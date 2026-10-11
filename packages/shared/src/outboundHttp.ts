@@ -3,15 +3,18 @@
 // Layer: Shared Node/Electron network security boundary
 
 import { randomUUID } from "node:crypto";
+import type { LookupAddress } from "node:dns";
 import * as Dns from "node:dns/promises";
 import * as Http from "node:http";
 import * as Https from "node:https";
 import * as Net from "node:net";
 
 import {
+  assertExactLoopbackIpAddress,
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
   assertPublicIpAddress,
+  isBenchmarkIpAddress,
   normalizeOutboundOrigin,
   stripOutboundSensitiveHeaders,
 } from "./outboundHttpPolicy";
@@ -50,12 +53,19 @@ export interface OutboundHttpPolicy {
   readonly maxConcurrent: number;
   readonly maxQueued: number;
   readonly requirePublicAddress?: boolean;
+  /** Permits HTTP only for localhost, 127.0.0.1, or ::1. */
+  readonly allowLoopbackHttp?: boolean;
+  /**
+   * Permits the RFC 2544 benchmarking range 198.18.0.0/15, which fake-ip DNS
+   * modes (Clash/Mihomo, Surge) hand out for the hosts they proxy.
+   */
+  readonly allowBenchmarkAddressRange?: boolean;
 }
 
 export interface OutboundHttpRequest {
   readonly policy: OutboundHttpPolicy;
   readonly url: string | URL;
-  readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly headers?: ConstructorParameters<typeof Headers>[0];
   readonly body?: string | Uint8Array;
   readonly signal?: AbortSignal;
@@ -261,19 +271,33 @@ function requestHeaders(headers: Headers): Record<string, string> {
 async function resolvePinnedAddress(
   url: URL,
   requirePublicAddress: boolean,
+  allowLoopbackHttp: boolean,
+  allowBenchmarkAddressRange: boolean,
   signal: AbortSignal,
 ): Promise<{ readonly address: string; readonly family: 4 | 6 }> {
   if (signal.aborted) throw abortedError(signal.reason);
-  const literalFamily = Net.isIP(url.hostname);
+  const hostname =
+    url.hostname.startsWith("[") && url.hostname.endsWith("]")
+      ? url.hostname.slice(1, -1)
+      : url.hostname;
+  const requireLoopbackAddress = allowLoopbackHttp && url.protocol === "http:";
+  const assertAddressAllowed = (address: string) => {
+    if (requireLoopbackAddress) assertExactLoopbackIpAddress(address);
+    else if (requirePublicAddress) {
+      if (allowBenchmarkAddressRange && isBenchmarkIpAddress(address)) return;
+      assertPublicIpAddress(address);
+    }
+  };
+  const literalFamily = Net.isIP(hostname);
   if (literalFamily === 4 || literalFamily === 6) {
-    if (requirePublicAddress) assertPublicIpAddress(url.hostname);
-    return { address: url.hostname, family: literalFamily };
+    assertAddressAllowed(hostname);
+    return { address: hostname, family: literalFamily };
   }
 
   let addresses: ReadonlyArray<{ readonly address: string; readonly family: 4 | 6 }>;
   try {
     addresses = (await Promise.race([
-      Dns.lookup(url.hostname, { all: true, verbatim: true }),
+      Dns.lookup(hostname, { all: true, verbatim: true }),
       new Promise<never>((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(abortedError(signal.reason)), {
           once: true,
@@ -287,14 +311,39 @@ async function resolvePinnedAddress(
   if (addresses.length === 0) {
     throw new OutboundHttpError("dns", "Outbound destination DNS lookup returned no addresses.");
   }
-  if (requirePublicAddress) {
-    for (const result of addresses) assertPublicIpAddress(result.address);
-  }
+  for (const result of addresses) assertAddressAllowed(result.address);
   const selected = addresses[0];
   if (!selected) {
     throw new OutboundHttpError("dns", "Outbound destination DNS lookup returned no addresses.");
   }
   return selected;
+}
+
+/**
+ * Custom `http`/`https` lookup that always returns the already-pinned address.
+ * Modern Node/Bun Happy Eyeballs pass `{ all: true }` and expect the array
+ * callback form; the legacy single-address form alone crashes those runtimes.
+ * Defer completion like native DNS so TLS construction and error listeners
+ * finish before a connection can fail (for example, with EADDRNOTAVAIL).
+ */
+export function invokePinnedDnsLookup(
+  pinned: { readonly address: string; readonly family: 4 | 6 },
+  options: { readonly all?: boolean | undefined } | undefined,
+  // Match Node/Bun's Happy Eyeballs lookup callback shape (`LookupAddress[]`, not
+  // a readonly structural twin) so `http.request({ lookup })` typechecks.
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | LookupAddress[],
+    family?: number,
+  ) => void,
+): void {
+  queueMicrotask(() => {
+    if (options?.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  });
 }
 
 async function requestHop(input: {
@@ -304,9 +353,17 @@ async function requestHop(input: {
   readonly body?: Uint8Array;
   readonly maxResponseBytes: number;
   readonly requirePublicAddress: boolean;
+  readonly allowLoopbackHttp: boolean;
+  readonly allowBenchmarkAddressRange: boolean;
   readonly signal: AbortSignal;
 }): Promise<OutboundHttpResponse> {
-  const pinned = await resolvePinnedAddress(input.url, input.requirePublicAddress, input.signal);
+  const pinned = await resolvePinnedAddress(
+    input.url,
+    input.requirePublicAddress,
+    input.allowLoopbackHttp,
+    input.allowBenchmarkAddressRange,
+    input.signal,
+  );
 
   return await new Promise<OutboundHttpResponse>((resolve, reject) => {
     let settled = false;
@@ -323,8 +380,8 @@ async function requestHop(input: {
         method: input.method,
         headers: requestHeaders(input.headers),
         signal: input.signal,
-        lookup: (_hostname, _options, callback) => {
-          callback(null, pinned.address, pinned.family);
+        lookup: (_hostname, options, callback) => {
+          invokePinnedDnsLookup(pinned, options, callback);
         },
       },
       (response) => {
@@ -384,12 +441,20 @@ async function requestHop(input: {
             url: input.url.href,
           });
         });
-        response.once("error", (cause) => {
+        // `on`, not `once`: a stream can emit `error` more than once, and a
+        // second emit with no listener attached is fatal to the process.
+        response.on("error", (cause) => {
           settle(new OutboundHttpError("request", "Outbound response failed.", cause));
         });
       },
     );
-    request.once("error", (cause) => {
+    // Also `on` rather than `once`. Happy Eyeballs tries each resolved address
+    // in turn, so a host that refuses all of them emits `error` once per
+    // attempt. `once` detaches after the first, `settle` correctly ignores the
+    // rest as duplicates, and those later emits then reach a request with no
+    // error listener. Node treats an unhandled `error` event as fatal, so the
+    // whole server exits: a failed favicon fetch could take the process down.
+    request.on("error", (cause) => {
       if (input.signal.aborted) {
         settle(abortedError(input.signal.reason));
       } else {
@@ -408,8 +473,16 @@ function isRedirectStatus(status: number): boolean {
 export class OutboundHttpClient {
   async request(input: OutboundHttpRequest): Promise<OutboundHttpResponse> {
     const policy = input.policy;
-    const allowedOrigins = policy.allowedOrigins.map(normalizeOutboundOrigin);
-    let url = assertOutboundUrlAllowed({ url: input.url, allowedOrigins });
+    const allowLoopbackHttp = policy.allowLoopbackHttp === true;
+    const originOptions = allowLoopbackHttp ? { allowLoopbackHttp: true } : {};
+    const allowedOrigins = policy.allowedOrigins.map((origin) =>
+      normalizeOutboundOrigin(origin, originOptions),
+    );
+    let url = assertOutboundUrlAllowed({
+      url: input.url,
+      allowedOrigins,
+      ...originOptions,
+    });
     let method = input.method ?? "GET";
     let body = bodyBytes(input.body);
     if ((body?.byteLength ?? 0) > policy.maxRequestBytes) {
@@ -451,6 +524,8 @@ export class OutboundHttpClient {
           ...(body ? { body } : {}),
           maxResponseBytes: policy.maxResponseBytes,
           requirePublicAddress: policy.requirePublicAddress ?? true,
+          allowLoopbackHttp,
+          allowBenchmarkAddressRange: policy.allowBenchmarkAddressRange === true,
           signal: controller.signal,
         });
         if (!isRedirectStatus(response.status)) return response;
@@ -470,8 +545,15 @@ export class OutboundHttpClient {
         const nextUrl = assertOutboundUrlAllowed({
           url: new URL(location, url),
           allowedOrigins,
+          ...originOptions,
         });
         if (nextUrl.origin !== url.origin) {
+          if (allowLoopbackHttp) {
+            throw new OutboundHttpError(
+              "invalid-redirect",
+              "Loopback HTTP redirects must remain on the original origin.",
+            );
+          }
           headers = stripOutboundSensitiveHeaders(headers);
         }
         if (response.status === 303) {

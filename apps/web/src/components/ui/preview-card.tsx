@@ -14,9 +14,9 @@ function PreviewCardTrigger(props: PreviewCardPrimitive.Trigger.Props) {
 function PreviewCardPopup({
   className,
   positionerClassName,
-  align = "start",
-  side = "right",
-  sideOffset = 8,
+  align: alignProp,
+  side: sideProp,
+  sideOffset: sideOffsetProp,
   anchor,
   children,
   ...props
@@ -29,6 +29,9 @@ function PreviewCardPopup({
   // z-index override has to land here rather than on the popup className.
   positionerClassName?: string;
 }) {
+  const align = alignProp ?? "start";
+  const side = sideProp ?? "right";
+  const sideOffset = sideOffsetProp ?? 8;
   return (
     <PreviewCardPrimitive.Portal>
       <PreviewCardPrimitive.Positioner

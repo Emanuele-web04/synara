@@ -38,10 +38,10 @@ function TooltipPopup({
   className,
   positionerClassName,
   viewportClassName,
-  variant = "default",
-  align = "center",
-  sideOffset = 4,
-  side = "top",
+  variant: variantProp,
+  align: alignProp,
+  sideOffset: sideOffsetProp,
+  side: sideProp,
   anchor,
   children,
   ...props
@@ -60,6 +60,10 @@ function TooltipPopup({
   // cards that bring their own padding can zero it here so they don't double up.
   viewportClassName?: string;
 }) {
+  const variant = variantProp ?? "default";
+  const align = alignProp ?? "center";
+  const sideOffset = sideOffsetProp ?? 4;
+  const side = sideProp ?? "top";
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner
@@ -78,7 +82,7 @@ function TooltipPopup({
             // Structure + type are shared by every tooltip; the variant supplies the
             // surface chrome (frosted card, picker, …) and `className` adds per-tooltip
             // tweaks like max-width or wrapping.
-            "flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) text-balance text-[length:var(--app-font-size-ui-sm,11px)] transition-[width,height,scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0",
+            "flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) text-balance text-ui-sm transition-[width,height,scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0",
             TOOLTIP_SURFACE_BY_VARIANT[variant],
             className,
           )}

@@ -8,16 +8,21 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
+  GitHubInboxState,
+  GitHubInboxSort,
+  GitHubIssueState,
+  GitHubIssueStateReason,
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestActor,
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
-  PullRequestInvolvement,
   PullRequestLabel,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
+  PullRequestStack,
+  PullRequestStackSummary,
   PullRequestState,
 } from "@synara/contracts";
 
@@ -82,12 +87,92 @@ export interface GitHubPullRequestListItem {
   readonly reviewRequestLogins: ReadonlyArray<string>;
   readonly labels: ReadonlyArray<PullRequestLabel>;
   readonly mergeability: "mergeable" | "conflicting" | "unknown";
+  readonly stack: PullRequestStackSummary | null;
 }
 
-/** Internal list result retaining the raw array cardinality before malformed entries are dropped. */
-export interface GitHubPullRequestListBatch {
-  readonly entries: ReadonlyArray<GitHubPullRequestListItem>;
-  readonly rawCount: number;
+/** A pull request row as the inbox query returns it: the list item plus fields GraphQL includes
+ * at no extra cost. */
+export interface GitHubInboxPullRequest extends GitHubPullRequestListItem {
+  readonly commentCount: number;
+  readonly assignees: ReadonlyArray<PullRequestActor>;
+}
+
+export interface GitHubInboxIssue {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly author: PullRequestActor | null;
+  readonly state: GitHubIssueState;
+  readonly stateReason: GitHubIssueStateReason | null;
+  readonly labels: ReadonlyArray<PullRequestLabel>;
+  readonly assignees: ReadonlyArray<PullRequestActor>;
+  readonly commentCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly closedAt: string | null;
+}
+
+export type GitHubInboxRemoteItem =
+  | { readonly kind: "pullRequest"; readonly item: GitHubInboxPullRequest }
+  | { readonly kind: "issue"; readonly item: GitHubInboxIssue };
+
+/** GitHub's GraphQL budget as reported by the `rateLimit` field of the same request. */
+export interface GitHubGraphQlRateLimit {
+  readonly cost: number;
+  readonly remaining: number;
+  readonly resetAt: string;
+}
+
+/**
+ * Everything the inbox needs from one repository and state: `listRepositoryInbox` and
+ * `listRepositoryInboxInvolvement` merged by the snapshot store. Items that involve the viewer
+ * but fall outside the 50 most recently updated come from the involvement search, so
+ * `pullRequests`/`issues` may hold more than 50 rows.
+ */
+export interface GitHubRepositoryInboxSnapshot {
+  readonly viewer: string;
+  readonly pullRequests: ReadonlyArray<GitHubInboxPullRequest>;
+  readonly issues: ReadonlyArray<GitHubInboxIssue>;
+  /** More pull requests or issues match the state than the repository lists returned. */
+  readonly truncatedPullRequests: boolean;
+  readonly truncatedIssues: boolean;
+  /** GitHub's own counts for the state, which can exceed the rows returned. */
+  readonly totalPullRequests: number;
+  readonly totalIssues: number;
+  /** Numbers matched by `involves:@me` (author, assignee, mention, or commenter). */
+  readonly involvedNumbers: ReadonlyArray<number>;
+  /** Open pull requests where GitHub's search matches `review-requested:@me`, teams included.
+   * Capped at the search page size; `reviewRequestedCount` is the uncapped total. */
+  readonly reviewRequestedNumbers: ReadonlyArray<number>;
+  readonly reviewRequestedCount: number;
+  readonly rateLimit: GitHubGraphQlRateLimit | null;
+}
+
+/** The lists document alone, before the involvement search is merged in. */
+export type GitHubRepositoryInboxLists = Omit<GitHubRepositoryInboxSnapshot, "involvedNumbers">;
+
+/** The `involves:@me` search for one repository and state, with full row fields. */
+export interface GitHubRepositoryInboxInvolvement {
+  readonly items: ReadonlyArray<GitHubInboxRemoteItem>;
+  /** Every matched number, including any whose node could not be decoded into `items`. */
+  readonly involvedNumbers: ReadonlyArray<number>;
+  readonly rateLimit: GitHubGraphQlRateLimit | null;
+}
+
+/** Result of the conditional REST request that tells whether a repository's issues or pull
+ * requests changed since `etag` was taken. A 304 costs no rate-limit quota. */
+export type GitHubRepositoryChangeProbe =
+  | { readonly changed: false }
+  | { readonly changed: true; readonly etag: string | null };
+
+export type GitHubRepositoryInboxLookup =
+  | { readonly _tag: "found"; readonly item: GitHubInboxRemoteItem }
+  | { readonly _tag: "not-found" };
+
+export interface GitHubIssueDetailData extends GitHubInboxIssue {
+  readonly body: string;
+  readonly comments: ReadonlyArray<PullRequestComment>;
+  readonly commentsTruncated: boolean;
 }
 
 export interface GitHubPullRequestDetailData {
@@ -124,6 +209,15 @@ export interface GitHubPullRequestDetailData {
  */
 export interface GitHubCliShape {
   /**
+   * Run a background read through the server-wide GitHub read queue. Fails fast with a
+   * `rate-limited` error while GitHub is limiting the account. User-initiated mutations and the
+   * reads they depend on call the methods below directly instead.
+   */
+  readonly withRead: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | GitHubCliError, R>;
+
+  /**
    * Execute a GitHub CLI command and return full process output.
    */
   readonly execute: (input: {
@@ -132,50 +226,88 @@ export interface GitHubCliShape {
     readonly timeoutMs?: number;
     readonly maxBufferBytes?: number;
     readonly outputMode?: "error" | "truncate";
+    readonly allowNonZeroExit?: boolean;
     /** Piped to the child's stdin — for payloads that must never appear in argv. */
     readonly stdin?: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly onStdoutChunk?: (chunk: string) => void;
+    readonly onStderrChunk?: (chunk: string) => void;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
   readonly getViewerLogin: (input: {
     readonly cwd: string;
   }) => Effect.Effect<string, GitHubCliError>;
 
-  readonly listRepositoryPullRequests: (input: {
+  /**
+   * Read a repository's first 50 pull requests and issues for one state and sort, the
+   * review-requested numbers and count, and the GraphQL budget in one `gh api graphql` call.
+   * A full inbox read sends it together with `listRepositoryInboxInvolvement`.
+   */
+  readonly listRepositoryInbox: (input: {
     readonly cwd: string;
     readonly repository: string;
-    readonly state: PullRequestState;
-    readonly involvement: PullRequestInvolvement;
-    readonly viewer: string;
-    readonly limit?: number;
-  }) => Effect.Effect<GitHubPullRequestListBatch, GitHubCliError>;
+    readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
+  }) => Effect.Effect<GitHubRepositoryInboxLists, GitHubCliError>;
 
   /**
-   * Fetch one pull request in the list-item shape (`gh pr view --json <list fields>`).
-   * Used to restore pinned PRs that fall outside the capped list results.
+   * Read the items matching `involves:@me` for one repository and state (first 50, full row
+   * fields) and the GraphQL budget in one `gh api graphql` call.
    */
-  readonly getPullRequestListItem: (input: {
+  readonly listRepositoryInboxInvolvement: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
+  }) => Effect.Effect<GitHubRepositoryInboxInvolvement, GitHubCliError>;
+
+  /**
+   * Conditional REST request for the repository's most recently updated issue or pull request.
+   * Pass the ETag of a previous probe; with no ETag it always reports a change and returns one.
+   */
+  readonly probeRepositoryInboxChanges: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly etag: string | null;
+  }) => Effect.Effect<GitHubRepositoryChangeProbe, GitHubCliError>;
+
+  /**
+   * Read specific pull requests or issues by number in one GraphQL call. Used to restore pinned
+   * items that fall outside the capped inbox lists. Only GitHub's per-number NOT_FOUND answer
+   * becomes `not-found`; any other failure fails the whole call.
+   */
+  readonly getRepositoryInboxItems: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly numbers: ReadonlyArray<number>;
+  }) => Effect.Effect<ReadonlyMap<number, GitHubRepositoryInboxLookup>, GitHubCliError>;
+
+  readonly getIssueDetail: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
-  }) => Effect.Effect<GitHubPullRequestListItem, GitHubCliError>;
+  }) => Effect.Effect<GitHubIssueDetailData, GitHubCliError>;
 
-  /**
-   * List open PR numbers for which GitHub's review-requested search matches the viewer. Unlike
-   * `pr view` reviewRequests, this authoritative search includes requests to teams the viewer
-   * belongs to. Used sparingly to verify pinned PRs beyond the normal list cap.
-   */
-  readonly listReviewRequestedPullRequestNumbers: (input: {
+  /** Post a comment on an issue as the authenticated gh user. */
+  readonly commentOnIssue: (input: {
     readonly cwd: string;
     readonly repository: string;
-    readonly viewer: string;
-    readonly limit?: number;
-  }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
+    readonly number: number;
+    readonly body: string;
+  }) => Effect.Effect<void, GitHubCliError>;
 
   readonly getPullRequestDetail: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
   }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
+
+  /** Read the selected PR's full GitHub stack, or null for a standalone pull request. */
+  readonly getPullRequestStack: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<PullRequestStack | null, GitHubCliError>;
 
   readonly getRepositoryMergeCapabilities: (input: {
     readonly cwd: string;
@@ -194,7 +326,7 @@ export interface GitHubCliShape {
     readonly number: number;
     readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
     readonly mergeMethod?: PullRequestMergeMethod;
-  }) => Effect.Effect<void, GitHubCliError>;
+  }) => Effect.Effect<{ readonly mergeOutcome: "merged" | "enqueued" | null }, GitHubCliError>;
 
   /**
    * Post an issue comment on a pull request as the authenticated gh user.
@@ -231,6 +363,8 @@ export interface GitHubCliShape {
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
+    /** Gate cache misses for polling; mutation-required lookups remain ungated. */
+    readonly background?: boolean;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**
@@ -244,6 +378,8 @@ export interface GitHubCliShape {
     {
       readonly summary: GitHubPullRequestSummary;
       readonly checks: ReadonlyArray<GitPullRequestCheck>;
+      /** Commit the checks ran against; null when `gh` did not report it. */
+      readonly headSha: string | null;
     },
     GitHubCliError
   >;
@@ -278,6 +414,7 @@ export interface GitHubCliShape {
     readonly headSelector: string;
     readonly title: string;
     readonly bodyFile: string;
+    readonly draft?: boolean;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**

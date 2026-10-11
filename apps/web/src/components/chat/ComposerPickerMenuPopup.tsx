@@ -26,9 +26,10 @@ type ComposerPickerMenuPopupProps = Omit<ComponentProps<typeof MenuPopupBase>, "
 export function ComposerPickerMenuPopup({
   className,
   size,
-  fixedWidth = false,
+  fixedWidth: fixedWidthProp,
   ...props
 }: ComposerPickerMenuPopupProps) {
+  const fixedWidth = fixedWidthProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <MenuPopupBase
@@ -45,21 +46,20 @@ export function ComposerPickerMenuPopup({
   );
 }
 
-/** Alias for menus outside the composer footer that share the same open panel chrome. */
-export const PickerMenuPopup = ComposerPickerMenuPopup;
-
 type ComposerPickerSelectPopupProps = Omit<ComponentProps<typeof SelectPopup>, "surface"> & {
   size?: ComposerPickerSize;
 };
 
 /** Select dropdown panel with the same frosted shell and option rows as picker menus. */
 export function ComposerPickerSelectPopup({
-  align = "end",
-  alignItemWithTrigger = false,
+  align: alignProp,
+  alignItemWithTrigger: alignItemWithTriggerProp,
   size,
   className,
   ...props
 }: ComposerPickerSelectPopupProps) {
+  const align = alignProp ?? "end";
+  const alignItemWithTrigger = alignItemWithTriggerProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <SelectPopup
@@ -73,9 +73,6 @@ export function ComposerPickerSelectPopup({
   );
 }
 
-/** Alias for settings and other non-menu pickers that open a select list panel. */
-export const PickerSelectPopup = ComposerPickerSelectPopup;
-
 type ComposerPickerMenuSubPopupProps = Omit<ComponentProps<typeof MenuSubPopup>, "surface"> & {
   /** Override global COMPOSER_PICKER_SIZE for this submenu. */
   size?: ComposerPickerSize;
@@ -87,9 +84,10 @@ type ComposerPickerMenuSubPopupProps = Omit<ComponentProps<typeof MenuSubPopup>,
 export function ComposerPickerMenuSubPopup({
   className,
   size,
-  fixedWidth = false,
+  fixedWidth: fixedWidthProp,
   ...props
 }: ComposerPickerMenuSubPopupProps) {
+  const fixedWidth = fixedWidthProp ?? false;
   const resolvedSize = resolveComposerPickerSize(size);
   return (
     <MenuSubPopup

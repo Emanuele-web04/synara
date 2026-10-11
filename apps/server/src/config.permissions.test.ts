@@ -82,7 +82,6 @@ describe.skipIf(process.platform === "win32")("private server state permissions"
         for (const filePath of [
           paths.settingsPath,
           paths.serverRuntimeStatePath,
-          paths.anonymousIdPath,
           paths.environmentIdPath,
         ]) {
           yield* writeFileStringAtomically({ filePath, contents: "private\n" });
@@ -91,6 +90,8 @@ describe.skipIf(process.platform === "win32")("private server state permissions"
           filePath: providerCachePath,
           provider: {
             provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -104,7 +105,6 @@ describe.skipIf(process.platform === "win32")("private server state permissions"
       paths.dbPath,
       paths.settingsPath,
       paths.serverRuntimeStatePath,
-      paths.anonymousIdPath,
       paths.environmentIdPath,
       providerCachePath,
     ]) {

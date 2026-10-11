@@ -14,6 +14,7 @@ import {
   type ManagedTerminalCliKind,
 } from "@synara/shared/terminalThreads";
 
+import { envPathKeyFor, resolveExecutable } from "../executableLookup.ts";
 import {
   ensurePrivateDirectorySync,
   PRIVATE_EXECUTABLE_FILE_MODE,
@@ -29,63 +30,19 @@ export interface ManagedTerminalWrapperState {
   targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>>;
 }
 
+export interface ManagedTerminalProfile {
+  readonly instanceId?: string;
+  readonly commandName: string;
+  readonly targetPath: string;
+  readonly environment: Readonly<Record<string, string>>;
+  readonly isolateEnvironment: boolean;
+  readonly omittedSensitiveEnvironmentNames?: ReadonlyArray<string>;
+}
+
+const PROVIDER_PROFILE_MANIFEST_FILENAME = "provider-profiles.json";
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
-}
-
-function envPathKeyFor(env: NodeJS.ProcessEnv): "PATH" | "Path" | "path" {
-  if ("PATH" in env) return "PATH";
-  if ("Path" in env) return "Path";
-  return "path";
-}
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stats = fs.statSync(filePath);
-    if (!stats.isFile()) {
-      return false;
-    }
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function executableCandidates(commandName: string): string[] {
-  if (process.platform !== "win32") {
-    return [commandName];
-  }
-
-  const pathExt = process.env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT"];
-  const lowerCommandName = commandName.toLowerCase();
-  const hasExtension = pathExt.some((extension) =>
-    lowerCommandName.endsWith(extension.toLowerCase()),
-  );
-  return hasExtension ? [commandName] : pathExt.map((extension) => `${commandName}${extension}`);
-}
-
-function resolveExecutableOnPath(commandName: string, env: NodeJS.ProcessEnv): string | null {
-  const envPathKey = envPathKeyFor(env);
-  const envPath = env[envPathKey]?.trim();
-  if (!envPath) {
-    return null;
-  }
-
-  for (const entry of envPath.split(path.delimiter)) {
-    const directory = entry.trim();
-    if (!directory) {
-      continue;
-    }
-    for (const candidateName of executableCandidates(commandName)) {
-      const candidatePath = path.join(directory, candidateName);
-      if (isExecutableFile(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-
-  return null;
 }
 
 function buildHookOscSequence(eventType: TerminalAgentHookEventType): string {
@@ -286,6 +243,91 @@ function buildWrapperScript(input: {
   ].join("\n");
 }
 
+const PROFILE_INHERITED_ENV_KEYS = [
+  "ALL_PROXY",
+  "CURL_CA_BUNDLE",
+  "COLORTERM",
+  "COMSPEC",
+  "SYSTEMROOT",
+  "WINDIR",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
+  "FORCE_COLOR",
+  "GIT_SSL_CAINFO",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_COLOR",
+  "NO_PROXY",
+  "no_proxy",
+  "PATH",
+  "REQUESTS_CA_BUNDLE",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SSH_AUTH_SOCK",
+  "TERM",
+  "TMPDIR",
+  "TZ",
+  "USER",
+  "XDG_RUNTIME_DIR",
+] as const;
+
+export function buildProviderProfileProcessEnv(
+  profile: ManagedTerminalProfile,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const inherited = profile.isolateEnvironment
+    ? Object.fromEntries(
+        Object.entries(baseEnv).filter(([key]) =>
+          PROFILE_INHERITED_ENV_KEYS.some((allowed) => allowed.toUpperCase() === key.toUpperCase()),
+        ),
+      )
+    : baseEnv;
+  return { ...inherited, ...profile.environment };
+}
+
+export function buildProviderProfileWrapperScript(profile: ManagedTerminalProfile): string {
+  const fixedEnvironment = Object.entries(profile.environment).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const environmentArguments = profile.isolateEnvironment
+    ? [
+        "exec env -i \\",
+        ...PROFILE_INHERITED_ENV_KEYS.map((name) =>
+          [`  ${name}=\"\${${name}:-}\" `, "\\"].join(""),
+        ),
+        ...fixedEnvironment.map(([name, value]) =>
+          [`  ${name}=${shellQuote(value)} `, "\\"].join(""),
+        ),
+        `  ${shellQuote(profile.targetPath)} \"$@\"`,
+      ]
+    : [
+        ...fixedEnvironment.map(([name, value]) => `export ${name}=${shellQuote(value)}`),
+        `exec ${shellQuote(profile.targetPath)} \"$@\"`,
+      ];
+  return [
+    "#!/bin/sh",
+    `# Synara provider profile: ${profile.commandName}`,
+    ...(profile.omittedSensitiveEnvironmentNames?.length
+      ? [
+          `# Sensitive environment is intentionally not serialized: ${profile.omittedSensitiveEnvironmentNames.join(
+            ", ",
+          )}`,
+        ]
+      : []),
+    ...environmentArguments,
+    "",
+  ].join("\n");
+}
+
 function writeFileIfChanged(filePath: string, content: string, mode: number): void {
   const currentContent = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : null;
   if (currentContent !== content) {
@@ -296,6 +338,49 @@ function writeFileIfChanged(filePath: string, content: string, mode: number): vo
   } catch {
     // Best effort.
   }
+}
+
+function readProviderProfileManifest(rootDir: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      fs.readFileSync(path.join(rootDir, PROVIDER_PROFILE_MANIFEST_FILENAME), "utf8"),
+    );
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (value): value is string =>
+            typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function synchronizeProviderProfileWrappers(
+  rootDir: string,
+  profiles: ReadonlyArray<ManagedTerminalProfile>,
+): void {
+  const nextNames = new Set(profiles.map((profile) => profile.commandName));
+  for (const previousName of readProviderProfileManifest(rootDir)) {
+    if (nextNames.has(previousName)) continue;
+    try {
+      fs.unlinkSync(path.join(rootDir, previousName));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  for (const profile of profiles) {
+    writeFileIfChanged(
+      path.join(rootDir, profile.commandName),
+      buildProviderProfileWrapperScript(profile),
+      PRIVATE_EXECUTABLE_FILE_MODE,
+    );
+  }
+  writeFileIfChanged(
+    path.join(rootDir, PROVIDER_PROFILE_MANIFEST_FILENAME),
+    `${JSON.stringify([...nextNames].toSorted(), null, 2)}\n`,
+    PRIVATE_FILE_MODE,
+  );
 }
 
 function buildManagedZshRc(quotedZshDir: string): string {
@@ -371,6 +456,7 @@ export ZDOTDIR=${quotedZshDir}
 
 export function prepareManagedTerminalWrappers(options: {
   baseEnv: NodeJS.ProcessEnv;
+  profiles?: ReadonlyArray<ManagedTerminalProfile>;
   rootDir: string;
   zshRootDir: string;
 }): ManagedTerminalWrapperState {
@@ -388,14 +474,17 @@ export function prepareManagedTerminalWrappers(options: {
   const targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>> = {};
   for (const cliKind of ["codex", "claude"] as const) {
     const commandName = managedTerminalCommandNameForCliKind(cliKind);
-    const targetPath = resolveExecutableOnPath(commandName, options.baseEnv);
+    const targetPath = resolveExecutable(commandName, { env: options.baseEnv });
     if (!targetPath) {
       continue;
     }
     targetPathByCliKind[cliKind] = targetPath;
   }
 
-  if (Object.keys(targetPathByCliKind).length === 0) {
+  if (Object.keys(targetPathByCliKind).length === 0 && (options.profiles?.length ?? 0) === 0) {
+    if (fs.existsSync(options.rootDir)) {
+      synchronizeProviderProfileWrappers(options.rootDir, []);
+    }
     return {
       binDir: null,
       codexHomeDir: null,
@@ -438,6 +527,7 @@ export function prepareManagedTerminalWrappers(options: {
       PRIVATE_EXECUTABLE_FILE_MODE,
     );
   }
+  synchronizeProviderProfileWrappers(options.rootDir, options.profiles ?? []);
   ensureManagedZshWrappers(options.zshRootDir);
 
   return {
@@ -493,22 +583,14 @@ export function applyManagedTerminalAgentWrapperEnv(
 
 export function prepareManagedTerminalAgentWrappers(options: {
   baseEnv: NodeJS.ProcessEnv;
+  profiles?: ReadonlyArray<ManagedTerminalProfile>;
   targetDir: string;
   zshDir: string;
 }): ManagedTerminalWrapperState {
   return prepareManagedTerminalWrappers({
     baseEnv: options.baseEnv,
+    ...(options.profiles ? { profiles: options.profiles } : {}),
     rootDir: options.targetDir,
     zshRootDir: options.zshDir,
   });
-}
-
-export function prependManagedTerminalAgentWrapperPath(
-  env: NodeJS.ProcessEnv,
-  managedWrapperState: {
-    binDir: string | null;
-    zshDir: string | null;
-  },
-): NodeJS.ProcessEnv {
-  return applyManagedTerminalWrapperEnvState(env, managedWrapperState);
 }

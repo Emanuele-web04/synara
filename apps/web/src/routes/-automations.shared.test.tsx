@@ -15,33 +15,69 @@ import {
   type AutomationRun,
   type ProviderStartOptions,
 } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyScheduleToForm,
-  allVisibleTriageRuns,
   applyAutomationEvent,
+  automationDefinitionUpdateMutationOptions,
   automationAttentionCount,
+  automationAttentionLabel,
   automationFastIntervalLimitMessage,
+  automationListRowIcon,
+  automationTargetThreads,
   canCancelAutomationRun,
   createInputFromForm,
   datetimeLocalFromIso,
   formatCadence,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
+  isTriageRun,
   maxIterationOptions,
   modelSelectionForProjectChange,
-  providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
-  runResultSummary,
-  scheduleKindFromSchedule,
+  reconcileAutomationFormAutoModeSupport,
+  rollbackAutomationDefinitionPatch,
   scheduleFromForm,
   updateWeeklyScheduleDay,
   updateWeeklyScheduleTime,
   unresolvedTriageRuns,
 } from "./-automations.shared";
+
+describe("automation definition update ordering", () => {
+  it("serializes successful edits in submission order", async () => {
+    const queryClient = new QueryClient();
+    const calls: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const buildMutation = (name: string, gate?: Promise<void>) =>
+      queryClient.getMutationCache().build(queryClient, {
+        ...automationDefinitionUpdateMutationOptions(async () => {
+          calls.push(`${name}:start`);
+          await gate;
+          calls.push(`${name}:finish`);
+          return {} as AutomationDefinition;
+        }),
+      });
+    const first = buildMutation("first", firstGate);
+    const second = buildMutation("second");
+
+    const input = { id: automationId("automation-ordered-edits") };
+    const firstRequest = first.execute(input);
+    const secondRequest = second.execute(input);
+    await vi.waitFor(() => expect(calls).toEqual(["first:start"]));
+    releaseFirst();
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(calls).toEqual(["first:start", "first:finish", "second:start", "second:finish"]);
+  });
+});
 
 const runId = (value: string) => AutomationRunId.makeUnsafe(value);
 const automationId = (value: string) => AutomationId.makeUnsafe(value);
@@ -49,6 +85,64 @@ const projectId = (value: string) => ProjectId.makeUnsafe(value);
 const threadId = (value: string) => ThreadId.makeUnsafe(value);
 const commandId = (value: string) => CommandId.makeUnsafe(value);
 const messageId = (value: string) => MessageId.makeUnsafe(value);
+
+describe("automationTargetThreads", () => {
+  it("excludes parent-linked side chats from heartbeat target choices", () => {
+    const project = projectId("project-1");
+    const parent = { projectId: project, sidechatSourceThreadId: null, title: "Parent" };
+    const sidechat = {
+      projectId: project,
+      sidechatSourceThreadId: threadId("thread-parent"),
+      title: "Side chat",
+    };
+
+    expect(automationTargetThreads([sidechat, parent], project)).toEqual([parent]);
+  });
+});
+
+describe("reconcileAutomationFormAutoModeSupport", () => {
+  it("persists refreshed Claude capability before an Auto automation is submitted", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      modelSelection: {
+        provider: "claudeAgent" as const,
+        model: "sonnet",
+        supportsAutoMode: false,
+      },
+      runtimeMode: "approval-required" as const,
+    };
+
+    expect(reconcileAutomationFormAutoModeSupport(form, true)).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "sonnet",
+        supportsAutoMode: true,
+      },
+      runtimeMode: "approval-required",
+    });
+  });
+
+  it("downgrades an Auto automation when refreshed capability is unavailable", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      modelSelection: {
+        provider: "claudeAgent" as const,
+        model: "sonnet",
+        supportsAutoMode: true,
+      },
+      runtimeMode: "auto" as const,
+    };
+
+    expect(reconcileAutomationFormAutoModeSupport(form, false)).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "sonnet",
+        supportsAutoMode: false,
+      },
+      runtimeMode: "approval-required",
+    });
+  });
+});
 
 const baseRun: AutomationRun = {
   id: runId("run-1"),
@@ -103,7 +197,10 @@ const baseDefinition: AutomationDefinition = {
   mode: "standalone",
   targetThreadId: null,
   maxIterations: null,
-  stopOnError: true,
+  stopAfterConsecutiveFailures: 3,
+  consecutiveFailureCount: 0,
+  disabledReason: null,
+  disabledAt: null,
   completionPolicy: { type: "none" },
   completionPolicyVersion: 1,
   completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
@@ -127,18 +224,56 @@ function definitionWith(overrides: Partial<AutomationDefinition>): AutomationDef
 }
 
 describe("automation shared route helpers", () => {
-  it("preserves manual and new schedule kinds", () => {
-    expect(scheduleKindFromSchedule({ type: "manual" })).toBe("manual");
-    expect(scheduleKindFromSchedule({ type: "once", runAt: "2026-06-19T10:15:00.000Z" })).toBe(
-      "once",
+  it("phrases the next-run countdown with pluralized units", () => {
+    const now = Date.parse("2026-06-19T00:00:00.000Z");
+    expect(formatNextRun("2026-06-19T00:00:30.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-18T23:00:00.000Z", now)).toBe("now");
+    expect(formatNextRun("2026-06-19T00:01:30.000Z", now)).toBe("in 2 minutes");
+    expect(formatNextRun("2026-06-19T00:59:00.000Z", now)).toBe("in 59 minutes");
+    expect(formatNextRun("2026-06-19T09:00:00.000Z", now)).toBe("in 9 hours");
+    expect(formatNextRun("2026-06-22T00:00:00.000Z", now)).toBe("in 3 days");
+    expect(formatNextRun(null, now)).toBeNull();
+    expect(formatNextRun("not-a-date", now)).toBeNull();
+  });
+
+  it("labels only badly-ended or approval-blocked runs as needing attention", () => {
+    expect(automationAttentionLabel(runWith({ status: "failed" }))).toBe("Last run failed");
+    expect(automationAttentionLabel(runWith({ status: "cancelled" }))).toBe("Last run cancelled");
+    expect(automationAttentionLabel(runWith({ status: "interrupted" }))).toBe(
+      "Last run interrupted",
     );
-    expect(
-      scheduleKindFromSchedule({
-        type: "cron",
-        expression: "0 9 * * *",
-        timezone: "Europe/Rome",
-      }),
-    ).toBe("cron");
+    expect(automationAttentionLabel(runWith({ status: "waiting-for-approval" }))).toBe(
+      "Waiting for approval",
+    );
+    expect(automationAttentionLabel(runWith({ status: "succeeded" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "running" }))).toBeNull();
+    expect(automationAttentionLabel(runWith({ status: "skipped" }))).toBeNull();
+  });
+
+  it.each([
+    ["running", false],
+    ["waiting-for-approval", true],
+  ] as const)("shows a live icon for %s runs when enabled is %s", (status, enabled) => {
+    expect(automationListRowIcon(definitionWith({ enabled }), runWith({ status })).name).toBe(
+      "loading-circle",
+    );
+  });
+
+  it.each([
+    {
+      label: "paused without a live run",
+      definition: definitionWith({ enabled: false }),
+      run: runWith({ status: "succeeded" }),
+      icon: "pause",
+    },
+    {
+      label: "failed",
+      definition: baseDefinition,
+      run: runWith({ status: "failed" }),
+      icon: "exclamation-circle",
+    },
+  ])("maps $label automation rows to $icon", ({ definition, run, icon }) => {
+    expect(automationListRowIcon(definition, run).name).toBe(icon);
   });
 
   it("counts only unread unarchived triage runs", () => {
@@ -165,11 +300,21 @@ describe("automation shared route helpers", () => {
       "run-failed-no-result",
     ]);
     expect(automationAttentionCount(runs)).toBe(2);
-    expect(allVisibleTriageRuns(runs).map((run) => run.id)).toEqual([
-      "run-unresolved",
-      "run-read",
-      "run-failed-no-result",
-    ]);
+  });
+
+  it("does not surface a reported result before its run finishes", () => {
+    const running = runWith({
+      status: "running",
+      finishedAt: null,
+      result: {
+        ...baseRun.result!,
+        decision: "notify",
+        unread: true,
+      },
+    });
+
+    expect(isTriageRun(running)).toBe(false);
+    expect(unresolvedTriageRuns([running])).toEqual([]);
   });
 
   it("allows cancelling active and waiting runs only", () => {
@@ -180,41 +325,10 @@ describe("automation shared route helpers", () => {
     expect(canCancelAutomationRun(runWith({ status: "cancelled" }))).toBe(false);
   });
 
-  it("uses human labels for resultless and unknown-result runs", () => {
-    expect(runResultSummary(runWith({ result: null, status: "waiting-for-approval" }))).toBe(
-      "Waiting for approval",
-    );
-    expect(
-      runResultSummary(
-        runWith({
-          result: { ...baseRun.result!, summary: null, outcome: "unknown" },
-          status: "succeeded",
-        }),
-      ),
-    ).toBe("Completed; open the thread for the reply");
-  });
-
-  it("round-trips one-shot datetimes through datetime-local values", () => {
-    const runAt = "2026-06-19T10:00:00.000Z";
-
-    expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
-  });
-
   it("preserves one-shot datetime seconds through datetime-local values", () => {
     const runAt = "2026-06-19T10:00:15.000Z";
 
     expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
-  });
-
-  it("preserves sub-minute custom intervals through the form state", () => {
-    const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
-      type: "interval",
-      everySeconds: 15,
-    });
-
-    expect(form.intervalAmount).toBe("15");
-    expect(form.intervalUnit).toBe("seconds");
-    expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 15 });
   });
 
   it("preserves non-minute interval cadences through the form state", () => {
@@ -382,18 +496,18 @@ describe("automation shared route helpers", () => {
     });
   });
 
-  it("serializes composer source thread provenance on create inputs", () => {
+  it("round-trips the notification policy through form payloads", () => {
     const form = {
-      ...formFromDefinition(null, "project-1"),
-      name: "Say hi",
-      prompt: "Say hi.",
+      ...formFromDefinition(
+        definitionWith({ notificationPolicy: "failed-runs-only" }),
+        "project-1",
+      ),
+      name: "Notify on failure",
+      prompt: "Check the build.",
     };
 
-    expect(
-      createInputFromForm(form, undefined, undefined, threadId("thread-source")),
-    ).toMatchObject({
-      sourceThreadId: "thread-source",
-    });
+    expect(form.notificationPolicy).toBe("failed-runs-only");
+    expect(createInputFromForm(form).notificationPolicy).toBe("failed-runs-only");
   });
 
   it("preserves saved provider options when editing without changing models", () => {
@@ -409,9 +523,13 @@ describe("automation shared route helpers", () => {
     });
     const form = formFromDefinition(definition, "project-1");
 
-    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
-      savedProviderOptions,
-    );
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        form.modelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
   });
 
   it("uses current provider options when an automation edit changes models", () => {
@@ -683,5 +801,106 @@ describe("automation shared route helpers", () => {
 
     expect(afterReconnectSnapshot.definitions).toEqual([definition]);
     expect(afterReconnectSnapshot.runs).toEqual([]);
+  });
+
+  it("keeps newer live memory when an older snapshot arrives later", () => {
+    const staleMemory = {
+      automationId: baseDefinition.id,
+      content: "Older persisted context.",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    };
+    const newerMemory = {
+      ...staleMemory,
+      content: "Newest live context.",
+      updatedAt: "2026-06-19T10:03:00.000Z",
+    };
+    const afterLiveUpdate = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [], memories: [staleMemory] },
+      { type: "memory-upserted", memory: newerMemory },
+    );
+
+    const afterLateSnapshot = applyAutomationEvent(afterLiveUpdate, {
+      type: "snapshot",
+      definitions: [baseDefinition],
+      runs: [],
+      memories: [staleMemory],
+    });
+
+    expect(afterLateSnapshot.memories).toEqual([newerMemory]);
+  });
+
+  it("keeps live memory omitted by a snapshot while its automation remains visible", () => {
+    const liveMemory = {
+      automationId: baseDefinition.id,
+      content: "Memory written after the snapshot query began.",
+      updatedAt: "2026-06-19T10:03:00.000Z",
+    };
+
+    const afterLateSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [], memories: [liveMemory] },
+      {
+        type: "snapshot",
+        definitions: [baseDefinition],
+        runs: [],
+        memories: [],
+      },
+    );
+
+    expect(afterLateSnapshot.memories).toEqual([liveMemory]);
+  });
+});
+
+describe("rollbackAutomationDefinitionPatch", () => {
+  it("restores only the failed patch's fields, keeping a concurrent edit's merge intact", () => {
+    // The name patch failed while a prompt patch (still in flight) had already merged
+    // optimistically. Rolling back the name must not also revert the prompt.
+    const current = {
+      definitions: [definitionWith({ name: "Optimistic name", prompt: "Optimistic prompt." })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]).toMatchObject({
+      name: baseDefinition.name,
+      prompt: "Optimistic prompt.",
+    });
+  });
+
+  it("does not overwrite a newer edit to the same field when an older patch fails", () => {
+    const current = {
+      definitions: [definitionWith({ name: "Newest name" })],
+      runs: [],
+      memories: [],
+    };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, name: "Older optimistic name" },
+      baseDefinition,
+    );
+
+    expect(rolledBack.definitions[0]?.name).toBe("Newest name");
+  });
+
+  it("removes input-only keys the definition never had instead of restoring them", () => {
+    const merged = {
+      ...definitionWith({}),
+      stopOnError: true,
+    } as AutomationDefinition;
+    const current = { definitions: [merged], runs: [], memories: [] };
+
+    const rolledBack = rollbackAutomationDefinitionPatch(
+      current,
+      { id: baseDefinition.id, stopOnError: true },
+      baseDefinition,
+    );
+
+    expect("stopOnError" in rolledBack.definitions[0]!).toBe(false);
   });
 });

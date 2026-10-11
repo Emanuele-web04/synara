@@ -7,24 +7,31 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
+import { executableCandidates, hasPathSeparator } from "../executableLookup.ts";
+import {
+  CLI_VERSION_PATTERN,
+  compareParsedCliVersions,
+  normalizeCliVersion,
+  splitPrerelease,
+  type ParsedCliVersion,
+} from "./cliVersion.ts";
+
 const LATEST_VERSION_CACHE_TTL_MS = 60 * 60 * 1_000;
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const PROVIDER_UPDATE_ACTION_MESSAGE = "Install the update now or review provider settings.";
-const WINDOWS_EXECUTABLE_EXTENSIONS = ["", ".exe", ".cmd", ".bat"] as const;
 
 type ProviderInstallSource = "npm" | "bun" | "pnpm" | "homebrew" | "native" | "unknown";
-
-interface ParsedSemver {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease: ReadonlyArray<string>;
-}
 
 export interface ProviderLatestVersionSource {
   readonly kind: "npm" | "homebrew";
   readonly name: string;
   readonly homebrewKind?: "formula" | "cask";
+}
+
+export interface ProviderHomebrewPackageDefinition {
+  readonly name: string;
+  readonly kind: "formula" | "cask";
+  readonly isCommandPath?: (commandPath: string) => boolean;
 }
 
 export interface ProviderMaintenanceCapabilities {
@@ -55,16 +62,19 @@ export interface PackageManagedProviderMaintenanceDefinition {
   readonly provider: ProviderKind;
   readonly binaryName: string;
   readonly npmPackageName: string | null;
-  readonly homebrew: {
-    readonly name: string;
-    readonly kind: "formula" | "cask";
-  } | null;
+  readonly homebrew:
+    | (ProviderHomebrewPackageDefinition & {
+        readonly variants?: ReadonlyArray<ProviderHomebrewPackageDefinition>;
+      })
+    | null;
   readonly latestVersionSource?: ProviderLatestVersionSource | null;
   readonly nativeUpdate: {
     readonly executable: string;
     readonly args: (installSource: ProviderInstallSource) => ReadonlyArray<string>;
     readonly lockKey: string;
     readonly strategy: "always" | "matching-path";
+    /** Explicit source for native installs. Null delegates update truth to the provider CLI. */
+    readonly latestVersionSource?: ProviderLatestVersionSource | null;
     readonly excludedInstallSources?: ReadonlyArray<ProviderInstallSource>;
     readonly isCommandPath?: (commandPath: string) => boolean;
   } | null;
@@ -74,6 +84,20 @@ const latestVersionCache = new Map<
   string,
   { readonly expiresAt: number; readonly version: string | null }
 >();
+
+/** V2 ships under different packages; never suggest a V1 package for a V2 binary. */
+export function withOpenCodeMaintenanceVersion(
+  definition: PackageManagedProviderMaintenanceDefinition,
+  version: string | null | undefined,
+): PackageManagedProviderMaintenanceDefinition {
+  if (definition.provider !== "opencode" || !version?.startsWith("2.")) return definition;
+  return {
+    ...definition,
+    npmPackageName: "@opencode/cli",
+    latestVersionSource: { kind: "npm", name: "@opencode/cli" },
+    homebrew: { name: "anomalyco/tap/opencode-v2", kind: "formula" },
+  };
+}
 const SEMVER_NUMBER_SEGMENT = /^\d+$/;
 
 function nonEmptyString(value: unknown): string | null {
@@ -81,21 +105,11 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 function normalizeSemverVersion(version: string): string {
-  const [main, prerelease] = version.trim().replace(/^v/, "").split("-", 2);
-  const segments = (main ?? "")
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-
-  if (segments.length === 2) {
-    segments.push("0");
-  }
-
-  return prerelease ? `${segments.join(".")}-${prerelease}` : segments.join(".");
+  return normalizeCliVersion(version.trim().replace(/^v/, ""));
 }
 
-function parseSemver(value: string): ParsedSemver | null {
-  const [main = "", prerelease] = normalizeSemverVersion(value).split("-", 2);
+function parseSemver(value: string): ParsedCliVersion | null {
+  const { main, prerelease } = splitPrerelease(normalizeSemverVersion(value));
   const segments = main.split(".");
   if (segments.length !== 3) {
     return null;
@@ -125,22 +139,6 @@ function parseSemver(value: string): ParsedSemver | null {
   };
 }
 
-function comparePrereleaseIdentifier(left: string, right: string): number {
-  const leftNumeric = SEMVER_NUMBER_SEGMENT.test(left);
-  const rightNumeric = SEMVER_NUMBER_SEGMENT.test(right);
-
-  if (leftNumeric && rightNumeric) {
-    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
-  }
-  if (leftNumeric) {
-    return -1;
-  }
-  if (rightNumeric) {
-    return 1;
-  }
-  return left.localeCompare(right);
-}
-
 export function compareSemverVersions(left: string, right: string): number {
   const parsedLeft = parseSemver(left);
   const parsedRight = parseSemver(right);
@@ -148,45 +146,11 @@ export function compareSemverVersions(left: string, right: string): number {
     return left.localeCompare(right);
   }
 
-  if (parsedLeft.major !== parsedRight.major) {
-    return parsedLeft.major - parsedRight.major;
-  }
-  if (parsedLeft.minor !== parsedRight.minor) {
-    return parsedLeft.minor - parsedRight.minor;
-  }
-  if (parsedLeft.patch !== parsedRight.patch) {
-    return parsedLeft.patch - parsedRight.patch;
-  }
-  if (parsedLeft.prerelease.length === 0 && parsedRight.prerelease.length === 0) {
-    return 0;
-  }
-  if (parsedLeft.prerelease.length === 0) {
-    return 1;
-  }
-  if (parsedRight.prerelease.length === 0) {
-    return -1;
-  }
-
-  const length = Math.max(parsedLeft.prerelease.length, parsedRight.prerelease.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftIdentifier = parsedLeft.prerelease[index];
-    const rightIdentifier = parsedRight.prerelease[index];
-    if (leftIdentifier === undefined) {
-      return -1;
-    }
-    if (rightIdentifier === undefined) {
-      return 1;
-    }
-    const comparison = comparePrereleaseIdentifier(leftIdentifier, rightIdentifier);
-    if (comparison !== 0) {
-      return comparison;
-    }
-  }
-  return 0;
+  return compareParsedCliVersions(parsedLeft, parsedRight);
 }
 
 export function parseGenericCliVersion(output: string): string | null {
-  const match = output.match(/\bv?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\b/);
+  const match = CLI_VERSION_PATTERN.exec(output);
   return match?.[1] ? normalizeSemverVersion(match[1]) : null;
 }
 
@@ -217,10 +181,6 @@ export function deriveNpmGlobalPrefix(commandPath: string): string | null {
   return null;
 }
 
-function hasPathSeparator(value: string): boolean {
-  return value.includes("/") || value.includes("\\");
-}
-
 export function makeProviderMaintenanceCapabilities(input: {
   readonly provider: ProviderKind;
   readonly packageName: string | null;
@@ -248,8 +208,11 @@ export function makeProviderMaintenanceCapabilities(input: {
     provider: input.provider,
     packageName: input.packageName,
     latestVersionSource:
-      input.latestVersionSource ??
-      (input.packageName ? { kind: "npm", name: input.packageName } : null),
+      input.latestVersionSource !== undefined
+        ? input.latestVersionSource
+        : input.packageName
+          ? { kind: "npm", name: input.packageName }
+          : null,
     update,
   };
 }
@@ -336,9 +299,10 @@ function makePnpmGlobalProviderMaintenanceCapabilities(
 
 function makeHomebrewProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
+  homebrewPackage: ProviderHomebrewPackageDefinition | null,
   pathPrepend?: string | null,
 ): ProviderMaintenanceCapabilities {
-  if (!definition.homebrew) {
+  if (!homebrewPackage) {
     return makeManualOnlyProviderMaintenanceCapabilities({
       provider: definition.provider,
       packageName: definition.npmPackageName,
@@ -348,12 +312,16 @@ function makeHomebrewProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: null,
-    latestVersionSource: resolveLatestVersionSourceForInstallSource(definition, "homebrew"),
+    latestVersionSource: resolveLatestVersionSourceForInstallSource(
+      definition,
+      "homebrew",
+      homebrewPackage,
+    ),
     updateExecutable: "brew",
     updateArgs:
-      definition.homebrew.kind === "cask"
-        ? ["upgrade", "--cask", definition.homebrew.name]
-        : ["upgrade", definition.homebrew.name],
+      homebrewPackage.kind === "cask"
+        ? ["upgrade", "--cask", homebrewPackage.name]
+        : ["upgrade", homebrewPackage.name],
     updateLockKey: "homebrew",
     ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
@@ -362,15 +330,23 @@ function makeHomebrewProviderMaintenanceCapabilities(
 function resolveLatestVersionSourceForInstallSource(
   definition: PackageManagedProviderMaintenanceDefinition,
   installSource: ProviderInstallSource,
+  homebrewPackage?: ProviderHomebrewPackageDefinition | null,
 ): ProviderLatestVersionSource | null {
   if (definition.latestVersionSource) {
     return definition.latestVersionSource;
   }
-  if (installSource === "homebrew" && definition.homebrew) {
+  if (
+    installSource === "native" &&
+    definition.nativeUpdate &&
+    definition.nativeUpdate.latestVersionSource !== undefined
+  ) {
+    return definition.nativeUpdate.latestVersionSource;
+  }
+  if (installSource === "homebrew" && homebrewPackage) {
     return {
       kind: "homebrew",
-      name: definition.homebrew.name,
-      homebrewKind: definition.homebrew.kind,
+      name: homebrewPackage.name,
+      homebrewKind: homebrewPackage.kind,
     };
   }
   return definition.npmPackageName ? { kind: "npm", name: definition.npmPackageName } : null;
@@ -424,12 +400,14 @@ function detectInstallSource(
 function makeProviderMaintenanceForInstallSource(input: {
   readonly definition: PackageManagedProviderMaintenanceDefinition;
   readonly installSource: ProviderInstallSource;
+  readonly homebrewPackage?: ProviderHomebrewPackageDefinition | null;
   readonly executable?: string | null;
   readonly pathPrepend?: string | null;
   /** Path that matched install-source detection, used to pin the install tree. */
   readonly commandPath?: string | null;
 }): ProviderMaintenanceCapabilities {
-  const { definition, installSource, executable, pathPrepend, commandPath } = input;
+  const { definition, installSource, homebrewPackage, executable, pathPrepend, commandPath } =
+    input;
   if (
     definition.nativeUpdate?.strategy === "always" &&
     !definition.nativeUpdate.excludedInstallSources?.includes(installSource)
@@ -471,12 +449,27 @@ function makeProviderMaintenanceForInstallSource(input: {
     return makeNpmGlobalProviderMaintenanceCapabilities(definition, pathPrepend, commandPath);
   }
   if (installSource === "homebrew") {
-    return makeHomebrewProviderMaintenanceCapabilities(definition, pathPrepend);
+    return makeHomebrewProviderMaintenanceCapabilities(
+      definition,
+      homebrewPackage ?? definition.homebrew,
+      pathPrepend,
+    );
   }
   return makeManualOnlyProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
   });
+}
+
+function resolveHomebrewPackageForCommandPath(
+  definition: PackageManagedProviderMaintenanceDefinition,
+  commandPath: string,
+): ProviderHomebrewPackageDefinition | null {
+  const homebrew = definition.homebrew;
+  if (!homebrew) {
+    return null;
+  }
+  return homebrew.variants?.find((variant) => variant.isCommandPath?.(commandPath)) ?? homebrew;
 }
 
 function isBunGlobalCommandPath(commandPath: string): boolean {
@@ -538,6 +531,9 @@ export function resolvePackageManagedProviderMaintenance(
       return makeProviderMaintenanceForInstallSource({
         definition,
         installSource,
+        ...(installSource === "homebrew"
+          ? { homebrewPackage: resolveHomebrewPackageForCommandPath(definition, commandPath) }
+          : {}),
         executable: binaryPath,
         commandPath,
         ...(options?.commandDirectory === undefined
@@ -569,35 +565,43 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   options?: ProviderMaintenanceCapabilityResolutionOptions,
 ) {
   const binaryPath = nonEmptyString(options?.binaryPath) ?? definition.binaryName;
+  const fileSystem = yield* FileSystem.FileSystem;
   if (hasPathSeparator(binaryPath)) {
-    return resolvePackageManagedProviderMaintenance(definition, options);
+    const realCommandPath =
+      nonEmptyString(options?.realCommandPath) ??
+      (yield* fileSystem.realPath(binaryPath).pipe(Effect.catch(() => Effect.succeed(binaryPath))));
+    return resolvePackageManagedProviderMaintenance(definition, {
+      ...options,
+      binaryPath,
+      realCommandPath,
+    });
   }
 
-  const pathEntries = (options?.env?.PATH ?? process.env.PATH ?? "")
-    .split(options?.platform === "win32" ? ";" : ":")
-    .filter(Boolean);
-  const fileSystem = yield* FileSystem.FileSystem;
-  const executableCandidates =
-    options?.platform === "win32"
-      ? WINDOWS_EXECUTABLE_EXTENSIONS.map((extension) => `${binaryPath}${extension}`)
-      : [binaryPath];
-  for (const entry of pathEntries) {
-    for (const executableCandidate of executableCandidates) {
-      const candidate = `${entry}/${executableCandidate}`;
-      const exists = yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
-      if (!exists) {
-        continue;
-      }
-      const realCommandPath = yield* fileSystem
-        .realPath(candidate)
-        .pipe(Effect.catch(() => Effect.succeed(candidate)));
-      return resolvePackageManagedProviderMaintenance(definition, {
-        ...options,
-        binaryPath,
-        realCommandPath,
-        commandDirectory: entry,
-      });
+  // Existence, not executability: this is locating an installation to report on, so an
+  // extensionless Windows file still counts even though nothing could spawn it directly.
+  //
+  // `options.env` is used whole, with no per-key fallback to `process.env`. An earlier version
+  // read `options.env.PATH ?? process.env.PATH`, which could report a provider as installed
+  // because *this* process can see it while the child environment we were asked about cannot.
+  // The production caller passes `buildProviderChildEnvironment(...)`, which always carries PATH.
+  for (const candidate of executableCandidates(binaryPath, {
+    ...(options?.platform === undefined ? {} : { platform: options.platform }),
+    ...(options?.env === undefined ? {} : { env: options.env }),
+    allowExtensionlessOnWindows: true,
+  })) {
+    const exists = yield* fileSystem.exists(candidate.path).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      continue;
     }
+    const realCommandPath = yield* fileSystem
+      .realPath(candidate.path)
+      .pipe(Effect.catch(() => Effect.succeed(candidate.path)));
+    return resolvePackageManagedProviderMaintenance(definition, {
+      ...options,
+      binaryPath,
+      realCommandPath,
+      commandDirectory: candidate.directory,
+    });
   }
 
   return resolvePackageManagedProviderMaintenance(definition, {
@@ -642,6 +646,10 @@ export function createProviderVersionAdvisory(input: {
     status: advisory.status,
     currentVersion: input.currentVersion,
     latestVersion,
+    // Knowable when a registry can be queried, or when a latest version was already
+    // resolved. Self-updating CLIs satisfy neither, so their status is pinned to
+    // "unknown" and must not be presented as "an update is waiting".
+    latestVersionKnowable: capabilities.latestVersionSource !== null || latestVersion !== null,
     updateCommand: capabilities.update?.command ?? null,
     canUpdate: capabilities.update !== null,
     checkedAt: input.checkedAt ?? null,
@@ -732,7 +740,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
     return {
       ...status,
       versionAdvisory: createProviderVersionAdvisory({
-        provider: status.provider,
+        provider: maintenanceCapabilities.provider,
         currentVersion: status.version ?? null,
         checkedAt: status.checkedAt,
         maintenanceCapabilities,
@@ -744,7 +752,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
   return {
     ...status,
     versionAdvisory: createProviderVersionAdvisory({
-      provider: status.provider,
+      provider: maintenanceCapabilities.provider,
       currentVersion: status.version,
       latestVersion,
       checkedAt: DateTime.formatIso(yield* DateTime.now),

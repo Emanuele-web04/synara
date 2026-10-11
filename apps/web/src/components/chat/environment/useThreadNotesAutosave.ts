@@ -32,8 +32,9 @@ export function useThreadNotesAutosave({
   threadId,
   notes,
   onChange,
-  debounceMs = DEFAULT_NOTES_AUTOSAVE_DEBOUNCE_MS,
+  debounceMs: debounceMsProp,
 }: UseThreadNotesAutosaveInput): UseThreadNotesAutosaveResult {
+  const debounceMs = debounceMsProp ?? DEFAULT_NOTES_AUTOSAVE_DEBOUNCE_MS;
   const [value, setValue] = useState(notes);
   const [focused, setFocused] = useState(false);
   const debounceRef = useRef<number | null>(null);
@@ -66,44 +67,49 @@ export function useThreadNotesAutosave({
     }, delayMs);
   }, []);
 
-  const flush = useCallback(async () => {
+  const flush = useCallback((): Promise<void> => {
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
     if (saveInFlightRef.current) {
       retryAfterInFlightRef.current = true;
-      return;
+      return Promise.resolve();
     }
     const next = valueRef.current;
     if (next === lastCommittedRef.current) {
-      return;
+      return Promise.resolve();
     }
     saveInFlightRef.current = true;
     let saved = false;
-    try {
-      await onChangeRef.current(threadIdRef.current, next);
-      saved = true;
-      lastCommittedRef.current = next;
-      pendingLocalEchoRef.current = {
-        value: next,
-        staleServerValue: lastObservedServerNotesRef.current,
-      };
-    } finally {
-      saveInFlightRef.current = false;
-      const shouldFlushQueued =
-        retryAfterInFlightRef.current &&
-        valueRef.current !== lastCommittedRef.current &&
-        (saved || !mountedRef.current);
-      retryAfterInFlightRef.current = false;
-      if (shouldFlushQueued) {
-        if (mountedRef.current) {
-          scheduleFlush(debounceMs);
-        } else {
-          void flushRef.current().catch(() => undefined);
+    // Promise chain instead of async/try-finally: React Compiler does not yet
+    // support try/finally, and it would skip optimizing this whole hook. The
+    // .finally keeps the exact same run-always semantics, including rejection
+    // propagation to the caller's .catch.
+    return Promise.resolve(onChangeRef.current(threadIdRef.current, next))
+      .then(() => {
+        saved = true;
+        lastCommittedRef.current = next;
+        pendingLocalEchoRef.current = {
+          value: next,
+          staleServerValue: lastObservedServerNotesRef.current,
+        };
+      })
+      .finally(() => {
+        saveInFlightRef.current = false;
+        const shouldFlushQueued =
+          retryAfterInFlightRef.current &&
+          valueRef.current !== lastCommittedRef.current &&
+          (saved || !mountedRef.current);
+        retryAfterInFlightRef.current = false;
+        if (shouldFlushQueued) {
+          if (mountedRef.current) {
+            scheduleFlush(debounceMs);
+          } else {
+            void flushRef.current().catch(() => undefined);
+          }
         }
-      }
-    }
+      });
   }, [debounceMs, scheduleFlush]);
 
   useEffect(() => {

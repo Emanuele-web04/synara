@@ -11,7 +11,7 @@
 // Layer: Web chat/editor file-preview component
 // Exports: PdfFilePreview
 
-import { memo, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
 import { Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
@@ -24,7 +24,7 @@ import { cn } from "~/lib/utils";
 import { PdfPageView } from "./pdf/PdfPageView";
 import { PdfViewerToolbar } from "./pdf/PdfViewerToolbar";
 
-export const PdfFilePreview = memo(function PdfFilePreview(props: {
+export function PdfFilePreview(props: {
   /**
    * Workspace-relative path of the PDF (resolved server-side against cwd), or an
    * allowlisted absolute path (e.g. inside a session's scratch workspace).
@@ -32,21 +32,30 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
   filePath: string;
   cwd: string | null | undefined;
   previewGrant?: string | null | undefined;
+  cacheKey?: string | number | undefined;
   /** Pre-resolved target for the "Open in editor" control in the toolbar. */
   openInTarget: string | null;
   className?: string;
+  onReload?: (() => void) | undefined;
+  onPreviewReady?: (() => void) | undefined;
+  onPreviewError?: (() => void) | undefined;
 }) {
-  const previewUrl = useMemo(
-    () =>
-      buildLocalImageUrl({
-        src: props.filePath,
-        cwd: props.cwd ?? undefined,
-        grant: props.previewGrant,
-      }),
-    [props.cwd, props.filePath, props.previewGrant],
-  );
-  const fileName = useMemo(() => basenameOfPath(props.filePath), [props.filePath]);
+  const previewUrl = buildLocalImageUrl({
+    src: props.filePath,
+    cwd: props.cwd ?? undefined,
+    grant: props.previewGrant,
+    cacheKey: props.cacheKey,
+  });
+  const fileName = basenameOfPath(props.filePath);
   const doc = usePdfDocument(previewUrl);
+
+  useEffect(() => {
+    if (doc.status === "ready") {
+      props.onPreviewReady?.();
+    } else if (doc.status === "error") {
+      props.onPreviewError?.();
+    }
+  }, [doc.status, props.onPreviewError, props.onPreviewReady]);
 
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
   const containerSize = useContainerSize(scrollRoot);
@@ -64,13 +73,10 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
     scrollToPage: navigation.scrollToPage,
   });
 
-  const pageNumbers = useMemo(
-    () => Array.from({ length: doc.numPages }, (_, index) => index + 1),
-    [doc.numPages],
-  );
+  const pageNumbers = Array.from({ length: doc.numPages }, (_, index) => index + 1);
 
   const outerClassName = cn(
-    "flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]",
+    "flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface",
     props.className,
   );
 
@@ -92,6 +98,7 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
           onFitWidth={zoom.onFitWidth}
           onFitPage={zoom.onFitPage}
           openInTarget={props.openInTarget}
+          onReload={props.onReload}
         />
         <div ref={setScrollRoot} className="pdf-viewer-scroll min-h-0 flex-1 overflow-auto">
           {containerSize
@@ -118,9 +125,16 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
       <div className={outerClassName}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
           <TriangleAlertIcon className="size-5 text-destructive/80" aria-hidden="true" />
-          <p className="text-[12px] text-muted-foreground">
-            {doc.error ?? "Could not open this PDF."}
-          </p>
+          <p className="text-ui text-muted-foreground">{doc.error ?? "Could not open this PDF."}</p>
+          {props.onReload ? (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-ui leading-snug hover:bg-foreground/8"
+              onClick={props.onReload}
+            >
+              Reload file from disk
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -137,4 +151,4 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
       </div>
     </div>
   );
-});
+}

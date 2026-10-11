@@ -28,6 +28,7 @@ import {
   PASTE_COMMAND,
   TextNode,
   $getRoot,
+  $nodesOfType,
   type ElementNode,
   type LexicalNode,
   type EditorState,
@@ -61,6 +62,9 @@ import { parseBareComposerLink } from "~/lib/linkChips";
 import { type TerminalContextDraft } from "~/lib/terminalContext";
 import { shouldCollapsePastedText } from "~/lib/composerPastedText";
 import type { ProviderMentionReference } from "@synara/contracts";
+import { useStore } from "~/store";
+import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
+import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
@@ -88,11 +92,7 @@ import {
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 
-const ComposerTerminalContextActionsContext = createContext<{
-  onRemoveTerminalContext: (contextId: string) => void;
-}>({
-  onRemoveTerminalContext: () => {},
-});
+const ComposerRemoveTerminalContextContext = createContext<(contextId: string) => void>(() => {});
 
 // Node classes imported from ./composer-nodes
 
@@ -451,7 +451,13 @@ function $setComposerEditorPrompt(
   const segments = splitPromptIntoComposerSegments(prompt, terminalContexts, mentionReferences);
   for (const segment of segments) {
     if (segment.type === "mention") {
-      paragraph.append($createComposerMentionNode(segment.path, segment.kind));
+      const thread = segment.threadId
+        ? useStore.getState().sidebarThreadSummaryById[segment.threadId]
+        : undefined;
+      const provider = thread ? resolveThreadDisplayProvider(thread) : undefined;
+      paragraph.append(
+        $createComposerMentionNode(segment.path, segment.kind, provider, segment.threadId),
+      );
       continue;
     }
     if (segment.type === "skill") {
@@ -513,6 +519,7 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  ariaLabel?: string | undefined;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
   /**
@@ -697,7 +704,7 @@ function ComposerInlineTokenSelectionNormalizePlugin() {
 
 function ComposerInlineTokenBackspacePlugin() {
   const [editor] = useLexicalComposerContext();
-  const { onRemoveTerminalContext } = useContext(ComposerTerminalContextActionsContext);
+  const onRemoveTerminalContext = useContext(ComposerRemoveTerminalContextContext);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -847,6 +854,46 @@ function ComposerLinkPastePlugin() {
   return null;
 }
 
+// Thread mention chips resolve their provider icon from the sidebar summaries,
+// which may not be loaded yet when a draft is restored (and can change after a
+// provider handoff). Refresh the stored provider on existing chips whenever the
+// summaries change so the icon never stays stale.
+function ComposerThreadMentionProviderPlugin() {
+  const [editor] = useLexicalComposerContext();
+  const threadMentionSources = useStore(
+    useMemo(() => createComposerThreadMentionSourcesSelector(), []),
+  );
+  const providerByThreadId = useMemo(
+    () => new Map(threadMentionSources.map((source) => [source.id as string, source.provider])),
+    [threadMentionSources],
+  );
+
+  useEffect(() => {
+    const staleProvider = (node: ComposerMentionNode): boolean => {
+      const threadId = node.getMentionThreadId();
+      if (!threadId) return false;
+      const provider = providerByThreadId.get(threadId);
+      return provider !== undefined && provider !== node.getMentionProvider();
+    };
+    const needsUpdate = editor
+      .getEditorState()
+      .read(() => $nodesOfType(ComposerMentionNode).some(staleProvider));
+    if (!needsUpdate) return;
+    editor.update(
+      () => {
+        for (const node of $nodesOfType(ComposerMentionNode)) {
+          if (!staleProvider(node)) continue;
+          const provider = providerByThreadId.get(node.getMentionThreadId() ?? "");
+          if (provider) node.setMentionProvider(provider);
+        }
+      },
+      { tag: "history-merge" },
+    );
+  }, [editor, providerByThreadId]);
+
+  return null;
+}
+
 // A sufficiently large text paste collapses into an attachment card instead of
 // flooding the editor. Intercepting at the Lexical command level (rather than the
 // React onPaste prop) is required: Lexical's own paste listener would otherwise
@@ -890,9 +937,10 @@ function ComposerPromptEditorInner({
   value,
   cursor,
   terminalContexts,
-  mentionReferences = [],
+  mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  ariaLabel,
   className,
   onRemoveTerminalContext,
   onCollapsePastedText,
@@ -901,6 +949,7 @@ function ComposerPromptEditorInner({
   onPaste,
   editorRef,
 }: ComposerPromptEditorInnerProps) {
+  const mentionReferences = mentionReferencesProp ?? [];
   const [editor] = useLexicalComposerContext();
   const onChangeRef = useRef(onChange);
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
@@ -916,10 +965,6 @@ function ComposerPromptEditorInner({
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
-  const terminalContextActions = useMemo(
-    () => ({ onRemoveTerminalContext }),
-    [onRemoveTerminalContext],
-  );
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -1152,7 +1197,7 @@ function ComposerPromptEditorInner({
   }, []);
 
   return (
-    <ComposerTerminalContextActionsContext.Provider value={terminalContextActions}>
+    <ComposerRemoveTerminalContextContext.Provider value={onRemoveTerminalContext}>
       <div className="relative">
         <PlainTextPlugin
           contentEditable={
@@ -1166,6 +1211,7 @@ function ComposerPromptEditorInner({
               )}
               data-testid="composer-editor"
               aria-placeholder={placeholder}
+              aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
@@ -1193,12 +1239,13 @@ function ComposerPromptEditorInner({
         <ComposerSlashCommandTransformPlugin />
         <ComposerLinkTransformPlugin />
         <ComposerLinkPastePlugin />
+        <ComposerThreadMentionProviderPlugin />
         {onCollapsePastedText ? (
           <ComposerBigPastePlugin onCollapsePastedText={onCollapsePastedText} />
         ) : null}
         <HistoryPlugin />
       </div>
-    </ComposerTerminalContextActionsContext.Provider>
+    </ComposerRemoveTerminalContextContext.Provider>
   );
 }
 
@@ -1213,6 +1260,7 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    ariaLabel,
     className,
     onRemoveTerminalContext,
     onCollapsePastedText,
@@ -1227,24 +1275,21 @@ export const ComposerPromptEditor = forwardRef<
   // Normalize once at the wrapper boundary so the inner editor can treat mention refs as concrete.
   const normalizedMentionReferences = mentionReferences ?? [];
   const initialMentionReferencesRef = useRef(normalizedMentionReferences);
-  const initialConfig = useMemo<InitialConfigType>(
-    () => ({
-      namespace: "synara-composer-editor",
-      editable: true,
-      nodes: [...COMPOSER_NODE_CLASSES],
-      editorState: () => {
-        $setComposerEditorPrompt(
-          initialValueRef.current,
-          initialTerminalContextsRef.current,
-          initialMentionReferencesRef.current,
-        );
-      },
-      onError: (error) => {
-        throw error;
-      },
-    }),
-    [],
-  );
+  const initialConfig: InitialConfigType = {
+    namespace: "synara-composer-editor",
+    editable: true,
+    nodes: [...COMPOSER_NODE_CLASSES],
+    editorState: () => {
+      $setComposerEditorPrompt(
+        initialValueRef.current,
+        initialTerminalContextsRef.current,
+        initialMentionReferencesRef.current,
+      );
+    },
+    onError: (error) => {
+      throw error;
+    },
+  };
 
   return (
     <LexicalComposer key={COMPOSER_EDITOR_HMR_KEY} initialConfig={initialConfig}>
@@ -1255,6 +1300,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
         onPaste={onPaste}

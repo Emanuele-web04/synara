@@ -15,7 +15,7 @@ import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 export function ThreadPinToggleButton({
   pinned,
   presentation,
-  targetLabel = "thread",
+  targetLabel: targetLabelProp,
   toneClassName,
   onToggle,
 }: {
@@ -25,6 +25,7 @@ export function ThreadPinToggleButton({
   toneClassName?: string;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
+  const targetLabel = targetLabelProp ?? "thread";
   const label = pinActionLabel(targetLabel, pinned);
 
   return (

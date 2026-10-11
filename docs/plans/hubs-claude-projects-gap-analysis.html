@@ -1,0 +1,2161 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="data:," />
+    <title>Hub Synara e Claude Projects · comparazione e piano</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      :root {
+        color-scheme: light;
+        --bg: #f7f6f2;
+        --paper: #fff;
+        --ink: #172d2a;
+        --muted: #5c6c68;
+        --line: #d9e1dc;
+        --accent: #236451;
+        --soft: #e9f2eb;
+      }
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 24px;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          16px/1.65 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      a {
+        color: var(--accent);
+        text-underline-offset: 3px;
+        overflow-wrap: anywhere;
+      }
+      button {
+        font: inherit;
+        font-size: 0.86rem;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        background: var(--paper);
+        color: var(--ink);
+        padding: 8px 13px;
+        border-radius: 6px;
+      }
+      button:hover {
+        border-color: var(--accent);
+        background: var(--soft);
+      }
+      button:focus-visible,
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid #af762c;
+        outline-offset: 3px;
+      }
+      .shell {
+        max-width: 1550px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 245px minmax(0, 1fr);
+        gap: 42px;
+        padding: 48px 42px;
+      }
+      nav {
+        position: sticky;
+        top: 28px;
+        align-self: start;
+        max-height: calc(100vh - 56px);
+        overflow-y: auto;
+        font-size: 0.84rem;
+      }
+      nav .brand {
+        letter-spacing: 0.18em;
+        font-weight: 700;
+        font-size: 0.76rem;
+        margin-bottom: 30px;
+      }
+      nav a {
+        display: flex;
+        gap: 12px;
+        text-decoration: none;
+        color: var(--muted);
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      nav a span {
+        flex-shrink: 0;
+        white-space: nowrap;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      nav .actions {
+        display: grid;
+        gap: 10px;
+        margin-top: 28px;
+      }
+      main {
+        min-width: 0;
+      }
+      .eyebrow {
+        font-size: 0.8rem;
+        font-weight: 650;
+        letter-spacing: 0.13em;
+        color: var(--accent);
+      }
+      h1 {
+        font:
+          500 clamp(2.4rem, 4.6vw, 4.8rem)/1.08 Georgia,
+          serif;
+        letter-spacing: -0.04em;
+        margin: 17px 0 25px;
+        max-width: 850px;
+      }
+      header .lead {
+        font-size: 1.18rem;
+        max-width: 75ch;
+      }
+      .facts {
+        display: flex;
+        gap: 30px;
+        flex-wrap: wrap;
+        margin: 28px 0;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      .facts strong {
+        display: block;
+        font-size: 1.05rem;
+        color: var(--ink);
+      }
+      .verdict {
+        border-left: 4px solid var(--accent);
+        padding: 15px 22px;
+        background: var(--soft);
+        max-width: 85ch;
+      }
+      .verdict p {
+        margin: 0;
+      }
+      .milestones {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        margin: 34px 0 45px;
+        border-top: 2px solid var(--accent);
+        gap: 16px;
+      }
+      .milestones a {
+        padding-top: 14px;
+        text-decoration: none;
+      }
+      .milestones b {
+        display: block;
+        color: var(--ink);
+      }
+      .milestones span {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      section {
+        padding: 40px 0 22px;
+        border-top: 1px solid var(--line);
+      }
+      h2 {
+        font:
+          500 clamp(1.65rem, 2.4vw, 2.25rem)/1.25 Georgia,
+          serif;
+        letter-spacing: -0.02em;
+        margin: 0 0 22px;
+      }
+      h3 {
+        font-size: 1.13rem;
+        line-height: 1.4;
+        margin: 32px 0 13px;
+      }
+      p {
+        max-width: 85ch;
+        margin: 14px 0;
+      }
+      li {
+        margin: 10px 0;
+        max-width: 95ch;
+      }
+      ul,
+      ol {
+        padding-left: 24px;
+      }
+      .table-scroll {
+        overflow: auto;
+        margin: 22px 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--paper);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        min-width: 670px;
+      }
+      th {
+        text-align: left;
+        background: var(--soft);
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+        font-weight: 650;
+      }
+      th,
+      td {
+        padding: 15px 17px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td:first-child {
+        font-weight: 600;
+        min-width: 155px;
+      }
+      tbody tr:hover {
+        background: #f6f9f5;
+      }
+      code {
+        font-size: 0.87em;
+        background: #eaf0eb;
+        padding: 2px 5px;
+        border-radius: 3px;
+        overflow-wrap: anywhere;
+      }
+      .ev {
+        display: inline-block;
+        font-size: 0.75rem;
+        text-decoration: none;
+        background: var(--soft);
+        padding: 0 4px;
+        border-radius: 3px;
+        margin-left: 3px;
+      }
+      .work {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin: 14px 0;
+      }
+      .work summary {
+        cursor: pointer;
+        font-weight: 650;
+        padding: 20px 23px;
+        line-height: 1.5;
+      }
+      .work[open] summary {
+        border-bottom: 1px solid var(--line);
+        background: var(--soft);
+      }
+      .work-body {
+        padding: 4px 24px 20px;
+      }
+      .section-tools {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+      }
+      .diagram {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        color: var(--accent);
+        overflow: auto;
+      }
+      .diagram svg {
+        width: 100%;
+        min-width: 660px;
+        height: auto;
+        display: block;
+      }
+      .nodes rect {
+        fill: var(--soft);
+        stroke: var(--line);
+      }
+      .labels {
+        font:
+          600 16px -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        fill: var(--ink);
+      }
+      .labels .small {
+        font-size: 12px;
+        font-weight: 400;
+        fill: var(--muted);
+      }
+      .mockup {
+        border: 1px solid var(--line);
+        padding: 24px;
+        margin: 22px 0;
+        background: var(--paper);
+        border-radius: 8px;
+      }
+      .mock-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+      }
+      .request {
+        font-weight: 600;
+        font-size: 1.1rem;
+      }
+      .mock-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .mock-grid > div {
+        border-top: 2px solid var(--accent);
+        padding: 15px;
+        background: var(--bg);
+      }
+      .mock-grid strong {
+        display: block;
+        font-size: 0.95rem;
+        margin-top: 10px;
+      }
+      .mock-grid p {
+        font-size: 0.86rem;
+        line-height: 1.6;
+      }
+      .mock-grid small {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+      .tag {
+        font-size: 0.72rem;
+        color: var(--accent);
+      }
+      .tag.queued {
+        color: #92601b;
+      }
+      footer {
+        padding: 35px 0;
+        color: var(--muted);
+        font-size: 0.83rem;
+      }
+      .status {
+        min-height: 1.5em;
+        color: var(--accent);
+        font-size: 0.8rem;
+      }
+      @media (max-width: 1080px) {
+        .shell {
+          grid-template-columns: 185px minmax(0, 1fr);
+          gap: 25px;
+          padding: 30px 24px;
+        }
+        .mock-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 760px) {
+        .shell {
+          display: block;
+          padding: 24px 18px;
+        }
+        nav {
+          position: static;
+          max-height: none;
+          margin-bottom: 30px;
+        }
+        nav .brand {
+          margin-bottom: 12px;
+        }
+        nav > a {
+          display: none;
+        }
+        nav .actions {
+          display: flex;
+          flex-wrap: wrap;
+          margin: 10px 0;
+        }
+        .facts {
+          gap: 17px;
+        }
+        .milestones {
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-bottom: 25px;
+        }
+        section {
+          padding-top: 30px;
+        }
+        .mockup {
+          padding: 16px;
+        }
+        .work summary {
+          padding: 16px;
+        }
+        .work-body {
+          padding: 4px 16px 16px;
+        }
+        .mock-head {
+          flex-direction: column;
+        }
+        .diagram {
+          padding: 10px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+      @media print {
+        nav,
+        .section-tools,
+        .status {
+          display: none;
+        }
+        .shell {
+          display: block;
+          padding: 0;
+        }
+        body {
+          background: white;
+          font-size: 10pt;
+        }
+        header,
+        section {
+          break-before: auto;
+        }
+        .work-body {
+          display: block !important;
+        }
+        details > summary {
+          list-style: none;
+        }
+        .table-scroll {
+          overflow: visible;
+        }
+        table {
+          min-width: 0;
+          font-size: 8pt;
+        }
+        .milestones {
+          margin: 20px 0;
+        }
+        .diagram svg {
+          min-width: 0;
+        }
+        a {
+          color: inherit;
+        }
+        h2,
+        h3,
+        summary {
+          break-after: avoid;
+        }
+        tr {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <nav aria-label="Indice">
+        <div class="brand">SYNARA / PROJECTS</div>
+        <a href="#section-1"><span>01</span>Perimetro ed evidenza</a
+        ><a href="#section-2"><span>02</span>Cosa abbiamo, cosa manca</a
+        ><a href="#section-3"><span>03</span>Problemi concreti prima delle nuove funzioni</a
+        ><a href="#section-4"><span>04</span>Cosa prendere dal blueprint, cosa correggere</a
+        ><a href="#section-5"><span>05</span>Architettura proposta</a
+        ><a href="#section-6"><span>06</span>Piano eseguibile</a
+        ><a href="#section-7"><span>07</span>Ordine e primo incremento raccomandato</a
+        ><a href="#section-8"><span>08</span>Verifica della versatilità</a
+        ><a href="#section-9"><span>09</span>Rischi, vincoli e scelte ancora aperte</a
+        ><a href="#section-10"><span>10</span>Riferimenti al codice</a>
+        <div class="actions">
+          <button type="button" id="download">Scarica Markdown</button
+          ><button type="button" id="copy">Copia piano</button
+          ><button type="button" id="print">Stampa / PDF</button>
+        </div>
+        <p class="status" role="status"></p>
+      </nav>
+      <main>
+        <header>
+          <div class="eyebrow">SYNARA · ANALISI DI PRODOTTO E ARCHITETTURA</div>
+          <h1>Hub Synara e<br />Claude Projects.</h1>
+          <p class="lead">
+            Hub Synara e Claude Code Projects: cosa c’è già, dove il comportamento si interrompe e
+            come colmare il divario riutilizzando la base esistente.
+          </p>
+          <div class="facts">
+            <div><strong>2 ottobre 2026</strong>Snapshot 09461820111d</div>
+            <div><strong>8 unità di lavoro</strong>Con dipendenze e accettazione</div>
+            <div><strong>Solo analisi e piano</strong>Nessuna modifica applicativa</div>
+          </div>
+          <div class="verdict">
+            <p>
+              <strong>Raccomandazione:</strong> partire da ruoli coerenti e richieste fedeli. Poi
+              card, coda e reazioni alle PR. Memoria, Library, gateway, automazioni e recovery sono
+              già presenti.
+            </p>
+          </div>
+          <div class="milestones">
+            <a href="#section-3"><b>01 · Coerenza</b><span>Ruoli e follow-up</span></a
+            ><a href="#w1"><b>02 · Continuità</b><span>Origine e progress</span></a
+            ><a href="#w3"><b>03 · Esecuzione</b><span>Coda e workspace</span></a
+            ><a href="#w5"><b>04 · Autonomia</b><span>PR, decisioni, contesto</span></a>
+          </div>
+        </header>
+        <section id="section-1" aria-labelledby="heading-1">
+          <h2 id="heading-1">1. Perimetro ed evidenza</h2>
+          <p>
+            Snapshot Synara: <code>09461820111d083c028a843d35face33fd5a52dd</code>, branch
+            <code>synara/compare-project-logic</code>. Working tree inizialmente pulito. Tre
+            verifiche indipendenti con subagent GPT-6.1 Sol: runtime, prodotto/UI e fonti Claude;
+            sintesi e controlli incrociati dell’agente principale.
+          </p>
+          <ul>
+            <li>
+              <strong>Synara:</strong> lettura di contratti, servizi, persistenza, gateway, reactor,
+              componenti e documentazione. Non è una prova runtime/provider/browser dell’app.
+            </li>
+            <li>
+              <strong>Claude:</strong> documentazione pubblica ufficiale verificata il 2 ottobre
+              2026. Nessun accesso al backend o a una sessione autenticata Claude Projects.
+            </li>
+            <li>
+              <strong>Blueprint allegato:</strong> letto integralmente. È una descrizione adattata e
+              una proposta per Synara; i prompt interni, i nomi MCP e il wake XML non sono contratti
+              pubblici verificati.
+            </li>
+            <li>
+              <strong>Consegna:</strong> questo piano e una vista HTML. Nessuna modifica
+              applicativa, migrazione, pubblicazione o modifica dei modelli. Nessuna suite
+              applicativa eseguita per questa analisi.
+            </li>
+          </ul>
+          <p>
+            Il prodotto da confrontare è <strong>Claude Code Projects</strong>, con coordinatore e
+            sessioni delegate. I Projects classici di Claude.ai con knowledge base/RAG sono un’altra
+            esperienza: RAG non è un requisito dimostrato del nuovo coordinatore.
+            <a href="https://support.claude.com/en/articles/9517075-what-are-projects"
+              >Projects classici</a
+            >,
+            <a
+              href="https://support.claude.com/en/articles/11473015-retrieval-augmented-generation-rag-for-projects"
+              >RAG</a
+            >.
+          </p>
+          <p>
+            Le descrizioni Claude nella matrice sono intenzionalmente sintetiche. Fonti primarie:
+            <a href="https://claude.com/blog/projects-redesigned">annuncio Projects</a>,
+            <a href="https://code.claude.com/docs/en/claude-projects">guida Projects</a>,
+            <a href="https://code.claude.com/docs/en/claude-code-on-the-web"
+              >sessioni cloud e auto-fix</a
+            >.
+          </p>
+        </section>
+        <section id="section-2" aria-labelledby="heading-2">
+          <h2 id="heading-2">2. Cosa abbiamo, cosa manca</h2>
+          <div class="table-scroll" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Capacità</th>
+                  <th scope="col">Claude documentato</th>
+                  <th scope="col">Synara nel checkout</th>
+                  <th scope="col">Valutazione / intervento</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Coordinatore e routing</td>
+                  <td>
+                    Nuovo lavoro, follow-up, risposta diretta.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#send-work-and-read-results"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>Già previsti dal playbook. <a class="ev" href="#s1">S1</a></td>
+                  <td>Presente; manca un contratto verificabile dell’instradamento. W1.</td>
+                </tr>
+                <tr>
+                  <td>Più repository e lavoro non-code</td>
+                  <td>
+                    Entrambi. <a href="https://claude.com/blog/projects-redesigned">Annuncio</a>
+                  </td>
+                  <td>
+                    Hub senza repo, repository collegati, workspace per worker.
+                    <a class="ev" href="#s2">S2</a>
+                  </td>
+                  <td>
+                    Presente. Conservare questa versatilità; il blueprint mono-repo la ridurrebbe.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Provider e modelli</td>
+                  <td>
+                    Claude; modelli/effort separati.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#choose-models-and-let-claude-manage-context"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Gateway multi-provider, routing e picker già disponibili.
+                    <a class="ev" href="#s3">S3</a>
+                  </td>
+                  <td>Punto di forza Synara; parità delle capacità da verificare per provider.</td>
+                </tr>
+                <tr>
+                  <td>Isolamento del codice</td>
+                  <td>
+                    Branch e copia per thread cloud.
+                    <a href="https://claude.com/blog/projects-redesigned">Annuncio</a>
+                  </td>
+                  <td>
+                    Worktree disponibili; nuovo Hub usa Local di default.
+                    <a class="ev" href="#s4">S4</a>
+                  </td>
+                  <td>Parziale: impostazioni per repo e policy esplicita dei nuovi task. W3.</td>
+                </tr>
+                <tr>
+                  <td>Contesto comune</td>
+                  <td>
+                    Istruzioni, memoria, file.
+                    <a href="https://claude.com/blog/projects-redesigned">Annuncio</a>
+                  </td>
+                  <td>
+                    Packet per turno, indice memoria, revisioni e Library.
+                    <a class="ev" href="#s5">S5</a>
+                  </td>
+                  <td>Presente. Correggere ruoli e distinguere istruzioni da dati. W0/W6.</td>
+                </tr>
+                <tr>
+                  <td>Fedeltà del brief</td>
+                  <td>Dettaglio interno non pubblico.</td>
+                  <td>
+                    Prompt del coordinatore, senza messaggi originali/allegati copiati per ID.
+                    <a class="ev" href="#s6">S6</a>
+                  </td>
+                  <td>Gap rispetto al blueprint, non inferiorità Claude dimostrata. W1.</td>
+                </tr>
+                <tr>
+                  <td>Card sotto la richiesta</td>
+                  <td>
+                    Card collegate al messaggio.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#send-work-and-read-results"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Righe Overview e link; manca la card Hub legata all’origine.
+                    <a class="ev" href="#s7">S7</a>
+                  </td>
+                  <td>Gap UX concreto. W1/W2.</td>
+                </tr>
+                <tr>
+                  <td>Progress e risultati</td>
+                  <td>
+                    Risultati nel thread.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#send-work-and-read-results"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Messaggi normali, monitor e riepiloghi nel coordinatore; nessuna checklist Hub
+                    revisionata. <a class="ev" href="#s1">S1</a><a class="ev" href="#s7">S7</a>
+                  </td>
+                  <td>Separare progress silenzioso, risultato e attenzione. W2.</td>
+                </tr>
+                <tr>
+                  <td>Decisioni strutturate</td>
+                  <td>Protocollo del blueprint non verificato.</td>
+                  <td>
+                    Domande asincrone persistenti esistono, limitate a Codex top-level.
+                    <a class="ev" href="#s8">S8</a>
+                  </td>
+                  <td>Parziale; riutilizzare UI con contratto Hub distinto. W4.</td>
+                </tr>
+                <tr>
+                  <td>Limite parallelo</td>
+                  <td>
+                    Preferenza in chat, non hard cap.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#tune-how-claude-runs-a-project"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Limite server, default massimo 8; oltre il limite errore, senza coda spawn.
+                    Settings non lo espone. <a class="ev" href="#s9">S9</a>
+                  </td>
+                  <td>Garanzia già utile, esperienza incompleta. W3.</td>
+                </tr>
+                <tr>
+                  <td>Recovery e wake</td>
+                  <td>
+                    Coordinamento continuativo.
+                    <a href="https://claude.com/blog/projects-redesigned">Annuncio</a>
+                  </td>
+                  <td>
+                    Inbox durable, cursor, coalescing, health ladder e proprietà dei turni.
+                    <a class="ev" href="#s10">S10</a>
+                  </td>
+                  <td>Fondamenta già presenti. Estenderle, non sostituirle.</td>
+                </tr>
+                <tr>
+                  <td>Overview / PR</td>
+                  <td>
+                    Review, Waiting, Working, Landing, Idle, Resolved.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#see-what-needs-you-in-overview"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Cinque bucket derivati; Landing è solo un’etichetta inutilizzata.
+                    <a class="ev" href="#s11">S11</a>
+                  </td>
+                  <td>Aggiungere stato PR fondato su evidenze. W5.</td>
+                </tr>
+                <tr>
+                  <td>Reazione a CI/review</td>
+                  <td>
+                    Auto-fix per PR.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-code-on-the-web#auto-fix-pull-requests"
+                      >Cloud</a
+                    >
+                  </td>
+                  <td>
+                    Lettura PR, commenti e polling UI; manca watcher Hub server che risvegli il
+                    worker. <a class="ev" href="#s12">S12</a>
+                  </td>
+                  <td>Gap funzionale importante. W5.</td>
+                </tr>
+                <tr>
+                  <td>Routine</td>
+                  <td>
+                    Programmazione ricorrente.
+                    <a href="https://code.claude.com/docs/en/claude-projects">Guida</a>
+                  </td>
+                  <td>
+                    Automazioni heartbeat, standalone, dedicated e schedule già esistenti.
+                    <a class="ev" href="#s13">S13</a>
+                  </td>
+                  <td>Presente; collegare i nuovi eventi senza un secondo scheduler.</td>
+                </tr>
+                <tr>
+                  <td>Memoria modificabile</td>
+                  <td>
+                    File editabili nelle impostazioni.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#give-a-project-standing-context"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Note/index/dedup e revisioni; Settings View/Add, forget via agente.
+                    <a class="ev" href="#s14">S14</a>
+                  </td>
+                  <td>Completare edit/delete e provenienza. W6.</td>
+                </tr>
+                <tr>
+                  <td>Library</td>
+                  <td>
+                    Input e output condivisi.
+                    <a href="https://claude.com/blog/projects-redesigned">Annuncio</a>
+                  </td>
+                  <td>
+                    Upload, preview, filtri, history/restore Git, remote opzionale.
+                    <a class="ev" href="#s15">S15</a>
+                  </td>
+                  <td>Già ricca. Search cerca solo nomi nei folder caricati. W6.</td>
+                </tr>
+                <tr>
+                  <td>Contesto nel tempo</td>
+                  <td>
+                    Recenti + memoria, non intera history.
+                    <a
+                      href="https://code.claude.com/docs/en/claude-projects#choose-models-and-let-claude-manage-context"
+                      >Guida</a
+                    >
+                  </td>
+                  <td>
+                    Packet limitato a 32.000 caratteri; conversazione provider persistente.
+                    <a class="ev" href="#s5">S5</a><a class="ev" href="#s9">S9</a>
+                  </td>
+                  <td>Valutare riciclo solo dopo misure e prova di continuità. W7.</td>
+                </tr>
+                <tr>
+                  <td>Esecuzione a computer spento</td>
+                  <td>
+                    Cloud continua.
+                    <a href="https://code.claude.com/docs/en/claude-code-on-the-web">Cloud</a>
+                  </td>
+                  <td>
+                    Runtime sui propri host; questo audit non qualifica la disponibilità remota
+                    end-to-end.
+                  </td>
+                  <td>
+                    Differenza infrastrutturale. Richiede host acceso; cloud gestito fuori da questo
+                    piano.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Voce esclusivamente via tool</td>
+                  <td>Non verificata pubblicamente.</td>
+                  <td>
+                    Transcript provider e tool normali; automazioni hanno già notify/silent.
+                    <a class="ev" href="#s13">S13</a>
+                  </td>
+                  <td>Scelta di design opzionale, non prerequisito della versatilità.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section id="section-3" aria-labelledby="heading-3">
+          <h2 id="heading-3">3. Problemi concreti prima delle nuove funzioni</h2>
+          <h3>A. Worker istruito come coordinatore — confermato nel codice</h3>
+          <p>
+            <code>isCoordinatorLike</code> include i worker. Il packet inserisce il playbook che
+            ordina di dirigere il lavoro senza scrivere codice, insieme alle regole
+            Watch/redelegate. Lo stesso packet dice poi al worker di non essere il coordinatore. Il
+            server, correttamente, gli impedisce di creare altri worker.
+            <a class="ev" href="#s5">S5</a><a class="ev" href="#s1">S1</a
+            ><a class="ev" href="#s16">S16</a>
+          </p>
+          <p>
+            <strong>Effetto possibile:</strong> rifiuti inutili dei tool, ruolo ambiguo, risposta al
+            posto dell’esecuzione. La contraddizione è provata; frequenza e impatto sui modelli non
+            sono misurati. Prima modifica raccomandata: contesto distinto per coordinator, worker e
+            member manuale.
+          </p>
+          <h3>B. Due policy sulla prosecuzione — confermato nel codice</h3>
+          <p>
+            La policy generale impone attesa dei risultati e vieta thread sostitutivi senza nuova
+            richiesta; il playbook Hub demanda al monitor e invita a sostituire worker falliti.
+            <a class="ev" href="#s13">S13</a><a class="ev" href="#s1">S1</a> Serve una policy per
+            ruolo che mantenga i vincoli generali di autorizzazione e lasci al server il recupero
+            entro i limiti già previsti.
+          </p>
+          <h3>C. Origine della richiesta non preservata nel prompt — limite confermato</h3>
+          <p>
+            Creazione e follow-up usano testo scritto dall’agente come messaggio
+            <code>role: user</code>, con <code>dispatchOrigin: agent</code> interno e lista allegati
+            vuota. Il modello non riceve un blocco separato con le parole originali copiate dal
+            server. <a class="ev" href="#s6">S6</a> L’idempotenza della creazione protegge
+            l’operazione nello stesso turno; non rappresenta da sola la continuità di una richiesta
+            umana attraverso più wake. <a class="ev" href="#s17">S17</a>
+          </p>
+          <p>
+            <strong>Conseguenza:</strong> la fedeltà dipende dalla parafrasi del coordinatore; il
+            collegamento richiesta → worker resta insufficiente per deduplica e card. Non è evidenza
+            di un bypass delle autorizzazioni.
+          </p>
+          <h3>D. Steering diverso da quanto descritto — confermato nel codice</h3>
+          <p>
+            Il tool descrive il fallback di <code>steer</code> come semplice accodamento. Il
+            reactor, senza steering nativo e con turno live, accoda in testa e interrompe il turno
+            in corso. <a class="ev" href="#s18">S18</a> Il default <code>queue</code> già attende:
+            conservarlo per normali follow-up e milestone. Esplicitare e qualificare separatamente
+            l’eventuale interruzione.
+          </p>
+          <h3>E. Segnale di attenzione per repository collegati — inferenza statica forte</h3>
+          <p>
+            La sidebar passa al selector Hub ID e coordinator ID, senza
+            <code>memberThreadIds</code>; il selector riconosce i membri in altri repository solo
+            con quell’insieme. Il pannello usa invece task/index dei membri. Anche il segnale
+            recovery <code>needsYou</code> non è allineato fra i due percorsi.
+            <a class="ev" href="#s19">S19</a> Rischio: pannello che mostra un worker bloccato e
+            sidebar senza indicatore. Da riprodurre in browser prima della correzione.
+          </p>
+          <h3>F. Ricerca Library incompleta — limite esplicito</h3>
+          <p>
+            Il filtro confronta il percorso del file; l’albero include soltanto directory già
+            caricate. Un file può non comparire nella ricerca finché il folder non è stato aperto.
+            <a class="ev" href="#s15">S15</a> Risolvere prima la ricerca per nome sull’intero
+            albero; full text e ricerca semantica sono fasi eventuali.
+          </p>
+        </section>
+        <section id="section-4" aria-labelledby="heading-4">
+          <h2 id="heading-4">4. Cosa prendere dal blueprint, cosa correggere</h2>
+          <div class="table-scroll" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Proposta</th>
+                  <th scope="col">Decisione raccomandata</th>
+                  <th scope="col">Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Originali utente separati dal brief</td>
+                  <td>Adottare</td>
+                  <td>
+                    Riferimenti verificati dal server, revisioni e allegati preservano intenti e
+                    provenienza.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Wake con tipo e origine</td>
+                  <td>Adottare nel modello esistente</td>
+                  <td>
+                    Tipi in contracts, delivery nell’orchestrazione e inbox attuali. XML è solo una
+                    possibile rappresentazione.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Progress silenzioso, risultato nel thread</td>
+                  <td>Adottare gradualmente</td>
+                  <td>
+                    Card e report chiari; coordinatore mantiene un riepilogo utile con link e alert
+                    azionabili.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Ogni frase del brief è un requisito</td>
+                  <td>Rifiutare</td>
+                  <td>
+                    Contraddice la stessa distinzione principal/relay del blueprint. Un agente non
+                    genera autorizzazione umana.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Nuovo schema project/message/thread e nuovo MCP</td>
+                  <td>Evitare</td>
+                  <td>
+                    Duplicherebbe entità, saga, session registry, gateway e migrazioni già
+                    disponibili.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Nuovi runner CLI generici</td>
+                  <td>Evitare</td>
+                  <td>
+                    Synara ha adapter e lifecycle specifici. Non sostituire SDK/app-server con
+                    ricette CLI del documento.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Worktree = sandbox</td>
+                  <td>Correggere</td>
+                  <td>Il worktree separa file Git, non processi, rete o credenziali.</td>
+                </tr>
+                <tr>
+                  <td>Shared file: rileggi e poi scrivi</td>
+                  <td>Conservare le garanzie Synara</td>
+                  <td>
+                    Rileggere non evita lost update. Mantenere expectedRevision/CAS e Library
+                    versionata.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Stateless ogni wake = costo piatto, zero perdita</td>
+                  <td>Sperimentare, non promettere</td>
+                  <td>
+                    Snapshot cresce, riciclo può perdere dettagli e cache. Prima misure e memoria
+                    sufficiente.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Nascondere sempre il testo normale</td>
+                  <td>Rinviare</td>
+                  <td>
+                    Un provider può terminare senza i nuovi tool: serve fallback visibile per
+                    risultato, errore e domande.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Continuare sul recommended mentre si aspetta</td>
+                  <td>Limitare al lavoro indipendente</td>
+                  <td>Una decisione necessaria o un’approvazione ancora aperta non è consenso.</td>
+                </tr>
+                <tr>
+                  <td>Ogni evento sveglia il coordinatore</td>
+                  <td>Sostituire con milestone deduplicate</td>
+                  <td>Evitare loop progress → wake → progress, costi e rumore.</td>
+                </tr>
+                <tr>
+                  <td>Ready significa CI green</td>
+                  <td>Separare Review da merge-ready</td>
+                  <td>
+                    Le docs Claude indicano PR aperta in attesa di review. CI verde da sola non
+                    basta per il merge in Synara.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Altre ambiguità interne dell’allegato da non trasferire: una sola azione visibile contro
+            multi-spawn; <code>failed</code> sia stato autonomo sia Waiting;
+            <code>priority=now</code> senza contratto di cancellazione; replay con solo
+            <code>delivered_at</code>; citazioni dichiarate top-level ma annidate. Sono problemi
+            della proposta, non difetti dimostrati del backend Claude.
+          </p>
+        </section>
+        <section id="section-5" aria-labelledby="heading-5">
+          <h2 id="heading-5">5. Architettura proposta</h2>
+          <div class="diagram">
+            <svg viewBox="0 0 920 260" role="img" aria-labelledby="flowtitle flowdesc">
+              <title id="flowtitle">Flusso proposto, esteso sull’orchestrazione Synara</title>
+              <desc id="flowdesc">
+                La richiesta persistita passa al routing con provenienza, alla coda di ammissione e
+                al worker. Il worker produce progress e risultati. Provider, PR e routine alimentano
+                l’inbox già esistente, che aggiorna le viste e consegna i nuovi turni.
+              </desc>
+              <defs>
+                <marker
+                  id="arrow"
+                  markerWidth="10"
+                  markerHeight="10"
+                  refX="8"
+                  refY="4"
+                  orient="auto"
+                >
+                  <path d="M0,0 L8,4 L0,8" fill="none" stroke="currentColor" />
+                </marker>
+              </defs>
+              <g fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)">
+                <path d="M188 57H243" />
+                <path d="M423 57H478" />
+                <path d="M658 57H713" />
+                <path d="M807 88V175H660" />
+                <path d="M475 205H423" />
+                <path d="M330 175V91" />
+                <path d="M238 205H189" />
+              </g>
+              <g class="nodes">
+                <rect x="8" y="25" width="180" height="65" rx="8" />
+                <rect x="243" y="25" width="180" height="65" rx="8" />
+                <rect x="478" y="25" width="180" height="65" rx="8" />
+                <rect x="713" y="25" width="198" height="65" rx="8" />
+                <rect x="475" y="172" width="185" height="65" rx="8" />
+                <rect x="238" y="172" width="185" height="65" rx="8" />
+                <rect x="8" y="172" width="180" height="65" rx="8" />
+              </g>
+              <g class="labels" text-anchor="middle">
+                <text x="98" y="52">Richiesta originale</text>
+                <text class="small" x="98" y="74">testo · allegati · revisione</text>
+                <text x="333" y="52">Routing persistente</text>
+                <text class="small" x="333" y="74">W1 · provenienza</text>
+                <text x="568" y="52">Ammissione / coda</text>
+                <text class="small" x="568" y="74">W3 · limite e workspace</text>
+                <text x="812" y="52">Worker per ruolo</text>
+                <text class="small" x="812" y="74">W0 · adapter esistenti</text>
+                <text x="567" y="199">Progress / risultati</text>
+                <text class="small" x="567" y="222">provider · PR · routine</text>
+                <text x="330" y="199">Inbox e turni</text>
+                <text class="small" x="330" y="222">durable · già presenti</text>
+                <text x="98" y="199">Viste coerenti</text>
+                <text class="small" x="98" y="222">W2 · card e Overview</text>
+              </g>
+            </svg>
+          </div>
+          <aside class="mockup" aria-label="Esempio concettuale dell'esperienza proposta">
+            <div class="mock-head">
+              <span>PROPOSTA UI · NON IMPLEMENTATA</span><span>3 ammessi / limite 3</span>
+            </div>
+            <p class="request">
+              «Sistema il login, aggiorna la guida e controlla le tre integrazioni.»
+            </p>
+            <div class="mock-grid">
+              <div>
+                <span class="tag">In corso</span><strong>Correzione login</strong>
+                <p>Riproduzione completata<br />Verifica della correzione</p>
+                <small>Originale e allegati collegati</small>
+              </div>
+              <div>
+                <span class="tag">In corso</span><strong>Aggiornamento guida</strong>
+                <p>Contenuti verificati<br />Aggiornamento esempi</p>
+                <small>Output nella Library</small>
+              </div>
+              <div>
+                <span class="tag">In corso</span><strong>Integrazione A</strong>
+                <p>Analisi dei flussi<br />Verifica connessione</p>
+                <small>Progress nel thread</small>
+              </div>
+              <div>
+                <span class="tag queued">In coda · 1</span><strong>Integrazione B</strong>
+                <p>In attesa di uno slot</p>
+                <small>Nessun processo avviato</small>
+              </div>
+              <div>
+                <span class="tag queued">In coda · 2</span><strong>Integrazione C</strong>
+                <p>Segue integrazione B</p>
+                <small>Ordine e cancellazione visibili</small>
+              </div>
+            </div>
+          </aside>
+          <p>
+            <strong>Un’unica catena di responsabilità:</strong> richiesta persistita → decisione di
+            routing → ammissione/coda → worker → progress/risultato → proiezioni UI. Riutilizzare
+            persistenza, receipts e riconciliazione delle wake. L’inbox attuale risveglia il
+            coordinatore: per gli eventi PR diretti ai worker servono destinatario, payload e stato
+            di consegna espliciti, prima dell’inoltro alla coda dei turni.
+            <a class="ev" href="#s20">S20</a>
+          </p>
+          <p>Le tre cose da tenere distinte sono:</p>
+          <ol>
+            <li>
+              <strong>Richiesta:</strong> cosa ha chiesto l’utente e quale revisione è stata
+              inoltrata. Un messaggio può contenere più task; un follow-up può riguardare un task
+              già esistente.
+            </li>
+            <li>
+              <strong>Esecuzione:</strong> tentativo, sessione e stato operativo. Un turno finito
+              non significa task concluso; un retry non significa nuova richiesta.
+            </li>
+            <li>
+              <strong>Consegna:</strong> risultato, file, domanda e PR. Una PR aperta non significa
+              pronta al merge; una PR chiusa senza merge non equivale a successo.
+            </li>
+          </ol>
+          <p>
+            Estendere ProjectTask/managed-worker/eventi esistenti dopo una verifica del loro
+            ownership, evitando un secondo task engine. Conservare API e chiavi persistite
+            <code>groups</code>, route compatibili e gate Beta server/web. Migrazioni additive;
+            nessun comportamento Hub attivo su Stable.
+          </p>
+        </section>
+        <section id="section-6" aria-labelledby="heading-6">
+          <h2 id="heading-6">6. Piano eseguibile</h2>
+          <div class="section-tools">
+            <button id="expand-all" type="button">Apri tutte le unità</button
+            ><button id="collapse-all" type="button">Chiudi tutte</button>
+          </div>
+          <p>
+            Dimensione relativa: <strong>S</strong> modifica circoscritta; <strong>M</strong> un
+            sottosistema e integrazioni; <strong>L</strong> stato persistente e più confini. Non
+            sono stime temporali. Ogni unità deve poter essere revisionata e ripristinata
+            separatamente.
+          </p>
+          <details class="work" id="w0" open>
+            <summary>W0 — Ruoli coerenti e semantica dei follow-up · P0 · M</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> un worker riceve il suo incarico, istruzioni/memoria del
+                Hub e strumenti pertinenti; il coordinatore riceve routing, monitoraggio e vista
+                aggregata.
+              </p>
+              <ul>
+                <li>
+                  Separare il rendering del packet per ruolo. Etichettare istruzioni user-owned,
+                  stato server e report di altri agenti con provenienza distinta; nessun report
+                  diventa autorizzazione.
+                </li>
+                <li>
+                  Preservare i playbook personalizzati; aggiornare automaticamente solo quelli
+                  riconosciuti come system-authored. La separazione deve impedire che il playbook
+                  coordinatore, anche personalizzato, finisca nel packet worker.
+                </li>
+                <li>
+                  Specializzare la policy Hub senza allentare quella delle conversazioni normali. La
+                  health ladder resta responsabile dei retry automatici già consentiti; sostituzioni
+                  fuori policy restano decisioni esplicite.
+                </li>
+                <li>
+                  Conservare <code>queue</code> per follow-up ordinari. Correggere la descrizione
+                  <code>steer</code>; se il prodotto richiede comportamento uniforme, introdurre una
+                  policy esplicita di interrupt senza modificare silenziosamente i provider.
+                </li>
+                <li>
+                  Moduli: <code>projectAgent/Layers/ProjectAgentService.ts</code>,
+                  <code>projectBotPlaybook.ts</code>, <code>agentGateway/harnessPolicy.ts</code>,
+                  catalogo <code>AgentGateway.ts</code>; reactor solo se cambia il comportamento.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> worker mai invitato a coordinare;
+                  coordinator/member ancora corretti; normali follow-up non interrompono; steering
+                  nativo e fallback corrispondono alla policy dichiarata; permessi ruolo invariati.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> due cambi focalizzati, packet/policy e
+                  descrizione/semantica steering. Nessuna migrazione necessaria per la prima parte.
+                  Rischio basso-medio, rollback del renderer/policy.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w1">
+            <summary>W1 — Richieste originali e routing persistente · P1 · L</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> «usa anche questo allegato» raggiunge il worker corretto
+                con testo e allegato originali; retry e riavvio non moltiplicano il lavoro.
+              </p>
+              <ul>
+                <li>
+                  Estendere create/send con riferimenti a messaggi persistiti e brief separato. Il
+                  server controlla accesso, Hub, autore e revisione; copia testo e riferimenti agli
+                  allegati secondo l’accesso del worker, senza fidarsi di <code>trust</code> fornito
+                  dall’agente.
+                </li>
+                <li>
+                  Memorizzare decisione di routing, motivazione breve, destinatari e stato di
+                  consegna. Riutilizzare sourceThread/sourceTurn e operation ID già esistenti.
+                </li>
+                <li>
+                  Chiave logica proposta: Hub + messaggio/revisione + taskKey fissato dal server
+                  alla prima decisione persistita, mai rigenerato liberamente dal modello al retry.
+                  Consente più task dallo stesso messaggio. Un follow-up aggiunge una consegna al
+                  task; riaprire o cambiare scope è un’azione distinta, non una collisione della
+                  deduplica. Aggregare le richieste/task decisi nello stesso turno nel piano
+                  congelato della saga; il ledger delle richieste raccorda i replay fra turni
+                  diversi.
+                </li>
+                <li>
+                  Inserire il record prima del dispatch; riconciliare crash fra prenotazione,
+                  creazione e ack attraverso la saga esistente. Verificare replay prima di
+                  respingere per nuova saturazione del limite.
+                </li>
+                <li>
+                  Moduli: <code>packages/contracts/src/agentGateway.ts</code>,
+                  <code>projectAgent.ts</code>, repository ProjectAgent,
+                  <code>AgentGatewayOperationRepository</code>, <code>creationCoordinator</code>,
+                  <code>AgentGateway</code>, proiezioni orchestration.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> due riavvii e retry danno un solo worker per
+                  taskKey; una richiesta composta crea il numero previsto; citazioni
+                  modificate/falsificate non acquistano autorità; allegati ancora leggibili con
+                  ownership corretta; vecchi thread senza origine restano navigabili.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> schema/persistenza additivi e integrazione gateway in
+                  PR dipendenti. Rischio alto: compatibilità e retention degli allegati. Rollback
+                  disabilita il nuovo routing senza cancellare record.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w2">
+            <summary>W2 — Card di lavoro, progress e attenzione · P1 · M/L</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> sotto la richiesta compaiono i task relativi, con
+                avanzamento e output; la chat del coordinatore resta leggibile.
+              </p>
+              <ul>
+                <li>
+                  Collegare card a W1. Checklist/status revisionati e aggiornabili dal worker
+                  proprietario; distinguere stato riferito dall’agente e stato derivato dal runtime.
+                </li>
+                <li>
+                  Riutilizzare GroupOverview/righe, primitive disclosure e presentazione di
+                  <code>ActiveTaskListCard</code>, <code>ComposerActiveTaskListCard</code> e
+                  <code>PlanSidebar</code>, estraendo il renderer comune se necessario. Il piano
+                  provider viene azzerato a turno concluso: il dato Hub deve restare durabile e
+                  distinto, senza una seconda implementazione visuale della checklist.
+                  <a class="ev" href="#s21">S21</a>
+                </li>
+                <li>
+                  Riutilizzare notice e azioni Retry/Stop/Open. Un solo riepilogo per batch con
+                  risultati/link; errori e domande restano visibili. Non imporre tool-only voice:
+                  mantenere fallback per finali testuali e crash.
+                </li>
+                <li>
+                  Uniformare membership e <code>needsYou</code> di sidebar e pannello, includendo
+                  repository collegati. Questa correzione può uscire prima di W1 dopo riproduzione.
+                </li>
+                <li>
+                  Moduli: <code>projectAgent.ts</code>, <code>projectAgentTools.ts</code>,
+                  <code>GroupOverview.tsx</code>, <code>MessagesTimeline.tsx</code>,
+                  <code>WorkerMonitorNoticePill.tsx</code>, <code>SidebarGroupsSurface.tsx</code> e
+                  relative proiezioni.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> progress non produce notifiche né auto-follow;
+                  reconnect non duplica card; un worker linked bloccato accende entrambi gli
+                  indicatori; un batch con successo/fallimento/attesa comunica ogni esito; final
+                  testuale sempre recuperabile.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> fix membership indipendente; progress backend e card
+                  dipendenti da W1. Rischio medio, rollback alla vista Overview senza perdita dei
+                  progress persistiti.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w3">
+            <summary>W3 — Coda, limiti e workspace · P1 · L</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> una richiesta di cinque task con limite tre avvia tre
+                worker e mostra gli altri due in coda.
+              </p>
+              <ul>
+                <li>
+                  Coda spawn persistente, distinta dalla coda di messaggi. Prenotazione atomica
+                  degli slot per evitare race fra batch; queued non crea processi/worktree prima
+                  dell’ammissione.
+                </li>
+                <li>
+                  Promuovere su rilascio slot, resume e recovery. Cancellazione, pausa, archive e
+                  repository scollegato impediscono nuovi avvii; backlog e motivazione restano
+                  visibili.
+                </li>
+                <li>
+                  La saga provider-session attuale richiede un turno chiamante ancora attivo. Il
+                  dispatch differito deve avere un ingresso server-owned fondato sulla richiesta
+                  autorizzata persistita W1, con accesso, lifecycle e cap rivalidati alla
+                  promozione. Non riutilizzare token/authority del turno ormai concluso e non
+                  disabilitarne i controlli. <a class="ev" href="#s20">S20</a>
+                </li>
+                <li>
+                  Definire slot per lavoro automatico ammesso: avvio, turno live e attesa nativa che
+                  ne conserva la proprietà; PR watcher e thread idle non occupano uno slot. Un task
+                  sospeso riacquisisce lo slot prima del nuovo turno. Non interrompere turni manuali
+                  per fare spazio.
+                </li>
+                <li>
+                  Esporre limiti, coda e preferenza propose-before-start nelle Settings. Proposta di
+                  default: tre worker automatici per nuovi Hub; preservare le impostazioni
+                  esistenti. È una scelta proposta, non un default già applicato.
+                </li>
+                <li>
+                  Preferire worktree per nuovi task di modifica codice, Local per non-code. Base
+                  branch e ambiente per repository/override del task, non un unico branch globale.
+                  Nessun fallback silenzioso da worktree fallito a directory condivisa.
+                </li>
+                <li>
+                  Moduli: config/contracts, ProjectAgent repository/service/reactor, saga
+                  <code>creationCoordinator</code>, GroupGeneral/Environment. Riutilizzare
+                  ProjectTask dove possibile.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> cap rispettato durante avvii concorrenti e dopo
+                  crash; pause zero nuovi dispatch; cancel queued zero processo/worktree; retry già
+                  eseguito riconosciuto anche a cap pieno; Local non-code resta supportato.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> admission/coda prima della UX; dipende da W1 per
+                  richieste stabili. Rischio alto di starvation e slot persi: riconciliazione
+                  runtime + lease solo se necessaria. Rollback congela i queued e mantiene visibili
+                  i task.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w4">
+            <summary>W4 — Decisioni Hub indipendenti dal provider · P2 · M</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> un worker Claude, Codex o altro provider espone una
+                domanda durevole con opzioni, conseguenze e raccomandazione.
+              </p>
+              <ul>
+                <li>
+                  Contratto Hub aggiuntivo con question ID, worker, required/optional, opzioni,
+                  raccomandazione, stato e risposta revisionata. Riutilizzare
+                  <code>AsyncUserInputCard</code> e <code>UserInputQuestionForm</code> rendendo la
+                  presentazione generica.
+                </li>
+                <li>
+                  Non rimuovere la guardia del percorso Codex nativo: integrare un’origine Hub
+                  distinta. Riutilizzare messaggi/queue per la risposta, con idempotenza e accesso
+                  controllato.
+                </li>
+                <li>
+                  Una domanda opzionale non rende automaticamente il task bloccato; una decisione
+                  richiesta impedisce solo il lavoro dipendente. Un’opzione preselezionata non è una
+                  risposta, né un’approvazione di merge/publish.
+                </li>
+                <li>
+                  Le decisioni required alimentano summary e Waiting on you anche quando il worker è
+                  idle: una domanda asincrona non è una pending request nativa. Risposta, scadenza o
+                  revoca aggiornano lo stesso stato condiviso di sidebar e pannello.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> domanda sopravvive a restart/turno concluso;
+                  required + idle resta Waiting su entrambe le superfici; doppio click genera una
+                  risposta; provider diversi mostrano gli stessi campi; risposta/scadenza/revoca
+                  rimuove l’attesa senza riavviare lavoro non autorizzato; autorizzazioni native
+                  restano separate.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> dopo W1, può procedere con W2. Rischio medio; fallback
+                  al thread con domanda visibile. Documentare in <code>docs/hubs.md</code> e
+                  <code>docs/providers.md</code>.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w5">
+            <summary>W5 — PR watcher e stato verificabile · P1/P2 · L</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> una CI rossa o una nuova review torna al worker
+                proprietario anche con pannello chiuso; la UI distingue review, problemi e landing.
+              </p>
+              <ul>
+                <li>
+                  Servizio server che riusa <code>PullRequestService.detail</code>, letture commenti
+                  e coda/cache GitHub. Watch persistente con repository, PR, worker proprietario e
+                  policy esplicitamente autorizzata: osservazione e auto-fix sono livelli diversi.
+                </li>
+                <li>
+                  Fingerprint per head SHA, checks e commenti/review; cambi della base verificati
+                  tramite polling. I contratti/mapping review attuali non preservano
+                  commitId/originalCommitId: estenderli per qualificare l’origine del finding. Non
+                  attribuire al commento l’head corrente al momento del poll; se non correlabile,
+                  evidenza non qualificata e nessun auto-fix. <a class="ev" href="#s22">S22</a>
+                </li>
+                <li>
+                  Estendere l’envelope durable con destinatario worker e payload PR, riusando
+                  receipts/cursor/reconcile ma senza travestire una review da evento di worker
+                  concluso. Deduplica e backoff evitano wake a ogni poll; stop su
+                  pausa/archive/disattivazione e finalizzazione coerente su merge/close.
+                </li>
+                <li>
+                  Conservare “Ready for review” come PR aperta da esaminare, accompagnata da badges
+                  CI/review/freschezza. “Pronta al merge” richiede prove aggiornate; Landing
+                  descrive approvazione/coda di merge effettiva, senza conferire al modello
+                  autorizzazione a unire.
+                </li>
+                <li>
+                  Policy bot esplicita: non trattare qualsiasi commentatore come istruzione. Per il
+                  workflow dell’operatore, Cursor Bugbot è il bot esterno di riferimento; rendere la
+                  policy configurabile anziché universale.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> cambio head invalida evidenza vecchia; stesso
+                  evento non genera fix doppi; commento ostile resta dato; rate limit/gh offline
+                  visibili; nessun merge/deploy/commento esterno fuori autorizzazione; riapertura PR
+                  gestita deliberatamente.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> watcher read-only, poi dispatch/autofix autorizzato,
+                  poi UI. Dipende dalla provenance W1; usa W3 per l’ammissione automatica. Rischio
+                  alto, kill switch watcher e backlog preservato.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w6">
+            <summary>W6 — Memoria e Library più utilizzabili · P2 · M</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato:</strong> correggere una preferenza e ritrovare un file non
+                richiede una nuova conversazione con l’agente.
+              </p>
+              <ul>
+                <li>
+                  Edit/delete delle note dalle Settings riutilizzando documenti revisionati, ma
+                  aggiungendo operazioni user-owned dedicate: oggi <code>writeDocument</code> non
+                  consente all’utente le note automatiche
+                  <code>memory/&lt;date&gt;-&lt;slug&gt;.md</code> e <code>forget</code> rifiuta il
+                  principal user. Non basta collegare un pulsante. Aggiornare atomicamente
+                  nota/indice in DB e riconciliare mirror/stream, conservando i confini di thread
+                  memory e indice generato. <a class="ev" href="#s23">S23</a>
+                </li>
+                <li>
+                  Provenienza minima: chi/cosa ha prodotto la nota, messaggio/task di origine,
+                  revisione; istruzioni umane distinte da conclusioni dell’agente. Moduli:
+                  contratti/RPC ProjectAgent, permessi memory in shared, repository/service e
+                  GroupMemorySection.
+                </li>
+                <li>
+                  Ricerca server per nome su tutto l’albero Library, con limiti/paginazione e
+                  vincoli sul root. Collegare output al task e riusare preview/history/restore.
+                </li>
+                <li>
+                  Non precaricare l’intera Library nel prompt. Indice leggero e lettura selettiva;
+                  full text solo dopo casi d’uso e misure, RAG semantico opzionale.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> due edit concorrenti non si sovrascrivono;
+                  edit/delete aggiornano indice, mirror e UI anche dopo restart; thread memory
+                  mantiene la propria ownership; file in directory mai aperta viene trovato;
+                  rename/delete non lasciano link falsi; provenienza non aumenta l’autorità dei
+                  contenuti.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> memory UI e ricerca Library indipendenti; provenance
+                  estesa dopo W1. Rischio medio, nessun nuovo archivio parallelo.
+                </li>
+              </ul>
+            </div>
+          </details>
+          <details class="work" id="w7">
+            <summary>W7 — Coordinatore a contesto controllato · P2, dopo misure · M/L</summary>
+            <div class="work-body">
+              <p>
+                <strong>Risultato desiderato:</strong> il coordinatore rimane preciso dopo molti
+                task e restart senza reiniettare una cronologia crescente.
+              </p>
+              <ul>
+                <li>
+                  Misurare token input, latenza, wake, informazioni omesse e cache per provider sul
+                  flusso corrente. Il limite di 32.000 caratteri del packet non limita tutta la
+                  history nativa.
+                </li>
+                <li>
+                  Prima migliorare selezione: istruzioni, indice memoria, richieste aperte,
+                  decisioni pendenti, delta di stato e report pertinenti. Esporre eventuali
+                  troncamenti e strumenti per recuperare il resto.
+                </li>
+                <li>
+                  Solo se le misure lo giustificano, checkpoint/versione del contesto e riciclo ai
+                  confini di turno. Preservare provider session semantics, questioni aperte e
+                  replay; niente restart durante tool/approval live.
+                </li>
+                <li>
+                  <strong>Accettazione:</strong> stessa informazione disponibile dopo riciclo per
+                  branch scelto, preferenza, task aperto e decisione; risultati non peggiori della
+                  baseline; costo/latency riportati separatamente, senza promessa “costo costante”.
+                </li>
+                <li>
+                  <strong>Consegna:</strong> misure/strumentazione locale, poi esperimento Beta
+                  reversibile. Nessuna raccolta diagnostica di contenuti. Rischio medio-alto;
+                  mantenere percorso sessione persistente come fallback.
+                </li>
+              </ul>
+            </div>
+          </details>
+        </section>
+        <section id="section-7" aria-labelledby="heading-7">
+          <h2 id="heading-7">7. Ordine e primo incremento raccomandato</h2>
+          <div class="table-scroll" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Fase</th>
+                  <th scope="col">Unità</th>
+                  <th scope="col">Dipendenze</th>
+                  <th scope="col">Cosa può uscire indipendentemente</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Coerenza</td>
+                  <td>W0; riproduzione/fix attenzione W2</td>
+                  <td>Nessuna nuova entità</td>
+                  <td>Ruoli, descrizione steering, indicatore linked worker</td>
+                </tr>
+                <tr>
+                  <td>Continuità</td>
+                  <td>W1 → W2</td>
+                  <td>Origine persistita prima delle card</td>
+                  <td>Progress backend dopo contratto; UI con fallback legacy</td>
+                </tr>
+                <tr>
+                  <td>Esecuzione</td>
+                  <td>W1 → W3</td>
+                  <td>Identità richiesta e saga</td>
+                  <td>Settings dopo admission; nessuna coda puramente visuale</td>
+                </tr>
+                <tr>
+                  <td>Autonomia</td>
+                  <td>W1/W3 → W5; W1 → W4</td>
+                  <td>Ownership, eventi, capacità</td>
+                  <td>Watcher osservativo; decision card separata</td>
+                </tr>
+                <tr>
+                  <td>Contesto</td>
+                  <td>W6; W7</td>
+                  <td>W6 base indipendente; W7 dopo baseline</td>
+                  <td>Ricerca completa per nome e editing note</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <strong>Primo incremento:</strong> W0 e riproduzione del segnale di attenzione. È
+            piccolo, corregge contraddizioni effettive e rende più attendibile qualunque confronto
+            successivo. <strong>Primo incremento percepibile come esperienza Projects:</strong> W1 +
+            card/progress essenziali W2 + coda W3. PR watcher viene dopo questa catena affidabile.
+          </p>
+          <p>
+            Non serve una singola PR enorme. Usare PR indipendenti per i fix; stack soltanto dove lo
+            schema/persistenza è una dipendenza reale, per esempio
+            <code>main ← origine richieste ← integrazione gateway ← card</code>. Dopo il merge della
+            base, riallineare le dipendenti. Nessuna PR aperta in questa fase.
+          </p>
+        </section>
+        <section id="section-8" aria-labelledby="heading-8">
+          <h2 id="heading-8">8. Verifica della versatilità</h2>
+          <p>
+            Questi sono scenari di accettazione proposti, <strong>non test già superati</strong>.
+            Per il confronto prodotto eseguirli anche su Claude con incarichi equivalenti; per le
+            garanzie Synara usare inoltre test deterministici di persistenza e lifecycle. Registrare
+            provider/modello/effort senza cambiarli silenziosamente.
+          </p>
+          <div class="table-scroll" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Scenario</th>
+                  <th scope="col">Esito richiesto in Synara</th>
+                  <th scope="col">Evidenza da raccogliere</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Domanda rapida poi grazie</td>
+                  <td>Risposta/reazione appropriata senza worker inutile</td>
+                  <td>Numero worker e messaggi visibili</td>
+                </tr>
+                <tr>
+                  <td>Tre richieste indipendenti in un messaggio</td>
+                  <td>Tre task collegati allo stesso originale</td>
+                  <td>Mapping e input ricevuti dai worker</td>
+                </tr>
+                <tr>
+                  <td>Follow-up con file mentre il worker lavora</td>
+                  <td>Stesso task, allegato corretto, queue ordinaria</td>
+                  <td>Trace dispatch, integrità allegato, nessuna interruzione implicita</td>
+                </tr>
+                <tr>
+                  <td>Cinque task, cap tre</td>
+                  <td>Tre ammessi, due queued; nessun oversubscription</td>
+                  <td>Reservation/avvii e ordine promozione</td>
+                </tr>
+                <tr>
+                  <td>Restart dopo creazione prima dell’ack</td>
+                  <td>Un solo worker per task</td>
+                  <td>Replay durabile e stato dopo restart</td>
+                </tr>
+                <tr>
+                  <td>Worker linked chiede approvazione</td>
+                  <td>Dot sidebar e pannello concordi; nessuna risposta automatica</td>
+                  <td>Browser + stato server</td>
+                </tr>
+                <tr>
+                  <td>Progress durante lettura vecchi messaggi</td>
+                  <td>Nessun salto al fondo o notifica per checklist</td>
+                  <td>Test transcript e prova browser</td>
+                </tr>
+                <tr>
+                  <td>PR cambia head; arriva un finding vecchio</td>
+                  <td>Nessuna readiness/fix basata su prova stale</td>
+                  <td>SHA/fingerprint e decisione watcher</td>
+                </tr>
+                <tr>
+                  <td>Nota memoria modificata e nuovo worker</td>
+                  <td>Nuova revisione ricevuta, origine conservata</td>
+                  <td>Packet effettivo e CAS</td>
+                </tr>
+                <tr>
+                  <td>Report in folder Library mai aperto</td>
+                  <td>Ricerca lo trova e apre il file corretto</td>
+                  <td>Risposta server e browser</td>
+                </tr>
+                <tr>
+                  <td>Pausa, archive, Stable</td>
+                  <td>Nessun nuovo dispatch Hub; stato conservato</td>
+                  <td>Lifecycle, migrazioni e gate server/web</td>
+                </tr>
+                <tr>
+                  <td>Riciclo coordinatore</td>
+                  <td>Decisioni e richieste aperte ancora disponibili</td>
+                  <td>Confronto prima/dopo e consumo reale</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Misure utili: task duplicati; follow-up assegnati correttamente; richieste da ripetere;
+            messaggi visibili per risultato; decisioni perse dopo restart; richieste automatiche di
+            tool non consentiti al ruolo; wake/token per task. Stabilire baseline e risultati
+            osservati prima di proporre percentuali di miglioramento.
+          </p>
+          <p>
+            Per ogni implementazione: test Vitest mirati tramite <code>bun run test</code>, poi
+            <code>bun run fmt:check</code>, <code>bun run lint</code>,
+            <code>bun run typecheck</code>. Suite più ampia per W1/W3/W5 e lifecycle;
+            <code>bun run migrations:check</code> per migrazioni;
+            <code>bun run windows-runtime:check</code> se si toccano confini process/platform.
+            Qualificazione reale per Claude, Codex e OpenCode inizialmente, poi altri provider
+            supportati. Nessun test mock dimostra avvio/cancellazione live o comportamento Windows
+            confezionato.
+          </p>
+        </section>
+        <section id="section-9" aria-labelledby="heading-9">
+          <h2 id="heading-9">9. Rischi, vincoli e scelte ancora aperte</h2>
+          <div class="table-scroll" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Rischio</th>
+                  <th scope="col">Valutazione</th>
+                  <th scope="col">Contromisura</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Report scambiato per istruzione/consenso</td>
+                  <td>Alto impatto</td>
+                  <td>
+                    Provenienza server, ruoli, citazioni separate; enforcement degli strumenti resta
+                    autoritativo
+                  </td>
+                </tr>
+                <tr>
+                  <td>Doppio spawn dopo crash</td>
+                  <td>Alto impatto</td>
+                  <td>Identità richiesta + saga + riconciliazione, test su confini reali</td>
+                </tr>
+                <tr>
+                  <td>Coda bloccata da slot persi</td>
+                  <td>Alto impatto</td>
+                  <td>
+                    Stato ammissione persistente, release idempotente, recovery senza interrompere
+                    l’utente
+                  </td>
+                </tr>
+                <tr>
+                  <td>Rumore o loop PR/progress/wake</td>
+                  <td>Medio-alto</td>
+                  <td>Fingerprint, milestone, backoff, policy di notifica</td>
+                </tr>
+                <tr>
+                  <td>Nascondere risultati per protocol miss</td>
+                  <td>Alto impatto</td>
+                  <td>Fallback transcript e errori sempre visibili</td>
+                </tr>
+                <tr>
+                  <td>Memoria persa o auto-prompt crescente</td>
+                  <td>Medio-alto</td>
+                  <td>CAS, selezione, budget, checkpoint e confronto misurato</td>
+                </tr>
+                <tr>
+                  <td>Feature attiva in Stable</td>
+                  <td>Alto impatto</td>
+                  <td>
+                    Gate <code>groups</code> su ogni nuovo tool/service/evento, migrazioni
+                    additive/inerti
+                  </td>
+                </tr>
+                <tr>
+                  <td>Sovrapposizione di codice fra worker</td>
+                  <td>Dipende dai task</td>
+                  <td>Worktree + ownership file/task; conflitti di merge restano possibili</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Scelte prodotto da valutare sul piano concreto: default tre o altro limite per nuovi
+            Hub; quanto dettaglio lasciare nel coordinatore; opt-in di auto-fix PR; worktree come
+            default per task di codice; eventuale modalità solo strumenti dopo averne dimostrato
+            l’affidabilità. Nessuna scelta richiede fermare i fix W0.
+          </p>
+          <p>
+            Fuori da questo piano: cloud Synara gestito, sostituzione dei provider runner, nuovo
+            database chat, RAG/vector database preventivo, redesign totale, nuove
+            animazioni/virtualizzazione, cambio automatico di modello, merge/publish. Gli host
+            remoti e i connector richiedono una qualificazione distinta se entrano nell’obiettivo.
+          </p>
+        </section>
+        <section id="section-10" aria-labelledby="heading-10">
+          <h2 id="heading-10">10. Riferimenti al codice</h2>
+          <p>
+            I link sono relativi al repository; numero di riga riferito allo snapshot dichiarato. La
+            guida corrente
+            <a
+              href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/docs/hubs.md"
+              >Hubs</a
+            >
+            è il riferimento prodotto da aggiornare in ogni fase;
+            <a
+              href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/BETA.md"
+              >Beta</a
+            >,
+            <a
+              href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/docs/providers.md"
+              >providers</a
+            >
+            e
+            <a
+              href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/CONTRIBUTING.md"
+              >contribution</a
+            >
+            definiscono i vincoli da preservare.
+          </p>
+          <ul>
+            <li id="s1">
+              <strong><a class="ev" href="#s1">S1</a> Routing e voce:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/projectBotPlaybook.ts#L9"
+                >projectBotPlaybook.ts:9</a
+              >, routing 15–39, monitor/redelegate 75–84.
+            </li>
+            <li id="s2">
+              <strong><a class="ev" href="#s2">S2</a> Multi-repo e non-code:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/docs/core-concepts.md#L240"
+                >core-concepts.md:240</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/GroupEnvironmentSection.tsx#L80"
+                >GroupEnvironmentSection.tsx:80</a
+              >.
+            </li>
+            <li id="s3">
+              <strong><a class="ev" href="#s3">S3</a> Modelli e gateway:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/projectAgent.ts#L52"
+                >projectAgent.ts:52</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/GroupGeneralSection.tsx#L128"
+                >GroupGeneralSection.tsx:128</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/mcpInjection.ts#L4"
+                >mcpInjection.ts:4</a
+              >.
+            </li>
+            <li id="s4">
+              <strong><a class="ev" href="#s4">S4</a> Ambiente:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/groupSettingsDialog.logic.ts#L113"
+                >groupSettingsDialog.logic.ts:113</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/creationCoordinator.ts#L1118"
+                >creationCoordinator.ts:1118</a
+              >.
+            </li>
+            <li id="s5">
+              <strong><a class="ev" href="#s5">S5</a> Contesto e ruoli:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4625"
+                >ProjectAgentService.ts:4625</a
+              >, inclusione worker 4628, playbook 4750, Watch 4800, etichetta authoritative 4827.
+            </li>
+            <li id="s6">
+              <strong><a class="ev" href="#s6">S6</a> Testo delegato:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/agentGateway.ts#L67"
+                >agentGateway.ts:67</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/creationCoordinator.ts#L1170"
+                >creationCoordinator.ts:1170</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/Layers/AgentGateway.ts#L555"
+                >AgentGateway.ts:555</a
+              >.
+            </li>
+            <li id="s7">
+              <strong><a class="ev" href="#s7">S7</a> Stato e rendering:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/projectAgent.ts#L138"
+                >ProjectTask:138</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/project/GroupOverview.tsx#L210"
+                >GroupOverview.tsx:210</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/MessagesTimeline.tsx#L1496"
+                >MessagesTimeline.tsx:1496</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/projectAgentTools.ts#L404"
+                >projectAgentTools.ts:404</a
+              >.
+            </li>
+            <li id="s8">
+              <strong><a class="ev" href="#s8">S8</a> Domande:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/asyncUserInput.ts#L4"
+                >asyncUserInput.ts:4</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/orchestration/decider.ts#L1787"
+                >decider.ts:1787</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/AsyncUserInputCard.tsx#L16"
+                >AsyncUserInputCard.tsx:16</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/UserInputQuestionForm.tsx"
+                >UserInputQuestionForm.tsx</a
+              >.
+            </li>
+            <li id="s9">
+              <strong><a class="ev" href="#s9">S9</a> Limiti:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/projectAgent.ts#L24"
+                >projectAgent.ts:24</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4840"
+                >authorizeManagedGoalCreation:4840</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/groupSettingsDialog.logic.ts#L121"
+                >Settings baseline:121</a
+              >.
+            </li>
+            <li id="s10">
+              <strong><a class="ev" href="#s10">S10</a> Wake e recovery:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentReactor.ts#L14"
+                >ProjectAgentReactor.ts:14</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L5497"
+                >processPendingWakes:5497</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/workerHealth.ts#L3"
+                >workerHealth.ts:3</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/persistence/Migrations/109_ProjectAgent.ts#L232"
+                >migrazione inbox:232</a
+              >.
+            </li>
+            <li id="s11">
+              <strong><a class="ev" href="#s11">S11</a> Bucket:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/shared/src/groupThreadState.ts#L20"
+                >groupThreadState.ts:20</a
+              >, derivazione 242–283.
+            </li>
+            <li id="s12">
+              <strong><a class="ev" href="#s12">S12</a> PR:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/pullRequests/Services/PullRequestService.ts#L15"
+                >PullRequestService.ts:15</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/pullRequests/pullRequestOperations.ts#L43"
+                >pullRequestOperations.ts:43</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/hooks/useThreadPullRequests.ts#L32"
+                >useThreadPullRequests.ts:32</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/githubInbox/Services/GitHubInboxService.ts#L27"
+                >GitHubInboxService.ts:27</a
+              >.
+            </li>
+            <li id="s13">
+              <strong><a class="ev" href="#s13">S13</a> Harness e automazioni:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/harnessPolicy.ts#L37"
+                >harnessPolicy.ts:37</a
+              >, report notify/silent 49–51,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/automationTools.ts#L314"
+                >automationTools.ts:314</a
+              >.
+            </li>
+            <li id="s14">
+              <strong><a class="ev" href="#s14">S14</a> Memoria:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/GroupMemorySection.tsx#L83"
+                >GroupMemorySection.tsx:83</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L2888"
+                >remember:2888</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4280"
+                >writeDocument:4280</a
+              >.
+            </li>
+            <li id="s15">
+              <strong><a class="ev" href="#s15">S15</a> Library:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/LibraryPanel.tsx#L110"
+                >LibraryPanel.tsx:110</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/group/libraryPanel.logic.ts#L90"
+                >libraryPanel.logic.ts:90</a
+              >, directory caricate 172–174,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/libraryGit.ts"
+                >libraryGit.ts</a
+              >.
+            </li>
+            <li id="s16">
+              <strong><a class="ev" href="#s16">S16</a> Ruoli/enforcement:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/principal.ts#L13"
+                >principal.ts:13</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L6124"
+                >ProjectAgentService.ts:6124</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/groupsBetaGate.ts#L44"
+                >groupsBetaGate.ts:44</a
+              >.
+            </li>
+            <li id="s17">
+              <strong><a class="ev" href="#s17">S17</a> Idempotenza:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/Layers/AgentGatewayOperationRepository.ts#L64"
+                >AgentGatewayOperationRepository.ts:64</a
+              >, chiave/replay 98–110;
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/creationCoordinator.ts#L356"
+                >creationCoordinator.ts:356</a
+              >.
+            </li>
+            <li id="s18">
+              <strong><a class="ev" href="#s18">S18</a> Steering:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/Layers/AgentGateway.ts#L526"
+                >AgentGateway.ts:526</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts#L4194"
+                >ProviderCommandReactor.ts:4194</a
+              >, interrupt fallback 4214–4226.
+            </li>
+            <li id="s19">
+              <strong><a class="ev" href="#s19">S19</a> Attention:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/SidebarGroupsSurface.tsx#L127"
+                >SidebarGroupsSurface.tsx:127</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/project/groupOverview.logic.ts#L283"
+                >groupOverview.logic.ts:283</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/project/ProjectPanel.tsx#L141"
+                >ProjectPanel.tsx:141</a
+              >, recovery 240–246.
+            </li>
+            <li id="s20">
+              <strong><a class="ev" href="#s20">S20</a> Authority e destinatari:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/agentGateway/creationCoordinator.ts#L324"
+                >creationCoordinator.ts:324</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/projectAgent.ts#L332"
+                >ProjectInboxEvent:332</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L5691"
+                >wake coordinatore:5691</a
+              >.
+            </li>
+            <li id="s21">
+              <strong><a class="ev" href="#s21">S21</a> Progress riutilizzabile:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/ActiveTaskListCard.tsx#L40"
+                >ActiveTaskListCard.tsx:40</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/chat/ComposerActiveTaskListCard.tsx#L21"
+                >ComposerActiveTaskListCard.tsx:21</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/PlanSidebar.tsx#L114"
+                >PlanSidebar.tsx:114</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/web/src/components/ChatView.tsx#L1571"
+                >ChatView.tsx:1571</a
+              >.
+            </li>
+            <li id="s22">
+              <strong><a class="ev" href="#s22">S22</a> Provenienza review:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/pullRequests.ts#L70"
+                >pullRequests.ts:70</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/contracts/src/git.ts#L123"
+                >git.ts:123</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/git/Layers/GitHubCli.ts#L821"
+                >GitHubCli.ts:821</a
+              >.
+            </li>
+            <li id="s23">
+              <strong><a class="ev" href="#s23">S23</a> Permessi memoria:</strong>
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/packages/shared/src/projectAgent.ts#L93"
+                >canWriteMemoryDocument:93</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L2988"
+                >forget:2988</a
+              >,
+              <a
+                href="https://github.com/Emanuele-web04/synara/blob/09461820111d083c028a843d35face33fd5a52dd/apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4454"
+                >aggiornamento indice:4454</a
+              >.
+            </li>
+          </ul>
+        </section>
+        <footer>
+          Analisi statica e fonti ufficiali. Nessun benchmark comparativo live eseguito. Il
+          diagramma e la card sono proposte; non rappresentano funzioni già implementate.
+        </footer>
+      </main>
+    </div>
+    <script id="markdown-data" type="application/json">
+      "# Hub Synara e Claude Code Projects\n\nComparazione e piano di evoluzione · 2 ottobre 2026 · Analisi, non implementazione.\n\n**Raccomandazione: evolvere gli Hub esistenti.** La base è già ampia; il miglioramento prioritario è rendere coerente il passaggio fra richiesta, delega, avanzamento e risultato. Prima correggere le istruzioni contraddittorie dei ruoli, poi rendere le richieste rintracciabili e introdurre coda, progress e reazioni alle PR. Riscrivere Hub, gateway o runner aumenterebbe il rischio senza risolvere meglio questi problemi.\n\nLa sensazione che Claude lavori meglio è plausibile per la continuità dell’esperienza, ma **non è una superiorità misurata**: non abbiamo eseguito gli stessi incarichi sui due prodotti. Qui distinguiamo capacità documentate, comportamento confermato dal codice e ipotesi da verificare dal vivo.\n\n## 1. Perimetro ed evidenza\n\nSnapshot Synara: `09461820111d083c028a843d35face33fd5a52dd`, branch `synara/compare-project-logic`. Working tree inizialmente pulito. Tre verifiche indipendenti con subagent GPT-6.1 Sol: runtime, prodotto/UI e fonti Claude; sintesi e controlli incrociati dell’agente principale.\n\n- **Synara:** lettura di contratti, servizi, persistenza, gateway, reactor, componenti e documentazione. Non è una prova runtime/provider/browser dell’app.\n- **Claude:** documentazione pubblica ufficiale verificata il 2 ottobre 2026. Nessun accesso al backend o a una sessione autenticata Claude Projects.\n- **Blueprint allegato:** letto integralmente. È una descrizione adattata e una proposta per Synara; i prompt interni, i nomi MCP e il wake XML non sono contratti pubblici verificati.\n- **Consegna:** questo piano e una vista HTML. Nessuna modifica applicativa, migrazione, pubblicazione o modifica dei modelli. Nessuna suite applicativa eseguita per questa analisi.\n\nIl prodotto da confrontare è **Claude Code Projects**, con coordinatore e sessioni delegate. I Projects classici di Claude.ai con knowledge base/RAG sono un’altra esperienza: RAG non è un requisito dimostrato del nuovo coordinatore. [Projects classici](https://support.claude.com/en/articles/9517075-what-are-projects), [RAG](https://support.claude.com/en/articles/11473015-retrieval-augmented-generation-rag-for-projects).\n\nLe descrizioni Claude nella matrice sono intenzionalmente sintetiche. Fonti primarie: [annuncio Projects](https://claude.com/blog/projects-redesigned), [guida Projects](https://code.claude.com/docs/en/claude-projects), [sessioni cloud e auto-fix](https://code.claude.com/docs/en/claude-code-on-the-web).\n\n## 2. Cosa abbiamo, cosa manca\n\n| Capacità | Claude documentato | Synara nel checkout | Valutazione / intervento |\n| --- | --- | --- | --- |\n| Coordinatore e routing | Nuovo lavoro, follow-up, risposta diretta. [Guida](https://code.claude.com/docs/en/claude-projects#send-work-and-read-results) | Già previsti dal playbook. [S1] | Presente; manca un contratto verificabile dell’instradamento. W1. |\n| Più repository e lavoro non-code | Entrambi. [Annuncio](https://claude.com/blog/projects-redesigned) | Hub senza repo, repository collegati, workspace per worker. [S2] | Presente. Conservare questa versatilità; il blueprint mono-repo la ridurrebbe. |\n| Provider e modelli | Claude; modelli/effort separati. [Guida](https://code.claude.com/docs/en/claude-projects#choose-models-and-let-claude-manage-context) | Gateway multi-provider, routing e picker già disponibili. [S3] | Punto di forza Synara; parità delle capacità da verificare per provider. |\n| Isolamento del codice | Branch e copia per thread cloud. [Annuncio](https://claude.com/blog/projects-redesigned) | Worktree disponibili; nuovo Hub usa Local di default. [S4] | Parziale: impostazioni per repo e policy esplicita dei nuovi task. W3. |\n| Contesto comune | Istruzioni, memoria, file. [Annuncio](https://claude.com/blog/projects-redesigned) | Packet per turno, indice memoria, revisioni e Library. [S5] | Presente. Correggere ruoli e distinguere istruzioni da dati. W0/W6. |\n| Fedeltà del brief | Dettaglio interno non pubblico. | Prompt del coordinatore, senza messaggi originali/allegati copiati per ID. [S6] | Gap rispetto al blueprint, non inferiorità Claude dimostrata. W1. |\n| Card sotto la richiesta | Card collegate al messaggio. [Guida](https://code.claude.com/docs/en/claude-projects#send-work-and-read-results) | Righe Overview e link; manca la card Hub legata all’origine. [S7] | Gap UX concreto. W1/W2. |\n| Progress e risultati | Risultati nel thread. [Guida](https://code.claude.com/docs/en/claude-projects#send-work-and-read-results) | Messaggi normali, monitor e riepiloghi nel coordinatore; nessuna checklist Hub revisionata. [S1][S7] | Separare progress silenzioso, risultato e attenzione. W2. |\n| Decisioni strutturate | Protocollo del blueprint non verificato. | Domande asincrone persistenti esistono, limitate a Codex top-level. [S8] | Parziale; riutilizzare UI con contratto Hub distinto. W4. |\n| Limite parallelo | Preferenza in chat, non hard cap. [Guida](https://code.claude.com/docs/en/claude-projects#tune-how-claude-runs-a-project) | Limite server, default massimo 8; oltre il limite errore, senza coda spawn. Settings non lo espone. [S9] | Garanzia già utile, esperienza incompleta. W3. |\n| Recovery e wake | Coordinamento continuativo. [Annuncio](https://claude.com/blog/projects-redesigned) | Inbox durable, cursor, coalescing, health ladder e proprietà dei turni. [S10] | Fondamenta già presenti. Estenderle, non sostituirle. |\n| Overview / PR | Review, Waiting, Working, Landing, Idle, Resolved. [Guida](https://code.claude.com/docs/en/claude-projects#see-what-needs-you-in-overview) | Cinque bucket derivati; Landing è solo un’etichetta inutilizzata. [S11] | Aggiungere stato PR fondato su evidenze. W5. |\n| Reazione a CI/review | Auto-fix per PR. [Cloud](https://code.claude.com/docs/en/claude-code-on-the-web#auto-fix-pull-requests) | Lettura PR, commenti e polling UI; manca watcher Hub server che risvegli il worker. [S12] | Gap funzionale importante. W5. |\n| Routine | Programmazione ricorrente. [Guida](https://code.claude.com/docs/en/claude-projects) | Automazioni heartbeat, standalone, dedicated e schedule già esistenti. [S13] | Presente; collegare i nuovi eventi senza un secondo scheduler. |\n| Memoria modificabile | File editabili nelle impostazioni. [Guida](https://code.claude.com/docs/en/claude-projects#give-a-project-standing-context) | Note/index/dedup e revisioni; Settings View/Add, forget via agente. [S14] | Completare edit/delete e provenienza. W6. |\n| Library | Input e output condivisi. [Annuncio](https://claude.com/blog/projects-redesigned) | Upload, preview, filtri, history/restore Git, remote opzionale. [S15] | Già ricca. Search cerca solo nomi nei folder caricati. W6. |\n| Contesto nel tempo | Recenti + memoria, non intera history. [Guida](https://code.claude.com/docs/en/claude-projects#choose-models-and-let-claude-manage-context) | Packet limitato a 32.000 caratteri; conversazione provider persistente. [S5][S9] | Valutare riciclo solo dopo misure e prova di continuità. W7. |\n| Esecuzione a computer spento | Cloud continua. [Cloud](https://code.claude.com/docs/en/claude-code-on-the-web) | Runtime sui propri host; questo audit non qualifica la disponibilità remota end-to-end. | Differenza infrastrutturale. Richiede host acceso; cloud gestito fuori da questo piano. |\n| Voce esclusivamente via tool | Non verificata pubblicamente. | Transcript provider e tool normali; automazioni hanno già notify/silent. [S13] | Scelta di design opzionale, non prerequisito della versatilità. |\n\n## 3. Problemi concreti prima delle nuove funzioni\n\n### A. Worker istruito come coordinatore — confermato nel codice\n\n`isCoordinatorLike` include i worker. Il packet inserisce il playbook che ordina di dirigere il lavoro senza scrivere codice, insieme alle regole Watch/redelegate. Lo stesso packet dice poi al worker di non essere il coordinatore. Il server, correttamente, gli impedisce di creare altri worker. [S5][S1][S16]\n\n**Effetto possibile:** rifiuti inutili dei tool, ruolo ambiguo, risposta al posto dell’esecuzione. La contraddizione è provata; frequenza e impatto sui modelli non sono misurati. Prima modifica raccomandata: contesto distinto per coordinator, worker e member manuale.\n\n### B. Due policy sulla prosecuzione — confermato nel codice\n\nLa policy generale impone attesa dei risultati e vieta thread sostitutivi senza nuova richiesta; il playbook Hub demanda al monitor e invita a sostituire worker falliti. [S13][S1] Serve una policy per ruolo che mantenga i vincoli generali di autorizzazione e lasci al server il recupero entro i limiti già previsti.\n\n### C. Origine della richiesta non preservata nel prompt — limite confermato\n\nCreazione e follow-up usano testo scritto dall’agente come messaggio `role: user`, con `dispatchOrigin: agent` interno e lista allegati vuota. Il modello non riceve un blocco separato con le parole originali copiate dal server. [S6] L’idempotenza della creazione protegge l’operazione nello stesso turno; non rappresenta da sola la continuità di una richiesta umana attraverso più wake. [S17]\n\n**Conseguenza:** la fedeltà dipende dalla parafrasi del coordinatore; il collegamento richiesta → worker resta insufficiente per deduplica e card. Non è evidenza di un bypass delle autorizzazioni.\n\n### D. Steering diverso da quanto descritto — confermato nel codice\n\nIl tool descrive il fallback di `steer` come semplice accodamento. Il reactor, senza steering nativo e con turno live, accoda in testa e interrompe il turno in corso. [S18] Il default `queue` già attende: conservarlo per normali follow-up e milestone. Esplicitare e qualificare separatamente l’eventuale interruzione.\n\n### E. Segnale di attenzione per repository collegati — inferenza statica forte\n\nLa sidebar passa al selector Hub ID e coordinator ID, senza `memberThreadIds`; il selector riconosce i membri in altri repository solo con quell’insieme. Il pannello usa invece task/index dei membri. Anche il segnale recovery `needsYou` non è allineato fra i due percorsi. [S19] Rischio: pannello che mostra un worker bloccato e sidebar senza indicatore. Da riprodurre in browser prima della correzione.\n\n### F. Ricerca Library incompleta — limite esplicito\n\nIl filtro confronta il percorso del file; l’albero include soltanto directory già caricate. Un file può non comparire nella ricerca finché il folder non è stato aperto. [S15] Risolvere prima la ricerca per nome sull’intero albero; full text e ricerca semantica sono fasi eventuali.\n\n## 4. Cosa prendere dal blueprint, cosa correggere\n\n| Proposta | Decisione raccomandata | Motivo |\n| --- | --- | --- |\n| Originali utente separati dal brief | Adottare | Riferimenti verificati dal server, revisioni e allegati preservano intenti e provenienza. |\n| Wake con tipo e origine | Adottare nel modello esistente | Tipi in contracts, delivery nell’orchestrazione e inbox attuali. XML è solo una possibile rappresentazione. |\n| Progress silenzioso, risultato nel thread | Adottare gradualmente | Card e report chiari; coordinatore mantiene un riepilogo utile con link e alert azionabili. |\n| Ogni frase del brief è un requisito | Rifiutare | Contraddice la stessa distinzione principal/relay del blueprint. Un agente non genera autorizzazione umana. |\n| Nuovo schema project/message/thread e nuovo MCP | Evitare | Duplicherebbe entità, saga, session registry, gateway e migrazioni già disponibili. |\n| Nuovi runner CLI generici | Evitare | Synara ha adapter e lifecycle specifici. Non sostituire SDK/app-server con ricette CLI del documento. |\n| Worktree = sandbox | Correggere | Il worktree separa file Git, non processi, rete o credenziali. |\n| Shared file: rileggi e poi scrivi | Conservare le garanzie Synara | Rileggere non evita lost update. Mantenere expectedRevision/CAS e Library versionata. |\n| Stateless ogni wake = costo piatto, zero perdita | Sperimentare, non promettere | Snapshot cresce, riciclo può perdere dettagli e cache. Prima misure e memoria sufficiente. |\n| Nascondere sempre il testo normale | Rinviare | Un provider può terminare senza i nuovi tool: serve fallback visibile per risultato, errore e domande. |\n| Continuare sul recommended mentre si aspetta | Limitare al lavoro indipendente | Una decisione necessaria o un’approvazione ancora aperta non è consenso. |\n| Ogni evento sveglia il coordinatore | Sostituire con milestone deduplicate | Evitare loop progress → wake → progress, costi e rumore. |\n| Ready significa CI green | Separare Review da merge-ready | Le docs Claude indicano PR aperta in attesa di review. CI verde da sola non basta per il merge in Synara. |\n\nAltre ambiguità interne dell’allegato da non trasferire: una sola azione visibile contro multi-spawn; `failed` sia stato autonomo sia Waiting; `priority=now` senza contratto di cancellazione; replay con solo `delivered_at`; citazioni dichiarate top-level ma annidate. Sono problemi della proposta, non difetti dimostrati del backend Claude.\n\n## 5. Architettura proposta\n\n**Un’unica catena di responsabilità:** richiesta persistita → decisione di routing → ammissione/coda → worker → progress/risultato → proiezioni UI. Riutilizzare persistenza, receipts e riconciliazione delle wake. L’inbox attuale risveglia il coordinatore: per gli eventi PR diretti ai worker servono destinatario, payload e stato di consegna espliciti, prima dell’inoltro alla coda dei turni. [S20]\n\nLe tre cose da tenere distinte sono:\n\n1. **Richiesta:** cosa ha chiesto l’utente e quale revisione è stata inoltrata. Un messaggio può contenere più task; un follow-up può riguardare un task già esistente.\n2. **Esecuzione:** tentativo, sessione e stato operativo. Un turno finito non significa task concluso; un retry non significa nuova richiesta.\n3. **Consegna:** risultato, file, domanda e PR. Una PR aperta non significa pronta al merge; una PR chiusa senza merge non equivale a successo.\n\nEstendere ProjectTask/managed-worker/eventi esistenti dopo una verifica del loro ownership, evitando un secondo task engine. Conservare API e chiavi persistite `groups`, route compatibili e gate Beta server/web. Migrazioni additive; nessun comportamento Hub attivo su Stable.\n\n## 6. Piano eseguibile\n\nDimensione relativa: **S** modifica circoscritta; **M** un sottosistema e integrazioni; **L** stato persistente e più confini. Non sono stime temporali. Ogni unità deve poter essere revisionata e ripristinata separatamente.\n\n### W0 — Ruoli coerenti e semantica dei follow-up · P0 · M\n\n**Risultato:** un worker riceve il suo incarico, istruzioni/memoria del Hub e strumenti pertinenti; il coordinatore riceve routing, monitoraggio e vista aggregata.\n\n- Separare il rendering del packet per ruolo. Etichettare istruzioni user-owned, stato server e report di altri agenti con provenienza distinta; nessun report diventa autorizzazione.\n- Preservare i playbook personalizzati; aggiornare automaticamente solo quelli riconosciuti come system-authored. La separazione deve impedire che il playbook coordinatore, anche personalizzato, finisca nel packet worker.\n- Specializzare la policy Hub senza allentare quella delle conversazioni normali. La health ladder resta responsabile dei retry automatici già consentiti; sostituzioni fuori policy restano decisioni esplicite.\n- Conservare `queue` per follow-up ordinari. Correggere la descrizione `steer`; se il prodotto richiede comportamento uniforme, introdurre una policy esplicita di interrupt senza modificare silenziosamente i provider.\n- Moduli: `projectAgent/Layers/ProjectAgentService.ts`, `projectBotPlaybook.ts`, `agentGateway/harnessPolicy.ts`, catalogo `AgentGateway.ts`; reactor solo se cambia il comportamento.\n- **Accettazione:** worker mai invitato a coordinare; coordinator/member ancora corretti; normali follow-up non interrompono; steering nativo e fallback corrispondono alla policy dichiarata; permessi ruolo invariati.\n- **Consegna:** due cambi focalizzati, packet/policy e descrizione/semantica steering. Nessuna migrazione necessaria per la prima parte. Rischio basso-medio, rollback del renderer/policy.\n\n### W1 — Richieste originali e routing persistente · P1 · L\n\n**Risultato:** «usa anche questo allegato» raggiunge il worker corretto con testo e allegato originali; retry e riavvio non moltiplicano il lavoro.\n\n- Estendere create/send con riferimenti a messaggi persistiti e brief separato. Il server controlla accesso, Hub, autore e revisione; copia testo e riferimenti agli allegati secondo l’accesso del worker, senza fidarsi di `trust` fornito dall’agente.\n- Memorizzare decisione di routing, motivazione breve, destinatari e stato di consegna. Riutilizzare sourceThread/sourceTurn e operation ID già esistenti.\n- Chiave logica proposta: Hub + messaggio/revisione + taskKey fissato dal server alla prima decisione persistita, mai rigenerato liberamente dal modello al retry. Consente più task dallo stesso messaggio. Un follow-up aggiunge una consegna al task; riaprire o cambiare scope è un’azione distinta, non una collisione della deduplica. Aggregare le richieste/task decisi nello stesso turno nel piano congelato della saga; il ledger delle richieste raccorda i replay fra turni diversi.\n- Inserire il record prima del dispatch; riconciliare crash fra prenotazione, creazione e ack attraverso la saga esistente. Verificare replay prima di respingere per nuova saturazione del limite.\n- Moduli: `packages/contracts/src/agentGateway.ts`, `projectAgent.ts`, repository ProjectAgent, `AgentGatewayOperationRepository`, `creationCoordinator`, `AgentGateway`, proiezioni orchestration.\n- **Accettazione:** due riavvii e retry danno un solo worker per taskKey; una richiesta composta crea il numero previsto; citazioni modificate/falsificate non acquistano autorità; allegati ancora leggibili con ownership corretta; vecchi thread senza origine restano navigabili.\n- **Consegna:** schema/persistenza additivi e integrazione gateway in PR dipendenti. Rischio alto: compatibilità e retention degli allegati. Rollback disabilita il nuovo routing senza cancellare record.\n\n### W2 — Card di lavoro, progress e attenzione · P1 · M/L\n\n**Risultato:** sotto la richiesta compaiono i task relativi, con avanzamento e output; la chat del coordinatore resta leggibile.\n\n- Collegare card a W1. Checklist/status revisionati e aggiornabili dal worker proprietario; distinguere stato riferito dall’agente e stato derivato dal runtime.\n- Riutilizzare GroupOverview/righe, primitive disclosure e presentazione di `ActiveTaskListCard`, `ComposerActiveTaskListCard` e `PlanSidebar`, estraendo il renderer comune se necessario. Il piano provider viene azzerato a turno concluso: il dato Hub deve restare durabile e distinto, senza una seconda implementazione visuale della checklist. [S21]\n- Riutilizzare notice e azioni Retry/Stop/Open. Un solo riepilogo per batch con risultati/link; errori e domande restano visibili. Non imporre tool-only voice: mantenere fallback per finali testuali e crash.\n- Uniformare membership e `needsYou` di sidebar e pannello, includendo repository collegati. Questa correzione può uscire prima di W1 dopo riproduzione.\n- Moduli: `projectAgent.ts`, `projectAgentTools.ts`, `GroupOverview.tsx`, `MessagesTimeline.tsx`, `WorkerMonitorNoticePill.tsx`, `SidebarGroupsSurface.tsx` e relative proiezioni.\n- **Accettazione:** progress non produce notifiche né auto-follow; reconnect non duplica card; un worker linked bloccato accende entrambi gli indicatori; un batch con successo/fallimento/attesa comunica ogni esito; final testuale sempre recuperabile.\n- **Consegna:** fix membership indipendente; progress backend e card dipendenti da W1. Rischio medio, rollback alla vista Overview senza perdita dei progress persistiti.\n\n### W3 — Coda, limiti e workspace · P1 · L\n\n**Risultato:** una richiesta di cinque task con limite tre avvia tre worker e mostra gli altri due in coda.\n\n- Coda spawn persistente, distinta dalla coda di messaggi. Prenotazione atomica degli slot per evitare race fra batch; queued non crea processi/worktree prima dell’ammissione.\n- Promuovere su rilascio slot, resume e recovery. Cancellazione, pausa, archive e repository scollegato impediscono nuovi avvii; backlog e motivazione restano visibili.\n- La saga provider-session attuale richiede un turno chiamante ancora attivo. Il dispatch differito deve avere un ingresso server-owned fondato sulla richiesta autorizzata persistita W1, con accesso, lifecycle e cap rivalidati alla promozione. Non riutilizzare token/authority del turno ormai concluso e non disabilitarne i controlli. [S20]\n- Definire slot per lavoro automatico ammesso: avvio, turno live e attesa nativa che ne conserva la proprietà; PR watcher e thread idle non occupano uno slot. Un task sospeso riacquisisce lo slot prima del nuovo turno. Non interrompere turni manuali per fare spazio.\n- Esporre limiti, coda e preferenza propose-before-start nelle Settings. Proposta di default: tre worker automatici per nuovi Hub; preservare le impostazioni esistenti. È una scelta proposta, non un default già applicato.\n- Preferire worktree per nuovi task di modifica codice, Local per non-code. Base branch e ambiente per repository/override del task, non un unico branch globale. Nessun fallback silenzioso da worktree fallito a directory condivisa.\n- Moduli: config/contracts, ProjectAgent repository/service/reactor, saga `creationCoordinator`, GroupGeneral/Environment. Riutilizzare ProjectTask dove possibile.\n- **Accettazione:** cap rispettato durante avvii concorrenti e dopo crash; pause zero nuovi dispatch; cancel queued zero processo/worktree; retry già eseguito riconosciuto anche a cap pieno; Local non-code resta supportato.\n- **Consegna:** admission/coda prima della UX; dipende da W1 per richieste stabili. Rischio alto di starvation e slot persi: riconciliazione runtime + lease solo se necessaria. Rollback congela i queued e mantiene visibili i task.\n\n### W4 — Decisioni Hub indipendenti dal provider · P2 · M\n\n**Risultato:** un worker Claude, Codex o altro provider espone una domanda durevole con opzioni, conseguenze e raccomandazione.\n\n- Contratto Hub aggiuntivo con question ID, worker, required/optional, opzioni, raccomandazione, stato e risposta revisionata. Riutilizzare `AsyncUserInputCard` e `UserInputQuestionForm` rendendo la presentazione generica.\n- Non rimuovere la guardia del percorso Codex nativo: integrare un’origine Hub distinta. Riutilizzare messaggi/queue per la risposta, con idempotenza e accesso controllato.\n- Una domanda opzionale non rende automaticamente il task bloccato; una decisione richiesta impedisce solo il lavoro dipendente. Un’opzione preselezionata non è una risposta, né un’approvazione di merge/publish.\n- Le decisioni required alimentano summary e Waiting on you anche quando il worker è idle: una domanda asincrona non è una pending request nativa. Risposta, scadenza o revoca aggiornano lo stesso stato condiviso di sidebar e pannello.\n- **Accettazione:** domanda sopravvive a restart/turno concluso; required + idle resta Waiting su entrambe le superfici; doppio click genera una risposta; provider diversi mostrano gli stessi campi; risposta/scadenza/revoca rimuove l’attesa senza riavviare lavoro non autorizzato; autorizzazioni native restano separate.\n- **Consegna:** dopo W1, può procedere con W2. Rischio medio; fallback al thread con domanda visibile. Documentare in `docs/hubs.md` e `docs/providers.md`.\n\n### W5 — PR watcher e stato verificabile · P1/P2 · L\n\n**Risultato:** una CI rossa o una nuova review torna al worker proprietario anche con pannello chiuso; la UI distingue review, problemi e landing.\n\n- Servizio server che riusa `PullRequestService.detail`, letture commenti e coda/cache GitHub. Watch persistente con repository, PR, worker proprietario e policy esplicitamente autorizzata: osservazione e auto-fix sono livelli diversi.\n- Fingerprint per head SHA, checks e commenti/review; cambi della base verificati tramite polling. I contratti/mapping review attuali non preservano commitId/originalCommitId: estenderli per qualificare l’origine del finding. Non attribuire al commento l’head corrente al momento del poll; se non correlabile, evidenza non qualificata e nessun auto-fix. [S22]\n- Estendere l’envelope durable con destinatario worker e payload PR, riusando receipts/cursor/reconcile ma senza travestire una review da evento di worker concluso. Deduplica e backoff evitano wake a ogni poll; stop su pausa/archive/disattivazione e finalizzazione coerente su merge/close.\n- Conservare “Ready for review” come PR aperta da esaminare, accompagnata da badges CI/review/freschezza. “Pronta al merge” richiede prove aggiornate; Landing descrive approvazione/coda di merge effettiva, senza conferire al modello autorizzazione a unire.\n- Policy bot esplicita: non trattare qualsiasi commentatore come istruzione. Per il workflow dell’operatore, Cursor Bugbot è il bot esterno di riferimento; rendere la policy configurabile anziché universale.\n- **Accettazione:** cambio head invalida evidenza vecchia; stesso evento non genera fix doppi; commento ostile resta dato; rate limit/gh offline visibili; nessun merge/deploy/commento esterno fuori autorizzazione; riapertura PR gestita deliberatamente.\n- **Consegna:** watcher read-only, poi dispatch/autofix autorizzato, poi UI. Dipende dalla provenance W1; usa W3 per l’ammissione automatica. Rischio alto, kill switch watcher e backlog preservato.\n\n### W6 — Memoria e Library più utilizzabili · P2 · M\n\n**Risultato:** correggere una preferenza e ritrovare un file non richiede una nuova conversazione con l’agente.\n\n- Edit/delete delle note dalle Settings riutilizzando documenti revisionati, ma aggiungendo operazioni user-owned dedicate: oggi `writeDocument` non consente all’utente le note automatiche `memory/<date>-<slug>.md` e `forget` rifiuta il principal user. Non basta collegare un pulsante. Aggiornare atomicamente nota/indice in DB e riconciliare mirror/stream, conservando i confini di thread memory e indice generato. [S23]\n- Provenienza minima: chi/cosa ha prodotto la nota, messaggio/task di origine, revisione; istruzioni umane distinte da conclusioni dell’agente. Moduli: contratti/RPC ProjectAgent, permessi memory in shared, repository/service e GroupMemorySection.\n- Ricerca server per nome su tutto l’albero Library, con limiti/paginazione e vincoli sul root. Collegare output al task e riusare preview/history/restore.\n- Non precaricare l’intera Library nel prompt. Indice leggero e lettura selettiva; full text solo dopo casi d’uso e misure, RAG semantico opzionale.\n- **Accettazione:** due edit concorrenti non si sovrascrivono; edit/delete aggiornano indice, mirror e UI anche dopo restart; thread memory mantiene la propria ownership; file in directory mai aperta viene trovato; rename/delete non lasciano link falsi; provenienza non aumenta l’autorità dei contenuti.\n- **Consegna:** memory UI e ricerca Library indipendenti; provenance estesa dopo W1. Rischio medio, nessun nuovo archivio parallelo.\n\n### W7 — Coordinatore a contesto controllato · P2, dopo misure · M/L\n\n**Risultato desiderato:** il coordinatore rimane preciso dopo molti task e restart senza reiniettare una cronologia crescente.\n\n- Misurare token input, latenza, wake, informazioni omesse e cache per provider sul flusso corrente. Il limite di 32.000 caratteri del packet non limita tutta la history nativa.\n- Prima migliorare selezione: istruzioni, indice memoria, richieste aperte, decisioni pendenti, delta di stato e report pertinenti. Esporre eventuali troncamenti e strumenti per recuperare il resto.\n- Solo se le misure lo giustificano, checkpoint/versione del contesto e riciclo ai confini di turno. Preservare provider session semantics, questioni aperte e replay; niente restart durante tool/approval live.\n- **Accettazione:** stessa informazione disponibile dopo riciclo per branch scelto, preferenza, task aperto e decisione; risultati non peggiori della baseline; costo/latency riportati separatamente, senza promessa “costo costante”.\n- **Consegna:** misure/strumentazione locale, poi esperimento Beta reversibile. Nessuna raccolta diagnostica di contenuti. Rischio medio-alto; mantenere percorso sessione persistente come fallback.\n\n## 7. Ordine e primo incremento raccomandato\n\n| Fase | Unità | Dipendenze | Cosa può uscire indipendentemente |\n| --- | --- | --- | --- |\n| Coerenza | W0; riproduzione/fix attenzione W2 | Nessuna nuova entità | Ruoli, descrizione steering, indicatore linked worker |\n| Continuità | W1 → W2 | Origine persistita prima delle card | Progress backend dopo contratto; UI con fallback legacy |\n| Esecuzione | W1 → W3 | Identità richiesta e saga | Settings dopo admission; nessuna coda puramente visuale |\n| Autonomia | W1/W3 → W5; W1 → W4 | Ownership, eventi, capacità | Watcher osservativo; decision card separata |\n| Contesto | W6; W7 | W6 base indipendente; W7 dopo baseline | Ricerca completa per nome e editing note |\n\n**Primo incremento:** W0 e riproduzione del segnale di attenzione. È piccolo, corregge contraddizioni effettive e rende più attendibile qualunque confronto successivo. **Primo incremento percepibile come esperienza Projects:** W1 + card/progress essenziali W2 + coda W3. PR watcher viene dopo questa catena affidabile.\n\nNon serve una singola PR enorme. Usare PR indipendenti per i fix; stack soltanto dove lo schema/persistenza è una dipendenza reale, per esempio `main ← origine richieste ← integrazione gateway ← card`. Dopo il merge della base, riallineare le dipendenti. Nessuna PR aperta in questa fase.\n\n## 8. Verifica della versatilità\n\nQuesti sono scenari di accettazione proposti, **non test già superati**. Per il confronto prodotto eseguirli anche su Claude con incarichi equivalenti; per le garanzie Synara usare inoltre test deterministici di persistenza e lifecycle. Registrare provider/modello/effort senza cambiarli silenziosamente.\n\n| Scenario | Esito richiesto in Synara | Evidenza da raccogliere |\n| --- | --- | --- |\n| Domanda rapida poi grazie | Risposta/reazione appropriata senza worker inutile | Numero worker e messaggi visibili |\n| Tre richieste indipendenti in un messaggio | Tre task collegati allo stesso originale | Mapping e input ricevuti dai worker |\n| Follow-up con file mentre il worker lavora | Stesso task, allegato corretto, queue ordinaria | Trace dispatch, integrità allegato, nessuna interruzione implicita |\n| Cinque task, cap tre | Tre ammessi, due queued; nessun oversubscription | Reservation/avvii e ordine promozione |\n| Restart dopo creazione prima dell’ack | Un solo worker per task | Replay durabile e stato dopo restart |\n| Worker linked chiede approvazione | Dot sidebar e pannello concordi; nessuna risposta automatica | Browser + stato server |\n| Progress durante lettura vecchi messaggi | Nessun salto al fondo o notifica per checklist | Test transcript e prova browser |\n| PR cambia head; arriva un finding vecchio | Nessuna readiness/fix basata su prova stale | SHA/fingerprint e decisione watcher |\n| Nota memoria modificata e nuovo worker | Nuova revisione ricevuta, origine conservata | Packet effettivo e CAS |\n| Report in folder Library mai aperto | Ricerca lo trova e apre il file corretto | Risposta server e browser |\n| Pausa, archive, Stable | Nessun nuovo dispatch Hub; stato conservato | Lifecycle, migrazioni e gate server/web |\n| Riciclo coordinatore | Decisioni e richieste aperte ancora disponibili | Confronto prima/dopo e consumo reale |\n\nMisure utili: task duplicati; follow-up assegnati correttamente; richieste da ripetere; messaggi visibili per risultato; decisioni perse dopo restart; richieste automatiche di tool non consentiti al ruolo; wake/token per task. Stabilire baseline e risultati osservati prima di proporre percentuali di miglioramento.\n\nPer ogni implementazione: test Vitest mirati tramite `bun run test`, poi `bun run fmt:check`, `bun run lint`, `bun run typecheck`. Suite più ampia per W1/W3/W5 e lifecycle; `bun run migrations:check` per migrazioni; `bun run windows-runtime:check` se si toccano confini process/platform. Qualificazione reale per Claude, Codex e OpenCode inizialmente, poi altri provider supportati. Nessun test mock dimostra avvio/cancellazione live o comportamento Windows confezionato.\n\n## 9. Rischi, vincoli e scelte ancora aperte\n\n| Rischio | Valutazione | Contromisura |\n| --- | --- | --- |\n| Report scambiato per istruzione/consenso | Alto impatto | Provenienza server, ruoli, citazioni separate; enforcement degli strumenti resta autoritativo |\n| Doppio spawn dopo crash | Alto impatto | Identità richiesta + saga + riconciliazione, test su confini reali |\n| Coda bloccata da slot persi | Alto impatto | Stato ammissione persistente, release idempotente, recovery senza interrompere l’utente |\n| Rumore o loop PR/progress/wake | Medio-alto | Fingerprint, milestone, backoff, policy di notifica |\n| Nascondere risultati per protocol miss | Alto impatto | Fallback transcript e errori sempre visibili |\n| Memoria persa o auto-prompt crescente | Medio-alto | CAS, selezione, budget, checkpoint e confronto misurato |\n| Feature attiva in Stable | Alto impatto | Gate `groups` su ogni nuovo tool/service/evento, migrazioni additive/inerti |\n| Sovrapposizione di codice fra worker | Dipende dai task | Worktree + ownership file/task; conflitti di merge restano possibili |\n\nScelte prodotto da valutare sul piano concreto: default tre o altro limite per nuovi Hub; quanto dettaglio lasciare nel coordinatore; opt-in di auto-fix PR; worktree come default per task di codice; eventuale modalità solo strumenti dopo averne dimostrato l’affidabilità. Nessuna scelta richiede fermare i fix W0.\n\nFuori da questo piano: cloud Synara gestito, sostituzione dei provider runner, nuovo database chat, RAG/vector database preventivo, redesign totale, nuove animazioni/virtualizzazione, cambio automatico di modello, merge/publish. Gli host remoti e i connector richiedono una qualificazione distinta se entrano nell’obiettivo.\n\n## 10. Riferimenti al codice\n\nI link sono relativi al repository; numero di riga riferito allo snapshot dichiarato. La guida corrente [Hubs](../hubs.md) è il riferimento prodotto da aggiornare in ogni fase; [Beta](../../BETA.md), [providers](../providers.md) e [contribution](../../CONTRIBUTING.md) definiscono i vincoli da preservare.\n\n- **[S1] Routing e voce:** [projectBotPlaybook.ts:9](../../apps/server/src/projectAgent/projectBotPlaybook.ts#L9), routing 15–39, monitor/redelegate 75–84.\n- **[S2] Multi-repo e non-code:** [core-concepts.md:240](../core-concepts.md#L240), [GroupEnvironmentSection.tsx:80](../../apps/web/src/components/chat/group/GroupEnvironmentSection.tsx#L80).\n- **[S3] Modelli e gateway:** [projectAgent.ts:52](../../packages/contracts/src/projectAgent.ts#L52), [GroupGeneralSection.tsx:128](../../apps/web/src/components/chat/group/GroupGeneralSection.tsx#L128), [mcpInjection.ts:4](../../apps/server/src/agentGateway/mcpInjection.ts#L4).\n- **[S4] Ambiente:** [groupSettingsDialog.logic.ts:113](../../apps/web/src/components/chat/group/groupSettingsDialog.logic.ts#L113), [creationCoordinator.ts:1118](../../apps/server/src/agentGateway/creationCoordinator.ts#L1118).\n- **[S5] Contesto e ruoli:** [ProjectAgentService.ts:4625](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4625), inclusione worker 4628, playbook 4750, Watch 4800, etichetta authoritative 4827.\n- **[S6] Testo delegato:** [agentGateway.ts:67](../../packages/contracts/src/agentGateway.ts#L67), [creationCoordinator.ts:1170](../../apps/server/src/agentGateway/creationCoordinator.ts#L1170), [AgentGateway.ts:555](../../apps/server/src/agentGateway/Layers/AgentGateway.ts#L555).\n- **[S7] Stato e rendering:** [ProjectTask:138](../../packages/contracts/src/projectAgent.ts#L138), [GroupOverview.tsx:210](../../apps/web/src/components/chat/project/GroupOverview.tsx#L210), [MessagesTimeline.tsx:1496](../../apps/web/src/components/chat/MessagesTimeline.tsx#L1496), [projectAgentTools.ts:404](../../apps/server/src/agentGateway/projectAgentTools.ts#L404).\n- **[S8] Domande:** [asyncUserInput.ts:4](../../packages/contracts/src/asyncUserInput.ts#L4), [decider.ts:1787](../../apps/server/src/orchestration/decider.ts#L1787), [AsyncUserInputCard.tsx:16](../../apps/web/src/components/chat/AsyncUserInputCard.tsx#L16), [UserInputQuestionForm.tsx](../../apps/web/src/components/chat/UserInputQuestionForm.tsx).\n- **[S9] Limiti:** [projectAgent.ts:24](../../packages/contracts/src/projectAgent.ts#L24), [authorizeManagedGoalCreation:4840](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4840), [Settings baseline:121](../../apps/web/src/components/chat/group/groupSettingsDialog.logic.ts#L121).\n- **[S10] Wake e recovery:** [ProjectAgentReactor.ts:14](../../apps/server/src/projectAgent/Layers/ProjectAgentReactor.ts#L14), [processPendingWakes:5497](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L5497), [workerHealth.ts:3](../../apps/server/src/projectAgent/workerHealth.ts#L3), [migrazione inbox:232](../../apps/server/src/persistence/Migrations/109_ProjectAgent.ts#L232).\n- **[S11] Bucket:** [groupThreadState.ts:20](../../packages/shared/src/groupThreadState.ts#L20), derivazione 242–283.\n- **[S12] PR:** [PullRequestService.ts:15](../../apps/server/src/pullRequests/Services/PullRequestService.ts#L15), [pullRequestOperations.ts:43](../../apps/server/src/pullRequests/pullRequestOperations.ts#L43), [useThreadPullRequests.ts:32](../../apps/web/src/hooks/useThreadPullRequests.ts#L32), [GitHubInboxService.ts:27](../../apps/server/src/githubInbox/Services/GitHubInboxService.ts#L27).\n- **[S13] Harness e automazioni:** [harnessPolicy.ts:37](../../apps/server/src/agentGateway/harnessPolicy.ts#L37), report notify/silent 49–51, [automationTools.ts:314](../../apps/server/src/agentGateway/automationTools.ts#L314).\n- **[S14] Memoria:** [GroupMemorySection.tsx:83](../../apps/web/src/components/chat/group/GroupMemorySection.tsx#L83), [remember:2888](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L2888), [writeDocument:4280](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4280).\n- **[S15] Library:** [LibraryPanel.tsx:110](../../apps/web/src/components/chat/group/LibraryPanel.tsx#L110), [libraryPanel.logic.ts:90](../../apps/web/src/components/chat/group/libraryPanel.logic.ts#L90), directory caricate 172–174, [libraryGit.ts](../../apps/server/src/projectAgent/libraryGit.ts).\n- **[S16] Ruoli/enforcement:** [principal.ts:13](../../apps/server/src/projectAgent/principal.ts#L13), [ProjectAgentService.ts:6124](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L6124), [groupsBetaGate.ts:44](../../apps/server/src/projectAgent/groupsBetaGate.ts#L44).\n- **[S17] Idempotenza:** [AgentGatewayOperationRepository.ts:64](../../apps/server/src/agentGateway/Layers/AgentGatewayOperationRepository.ts#L64), chiave/replay 98–110; [creationCoordinator.ts:356](../../apps/server/src/agentGateway/creationCoordinator.ts#L356).\n- **[S18] Steering:** [AgentGateway.ts:526](../../apps/server/src/agentGateway/Layers/AgentGateway.ts#L526), [ProviderCommandReactor.ts:4194](../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts#L4194), interrupt fallback 4214–4226.\n- **[S19] Attention:** [SidebarGroupsSurface.tsx:127](../../apps/web/src/components/SidebarGroupsSurface.tsx#L127), [groupOverview.logic.ts:283](../../apps/web/src/components/chat/project/groupOverview.logic.ts#L283), [ProjectPanel.tsx:141](../../apps/web/src/components/chat/project/ProjectPanel.tsx#L141), recovery 240–246.\n- **[S20] Authority e destinatari:** [creationCoordinator.ts:324](../../apps/server/src/agentGateway/creationCoordinator.ts#L324), [ProjectInboxEvent:332](../../packages/contracts/src/projectAgent.ts#L332), [wake coordinatore:5691](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L5691).\n- **[S21] Progress riutilizzabile:** [ActiveTaskListCard.tsx:40](../../apps/web/src/components/chat/ActiveTaskListCard.tsx#L40), [ComposerActiveTaskListCard.tsx:21](../../apps/web/src/components/chat/ComposerActiveTaskListCard.tsx#L21), [PlanSidebar.tsx:114](../../apps/web/src/components/PlanSidebar.tsx#L114), [ChatView.tsx:1571](../../apps/web/src/components/ChatView.tsx#L1571).\n- **[S22] Provenienza review:** [pullRequests.ts:70](../../packages/contracts/src/pullRequests.ts#L70), [git.ts:123](../../packages/contracts/src/git.ts#L123), [GitHubCli.ts:821](../../apps/server/src/git/Layers/GitHubCli.ts#L821).\n- **[S23] Permessi memoria:** [canWriteMemoryDocument:93](../../packages/shared/src/projectAgent.ts#L93), [forget:2988](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L2988), [aggiornamento indice:4454](../../apps/server/src/projectAgent/Layers/ProjectAgentService.ts#L4454).\n"
+    </script>
+    <script>
+      const all = () => document.querySelectorAll("details.work");
+      document
+        .getElementById("expand-all")
+        .addEventListener("click", () => all().forEach((x) => (x.open = true)));
+      document
+        .getElementById("collapse-all")
+        .addEventListener("click", () => all().forEach((x) => (x.open = false)));
+      window.addEventListener("beforeprint", () => all().forEach((x) => (x.open = true)));
+      document.getElementById("print").addEventListener("click", () => window.print());
+      const text = JSON.parse(document.getElementById("markdown-data").textContent);
+      document.getElementById("download").addEventListener("click", () => {
+        const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "hubs-claude-projects-gap-analysis.md";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        document.querySelector(".status").textContent = "Piano Markdown esportato.";
+      });
+      document.getElementById("copy").addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          document.querySelector(".status").textContent = "Piano copiato come Markdown.";
+        } catch {
+          document.querySelector(".status").textContent =
+            "Clipboard non disponibile: usa Scarica Markdown.";
+        }
+      });
+    </script>
+  </body>
+</html>

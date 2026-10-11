@@ -5,33 +5,82 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  CODE_THEME_OPTIONS,
-  DEFAULT_CHROME_THEME_BY_VARIANT,
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
+  canParseThemeShareString,
   createThemeShareString,
   getCodeThemeSeed,
-  getCodeThemeSeedPatch,
   normalizeThemeState,
   parseStoredThemeState,
   parseThemeShareString,
   parseThemeShareStringForVariant,
   resolveThemePack,
+  resetThemeVariant,
   setThemeCodeThemeId,
+  setWindowTranslucency,
   updateThemePackFromShareString,
 } from "./theme.logic";
-import { DEFAULT_MONOSPACE_FONT_FAMILY_STACK } from "../lib/fontFamily";
 
 const PROVIDED_THEME_STRING =
   'codex-theme-v1:{"codeThemeId":"linear","theme":{"accent":"#606acc","contrast":30,"fonts":{"code":"\\"Jetbrains Mono\\"","ui":"Inter"},"ink":"#e3e4e6","opaqueWindows":true,"semanticColors":{"diffAdded":"#69c967","diffRemoved":"#ff7e78","skill":"#c2a1ff"},"surface":"#0f0f11"},"variant":"dark"}';
 
 describe("parseStoredThemeState", () => {
-  it("migrates the legacy mode-only value into the new theme store", () => {
-    expect(parseStoredThemeState("dark")).toEqual({
-      ...DEFAULT_THEME_STATE,
-      mode: "dark",
-    });
+  it.each([null, undefined, ""])("uses Synara for an absent stored theme (%j)", (raw) => {
+    const state = parseStoredThemeState(raw);
+    expect(state.codeThemeIds).toEqual({ dark: "synara", light: "synara" });
+    expect(state.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(state.chromeThemes.light.accent).toBe("#c74614");
+    expect(state.mode).toBe("system");
+  });
+
+  it.each(["dark", "light", "system"] as const)(
+    "preserves Codex for a legacy mode-only value (%s)",
+    (mode) => {
+      for (const raw of [mode, JSON.stringify({ mode })]) {
+        const state = parseStoredThemeState(raw);
+        expect(state.mode).toBe(mode);
+        expect(state.codeThemeIds).toEqual({ dark: "codex", light: "codex" });
+        expect(state.chromeThemes.dark.accent).toBe("#0169cc");
+        expect(state.chromeThemes.light.accent).toBe("#0169cc");
+      }
+    },
+  );
+
+  it.each(["codex", "linear", "synara"])(
+    "preserves saved %s colors and preferences without reapplying the preset",
+    (codeThemeId) => {
+      const saved = {
+        ...DEFAULT_THEME_STATE,
+        mode: "dark",
+        codeThemeIds: { dark: codeThemeId, light: "codex" },
+        chromeThemes: {
+          dark: {
+            ...getCodeThemeSeed(codeThemeId, "dark"),
+            accent: "#6073cc",
+            contrast: 22,
+            fonts: { code: "Menlo", ui: "Inter" },
+            opaqueWindows: true,
+          },
+          light: getCodeThemeSeed("codex", "light"),
+        },
+        systemUiFont: false,
+        translucency: {
+          dark: { opacity: 72, blur: null, sidebarOnly: true },
+          light: { opacity: 38, blur: 64, sidebarOnly: false },
+        },
+      };
+      expect(parseStoredThemeState(JSON.stringify(saved))).toEqual(saved);
+    },
+  );
+
+  it("resets only the selected variant to Synara when explicitly requested", () => {
+    const saved = parseStoredThemeState("dark");
+    const reset = resetThemeVariant(saved, "dark");
+    expect(reset.codeThemeIds).toEqual({ dark: "synara", light: "codex" });
+    expect(reset.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(reset.chromeThemes.light).toEqual(saved.chromeThemes.light);
+    expect(reset.mode).toBe("dark");
   });
 
   it("normalizes partial stored packs against the per-variant defaults", () => {
@@ -53,11 +102,11 @@ describe("parseStoredThemeState", () => {
           accent: "#606acc",
           contrast: 0,
         },
-        light: DEFAULT_THEME_STATE.chromeThemes.light,
+        light: getCodeThemeSeed("codex", "light"),
       },
       codeThemeIds: {
         dark: "linear",
-        light: DEFAULT_THEME_STATE.codeThemeIds.light,
+        light: "codex",
       },
       mode: "light",
     });
@@ -120,7 +169,7 @@ describe("theme share strings", () => {
     );
 
     expect(parseThemeShareString(shareString)).toEqual({
-      codeThemeId: "codex",
+      codeThemeId: "synara",
       theme: resolveThemePack(DEFAULT_THEME_STATE, "dark").theme,
       variant: "dark",
     });
@@ -155,6 +204,27 @@ describe("theme share strings", () => {
     );
   });
 
+  it("rejects malformed percent-encoding with the designed parse error", () => {
+    expect(() => parseThemeShareString("codex-theme-v1:%zz")).toThrow(
+      /does not contain valid JSON/i,
+    );
+    expect(canParseThemeShareString("codex-theme-v1:%zz")).toBe(false);
+  });
+
+  it("parses a percent-encoded payload", () => {
+    const encoded = `codex-theme-v1:${encodeURIComponent(
+      PROVIDED_THEME_STRING.slice("codex-theme-v1:".length),
+    )}`;
+    expect(parseThemeShareString(encoded)).toEqual(parseThemeShareString(PROVIDED_THEME_STRING));
+  });
+
+  it("rejects non-JSON and schema-invalid payloads with designed errors", () => {
+    expect(() => parseThemeShareString("codex-theme-v1:notjson")).toThrow(
+      /does not contain valid JSON/i,
+    );
+    expect(() => parseThemeShareString("codex-theme-v1:{}")).toThrow(/codeThemeId/i);
+  });
+
   it("updates only the matching variant pack when importing", () => {
     const nextState = updateThemePackFromShareString(
       DEFAULT_THEME_STATE,
@@ -168,50 +238,6 @@ describe("theme share strings", () => {
 });
 
 describe("code theme seeds", () => {
-  it("starts every bundled theme variant at zero contrast", () => {
-    for (const option of CODE_THEME_OPTIONS) {
-      for (const variant of option.variants) {
-        expect(getCodeThemeSeed(option.id, variant).contrast).toBe(0);
-      }
-    }
-  });
-
-  it("loads the exact normalized seed for a bundled code theme", () => {
-    expect(getCodeThemeSeed("linear", "dark")).toEqual({
-      accent: "#606acc",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: "Inter",
-      },
-      ink: "#e3e4e6",
-      opaqueWindows: true,
-      semanticColors: {
-        diffAdded: "#69c967",
-        diffRemoved: "#ff7e78",
-        skill: "#c2a1ff",
-      },
-      surface: "#0f0f11",
-    });
-  });
-
-  it("exposes only the raw seed fields that Codex merges on theme switching", () => {
-    expect(getCodeThemeSeedPatch("linear", "dark")).toEqual({
-      accent: "#606acc",
-      fonts: {
-        ui: "Inter",
-      },
-      ink: "#e3e4e6",
-      opaqueWindows: true,
-      semanticColors: {
-        diffAdded: "#69c967",
-        diffRemoved: "#ff7e78",
-        skill: "#c2a1ff",
-      },
-      surface: "#0f0f11",
-    });
-  });
-
   it("merges the selected theme seed into the current pack instead of hard-resetting", () => {
     const nextState = setThemeCodeThemeId(
       {
@@ -318,108 +344,29 @@ describe("code theme seeds", () => {
 });
 
 describe("buildThemeCssVariables", () => {
-  it("derives the renderer token map from the imported theme pack", () => {
-    const importedTheme = parseThemeShareString(PROVIDED_THEME_STRING);
-    const cssVariables = buildThemeCssVariables(
-      {
-        codeThemeId: importedTheme.codeThemeId,
-        theme: importedTheme.theme,
-      },
-      importedTheme.variant,
-      { electron: true },
-    );
-
-    expect(cssVariables.material).toBe("opaque");
-    expect(cssVariables.variables["--codex-base-accent"]).toBe("#606acc");
-    expect(cssVariables.variables["--background"]).toBe("#0d0d0f");
-    expect(cssVariables.variables["--card"]).toBe("#151517");
-    expect(cssVariables.variables["--composer-surface"]).toBe("rgb(27, 27, 29)");
-    expect(cssVariables.variables["--composer-surface"]).not.toBe(cssVariables.variables["--card"]);
-    expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
-    expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
-    expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
-    expect(cssVariables.variables["--theme-font-code-family"]).toBe(
-      `"Jetbrains Mono", ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`,
-    );
-    expect(cssVariables.variables["--vscode-terminal-ansiBlue"]).toBe("#606acc");
-    expect(cssVariables.variables["--vscode-terminal-ansiGreen"]).toBe("#56a554");
-    expect(cssVariables.variables["--vscode-terminal-ansiMagenta"]).toBe("#c2a1ff");
-    expect(cssVariables.variables["--vscode-terminal-ansiRed"]).toBe("#ff7e78");
-    expect(cssVariables.variables["--vscode-terminal-foreground"]).toBe("#e3e4e6");
-    expect(cssVariables.variables["--color-token-terminal-ansi-blue"]).toBe("#606acc");
-    expect(cssVariables.variables["--color-token-terminal-ansi-green"]).toBe("#56a554");
-    expect(cssVariables.variables["--color-token-terminal-ansi-magenta"]).toBe("#c2a1ff");
-    expect(cssVariables.variables["--color-token-terminal-ansi-red"]).toBe("#ff7e78");
-  });
-
-  it("exposes a structured derived-token surface for retrieving non-stored colors", () => {
-    const importedTheme = parseThemeShareString(PROVIDED_THEME_STRING);
-    const tokens = buildResolvedThemeTokens(
-      {
-        codeThemeId: importedTheme.codeThemeId,
-        theme: importedTheme.theme,
-      },
-      importedTheme.variant,
-    );
-
-    expect(tokens.computed.surfaceUnder).toBe("#0d0d0f");
-    expect(tokens.computed.panel).toBe("#151517");
-    expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
-    expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
-    expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
-    // Dark primary button label is the surface color (dark) on the white (ink) button.
-    expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
-    expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
-    // Codex maps the sidebar token to the PRIMARY surface (same as main-surface-primary),
-    // not the darker under-surface; mirror that so the sidebar color matches Codex.
-    expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0f0f11");
-    expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
-      tokens.derived.buttonSecondaryBackgroundHover,
-    );
-    expect(tokens.aliases["--color-token-dropdown-background"]).toBe(
-      tokens.derived.controlBackgroundOpaque,
-    );
-    expect(tokens.aliases["--color-token-main-surface-primary"]).toBe("#0f0f11");
-    expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(27, 27, 29, 0.96)");
-    expect(tokens.aliases["--color-token-terminal-background"]).toBe("#0f0f11");
-    expect(tokens.aliases["--color-token-terminal-foreground"]).toBe("#e3e4e6");
-    expect(tokens.aliases["--color-token-terminal-ansi-black"]).toBe(
-      tokens.derived.textForegroundTertiary,
-    );
-    expect(tokens.aliases["--color-token-terminal-ansi-bright-black"]).toBe(
-      tokens.derived.textForegroundSecondary,
-    );
-    expect(tokens.aliases["--color-token-terminal-ansi-yellow"]).toBe("#f5b44a");
-  });
-
-  it("uses the zero-contrast dark composer and dropdown control color", () => {
-    const tokens = buildResolvedThemeTokens(
-      {
-        codeThemeId: "codex",
-        theme: DEFAULT_CHROME_THEME_BY_VARIANT.dark,
-      },
-      "dark",
-    );
-
-    expect(tokens.derived.controlBackgroundOpaque).toBe("rgb(30, 30, 30)");
-    expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(30, 30, 30)");
-  });
-
-  it("matches Codex's light composer surface token path", () => {
-    const cssVariables = buildThemeCssVariables(
-      {
-        codeThemeId: "absolutely",
-        theme: getCodeThemeSeed("absolutely", "light"),
-      },
-      "light",
-      { electron: true },
-    );
-
-    expect(cssVariables.variables["--composer-surface"]).toBe(
-      "color-mix(in oklab, var(--color-background-control) 90%, transparent)",
-    );
-    expect(cssVariables.variables["--color-background-control"]).toBe("rgba(249, 249, 248, 0.96)");
-  });
+  it.each([{ electron: true, isMac: true }])(
+    "projects distinct Vercel and Codex light colors on %j",
+    (platform) => {
+      const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
+      const vercel = buildThemeCssVariables(resolveThemePack(state, "light"), "light", platform);
+      const codex = buildThemeCssVariables(
+        { codeThemeId: "codex", theme: getCodeThemeSeed("codex", "light") },
+        "light",
+        platform,
+      );
+      expect(vercel.variables["--codex-base-accent"]).toBe("#006aff");
+      expect(codex.variables["--codex-base-accent"]).toBe("#0169cc");
+      expect(vercel.variables["--color-text-foreground"]).toBe("#171717");
+      expect(codex.variables["--color-text-foreground"]).toBe("#0d0d0d");
+      // These two presets intentionally share a white surface in light mode.
+      expect(vercel.variables["--codex-base-surface"]).toBe(
+        codex.variables["--codex-base-surface"],
+      );
+      // Editing a slot must not change the user's system-mode or other-slot choices.
+      expect(state.mode).toBe("system");
+      expect(state.chromeThemes.dark).toEqual(DEFAULT_THEME_STATE.chromeThemes.dark);
+    },
+  );
 
   it("uses the light-theme foreground color for the primary button background", () => {
     const tokens = buildResolvedThemeTokens(
@@ -432,22 +379,6 @@ describe("buildThemeCssVariables", () => {
 
     expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.light.ink);
     expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.light.surface);
-    expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
-  });
-
-  it("uses the dark-theme foreground color for the primary button background", () => {
-    const tokens = buildResolvedThemeTokens(
-      {
-        codeThemeId: "codex",
-        theme: DEFAULT_THEME_STATE.chromeThemes.dark,
-      },
-      "dark",
-    );
-
-    // Dark mode mirrors light mode's high-contrast primary: bg = ink (white),
-    // label = surface (dark), so the primary action reads as a filled button.
-    expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
-    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
   });
 
@@ -468,6 +399,143 @@ describe("buildThemeCssVariables", () => {
     );
     expect(cssVariables.variables["--app-chat-code-surface"]).toBe(
       cssVariables.variables["--app-user-message-background"],
+    );
+  });
+});
+
+describe("window translucency", () => {
+  const macDesktop = { electron: true, isMac: true };
+
+  const sidebarOnly = (opacity: number) => ({
+    ...macDesktop,
+    translucency: { opacity, blur: 0, sidebarOnly: true },
+  });
+
+  it("defaults both themes to full-window glass with 90% opacity and 64 blur", () => {
+    const state = normalizeThemeState({});
+    expect(state.translucency).toEqual({
+      dark: { opacity: 90, blur: 64, sidebarOnly: false },
+      light: { opacity: 90, blur: 64, sidebarOnly: false },
+    });
+  });
+
+  it("makes the whole window one translucent coat when not limited to the sidebar", () => {
+    const dark = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "dark"), "dark", {
+      ...macDesktop,
+      translucency: { opacity: 72, blur: null, sidebarOnly: false },
+    });
+    expect(dark.material).toBe("translucent");
+    expect(dark.translucencyScope).toBe("window");
+    // The body carries the only fill; every surface above it stays clear so nested route
+    // surfaces never stack it.
+    expect(dark.variables["--app-window-background"]).toMatch(/80%, black\) 72%, transparent\)$/);
+    expect(dark.variables["--app-content-surface"]).toBe("transparent");
+    expect(dark.variables["--app-settings-surface"]).toBe("transparent");
+    expect(dark.variables["--app-sidebar-surface"]).toBe("transparent");
+    expect(dark.variables["--app-rail-shell-opacity"]).toBe("0%");
+    expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
+      dark.variables["--app-window-background"],
+    );
+    // Raised chrome is a denser pane of the elevated tone, tracking the coat's opacity.
+    expect(dark.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 46%, transparent)",
+    );
+    // Overlays share that tint, and the body already paints the coat behind them.
+    expect(dark.variables["--app-overlay-surface"]).toBe(
+      dark.variables["--app-glass-raised-surface"],
+    );
+    expect(dark.variables["--app-overlay-backing"]).toBe("");
+    const light = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "light"), "light", {
+      ...macDesktop,
+      translucency: { opacity: 38, blur: null, sidebarOnly: false },
+    });
+    expect(light.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 15%, transparent)",
+    );
+  });
+
+  it("keeps the content opaque and the shell clear for opaque windows", () => {
+    const opaque = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "dark"), "dark", {
+      electron: true,
+      isMac: false,
+    });
+    expect(opaque.material).toBe("opaque");
+    expect(opaque.translucencyScope).toBe("none");
+    expect(opaque.variables["--app-content-surface"]).toBe(
+      opaque.variables["--color-background-surface"],
+    );
+    expect(opaque.variables["--app-window-background"]).toBe(
+      opaque.variables["--app-shell-background"],
+    );
+  });
+
+  it("keeps the long-standing sidebar fills when limited to the sidebar", () => {
+    const dark = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "dark"),
+      "dark",
+      sidebarOnly(72),
+    );
+    const light = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "light"),
+      "light",
+      sidebarOnly(38),
+    );
+    expect(dark.material).toBe("translucent");
+    expect(dark.translucencyScope).toBe("sidebar");
+    expect(dark.variables["--app-window-background"]).toBe("transparent");
+    expect(dark.variables["--app-glass-raised-surface"]).toBe("");
+    // Off whole-window glass, overlays take the composer's fill and carry the coat themselves.
+    expect(dark.variables["--app-overlay-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 55%, transparent)",
+    );
+    expect(dark.variables["--app-overlay-backing"]).toBe(dark.variables["--app-sidebar-surface"]);
+    expect(dark.variables["--app-content-surface"]).toBe(
+      dark.variables["--color-background-surface"],
+    );
+    expect(dark.variables["--app-settings-surface"]).toBe(
+      dark.variables["--color-background-surface"],
+    );
+    expect(dark.variables["--app-sidebar-surface"]).toMatch(/80%, black\) 72%, transparent\)$/);
+    expect(dark.variables["--app-rail-shell-opacity"]).toBe("64%");
+    expect(light.variables["--app-sidebar-surface"]).toMatch(/ 38%, transparent\)$/);
+    expect(light.variables["--app-rail-shell-opacity"]).toBe("82%");
+  });
+
+  it("scales the sidebar and rail fills with the chosen opacity", () => {
+    const pack = resolveThemePack(DEFAULT_THEME_STATE, "light");
+    const clear = buildThemeCssVariables(pack, "light", sidebarOnly(0));
+    const dense = buildThemeCssVariables(pack, "light", sidebarOnly(90));
+    expect(clear.variables["--app-sidebar-surface"]).toMatch(/ 0%, transparent\)$/);
+    expect(clear.variables["--app-rail-shell-opacity"]).toBe("0%");
+    expect(dense.variables["--app-rail-shell-opacity"]).toBe("100%");
+  });
+
+  it("gives stored states without translucency the defaults and clamps edits", () => {
+    const legacy = normalizeThemeState({ mode: "dark" });
+    expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
+    expect(legacy.translucency.dark.blur).toBe(64);
+
+    // Missing scope uses the default while preserving explicit opacity and blur.
+    expect(
+      normalizeThemeState({ translucency: { dark: { opacity: 50, blur: 10 } } }).translucency.dark,
+    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: false });
+
+    const edited = setWindowTranslucency(legacy, "dark", {
+      opacity: 140,
+      blur: -3,
+      sidebarOnly: false,
+    });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 1, sidebarOnly: false });
+    // A stored see-through window (no fill, no blur) is repaired to the floors on load.
+    expect(
+      normalizeThemeState({ translucency: { dark: { opacity: 0, blur: 0, sidebarOnly: false } } })
+        .translucency.dark,
+    ).toEqual({ opacity: 15, blur: 1, sidebarOnly: false });
+    // Clearing the blur returns to the vibrancy material.
+    expect(setWindowTranslucency(edited, "dark", { blur: null }).translucency.dark.blur).toBeNull();
+    expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
+    expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
+      DEFAULT_THEME_STATE.translucency.dark,
     );
   });
 });

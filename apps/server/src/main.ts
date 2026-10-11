@@ -7,9 +7,25 @@
  * @module CliConfig
  */
 import OS from "node:os";
-import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
+import type { ServerSettings } from "@synara/contracts";
 import { NetService } from "@synara/shared/Net";
+import {
+  MIGRATION_DIVERGENCE_CONSENT_ENV,
+  MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
+} from "@synara/shared/migrationRecovery";
 import {
   optionalBooleanEnvironmentConfig,
   optionalBooleanFlag,
@@ -28,29 +44,68 @@ import {
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+} from "@synara/shared/desktopIdentity";
+import { runBetaImportIfRequested } from "./betaImport";
+import { startBetaUsageSnapshotJob } from "./betaUsageSnapshot";
+import { LATEST_MIGRATION_ID } from "./persistence/Migrations";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
-import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
+import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
-import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
+import {
+  claudeCredentialKeepaliveTargets,
+  createClaudeCredentialKeepaliveController,
+} from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
+import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
+import {
+  discoverServerRuntime,
+  pairExternalMcpClient,
+  resolveExternalMcpBaseDir,
+  serveExternalMcpStdio,
+  verifyServerRuntime,
+} from "./externalMcp/bridge";
+import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
+import {
+  embeddedMigrationRuntimeSourceDigest,
+  verifyMigrationRuntimeIdentity,
+} from "./migrationBundleIdentity";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
+
+function consumeProcessEnvironmentValue(environmentKey: string): string | undefined {
+  const matchingKeys =
+    process.platform === "win32"
+      ? Object.keys(process.env).filter((key) => key.toUpperCase() === environmentKey)
+      : [environmentKey];
+  let value: string | undefined;
+
+  for (const key of matchingKeys) {
+    value ??= process.env[key];
+    delete process.env[key];
+  }
+
+  return value;
+}
 
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
@@ -131,8 +186,24 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  migrationDivergenceConsent: Config.string(MIGRATION_DIVERGENCE_CONSENT_ENV).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  migrationRuntimeSourceDigest: Config.string(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV).pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+  ),
+  trashDir: Config.string("SYNARA_TRASH_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
   logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
   logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
@@ -150,6 +221,34 @@ const ServerConfigLive = (input: CliInput) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
       );
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(DESKTOP_SHUTDOWN_TOKEN_ENV_KEY),
+      );
+      const liveProcessMigrationConsent = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_DIVERGENCE_CONSENT_ENV),
+      );
+      const liveProcessMigrationSourceDigest = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV),
+      );
+
+      const launcherMigrationSourceDigest =
+        env.migrationRuntimeSourceDigest ?? liveProcessMigrationSourceDigest;
+      yield* Effect.try({
+        try: () =>
+          verifyMigrationRuntimeIdentity({
+            cwd: cliConfig.cwd,
+            embeddedDigest: embeddedMigrationRuntimeSourceDigest(),
+            launcherDigest: launcherMigrationSourceDigest,
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message:
+              cause instanceof Error
+                ? `${cause.name}: ${cause.message}`
+                : "Migration bundle check failed",
+            cause,
+          }),
+      });
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
 
@@ -186,6 +285,28 @@ const ServerConfigLive = (input: CliInput) =>
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
+      // A "Copy my data to Beta" request from a stable install lands as a
+      // marker in this home; it must be consumed before the private state
+      // directory (and its database) is created or repaired.
+      // Only Synara Beta consumes the marker, so a stray file in any other
+      // home can never replace that install's database.
+      if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+        const importResult = yield* Effect.tryPromise({
+          try: () =>
+            runBetaImportIfRequested({
+              betaHomeDir: baseDir,
+              stateDir: derivedPaths.stateDir,
+              latestMigrationId: LATEST_MIGRATION_ID,
+            }),
+          catch: (cause) =>
+            new StartupError({ message: "Failed to complete the stable→beta data import", cause }),
+        });
+        if (importResult.consumed) {
+          yield* Effect.logInfo("stable→beta data import finished").pipe(
+            Effect.annotateLogs({ ok: importResult.ok, error: importResult.error ?? null }),
+          );
+        }
+      }
       yield* Effect.try({
         try: () => preparePrivateServerPaths(derivedPaths),
         catch: (cause) =>
@@ -193,6 +314,9 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
+      const migrationDivergenceConsent =
+        env.migrationDivergenceConsent ?? liveProcessMigrationConsent;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd,
@@ -230,7 +354,7 @@ const ServerConfigLive = (input: CliInput) =>
         });
       }
 
-      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot } =
         yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
 
       const config: ServerConfigShape = {
@@ -240,6 +364,7 @@ const ServerConfigLive = (input: CliInput) =>
         homeDir,
         chatWorkspaceRoot,
         studioWorkspaceRoot,
+        groupsWorkspaceRoot,
         host,
         baseDir,
         ...derivedPaths,
@@ -249,7 +374,10 @@ const ServerConfigLive = (input: CliInput) =>
         allowInsecureRemote,
         noBrowser,
         authToken,
+        desktopShutdownToken,
+        migrationDivergenceConsent,
         autoBootstrapProjectFromCwd,
+        trashDir: env.trashDir,
         logProviderEvents,
         logWebSocketEvents,
       } satisfies ServerConfigShape;
@@ -259,52 +387,42 @@ const ServerConfigLive = (input: CliInput) =>
   );
 
 const LayerLive = (input: CliInput) => {
-  const runtimeServicesLayer = makeServerRuntimeServicesLayer();
-  const providerLayer = makeServerProviderLayer();
-  const providerHealthLayer = ProviderHealthLive.pipe(
-    // Provider health reads persisted provider settings while constructing its
-    // cache, so build it with the same runtime services layer exposed to Server.
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const { runtimeServicesLayer, providerLayer } = makeServerApplicationLayers();
   const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
     // The reaper coordinates orchestration state with live provider sessions,
     // so it belongs at the top level where both layers are available.
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
-
+  const providerRuntimeReconcilerLayer = ProviderRuntimeReconcilerLive.pipe(
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+  );
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
-    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(providerSessionReaperLayer),
+    Layer.provideMerge(providerRuntimeReconcilerLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
-    Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
 };
 
-export const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
+  const safeConfig: Record<string, unknown> = { ...config };
+  delete safeConfig.authToken;
+  delete safeConfig.desktopShutdownToken;
+  delete safeConfig.migrationDivergenceConsent;
+  delete safeConfig.devUrl;
 
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getCounts().pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather startup projection counts for telemetry", { cause }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-});
+  return {
+    ...safeConfig,
+    devUrl: config.devUrl?.toString(),
+    authEnabled: Boolean(config.authToken),
+  };
+}
 
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
@@ -353,32 +471,41 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
-    yield* Effect.forkChild(recordStartupHeartbeat);
+    // Beta only: anonymous 24h usage snapshot for diagnostics. Same gate as the
+    // stable→beta import; failures are logged inside and never break startup.
+    if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+      yield* startBetaUsageSnapshotJob(config.baseDir);
+    }
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
-    yield* Effect.forkChild(
-      Effect.gen(function* () {
-        const settings = yield* serverSettings.getSettings;
-        if (settings.providers.claudeAgent.enabled === false) {
-          return;
-        }
-        yield* Effect.sync(() =>
-          startClaudeCredentialKeepalive({
-            binaryPath: settings.providers.claudeAgent.binaryPath,
+    const claudeKeepalive = createClaudeCredentialKeepaliveController({
+      homeDir: config.homeDir,
+      log: (message) => Effect.runFork(Effect.logInfo(message)),
+    });
+    const reconcileClaudeKeepalive = (settings: ServerSettings) =>
+      Effect.promise(() =>
+        claudeKeepalive.reconcile(
+          claudeCredentialKeepaliveTargets(settings, {
             homeDir: config.homeDir,
-            log: (message) => Effect.runFork(Effect.logInfo(message)),
+            stateDir: config.stateDir,
           }),
-        );
-      }),
+        ),
+      );
+    // Attach before reading the initial snapshot. The settings PubSub does not
+    // replay, so reading first could miss a disable/path update in the small
+    // window before the stream consumer subscribes.
+    const claudeKeepaliveSettingsChanges = yield* serverSettings.streamChanges.pipe(
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+    yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
+    yield* Stream.fromQueue(claudeKeepaliveSettingsChanges).pipe(
+      Stream.runForEach(reconcileClaudeKeepalive),
+      Effect.ensuring(Effect.promise(() => claudeKeepalive.stop())),
+      Effect.forkChild,
     );
 
-    const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("Synara running", {
-      ...safeConfig,
-      devUrl: devUrl?.toString(),
-      authEnabled: Boolean(authToken),
-    });
+    yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
     if (startupPairingUrl) {
       if (config.allowInsecureRemote && !config.publicUrl) {
         yield* Effect.logWarning(
@@ -415,7 +542,7 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     return yield* stopSignal;
-  }).pipe(Effect.provide(LayerLive(input)));
+  }).pipe(Effect.scoped, Effect.provide(LayerLive(input)));
 
 /**
  * These flags mirrors the environment variables and the config shape.
@@ -477,7 +604,19 @@ const logWebSocketEventsFlag = optionalBooleanFlag("log-websocket-events", {
   aliases: ["log-ws-events"],
 });
 
-export const synaraCli = Command.make("synara", {
+const mcpIntegrationFlag = Flag.string("integration").pipe(
+  Flag.withDescription(
+    "Paired integration id to serve (required only when more than one is stored).",
+  ),
+  Flag.optional,
+);
+
+// Base `synara` command defined before the MCP subcommands so they can yield
+// its parsed input (notably `--home-dir` / `synaraHome`) via Effect's command
+// context. This avoids a duplicate `--home-dir` flag between the root command
+// and its MCP subcommands, which the Effect CLI assigns to the parent and
+// leaves the subcommand flag unset.
+const baseServerCommand = Command.make("synara", {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
@@ -490,7 +629,140 @@ export const synaraCli = Command.make("synara", {
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logProviderEvents: logProviderEventsFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
-}).pipe(
-  Command.withDescription("Run the Synara server."),
-  Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
+}).pipe(Command.withDescription("Run the Synara server."));
+
+const mcpServeCommand = Command.make(
+  "serve",
+  { integration: mcpIntegrationFlag },
+  ({ integration }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      yield* Effect.tryPromise({
+        try: () =>
+          serveExternalMcpStdio({
+            baseDir,
+            ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
+          }),
+        catch: (cause) =>
+          new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+      });
+    }),
+).pipe(
+  Command.withDescription(
+    "Serve the paired Synara external MCP integration over stdio for Codex, Claude, and other MCP clients.",
+  ),
 );
+
+const mcpPairCommand = Command.make(
+  "pair",
+  {
+    code: Flag.string("code").pipe(
+      Flag.withDescription("Short-lived pairing code issued by Synara Settings."),
+    ),
+  },
+  ({ code }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      const paired = yield* Effect.tryPromise({
+        try: () =>
+          pairExternalMcpClient({
+            baseDir,
+            pairingCode: code,
+          }),
+        catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+      });
+      process.stdout.write(
+        `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+      );
+      if (process.platform === "win32") {
+        process.stdout.write(
+          "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
+        );
+      }
+    }),
+).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
+
+const serverStatusCommand = Command.make(
+  "status",
+  {
+    url: Flag.string("url").pipe(
+      Flag.withDescription("Synara server base URL to probe."),
+      Flag.optional,
+    ),
+    json: Flag.boolean("json").pipe(
+      Flag.withDescription("Print machine-readable JSON."),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ url, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const discovered = Option.isSome(url)
+        ? { url: url.value }
+        : (() => {
+            const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+            try {
+              const runtime = discoverServerRuntime(baseDir);
+              return { url: runtime.state.origin, runtime };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Failed to discover a running Synara server.",
+              };
+            }
+          })();
+      const result =
+        "error" in discovered
+          ? {
+              reachable: false as const,
+              ready: false as const,
+              url: "[undiscovered]",
+              error: discovered.error,
+            }
+          : yield* Effect.promise(async () => {
+              try {
+                if ("runtime" in discovered) {
+                  await verifyServerRuntime(discovered.runtime, globalThis.fetch);
+                }
+                return await fetchSynaraServerStatus({ url: discovered.url });
+              } catch (cause) {
+                return {
+                  reachable: false as const,
+                  ready: false as const,
+                  url: discovered.url,
+                  error:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Failed to verify the discovered Synara server.",
+                };
+              }
+            });
+      process.stdout.write(
+        json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
+      );
+      if (!result.ready) {
+        process.exitCode = 1;
+      }
+    }),
+).pipe(Command.withDescription("Check whether a Synara server is reachable and ready."));
+
+const serverToolsCommand = Command.make("server").pipe(
+  Command.withDescription("Inspect and manage a running Synara server."),
+  Command.withSubcommands([serverStatusCommand]),
+);
+
+const mcpCommand = Command.make("mcp").pipe(
+  Command.withDescription("Manage Synara's loopback external MCP bridge."),
+  Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
+);
+
+const serverCommand = baseServerCommand.pipe(
+  Command.withHandler((input) => makeServerProgram(input)),
+  Command.withSubcommands([serverToolsCommand, mcpCommand]),
+);
+
+export const synaraCli = serverCommand;

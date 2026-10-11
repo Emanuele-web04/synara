@@ -6,7 +6,7 @@
 // Layer: Chat/diff UI primitives
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { type ReactNode, memo, useMemo } from "react";
+import { type ReactNode } from "react";
 
 import {
   resolveFileDiffPath,
@@ -21,7 +21,7 @@ function stripPatchPathPrefix(path: string): string {
   return path.startsWith("a/") || path.startsWith("b/") ? path.slice(2) : path;
 }
 
-export const FileDiffHeader = memo(function FileDiffHeader(props: {
+export const FileDiffHeader = function FileDiffHeader(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   /** Optional trailing chrome (file-actions menu, collapse chevron, etc.). */
@@ -37,14 +37,14 @@ export const FileDiffHeader = memo(function FileDiffHeader(props: {
       : null;
   const prevPath =
     isRename && props.fileDiff.prevName ? stripPatchPathPrefix(props.fileDiff.prevName) : null;
-  const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
+  const stat = summarizeFileDiffStats([props.fileDiff]);
 
   return (
     <div
       data-diff-file-header=""
       className={cn(
         "font-system-ui flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5",
-        "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+        "text-ui text-foreground",
       )}
       title={prevPath ? `${prevPath} → ${filePath}` : filePath}
     >
@@ -59,29 +59,27 @@ export const FileDiffHeader = memo(function FileDiffHeader(props: {
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
         {prevLeaf ? (
           <>
-            <span className="shrink-0 truncate text-[11.5px] text-muted-foreground/65 line-through">
+            <span className="shrink-0 truncate text-ui-sm text-muted-foreground/65 line-through">
               {prevLeaf}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground/45" aria-hidden>
+            <span className="shrink-0 text-ui-sm text-muted-foreground/45" aria-hidden>
               →
             </span>
           </>
         ) : null}
-        <span className="shrink-0 truncate text-[11.5px] font-medium text-foreground/85">
-          {name}
-        </span>
+        <span className="shrink-0 truncate text-ui-sm font-medium text-foreground/85">{name}</span>
         {dir ? (
-          <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
+          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
         ) : null}
       </div>
       <DiffStat
         additions={stat.additions}
         deletions={stat.deletions}
-        className="shrink-0 text-[10px] tabular-nums"
+        className="shrink-0 text-ui-xs tabular-nums"
       />
       {props.trailing ? (
         <span className="inline-flex shrink-0 items-center gap-0.5">{props.trailing}</span>
       ) : null}
     </div>
   );
-});
+};

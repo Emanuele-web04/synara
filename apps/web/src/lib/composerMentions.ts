@@ -4,6 +4,7 @@
 // Exports: mention token formatters plus regex helpers used by composer parsing and prompt sync.
 
 import type { ProviderMentionReference, ProviderSkillReference } from "@synara/contracts";
+import { isThreadMentionPath, threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
 export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";
@@ -146,10 +147,30 @@ export function providerMentionMatchesToken(
   );
 }
 
-export type MentionChipKind = "path" | "plugin";
+export type MentionChipKind = "path" | "plugin" | "thread";
 
 export function isPluginProviderMentionReference(mention: ProviderMentionReference): boolean {
   return mention.path.startsWith("plugin://");
+}
+
+export function isThreadProviderMentionReference(mention: ProviderMentionReference): boolean {
+  return isThreadMentionPath(mention.path);
+}
+
+export function threadIdFromProviderMentionReference(
+  mention: ProviderMentionReference,
+): string | null {
+  return threadIdFromThreadMentionPath(mention.path);
+}
+
+export function findThreadProviderMentionReferenceForToken(
+  token: string,
+  mentions: ReadonlyArray<ProviderMentionReference> | undefined,
+): ProviderMentionReference | undefined {
+  return mentions?.find(
+    (mention) =>
+      isThreadProviderMentionReference(mention) && providerMentionMatchesToken(mention, token),
+  );
 }
 
 export function resolveMentionChipKind(
@@ -159,8 +180,14 @@ export function resolveMentionChipKind(
     mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   },
 ): MentionChipKind {
+  if (options?.kind === "thread" || isThreadMentionPath(path)) {
+    return "thread";
+  }
   if (options?.kind === "plugin" || path.startsWith("plugin://")) {
     return "plugin";
+  }
+  if (findThreadProviderMentionReferenceForToken(path, options?.mentionReferences)) {
+    return "thread";
   }
   if (
     options?.mentionReferences?.some(

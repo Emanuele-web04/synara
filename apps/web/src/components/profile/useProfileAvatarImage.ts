@@ -3,7 +3,6 @@
 // When set it takes precedence over the accent color. Local-only, no I/O.
 // Layer: web profile feature.
 
-import { useCallback } from "react";
 import { Schema } from "effect";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 
@@ -21,12 +20,9 @@ export function useProfileAvatarImage() {
 
   const image = stored.trim().length > 0 ? stored : null;
 
-  const setImage = useCallback(
-    (next: string | null) => {
-      setStored(next ?? "");
-    },
-    [setStored],
-  );
+  const setImage = (next: string | null) => {
+    setStored(next ?? "");
+  };
 
   return { image, setImage } as const;
 }

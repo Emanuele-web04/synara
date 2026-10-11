@@ -13,7 +13,11 @@ import { DiffPanelPatchViewport } from "~/components/DiffPanelPatchViewport";
 import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
 import { DiffPanelLoadingState } from "~/components/DiffPanelShell";
 import { useTheme } from "~/hooks/useTheme";
-import { getRenderablePatch, sortFileDiffsByPath, summarizePatchTotals } from "~/lib/diffRendering";
+import {
+  getRenderablePatch,
+  sortFileDiffsByPath,
+  summarizeRenderablePatchStats,
+} from "~/lib/diffRendering";
 import { pullRequestDiffQueryOptions } from "~/lib/pullRequestReactQuery";
 import { cn } from "~/lib/utils";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
@@ -32,16 +36,22 @@ export function PullRequestCodeTab({
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const diffQuery = useQuery(pullRequestDiffQueryOptions(input));
 
+  // Parse once per distinct patch (mirroring DiffPanel): every collapse toggle
+  // and theme change re-renders this tab, and the patch can be up to 8 MiB.
+  // Totals come from the parsed result rather than a second full parse.
+  const patch = diffQuery.data?.patch;
   const renderablePatch = useMemo(
-    () =>
-      getRenderablePatch(diffQuery.data?.patch, `pull-request:${input.projectId}:${input.number}`),
-    [diffQuery.data?.patch, input.number, input.projectId],
+    () => getRenderablePatch(patch, `pull-request:${input.projectId}:${input.number}`),
+    [input.number, input.projectId, patch],
   );
   const renderableFiles = useMemo(
     () => (renderablePatch?.kind === "files" ? sortFileDiffsByPath(renderablePatch.files) : []),
     [renderablePatch],
   );
-  const patchTotals = useMemo(() => summarizePatchTotals(diffQuery.data?.patch), [diffQuery.data]);
+  const patchTotals = useMemo(
+    () => summarizeRenderablePatchStats(renderablePatch),
+    [renderablePatch],
+  );
 
   return (
     <DiffWorkerPoolProvider>

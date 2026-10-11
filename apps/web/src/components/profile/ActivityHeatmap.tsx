@@ -4,7 +4,7 @@
 // intensity. Sizing uses inline px so html-to-image reproduces it exactly.
 // Layer: web profile feature.
 
-import { type CSSProperties, useMemo } from "react";
+import { type CSSProperties } from "react";
 import type { ProfileHeatmapCell } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -95,23 +95,30 @@ interface Column {
 
 export function ActivityHeatmap({
   cells,
-  cellSize = 13,
-  gap = 3,
-  radius = 4,
-  intensityClasses = APP_HEATMAP_INTENSITY_CLASSES,
-  showMonths = false,
-  monthsPosition = "top",
+  cellSize: cellSizeProp,
+  gap: gapProp,
+  radius: radiusProp,
+  intensityClasses: intensityClassesProp,
+  showMonths: showMonthsProp,
+  monthsPosition: monthsPositionProp,
   monthLabelClassName,
-  fill = false,
+  fill: fillProp,
   maxCellSize,
-  tooltip = false,
-  tooltipUnit = "prompts",
+  tooltip: tooltipProp,
+  tooltipUnit: tooltipUnitProp,
   className,
 }: ActivityHeatmapProps) {
-  const columns = useMemo<Column[]>(() => {
-    if (cells.length === 0) {
-      return [];
-    }
+  const cellSize = cellSizeProp ?? 13;
+  const gap = gapProp ?? 3;
+  const radius = radiusProp ?? 4;
+  const intensityClasses = intensityClassesProp ?? APP_HEATMAP_INTENSITY_CLASSES;
+  const showMonths = showMonthsProp ?? false;
+  const monthsPosition = monthsPositionProp ?? "top";
+  const fill = fillProp ?? false;
+  const tooltip = tooltipProp ?? false;
+  const tooltipUnit = tooltipUnitProp ?? "prompts";
+  const columns: Column[] = [];
+  if (cells.length > 0) {
     const slots: Slot[] = [];
     for (let index = 0; index < cells[0]!.weekday; index += 1) {
       slots.push({ kind: "pad", id: `pad-lead-${index}` });
@@ -123,34 +130,30 @@ export function ActivityHeatmap({
       slots.push({ kind: "pad", id: `pad-tail-${slots.length}` });
     }
 
-    const result: Column[] = [];
     for (let index = 0; index < slots.length; index += 7) {
       const week = slots.slice(index, index + 7);
       const firstCell = week.find(
         (slot): slot is Extract<Slot, { kind: "cell" }> => slot.kind === "cell",
       );
-      result.push({ key: firstCell ? firstCell.cell.day : `col-${index}`, slots: week });
+      columns.push({ key: firstCell ? firstCell.cell.day : `col-${index}`, slots: week });
     }
-    return result;
-  }, [cells]);
+  }
 
-  const monthByColumn = useMemo<(string | null)[]>(() => {
-    let previousMonth = -1;
-    return columns.map((column) => {
-      const firstCell = column.slots.find(
-        (slot): slot is Extract<Slot, { kind: "cell" }> => slot.kind === "cell",
-      );
-      if (!firstCell) {
-        return null;
-      }
-      const monthIndex = Number(firstCell.cell.day.split("-")[1]) - 1;
-      if (monthIndex === previousMonth || monthIndex < 0) {
-        return null;
-      }
-      previousMonth = monthIndex;
-      return MONTH_LABELS[monthIndex] ?? null;
-    });
-  }, [columns]);
+  let previousMonth = -1;
+  const monthByColumn: (string | null)[] = columns.map((column) => {
+    const firstCell = column.slots.find(
+      (slot): slot is Extract<Slot, { kind: "cell" }> => slot.kind === "cell",
+    );
+    if (!firstCell) {
+      return null;
+    }
+    const monthIndex = Number(firstCell.cell.day.split("-")[1]) - 1;
+    if (monthIndex === previousMonth || monthIndex < 0) {
+      return null;
+    }
+    previousMonth = monthIndex;
+    return MONTH_LABELS[monthIndex] ?? null;
+  });
 
   const columnCount = columns.length;
   const responsiveFill = fill && maxCellSize != null;
@@ -191,7 +194,7 @@ export function ActivityHeatmap({
         <div
           key={column.key}
           className={cn(
-            "overflow-visible whitespace-nowrap text-[10px] font-medium leading-none text-muted-foreground",
+            "overflow-visible whitespace-nowrap text-ui-xs font-medium leading-none text-muted-foreground",
             monthLabelClass,
             monthLabelClassName,
           )}

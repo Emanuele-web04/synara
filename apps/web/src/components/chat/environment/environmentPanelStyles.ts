@@ -18,10 +18,7 @@ export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
 );
 
 /** Top-of-card title row. */
-export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
-  ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
-  "text-[length:var(--app-font-size-ui,12px)]",
-);
+export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(ENVIRONMENT_PANEL_LABEL_CLASS_NAME, "text-ui");
 
 /**
  * Section-heading typography without row padding — used inline inside the collapsible
@@ -29,7 +26,7 @@ export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
  */
 export const ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME = cn(
   ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
-  "text-[length:var(--app-font-size-ui-sm,11px)]",
+  "text-ui-sm",
 );
 
 /**
@@ -51,7 +48,8 @@ export const ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME = cn(
 /** Recap markdown — same placeholder tone with markdown-specific spacing overrides. */
 export const ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME = cn(
   ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME,
-  `!${COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME}`,
+  // Literal, not `!${...}`: Tailwind scans source text, so a template-built class emits no CSS.
+  "text-muted-foreground/40!",
   "[&_strong]:font-medium [&_strong]:text-muted-foreground/40",
   "[&_:not(pre)>code]:!text-muted-foreground/45",
   COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME,

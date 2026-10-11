@@ -9,7 +9,7 @@
 // Layer: UI shared component
 // Exports: InlineMentionChip
 
-import { memo, type MouseEvent, type ReactNode } from "react";
+import { type MouseEvent, type ReactNode } from "react";
 import type { ProviderMentionReference } from "@synara/contracts";
 import { basenameOfPath, pathLooksLikeKnownFile } from "~/file-icons";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "~/lib/workspaceFileOpener";
@@ -19,6 +19,7 @@ import {
 } from "../composerInlineChip";
 import { InlineChipContent } from "../InlineChip";
 import { MentionChipIcon, type MentionChipKind } from "./MentionChipIcon";
+import { resolveMentionChipKind } from "~/lib/composerMentions";
 
 interface InlineMentionChipProps {
   path: string;
@@ -30,13 +31,19 @@ interface InlineMentionChipProps {
   /** When set, the chip renders as an openable anchor instead of a static span. */
   href?: string;
   onActivate?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  onContextMenu?: (event: MouseEvent<HTMLAnchorElement>) => void;
   /** Warm-up hook fired on hover/focus so activating the chip feels instant. */
   onHoverPrefetch?: (() => void) | undefined;
 }
 
-export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMentionChipProps) {
+export function InlineMentionChip(props: InlineMentionChipProps) {
   const opener = useWorkspaceFileOpener();
-  const label = props.label ?? basenameOfPath(props.path);
+  const resolvedKind = resolveMentionChipKind(props.path, {
+    ...(props.kind ? { kind: props.kind } : {}),
+    ...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {}),
+  });
+  const label =
+    props.label ?? (resolvedKind === "thread" ? props.path : basenameOfPath(props.path));
   const inner = (
     <InlineChipContent
       icon={
@@ -83,6 +90,7 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
         title={props.path}
         {...(href !== undefined ? { href } : {})}
         {...(handleActivate ? { onClick: handleActivate } : {})}
+        {...(props.onContextMenu ? { onContextMenu: props.onContextMenu } : {})}
         {...(handleHoverPrefetch
           ? { onPointerEnter: handleHoverPrefetch, onFocus: handleHoverPrefetch }
           : {})}
@@ -97,4 +105,4 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
       {inner}
     </span>
   );
-});
+}

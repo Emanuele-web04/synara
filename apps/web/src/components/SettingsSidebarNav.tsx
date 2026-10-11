@@ -5,10 +5,11 @@
 // Layer: UI component
 // Exports: SettingsSidebarNav
 
-import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useMemo, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { Badge } from "./ui/badge";
 import { SearchInput } from "./ui/search-input";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
@@ -20,6 +21,7 @@ import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
   settingsSectionLabel,
+  type SettingsSearchContext,
   type SettingsSearchEntry,
 } from "../settingsSearchIndex";
 import {
@@ -50,7 +52,7 @@ function SettingsSearchResultRow(props: {
   onSelect: (entry: SettingsSearchEntry) => void;
 }) {
   const { entry, onSelect } = props;
-  const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-1";
+  const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-4";
   // Mirrors the project header + nested thread layout: the section reuses the nav row
   // (muted icon + label) and the matched setting sits below as an indented thread-style row.
   return (
@@ -85,65 +87,51 @@ function SettingsSearchResultRow(props: {
 
 export function SettingsSidebarNav(props: {
   activeSection: SettingsSectionId;
-  onBack: () => void;
   onSelectSection: (section: SettingsSectionId, options?: { target?: string }) => void;
+  /**
+   * Which conditionally-rendered rows exist on this machine, so the search
+   * cannot offer a row the panel does not draw. Passed in rather than read here:
+   * this component is a pure nav, and the one fact it needs is owned by a
+   * surface that already has it.
+   */
+  searchContext?: SettingsSearchContext | undefined;
 }) {
   const { onSelectSection } = props;
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
   const isSearching = trimmedQuery.length > 0;
-  const results = useMemo(
-    () => rankSettingsSearchEntries(trimmedQuery, SETTINGS_SEARCH_RESULTS_LIMIT),
-    [trimmedQuery],
+  const results = rankSettingsSearchEntries(
+    trimmedQuery,
+    SETTINGS_SEARCH_RESULTS_LIMIT,
+    props.searchContext,
   );
 
-  const handleSelectResult = useCallback(
-    (entry: SettingsSearchEntry) => {
-      const target = settingsSearchEntryTarget(entry);
-      onSelectSection(entry.section, target ? { target } : undefined);
+  const handleSelectResult = (entry: SettingsSearchEntry) => {
+    const target = settingsSearchEntryTarget(entry);
+    onSelectSection(entry.section, target ? { target } : undefined);
+    setQuery("");
+  };
+
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const topMatch = results[0];
+      if (topMatch) {
+        handleSelectResult(topMatch);
+      }
+      return;
+    }
+    if (event.key === "Escape" && query.length > 0) {
+      event.stopPropagation();
       setQuery("");
-    },
-    [onSelectSection],
-  );
-
-  const handleSearchKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        const topMatch = results[0];
-        if (topMatch) {
-          handleSelectResult(topMatch);
-        }
-        return;
-      }
-      if (event.key === "Escape" && query.length > 0) {
-        event.stopPropagation();
-        setQuery("");
-      }
-    },
-    [handleSelectResult, query.length, results],
-  );
+    }
+  };
 
   return (
     <div className="px-1.5 py-1.5">
-      <div className="mb-3">
-        <button
-          type="button"
-          className={cn(
-            SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
-            SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
-          )}
-          onClick={props.onBack}
-        >
-          <SidebarLeadingIcon size="sm" tone="text-inherit">
-            <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
-          </SidebarLeadingIcon>
-          <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to app</span>
-        </button>
-      </div>
-
       <div className="mb-3 px-1">
         <SearchInput
+          shape="capsule"
           value={query}
           spellCheck={false}
           autoCorrect="off"
@@ -213,6 +201,15 @@ export function SettingsSidebarNav(props: {
                           <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
                             {item.label}
                           </span>
+                          {item.badge ? (
+                            <Badge
+                              variant="outline"
+                              size="sm"
+                              className="ml-auto rounded-full px-1.5 font-normal text-muted-foreground"
+                            >
+                              {item.badge}
+                            </Badge>
+                          ) : null}
                         </button>
                       </li>
                     );

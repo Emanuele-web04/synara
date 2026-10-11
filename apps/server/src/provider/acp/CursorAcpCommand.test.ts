@@ -7,7 +7,22 @@
  *
  * @module CursorAcpCommand.test
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const virtualWindowsFiles = vi.hoisted(() => new Map<string, "file" | "directory">());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: (filePath: string) =>
+      virtualWindowsFiles.has(filePath.replaceAll("/", "\\")) || actual.existsSync(filePath),
+    statSync: (filePath: string) => {
+      const kind = virtualWindowsFiles.get(filePath.replaceAll("/", "\\"));
+      return kind ? { isFile: () => kind === "file" } : actual.statSync(filePath);
+    },
+  };
+});
+afterEach(() => virtualWindowsFiles.clear());
 
 import {
   buildCursorAgentCommand,
@@ -31,9 +46,62 @@ describe("resolveCursorAgentBinaryPath", () => {
     expect(resolveCursorAgentBinaryPath("cursor-agent")).toBe("cursor-agent");
     expect(resolveCursorAgentBinaryPath("/usr/local/bin/agent")).toBe("/usr/local/bin/agent");
   });
+
+  it("discovers native Windows Cursor Agent installs outside PATH", () => {
+    const installedPath = "C:\\Users\\me\\AppData\\Local\\cursor-agent\\agent.exe";
+    expect(
+      resolveCursorAgentBinaryPath(undefined, {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Windows" },
+        pathExists: (path) => path === installedPath,
+      }),
+    ).toBe(installedPath);
+  });
+
+  it("keeps PATH precedence over the native Windows fallback", () => {
+    expect(
+      resolveCursorAgentBinaryPath(undefined, {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local", PATH: "C:\\Tools" },
+        pathExists: (path) =>
+          path.replaceAll("/", "\\") === "C:\\Tools\\cursor-agent.CMD" ||
+          path === "C:\\Users\\me\\AppData\\Local\\cursor-agent\\agent.exe",
+      }),
+    ).toBe("cursor-agent");
+  });
 });
 
 describe("buildCursorAgentCommand", () => {
+  it("ignores a PATH directory when choosing a native Windows install", () => {
+    const installedPath = "C:\\Users\\tester\\AppData\\Local\\cursor-agent\\agent.exe";
+    virtualWindowsFiles.set("C:\\Tools\\cursor-agent.EXE", "directory");
+    virtualWindowsFiles.set(installedPath, "file");
+    expect(
+      buildCursorAgentCommand(undefined, ["acp"], {
+        platform: "win32",
+        env: { LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local", PATH: "C:\\Tools" },
+      }),
+    ).toEqual({ command: installedPath, args: ["acp"] });
+  });
+
+  it("wraps a native PowerShell-only install even when PS1 is absent from PATHEXT", () => {
+    const installedPath = "C:\\Users\\tester\\AppData\\Local\\cursor-agent\\agent.ps1";
+    virtualWindowsFiles.set(installedPath, "file");
+    const options = {
+      platform: "win32" as const,
+      env: {
+        LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local",
+        PATH: "",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      },
+    };
+    expect(resolveCursorAgentBinaryPath(undefined, options)).toBe(installedPath);
+    expect(buildCursorAgentCommand(undefined, ["acp"], options)).toEqual({
+      command: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installedPath, "acp"],
+    });
+  });
+
   it("runs default Cursor Agent commands directly", () => {
     expect(buildCursorAgentCommand(undefined, ["acp"])).toEqual({
       command: "cursor-agent",

@@ -1,6 +1,7 @@
 import { type AutomationStreamEvent } from "@synara/contracts";
 import { Cause, Duration, Effect, Layer, Queue, Stream } from "effect";
 
+import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { AutomationService } from "../Services/AutomationService.ts";
 import {
@@ -14,7 +15,9 @@ function shouldWakeScheduler(event: AutomationStreamEvent): boolean {
   return (
     event.type === "definition-upserted" ||
     event.type === "definition-deleted" ||
-    (event.type === "run-upserted" && event.run.result?.completionEvaluation !== undefined)
+    (event.type === "run-upserted" &&
+      ((event.run.deferredUntil ?? null) !== null ||
+        event.run.result?.completionEvaluation !== undefined))
   );
 }
 
@@ -45,19 +48,24 @@ export const makeAutomationSchedulerLive = (options?: AutomationSchedulerLiveOpt
       );
 
       const nextDelayMs = () =>
-        automationRepository.getEarliestNextRunAt({ now: new Date().toISOString() }).pipe(
-          Effect.map((nextRunAt) => {
-            if (!nextRunAt) {
-              return intervalMs;
-            }
-            const dueInMs = Date.parse(nextRunAt) - Date.now();
-            return Math.min(
-              intervalMs,
-              Math.max(1_000, Number.isFinite(dueInMs) ? dueInMs : intervalMs),
-            );
-          }),
-          Effect.catch(() => Effect.succeed(intervalMs)),
-        );
+        automationRepository
+          .getEarliestNextRunAt({
+            now: new Date().toISOString(),
+            excludeProjectManaged: !isServerGroupsEnabled(),
+          })
+          .pipe(
+            Effect.map((nextRunAt) => {
+              if (!nextRunAt) {
+                return intervalMs;
+              }
+              const dueInMs = Date.parse(nextRunAt) - Date.now();
+              return Math.min(
+                intervalMs,
+                Math.max(1_000, Number.isFinite(dueInMs) ? dueInMs : intervalMs),
+              );
+            }),
+            Effect.catch(() => Effect.succeed(intervalMs)),
+          );
 
       const start: AutomationSchedulerShape["start"] = () =>
         Effect.forkScoped(

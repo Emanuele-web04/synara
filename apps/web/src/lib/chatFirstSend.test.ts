@@ -1,7 +1,7 @@
 // FILE: chatFirstSend.test.ts
 // Purpose: Verifies first-send project routing for general chats and folder mentions.
 
-import { type ProjectId } from "@synara/contracts";
+import { DEFAULT_MODEL_BY_PROVIDER, type ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { Project } from "../types";
@@ -18,6 +18,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     cwd: "/Users/tester",
     defaultModelSelection: null,
     expanded: false,
+    spaceId: null,
     scripts: [],
     ...overrides,
   };
@@ -31,7 +32,7 @@ describe("resolveFirstSendTarget", () => {
       createdAt: new Date(2026, 5, 11, 23, 30, 43),
       isFirstMessage: true,
       isHomeChatContainer: true,
-      isStudioContainer: false,
+      isGroupContainer: false,
       projects: [makeProject()],
       selectedWorkspaceRoot: null,
       title: "Yes it takes",
@@ -56,7 +57,7 @@ describe("resolveFirstSendTarget", () => {
       createdAt: new Date(2026, 5, 11, 23, 30, 43),
       isFirstMessage: true,
       isHomeChatContainer: true,
-      isStudioContainer: false,
+      isGroupContainer: false,
       projects: [makeProject()],
       selectedWorkspaceRoot: "/Users/tester/Developer/app",
       title: "Use app",
@@ -82,7 +83,7 @@ describe("resolveFirstSendTarget", () => {
       createdAt: new Date(2026, 5, 11, 23, 30, 43),
       isFirstMessage: false,
       isHomeChatContainer: false,
-      isStudioContainer: false,
+      isGroupContainer: false,
       projects: [activeProject],
       selectedWorkspaceRoot: null,
       title: "Follow up",
@@ -112,7 +113,7 @@ describe("resolveFirstSendTarget", () => {
       createdAt: new Date(2026, 5, 11, 23, 30, 43),
       isFirstMessage: true,
       isHomeChatContainer: false,
-      isStudioContainer: true,
+      isGroupContainer: true,
       projects: [activeProject],
       selectedWorkspaceRoot: null,
       title: "Write content",
@@ -129,7 +130,7 @@ describe("resolveFirstSendTarget", () => {
     });
   });
 
-  it("promotes a Studio folder pick to an ordinary project", () => {
+  it("keeps a Studio folder pick in the Studio container", () => {
     const activeProject = makeProject({
       id: "project-studio" as ProjectId,
       kind: "studio",
@@ -143,7 +144,7 @@ describe("resolveFirstSendTarget", () => {
       createdAt: new Date(2026, 5, 11, 23, 30, 43),
       isFirstMessage: true,
       isHomeChatContainer: false,
-      isStudioContainer: true,
+      isGroupContainer: true,
       projects: [activeProject],
       selectedWorkspaceRoot: "/Users/tester/Developer/app",
       title: "Use app",
@@ -151,12 +152,34 @@ describe("resolveFirstSendTarget", () => {
     });
 
     expect(result).toMatchObject({
+      kind: "current",
+      target: {
+        targetProjectId: "project-studio",
+        targetProjectKind: "studio",
+        targetProjectCwd: "/Users/tester/Documents/Synara/Studio",
+      },
+    });
+  });
+
+  it("falls back to codex when no defaultModelSelection is provided", () => {
+    const result = resolveFirstSendTarget({
+      activeProject: makeProject(),
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      createdAt: new Date(2026, 5, 11, 23, 30, 43),
+      isFirstMessage: true,
+      isHomeChatContainer: true,
+      isGroupContainer: false,
+      projects: [makeProject()],
+      selectedWorkspaceRoot: null,
+      title: "Codex task",
+      titleSeed: "Codex task",
+    });
+
+    expect(result).toMatchObject({
       kind: "create-project",
       creation: {
-        workspaceRoot: "/Users/tester/Developer/app",
-        title: "app",
-        kind: "project",
-        createWorkspaceRootIfMissing: false,
+        kind: "chat",
+        defaultModelSelection: { provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex },
       },
     });
   });

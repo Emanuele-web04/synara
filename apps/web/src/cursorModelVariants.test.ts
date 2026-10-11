@@ -137,42 +137,47 @@ describe("collapseCursorModelVariants", () => {
     ]);
   });
 
-  it("restores Cursor CLI fallback context choices for Sonnet 5 variants", () => {
+  it("defaults collapsed Cursor Grok variants to high and keeps fast as a toggle", () => {
     expect(
       collapseCursorModelVariants([
         {
-          slug: "claude-sonnet-5-xhigh",
-          name: "Sonnet 5 1M Extra High",
-          upstreamProviderId: "anthropic",
-          upstreamProviderName: "Anthropic",
-          supportedReasoningEfforts: [{ value: "xhigh", label: "Extra High" }],
-          defaultReasoningEffort: "xhigh",
+          slug: "grok-4.6-low",
+          name: "Cursor Grok 4.6 Low",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
         },
         {
-          slug: "claude-sonnet-5-max",
-          name: "Sonnet 5 1M Max",
-          upstreamProviderId: "anthropic",
-          upstreamProviderName: "Anthropic",
-          supportedReasoningEfforts: [{ value: "max", label: "Max" }],
-          defaultReasoningEffort: "max",
+          slug: "grok-4.6-high",
+          name: "Cursor Grok 4.6 High",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "grok-4.6-low-fast",
+          name: "Cursor Grok 4.6 Low Fast",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+          supportsFastMode: true,
         },
       ]),
     ).toEqual([
       {
-        slug: "claude-sonnet-5",
-        name: "Sonnet 5",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
+        slug: "grok-4.6",
+        name: "Cursor Grok 4.6",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
         supportedReasoningEfforts: [
-          { value: "xhigh", label: "Extra High", isDefault: true },
-          { value: "max", label: "Max" },
+          { value: "low", label: "Low" },
+          { value: "high", label: "High", isDefault: true },
         ],
-        defaultReasoningEffort: "xhigh",
-        contextWindowOptions: [
-          { value: "300k", label: "300K", isDefault: true },
-          { value: "1m", label: "1M" },
-        ],
-        defaultContextWindow: "300k",
+        defaultReasoningEffort: "high",
+        supportsFastMode: true,
       },
     ]);
   });

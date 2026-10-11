@@ -12,6 +12,11 @@ import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
+import type { SpaceMetadataOrchestrationEvent } from "../spaceMetadataProjection.ts";
+
+export type ShellMetadataOrchestrationEvent =
+  | ProjectMetadataOrchestrationEvent
+  | SpaceMetadataOrchestrationEvent;
 
 /**
  * OrchestrationProjectionPipelineShape - Service API for projection execution.
@@ -34,8 +39,8 @@ export interface OrchestrationProjectionPipelineShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
-   * Project only the hot-path repositories required for live transcript and
-   * session updates during streaming.
+   * Project the repositories required for live transcript, session and shell
+   * notifications before their domain events are published.
    *
    * PRECONDITION: the caller MUST already hold an open transaction. This method
    * performs NO transaction management of its own — it runs the hot projectors
@@ -48,19 +53,11 @@ export interface OrchestrationProjectionPipelineShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
-   * Project deferred repositories whose derived shell metadata is safe to
-   * compute after the main event transaction commits.
-   */
-  readonly projectDeferredEvent: (
-    event: OrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  /**
    * Project a single project metadata event while the caller already owns the
    * surrounding transaction.
    */
   readonly projectMetadataEvent: (
-    event: ProjectMetadataOrchestrationEvent,
+    event: ShellMetadataOrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

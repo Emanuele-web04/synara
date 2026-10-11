@@ -6,12 +6,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as Acp from "@agentclientprotocol/sdk";
 
 import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 
 function flattenSelectOptionValues(
-  option: Extract<EffectAcpSchema.SessionConfigOption, { type: "select" }> | undefined,
+  option: Extract<Acp.SessionConfigOption, { type: "select" }> | undefined,
 ): ReadonlyArray<string> {
   return (
     option?.options.flatMap((entry) =>
@@ -122,8 +122,10 @@ describe.runIf(process.env.SYNARA_CURSOR_ACP_PROBE === "1")("Cursor ACP CLI prob
         }
       }
 
-      const setResult: EffectAcpSchema.SetSessionConfigOptionResponse =
-        yield* runtime.setConfigOption(modelConfigId, targetModelValue);
+      const setResult: Acp.SetSessionConfigOptionResponse = yield* runtime.setConfigOption(
+        modelConfigId,
+        targetModelValue,
+      );
 
       console.log("session/set_config_option result:", JSON.stringify(setResult, null, 2));
 

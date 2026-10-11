@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  findThreadProviderMentionReferenceForToken,
   isPluginProviderMentionReference,
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
@@ -16,6 +17,7 @@ import {
 } from "./lib/linkChips";
 import { resolveAgentAlias } from "@synara/contracts";
 import type { ProviderMentionReference } from "@synara/contracts";
+import { threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
 export type ComposerPromptSegment =
   | {
@@ -25,7 +27,13 @@ export type ComposerPromptSegment =
   | {
       type: "mention";
       path: string;
-      kind?: "path" | "plugin";
+      kind?: "path" | "plugin" | "thread";
+      threadId?: string;
+      /**
+       * Raw token length in the source text (`@name` vs `@"name with spaces"`).
+       * Cursor math must use this — quoted tokens are longer than path.length + 1.
+       */
+      tokenLength?: number;
     }
   | {
       type: "skill";
@@ -56,7 +64,13 @@ const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 const SLASH_COMMAND_CHIP_TOKEN_REGEX = /(^|\s)\/([a-zA-Z][a-zA-Z0-9_-]*)(?=\s)/i;
 
-const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>(["automation"]);
+// Built-in commands that render as an inline chip (icon + label) instead of plain
+// text, both while typing and in the sent message. Everything else stays literal.
+const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>([
+  "automation",
+  "goal",
+  "computer-use",
+]);
 
 // While typing (composer) a URL only becomes a chip once a delimiter follows it,
 // mirroring how skills/mentions wait for a trailing boundary. For read-only
@@ -314,16 +328,30 @@ function splitTextIntoPromptSegments(
         color: match.color,
       });
     } else if (match.kind === "mention") {
+      const threadMention = findThreadProviderMentionReferenceForToken(
+        match.value,
+        options.mentionReferences,
+      );
       const isPluginMention =
         options.mentionReferences?.some(
           (mention) =>
             isPluginProviderMentionReference(mention) &&
             providerMentionMatchesToken(mention, match.value),
         ) ?? false;
+      const tokenLength = match.end - match.start;
+      const threadId = threadMention ? threadIdFromThreadMentionPath(threadMention.path) : null;
       segments.push(
-        isPluginMention
-          ? { type: "mention", path: match.value, kind: "plugin" }
-          : { type: "mention", path: match.value },
+        threadMention
+          ? {
+              type: "mention",
+              path: match.value,
+              kind: "thread",
+              ...(threadId !== null ? { threadId } : {}),
+              tokenLength,
+            }
+          : isPluginMention
+            ? { type: "mention", path: match.value, kind: "plugin", tokenLength }
+            : { type: "mention", path: match.value, tokenLength },
       );
     } else if (match.kind === "slash-command") {
       segments.push({ type: "slash-command", command: match.command });
@@ -349,8 +377,11 @@ export function splitPromptIntoDisplaySegments(
   mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ComposerPromptSegment[] {
   return splitTextIntoPromptSegments(prompt, {
+    // Sent messages echo the same chips the composer showed while typing, so a
+    // `/goal`/`/automation` token keeps its icon + label instead of falling back
+    // to raw text once the turn is submitted.
     includeTrailingTokenAtEnd: true,
-    includeSlashCommandChips: false,
+    includeSlashCommandChips: true,
     mentionReferences,
   });
 }

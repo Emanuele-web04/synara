@@ -9,6 +9,7 @@ import type {
   AutomationMode,
   ModelSelection,
   ProjectId,
+  ProviderStartOptions,
   ServerAutomationIntentMissingField,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
@@ -21,7 +22,8 @@ import {
   isFormSubmittable,
   type AutomationFormState,
 } from "./automationForm";
-import { stopWhenFromCompletionPolicy } from "./automationCompletionPolicy";
+import { stopWhenFromCompletionPolicy } from "@synara/shared/automationCompletionPolicy";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   buildAutomationDraftWarnings,
@@ -160,6 +162,9 @@ export async function resolveComposerAutomationRequest(input: {
   readonly message: string;
   readonly cwd: string;
   readonly nowIso?: string;
+  readonly codexHomePath?: string | null;
+  readonly providerOptions?: ProviderStartOptions | null;
+  readonly textGenerationModelSelection?: ModelSelection | null;
   readonly generateIntent: GenerateComposerAutomationIntent;
   readonly generateIntentTimeoutMs?: number;
 }): Promise<ComposerAutomationRequestDecision> {
@@ -210,6 +215,11 @@ export async function resolveComposerAutomationRequest(input: {
           message: automationMessage,
           defaultMode: automationDefaultMode,
           nowIso,
+          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.textGenerationModelSelection
+            ? { textGenerationModelSelection: input.textGenerationModelSelection }
+            : {}),
         },
       })
     : null;
@@ -273,11 +283,14 @@ export function buildComposerAutomationDraft(input: {
       worktreeMode: automationIntent.executionScope === "worktree" ? "worktree" : "auto",
       mode: automationMode,
       targetThreadId:
-        automationMode === "heartbeat" && input.targetThreadId ? input.targetThreadId : "",
+        automationRequiresTargetThread(automationMode) && input.targetThreadId
+          ? input.targetThreadId
+          : "",
       maxIterations:
         automationIntent.maxIterations === null ? "" : String(automationIntent.maxIterations),
-      stopOnError: true,
-      stopWhen: automationMode === "heartbeat" ? automationStopWhen : "",
+      // Stop clauses are mode-independent: a standalone or dedicated automation retires
+      // itself on the same condition a heartbeat would.
+      stopWhen: automationStopWhen,
     },
     automationIntent.schedule,
   );

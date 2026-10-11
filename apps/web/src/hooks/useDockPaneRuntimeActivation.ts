@@ -7,12 +7,20 @@ import type { ThreadId } from "@synara/contracts";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
-  DOCK_PANE_DEFERRED_HYDRATION_FRAMES,
   dockPaneActivationKey,
   resolveDockPaneRuntimeMode,
+  scheduleDeferredDockPaneHydration,
+  type DeferredDockPaneHydrationScheduler,
   type DockPaneRuntimeMode,
 } from "~/lib/dockPaneActivation";
 import type { RightDockPane, RightDockPaneKind } from "~/rightDockStore.logic";
+
+const browserDockPaneHydrationScheduler: DeferredDockPaneHydrationScheduler = {
+  requestFrame: (callback) => window.requestAnimationFrame(callback),
+  cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+  setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+  clearTimer: (timerId) => window.clearTimeout(timerId),
+};
 
 export function useDockPaneRuntimeActivation(input: {
   threadId: ThreadId;
@@ -20,26 +28,28 @@ export function useDockPaneRuntimeActivation(input: {
 }) {
   const immediateHydrationKindRef = useRef<RightDockPaneKind | "any" | null>(null);
   const [hydratedPaneKey, setHydratedPaneKey] = useState<string | null>(null);
+  const activePaneId = input.activePane?.id ?? null;
+  const activePaneKind = input.activePane?.kind ?? null;
 
   const activePaneKey = useMemo(
     () =>
-      input.activePane
+      activePaneId !== null && activePaneKind !== null
         ? dockPaneActivationKey({
             threadId: input.threadId,
-            paneId: input.activePane.id,
-            kind: input.activePane.kind,
+            paneId: activePaneId,
+            kind: activePaneKind,
           })
         : null,
-    [input.activePane, input.threadId],
+    [activePaneId, activePaneKind, input.threadId],
   );
 
   const activePaneRuntimeMode: DockPaneRuntimeMode =
-    input.activePane && activePaneKey
+    activePaneKind !== null && activePaneKey !== null
       ? resolveDockPaneRuntimeMode({
-          kind: input.activePane.kind,
+          kind: activePaneKind,
           reason:
             immediateHydrationKindRef.current === "any" ||
-            immediateHydrationKindRef.current === input.activePane.kind
+            immediateHydrationKindRef.current === activePaneKind
               ? "explicit"
               : "restore",
           hydrated: hydratedPaneKey === activePaneKey,
@@ -59,9 +69,9 @@ export function useDockPaneRuntimeActivation(input: {
   useLayoutEffect(() => {
     activePaneRef.current = {
       key: activePaneKey,
-      kind: input.activePane?.kind ?? null,
+      kind: activePaneKind,
     };
-  }, [activePaneKey, input.activePane]);
+  }, [activePaneKey, activePaneKind]);
 
   const requestImmediateHydration = useCallback((kind?: RightDockPaneKind) => {
     immediateHydrationKindRef.current = kind ?? "any";
@@ -80,7 +90,7 @@ export function useDockPaneRuntimeActivation(input: {
   }, []);
 
   useLayoutEffect(() => {
-    if (!input.activePane || !activePaneKey) {
+    if (activePaneKind === null || activePaneKey === null) {
       immediateHydrationKindRef.current = null;
       setHydratedPaneKey(null);
       return;
@@ -88,7 +98,7 @@ export function useDockPaneRuntimeActivation(input: {
 
     const reason =
       immediateHydrationKindRef.current === "any" ||
-      immediateHydrationKindRef.current === input.activePane.kind
+      immediateHydrationKindRef.current === activePaneKind
         ? "explicit"
         : "restore";
     if (reason === "explicit") {
@@ -96,7 +106,7 @@ export function useDockPaneRuntimeActivation(input: {
     }
 
     const nextRuntimeMode = resolveDockPaneRuntimeMode({
-      kind: input.activePane.kind,
+      kind: activePaneKind,
       reason,
       hydrated: hydratedPaneKey === activePaneKey,
     });
@@ -107,30 +117,11 @@ export function useDockPaneRuntimeActivation(input: {
     }
 
     setHydratedPaneKey((current) => (current === activePaneKey ? current : null));
-    let cancelled = false;
-    let frameId: number | null = null;
-    let framesRemaining = DOCK_PANE_DEFERRED_HYDRATION_FRAMES;
-
-    const tick = () => {
-      framesRemaining -= 1;
-      if (cancelled) {
-        return;
-      }
-      if (framesRemaining <= 0) {
-        setHydratedPaneKey(activePaneKey);
-        return;
-      }
-      frameId = window.requestAnimationFrame(tick);
-    };
-
-    frameId = window.requestAnimationFrame(tick);
-    return () => {
-      cancelled = true;
-      if (frameId !== null) {
-        window.cancelAnimationFrame(frameId);
-      }
-    };
-  }, [activePaneKey, hydratedPaneKey, input.activePane]);
+    return scheduleDeferredDockPaneHydration({
+      onHydrate: () => setHydratedPaneKey(activePaneKey),
+      scheduler: browserDockPaneHydrationScheduler,
+    });
+  }, [activePaneKey, activePaneKind, hydratedPaneKey]);
 
   return {
     activePaneRuntimeMode,

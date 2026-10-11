@@ -1,12 +1,13 @@
 // FILE: toolCallDetails.ts
 // Purpose: Extract bounded command/edit details from provider tool lifecycle payloads.
 // Layer: Web transcript data utility
-// Exports: deriveWorkLogToolDetails, mergeWorkLogToolDetails
+// Exports: deriveWorkLogToolDetails, mergeWorkLogToolDetails, deriveToolFailureSummary
 // Depends on: provider runtime item metadata already truncated by server ingestion
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { stripTrailingToolExitCode as stripTrailingExitCode } from "@synara/shared/toolOutputSummary";
 
-type WorkLogRequestKind = "command" | "file-read" | "file-change";
+type WorkLogRequestKind = "command" | "file-read" | "file-change" | "permissions" | "tool";
 
 export interface WorkLogToolOutputDetails {
   output?: string;
@@ -103,25 +104,6 @@ function firstNumber(...values: unknown[]): number | undefined {
     }
   }
   return undefined;
-}
-
-function stripTrailingExitCode(value: string): {
-  output: string | null;
-  exitCode?: number | undefined;
-} {
-  const trimmed = value.trim();
-  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
-    trimmed,
-  );
-  if (!match?.groups) {
-    return { output: value.trim().length > 0 ? value : null };
-  }
-  const exitCode = Number.parseInt(match.groups.code ?? "", 10);
-  const output = value.replace(/\s*<exited with exit code \d+>\s*$/i, "");
-  return {
-    output: output.trim().length > 0 ? output : null,
-    ...(Number.isInteger(exitCode) ? { exitCode } : {}),
-  };
 }
 
 function outputText(value: unknown): string | undefined {
@@ -452,5 +434,47 @@ export function mergeWorkLogToolDetails(
     ...((right.content ?? left.content) ? { content: right.content ?? left.content } : {}),
     ...((right.edits ?? left.edits) ? { edits: right.edits ?? left.edits } : {}),
     ...(files ? { files } : {}),
+  };
+}
+
+export interface ToolFailureSummary {
+  exitCode: number | null;
+  // First line that explains the failure, stderr first.
+  excerpt: string | null;
+}
+
+const LEADING_EXIT_CODE_PATTERN = /^\s*exit code (\d+)\s*$/i;
+const MAX_FAILURE_EXCERPT_CHARS = 200;
+
+function firstExplanatoryLine(value: string | undefined): string | null {
+  if (!value) return null;
+  for (const line of value.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || LEADING_EXIT_CODE_PATTERN.test(trimmed)) continue;
+    return trimmed.length > MAX_FAILURE_EXCERPT_CHARS
+      ? `${trimmed.slice(0, MAX_FAILURE_EXCERPT_CHARS - 1).trimEnd()}…`
+      : trimmed;
+  }
+  return null;
+}
+
+// The exit code and one-line reason a failed tool row shows under its command.
+// Claude prefixes failed Bash output with "Exit code N" instead of reporting a
+// structured code, so that line supplies the code and is never the excerpt.
+export function deriveToolFailureSummary(
+  details: WorkLogToolDetails | undefined,
+): ToolFailureSummary {
+  const output = details?.output;
+  const leadingCode = [output?.output, output?.stdout, output?.stderr]
+    .map((value) => LEADING_EXIT_CODE_PATTERN.exec(value?.split(/\r?\n/u, 1)[0] ?? "")?.[1])
+    .find((code) => code !== undefined);
+  const exitCode =
+    output?.exitCode ?? (leadingCode !== undefined ? Number.parseInt(leadingCode, 10) : null);
+  return {
+    exitCode: exitCode !== null && Number.isFinite(exitCode) ? exitCode : null,
+    excerpt:
+      firstExplanatoryLine(output?.stderr) ??
+      firstExplanatoryLine(output?.output) ??
+      firstExplanatoryLine(output?.stdout),
   };
 }

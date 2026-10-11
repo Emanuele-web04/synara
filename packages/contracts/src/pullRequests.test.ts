@@ -2,20 +2,50 @@ import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
 import {
+  PullRequestActor,
+  PullRequestCommit,
+  PullRequestCommitAuthor,
   PullRequestCommentInput,
+  PullRequestActionResult,
   PullRequestDetail,
   PullRequestListEntry,
-  PullRequestReviewRequestCountResult,
-  PullRequestSetPinnedInput,
+  PullRequestsUnavailableError,
 } from "./pullRequests";
 
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
-const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput);
-const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
-  PullRequestReviewRequestCountResult,
-);
+const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
+
+describe("PullRequestCommitAuthor", () => {
+  const decodeAuthor = Schema.decodeUnknownSync(PullRequestCommitAuthor);
+  const localAuthor = {
+    login: null,
+    name: "Local author",
+    avatarUrl: null,
+    url: null,
+  };
+
+  it("preserves name-only authors through the commit wire contract", () => {
+    const commit = Schema.decodeUnknownSync(PullRequestCommit)({
+      oid: "abc123",
+      messageHeadline: "Keep local author",
+      messageBody: "",
+      committedDate: "2026-09-08T13:18:37Z",
+      authors: [localAuthor],
+    });
+    expect(commit.authors).toEqual([localAuthor]);
+    expect(() => Schema.decodeUnknownSync(PullRequestActor)(localAuthor)).toThrow();
+  });
+
+  it.each(["", "   ", 123])("rejects invalid login %j", (login) => {
+    expect(() => decodeAuthor({ ...localAuthor, login })).toThrow();
+  });
+
+  it("rejects non-string names", () => {
+    expect(() => decodeAuthor({ ...localAuthor, name: 123 })).toThrow();
+  });
+});
 
 function listEntry() {
   return {
@@ -47,6 +77,14 @@ describe("PullRequestListEntry", () => {
     expect(decoded.isPinned).toBe(false);
     expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.stack).toBeNull();
+    expect(decoded.commentCount).toBe(0);
+    expect(decoded.assignees).toEqual([]);
+    expect(decoded.viewerInvolvement).toEqual({
+      authored: false,
+      assigned: false,
+      involved: false,
+    });
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
     ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
@@ -96,6 +134,24 @@ describe("PullRequestDetail", () => {
     });
 
     expect(decoded.mergeability).toBe("unknown");
+    expect(decoded.stack).toBeNull();
+    expect(decoded.stackMetadataIncomplete).toBe(false);
+    expect(
+      decodeDetail({ ...decoded, stackMetadataIncomplete: true }).stackMetadataIncomplete,
+    ).toBe(true);
+  });
+});
+
+describe("PullRequestActionResult", () => {
+  it("defaults old mutation acknowledgements to no merge outcome", () => {
+    expect(
+      decodeActionResult({
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 42,
+        workspaceRoot: "/workspace/project-one",
+      }).mergeOutcome,
+    ).toBeNull();
   });
 });
 
@@ -112,31 +168,23 @@ describe("PullRequestCommentInput", () => {
   });
 });
 
-describe("PullRequestSetPinnedInput", () => {
-  it("decodes a project-scoped idempotent pin setter", () => {
+describe("PullRequestsUnavailableError", () => {
+  it("carries a retry time only for the rate-limited reason", () => {
+    const decode = Schema.decodeUnknownSync(PullRequestsUnavailableError);
     expect(
-      decodeSetPinnedInput({
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 42,
-        isPinned: true,
-      }),
-    ).toEqual({
-      projectId: "project-1",
-      repository: "acme/widgets",
-      number: 42,
-      isPinned: true,
-    });
-  });
-});
-
-describe("PullRequestReviewRequestCountResult", () => {
-  it("requires a non-negative count and explicit completeness", () => {
-    expect(decodeReviewRequestCountResult({ count: 2, incomplete: true })).toEqual({
-      count: 2,
-      incomplete: true,
-    });
-    expect(() => decodeReviewRequestCountResult({ count: -1, incomplete: false })).toThrow();
-    expect(() => decodeReviewRequestCountResult({ count: 2 })).toThrow();
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "rate-limited",
+        message: "GitHub rate limit reached.",
+        retryAt: "2026-07-15T01:00:00.000Z",
+      }).retryAt,
+    ).toBe("2026-07-15T01:00:00.000Z");
+    expect(
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "gh-not-authenticated",
+        message: "Sign in.",
+      }).retryAt,
+    ).toBeUndefined();
   });
 });

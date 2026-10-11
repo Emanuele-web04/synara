@@ -28,6 +28,7 @@ export interface PackagedDesktopStartupOptions {
   readonly arch: string;
   readonly version: string;
   readonly timeoutMs: number;
+  readonly executableName: string;
 }
 
 export function parsePackagedDesktopStartupArgs(
@@ -42,7 +43,14 @@ export function parsePackagedDesktopStartupArgs(
     }
     values.set(name, value);
   }
-  const known = new Set(["--assets-dir", "--platform", "--arch", "--version", "--timeout-ms"]);
+  const known = new Set([
+    "--assets-dir",
+    "--platform",
+    "--arch",
+    "--version",
+    "--timeout-ms",
+    "--executable-name",
+  ]);
   for (const name of values.keys()) {
     if (!known.has(name)) throw new Error(`Unknown packaged startup argument: ${name}.`);
   }
@@ -59,12 +67,17 @@ export function parsePackagedDesktopStartupArgs(
   if (!Number.isInteger(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 180_000) {
     throw new Error("--timeout-ms must be an integer between 5000 and 180000.");
   }
+  const executableName = values.get("--executable-name")?.trim() || "synara";
+  if (!/^[A-Za-z0-9._-]+$/.test(executableName) || executableName.includes("..")) {
+    throw new Error(`Invalid packaged startup executable name: ${executableName}.`);
+  }
   return {
     assetsDirectory: resolve(required("--assets-dir")),
     platform,
     arch: required("--arch"),
     version: required("--version"),
     timeoutMs,
+    executableName,
   };
 }
 
@@ -116,6 +129,12 @@ interface LaunchCommand {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
+  readonly runtime: PackagedRuntime;
+}
+
+interface PackagedRuntime {
+  readonly executable: string;
+  readonly resourcesDirectory: string;
 }
 
 function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
@@ -132,10 +151,22 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
   if (executables.length !== 1) {
     throw new Error(`Expected one macOS main executable, found ${executables.length}.`);
   }
-  return { command: executables[0]!, args: [], cwd: appBundle };
+  return {
+    command: executables[0]!,
+    args: [],
+    cwd: appBundle,
+    runtime: {
+      executable: executables[0]!,
+      resourcesDirectory: join(appBundle, "Contents", "Resources"),
+    },
+  };
 }
 
-function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareLinuxLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  executableName: string,
+): LaunchCommand {
   const collectedAppImage = requireSingleAsset(assetsDirectory, ".AppImage");
   const appImage = join(extractionRoot, basename(collectedAppImage));
   copyFileSync(collectedAppImage, appImage);
@@ -150,6 +181,10 @@ function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): La
     command: "xvfb-run",
     args: ["-a", appRun, "--no-sandbox", "--disable-gpu"],
     cwd: join(extractionRoot, "squashfs-root"),
+    runtime: {
+      executable: join(extractionRoot, "squashfs-root", executableName),
+      resourcesDirectory: join(extractionRoot, "squashfs-root", "resources"),
+    },
   };
 }
 
@@ -170,12 +205,54 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   }
   runCommand("7z", ["x", "-y", `-o${applicationRoot}`, applicationArchives[0]!]);
   const executables = findFiles(applicationRoot, (candidate) =>
-    /[/\\]Synara\.exe$/i.test(candidate),
+    /[/\\]Synara[^/\\]*\.exe$/i.test(candidate),
   );
   if (executables.length !== 1) {
-    throw new Error(`Expected one extracted Synara.exe, found ${executables.length}.`);
+    throw new Error(
+      `Expected one extracted Synara application executable, found ${executables.length}.`,
+    );
   }
-  return { command: executables[0]!, args: [], cwd: dirname(executables[0]!) };
+  return {
+    command: executables[0]!,
+    args: [],
+    cwd: dirname(executables[0]!),
+    runtime: {
+      executable: executables[0]!,
+      resourcesDirectory: join(dirname(executables[0]!), "resources"),
+    },
+  };
+}
+
+export function verifyPackagedRuntimeDependencies(
+  runtime: PackagedRuntime,
+  isolatedEnvironment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): void {
+  const entry = join(
+    runtime.resourcesDirectory,
+    "app.asar",
+    "apps/server/dist/runtimeDependencySmoke.mjs",
+  );
+  const env: NodeJS.ProcessEnv = { ...isolatedEnvironment, ELECTRON_RUN_AS_NODE: "1" };
+  // A workspace loader or NODE_PATH could conceal a missing packaged dependency.
+  delete env.NODE_OPTIONS;
+  delete env.NODE_PATH;
+  const result = spawnSync(runtime.executable, [entry], {
+    cwd: runtime.resourcesDirectory,
+    env,
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    windowsHide: true,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message ?? (result.stderr || result.stdout)?.trim();
+    throw new Error(
+      `Packaged runtime dependency smoke failed (exit=${result.status ?? "unknown"}): ${detail}`,
+    );
+  }
+  console.log("Packaged runtime dependency smoke passed from isolated state.");
 }
 
 function prepareLaunch(
@@ -186,14 +263,14 @@ function prepareLaunch(
     return prepareMacLaunch(options.assetsDirectory, extractionRoot);
   }
   if (options.platform === "linux") {
-    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot);
+    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot, options.executableName);
   }
   return prepareWindowsLaunch(options.assetsDirectory, extractionRoot);
 }
 
 export function createPackagedDesktopSmokeEnvironment(
   root: string,
-  options: Pick<PackagedDesktopStartupOptions, "platform" | "version">,
+  options: Pick<PackagedDesktopStartupOptions, "platform" | "version" | "executableName">,
   inheritedEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -206,6 +283,7 @@ export function createPackagedDesktopSmokeEnvironment(
     XDG_CACHE_HOME: join(root, "xdg-cache"),
     XDG_DATA_HOME: join(root, "xdg-data"),
     SYNARA_HOME: join(root, "synara-home"),
+    SYNARA_BETA_HOME: join(root, "synara-beta-home"),
     SYNARA_DISABLE_AUTO_UPDATE: "1",
     ELECTRON_ENABLE_LOGGING: "1",
   };
@@ -219,11 +297,17 @@ export function createPackagedDesktopSmokeEnvironment(
     env.XDG_CACHE_HOME,
     env.XDG_DATA_HOME,
     env.SYNARA_HOME,
+    env.SYNARA_BETA_HOME,
   ]) {
     if (path) mkdirSync(path, { recursive: true });
   }
   if (options.platform === "mac") {
-    const userDataPath = join(env.HOME!, "Library", "Application Support", "synara");
+    const userDataPath = join(
+      env.HOME!,
+      "Library",
+      "Application Support",
+      options.executableName === "synara-beta" ? "synara-beta" : "synara",
+    );
     mkdirSync(userDataPath, { recursive: true });
     // Prevent the packaged app's update-only icon repair from registering this
     // temporary bundle in the runner's normal Launch Services database.
@@ -284,9 +368,24 @@ function hasStartupProof(logPath: string): boolean {
   }
 }
 
-export function resolveNativePackagedDesktopPlatform(
-  platform: NodeJS.Platform,
-): PackagedDesktopPlatform {
+const STARTUP_DIAGNOSTIC_TAIL_LENGTH = 16_384;
+
+export function readPackagedStartupLogTails(logDirectory: string): string {
+  return ["desktop-main.log", "server-child.log"]
+    .map((name) => {
+      try {
+        const tail = readFileSync(join(logDirectory, name), "utf8").slice(
+          -STARTUP_DIAGNOSTIC_TAIL_LENGTH,
+        );
+        return `${name}:\n${tail}`;
+      } catch {
+        return `${name}: unavailable`;
+      }
+    })
+    .join("\n");
+}
+
+function resolveNativePackagedDesktopPlatform(platform: NodeJS.Platform): PackagedDesktopPlatform {
   if (platform === "darwin") return "mac";
   if (platform === "win32") return "win";
   return "linux";
@@ -306,10 +405,17 @@ export async function verifyPackagedDesktopStartup(
   mkdirSync(extractionRoot, { recursive: true });
 
   let child: ChildProcess | null = null;
+  let logDirectory: string | null = null;
+  let outputTail = "";
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
-    const logPath = join(env.SYNARA_HOME!, "userdata", "logs", "desktop-main.log");
+    verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
+    // Beta deliberately ignores SYNARA_HOME to avoid opening Stable's data.
+    const appHome =
+      options.executableName === "synara-beta" ? env.SYNARA_BETA_HOME! : env.SYNARA_HOME!;
+    logDirectory = join(appHome, "userdata", "logs");
+    const logPath = join(logDirectory, "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {
       cwd: launch.cwd,
       env,
@@ -328,8 +434,11 @@ export async function verifyPackagedDesktopStartup(
     child.once("error", (error) => {
       childOutcome.launchError = error;
     });
-    child.stdout?.resume();
-    child.stderr?.resume();
+    const retainOutputTail = (chunk: Buffer) => {
+      outputTail = (outputTail + chunk.toString("utf8")).slice(-STARTUP_DIAGNOSTIC_TAIL_LENGTH);
+    };
+    child.stdout?.on("data", retainOutputTail);
+    child.stderr?.on("data", retainOutputTail);
 
     const deadline = Date.now() + options.timeoutMs;
     while (Date.now() < deadline) {
@@ -350,11 +459,34 @@ export async function verifyPackagedDesktopStartup(
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+  } catch (error) {
+    if (logDirectory) {
+      console.error(readPackagedStartupLogTails(logDirectory));
+      console.error(`Packaged process output tail:\n${outputTail || "No output captured."}`);
+    }
+    throw error;
   } finally {
     if (child) {
       await terminateProcessTree(child);
     }
-    rmSync(temporaryRoot, { recursive: true, force: true });
+    try {
+      rmSync(temporaryRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: process.platform === "win32" ? 20 : 0,
+        retryDelay: process.platform === "win32" ? 250 : 100,
+      });
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        !(error instanceof Error && "code" in error && error.code === "EPERM")
+      ) {
+        throw error;
+      }
+      console.warn(
+        `Could not remove Windows smoke temp directory; leaving it for runner cleanup: ${temporaryRoot}`,
+      );
+    }
   }
 }
 

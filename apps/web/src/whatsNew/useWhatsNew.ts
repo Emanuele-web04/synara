@@ -8,9 +8,10 @@
 // the popout + dialog components.
 
 import { Schema } from "effect";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { APP_VERSION } from "../branding";
+import { useAnnouncementSheetSlot } from "../components/announcementSheetSlot";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { WHATS_NEW_ENTRIES } from "./entries";
 import {
@@ -94,79 +95,77 @@ export function useWhatsNew(options?: {
   // Snapshot the decision once per mount using the initial storage value so
   // that updating localStorage (e.g. acknowledging the dialog) doesn't flip
   // the UI back and forth while animations are still running.
-  const initialStorageRef = useRef(storage);
-  const initialState = useMemo<WhatsNewState>(
-    () =>
-      resolveWhatsNewState({
-        entries,
-        currentVersion,
-        lastSeenVersion: initialStorageRef.current.lastSeenVersion,
-      } satisfies WhatsNewInputs),
-    [entries, currentVersion],
-  );
+  const [initialLastSeenVersion] = useState(() => storage.lastSeenVersion);
+  const initialState: WhatsNewState = resolveWhatsNewState({
+    entries,
+    currentVersion,
+    lastSeenVersion: initialLastSeenVersion,
+  } satisfies WhatsNewInputs);
 
   // The popout starts visible only when we actually have something to show.
   const [isPopoutVisible, setIsPopoutVisible] = useState(initialState.kind === "show");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // Keep one claim across the card → notes transition. Queuing never marks notes
+  // seen; only the existing explicit dismissal/close handlers acknowledge them.
+  const { open } = useAnnouncementSheetSlot(isPopoutVisible || isDialogOpen);
 
   // Silent bootstrap (first launch or no curated notes for this upgrade):
   // advance the marker in the background so the next upgrade is correctly
   // detected. Done in an effect so we only touch storage once per mount.
+  // Once-per-mount by design (ref-guarded): the storage write must not depend
+  // on the referential identity of initialState/setStorage, which are not
+  // guaranteed stable — an identity-driven re-run would loop setStorage.
+  const silentBootstrapDoneRef = useRef(false);
   useEffect(() => {
-    if (initialState.kind === "silent-bootstrap") {
-      setStorage({ lastSeenVersion: initialState.nextLastSeenVersion });
+    if (silentBootstrapDoneRef.current || initialState.kind !== "silent-bootstrap") {
+      return;
     }
+    silentBootstrapDoneRef.current = true;
+    setStorage({ lastSeenVersion: initialState.nextLastSeenVersion });
   }, [initialState, setStorage]);
 
-  const currentEntry = useMemo<WhatsNewEntry | null>(
-    () => (initialState.kind === "show" ? initialState.currentEntry : null),
-    [initialState],
-  );
+  const currentEntry: WhatsNewEntry | null =
+    initialState.kind === "show" ? initialState.currentEntry : null;
 
-  const allEntries = useMemo<readonly WhatsNewEntry[]>(
-    () => (initialState.kind === "show" ? initialState.allEntries : []),
-    [initialState],
-  );
+  const allEntries: readonly WhatsNewEntry[] =
+    initialState.kind === "show" ? initialState.allEntries : [];
 
-  const markSeen = useCallback(() => {
+  const markSeen = () => {
     if (initialState.kind === "show") {
       setStorage({ lastSeenVersion: initialState.nextLastSeenVersion });
     }
-  }, [initialState, setStorage]);
+  };
 
-  const openDialog = useCallback(() => {
+  const openDialog = () => {
     // Just open the dialog. The user is about to read the notes — don't mark
     // as seen yet; that happens on dialog close.
     setIsDialogOpen(true);
-  }, []);
+  };
 
-  const dismissPopout = useCallback(() => {
+  const dismissPopout = () => {
     // X on the card: treat as "I've acknowledged this update". Mark as seen
     // and hide the popout forever (for this version).
     setIsPopoutVisible(false);
     markSeen();
-  }, [markSeen]);
+  };
 
-  const onDialogOpenChange = useCallback(
-    (open: boolean) => {
-      setIsDialogOpen(open);
-      if (!open) {
-        // Dismissing the dialog = finished reading the notes. Hide the
-        // popout too so we don't leave the "click me" affordance lingering
-        // after the user clearly engaged.
-        setIsPopoutVisible(false);
-        markSeen();
-      }
-    },
-    [markSeen],
-  );
+  const onDialogOpenChange = (open: boolean) => {
+    setIsDialogOpen(open);
+    if (!open) {
+      // Dismissing the dialog = finished reading the notes. Hide the
+      // popout too so we don't leave the "click me" affordance lingering
+      // after the user clearly engaged.
+      setIsPopoutVisible(false);
+      markSeen();
+    }
+  };
 
   return {
     currentEntry,
     allEntries,
     currentVersion,
-    isPopoutVisible,
-    isDialogOpen,
+    isPopoutVisible: open && isPopoutVisible && !isDialogOpen,
+    isDialogOpen: open && isDialogOpen,
     openDialog,
     dismissPopout,
     onDialogOpenChange,

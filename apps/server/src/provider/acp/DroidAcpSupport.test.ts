@@ -6,21 +6,25 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { Effect } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
-import { afterEach, describe, expect, it } from "vitest";
+import { Effect, Layer } from "effect";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
+import type { AcpSessionRuntimeOptions, AcpSessionRuntimeShape } from "./AcpSessionRuntime.ts";
 import {
   applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
   buildDroidAcpSpawnInput,
   discoverDroidAcpModels,
+  makeDroidAcpRuntime,
   resolveDroidAcpAuthMethodId,
   resolveDroidCliBinaryPath,
 } from "./DroidAcpSupport.ts";
 
-function initializeWithAuthMethods(ids: ReadonlyArray<string>): EffectAcpSchema.InitializeResponse {
+function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
     authMethods: ids.map((id) => ({ id, name: id })),
@@ -44,14 +48,13 @@ describe("buildDroidAcpSpawnInput", () => {
     expect(spawn.env).toBeDefined();
   });
 
-  it("passes model, reasoning effort, full-access, and an appended system prompt", () => {
+  it("passes model, reasoning effort, and an appended system prompt without bypassing permissions", () => {
     const spawn = buildDroidAcpSpawnInput(
       {
         appendSystemPrompt: "Run heavyweight validators serially.",
         binaryPath: "/usr/local/bin/droid",
         model: "claude-opus-4-8",
         reasoningEffort: "high",
-        skipPermissionsUnsafe: true,
       },
       "/tmp/project",
     );
@@ -61,7 +64,6 @@ describe("buildDroidAcpSpawnInput", () => {
       "exec",
       "--output-format",
       "acp",
-      "--skip-permissions-unsafe",
       "--append-system-prompt",
       "Run heavyweight validators serially.",
       "-m",
@@ -74,6 +76,34 @@ describe("buildDroidAcpSpawnInput", () => {
   });
 });
 
+describe("makeDroidAcpRuntime", () => {
+  it("selects on-demand authentication so session start never re-opens the OAuth login page", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeDroidAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          droidSettings: undefined,
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+      expect(capturedOptions?.authenticateMeta).toEqual({ headless: true });
+    } finally {
+      layerSpy.mockRestore();
+    }
+  });
+});
+
 describe("applyDroidAcpModelSelection", () => {
   function recordingRuntime(failFor?: string) {
     const calls: Array<{ configId: string; value: string | boolean }> = [];
@@ -83,7 +113,7 @@ describe("applyDroidAcpModelSelection", () => {
         setConfigOption: (configId: string, value: string | boolean) => {
           if (configId === failFor) {
             return Effect.fail(
-              new EffectAcpErrors.AcpRequestError({
+              new AcpErrors.AcpRequestError({
                 code: -32602,
                 errorMessage: `Unknown config option: ${configId}`,
               }),
@@ -138,7 +168,7 @@ describe("applyDroidAcpModelSelection", () => {
 });
 
 describe("applyDroidAcpInteractionMode", () => {
-  it("uses native spec mode for plan turns and restores normal mode", async () => {
+  it("uses native spec mode for Plan and restores Full Access on the next turn", async () => {
     const calls: string[] = [];
     const runtime = {
       setMode: (modeId: string) => {
@@ -152,6 +182,7 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "plan",
+        runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
@@ -159,30 +190,12 @@ describe("applyDroidAcpInteractionMode", () => {
       applyDroidAcpInteractionMode({
         runtime,
         interactionMode: "default",
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual(["spec", "normal"]);
-  });
-
-  it("uses Droid's highest native autonomy outside plan mode for full-access sessions", async () => {
-    const calls: string[] = [];
-    await Effect.runPromise(
-      applyDroidAcpInteractionMode({
-        runtime: {
-          setMode: (modeId: string) => {
-            calls.push(modeId);
-            return Effect.succeed({});
-          },
-          setConfigOption: () => Effect.succeed({ configOptions: [] }),
-        },
-        interactionMode: "default",
         runtimeMode: "full-access",
         mapError: ({ cause }) => cause,
       }),
     );
-    expect(calls).toEqual(["auto-high"]);
+
+    expect(calls).toEqual(["spec", "auto-high"]);
   });
 
   it("falls back to Droid's autonomy config for older ACP mode responses", async () => {
@@ -190,7 +203,7 @@ describe("applyDroidAcpInteractionMode", () => {
     const runtime = {
       setMode: () =>
         Effect.fail(
-          new EffectAcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
+          new AcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
         ),
       setConfigOption: (configId: string, value: string | boolean) => {
         calls.push({ configId, value });
@@ -212,7 +225,7 @@ describe("applyDroidAcpInteractionMode", () => {
 describe("discoverDroidAcpModels", () => {
   it("reads each model's reasoning choices from session config options", async () => {
     let currentModel = "model-a";
-    const configOptions = (): ReadonlyArray<EffectAcpSchema.SessionConfigOption> => [
+    const configOptions = (): ReadonlyArray<Acp.SessionConfigOption> => [
       {
         id: "model",
         name: "Model",
@@ -252,7 +265,7 @@ describe("discoverDroidAcpModels", () => {
         if (configId === "model") {
           currentModel = String(value);
         }
-        return Effect.succeed({ configOptions: configOptions() });
+        return Effect.succeed({ configOptions: [...configOptions()] });
       },
     };
 
@@ -317,6 +330,6 @@ describe("resolveDroidAcpAuthMethodId", () => {
     const error = await Effect.runPromise(
       resolveDroidAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
     );
-    expect(error).toBeInstanceOf(EffectAcpErrors.AcpRequestError);
+    expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
   });
 });

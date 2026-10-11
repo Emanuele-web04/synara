@@ -1,10 +1,15 @@
 import { describe, it, assert } from "@effect/vitest";
+import { join } from "node:path";
+
+import { Effect, FileSystem } from "effect";
 
 import {
   createProviderVersionAdvisory,
   deriveNpmGlobalPrefix,
-  parseGenericCliVersion,
+  makeProviderMaintenanceCapabilities,
   resolvePackageManagedProviderMaintenance,
+  resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
 } from "./providerMaintenance";
 
@@ -34,27 +39,56 @@ const OPENCODE_DEFINITION = {
   },
 } as const satisfies PackageManagedProviderMaintenanceDefinition;
 
+it("keeps OpenCode V2 package updates on the V2 distribution", () => {
+  const definition = withOpenCodeMaintenanceVersion(OPENCODE_DEFINITION, "2.0.25");
+  const brew = resolvePackageManagedProviderMaintenance(definition, {
+    binaryPath: "opencode",
+    realCommandPath: "/opt/homebrew/Cellar/opencode-v2/2.0.25/bin/opencode",
+  });
+  assert.deepStrictEqual(brew.update?.args, ["upgrade", "anomalyco/tap/opencode-v2"]);
+  assert.deepStrictEqual(brew.latestVersionSource, { kind: "npm", name: "@opencode/cli" });
+  const npm = resolvePackageManagedProviderMaintenance(definition, {
+    binaryPath: "opencode",
+    realCommandPath: "/usr/local/lib/node_modules/@opencode/cli/bin/opencode",
+  });
+  assert.deepStrictEqual(npm.update?.args, ["upgrade", "--method", "npm"]);
+  assert.equal(npm.packageName, "@opencode/cli");
+  assert.equal(withOpenCodeMaintenanceVersion(OPENCODE_DEFINITION, "1.18.35"), OPENCODE_DEFINITION);
+});
+
+const CLAUDE_DEFINITION = {
+  provider: "claudeAgent",
+  binaryName: "claude",
+  npmPackageName: "@anthropic-ai/claude-code",
+  homebrew: {
+    name: "claude-code",
+    kind: "cask",
+    variants: [
+      {
+        name: "claude-code@latest",
+        kind: "cask",
+        isCommandPath: (commandPath: string) =>
+          commandPath.toLowerCase().includes("/caskroom/claude-code@latest/"),
+      },
+    ],
+  },
+  nativeUpdate: {
+    executable: "claude",
+    args: () => ["update"],
+    lockKey: "claude-native",
+    strategy: "matching-path",
+    latestVersionSource: null,
+    isCommandPath: (commandPath: string) =>
+      commandPath.toLowerCase().includes("/.local/share/claude/"),
+  },
+} as const satisfies PackageManagedProviderMaintenanceDefinition;
+
+/** The trailing name of a probed path, whichever separator the host joined it with. */
+function fileNameOf(probedPath: string): string {
+  return probedPath.slice(Math.max(probedPath.lastIndexOf("/"), probedPath.lastIndexOf("\\")) + 1);
+}
+
 describe("providerMaintenance", () => {
-  it("parses generic CLI versions", () => {
-    assert.strictEqual(parseGenericCliVersion("codex-cli 0.130.0\n"), "0.130.0");
-    assert.strictEqual(parseGenericCliVersion("claude 2.1\n"), "2.1.0");
-    assert.strictEqual(parseGenericCliVersion("no version here"), null);
-  });
-
-  it("resolves npm global update commands for unqualified binaries", () => {
-    const capabilities = resolvePackageManagedProviderMaintenance(CODEX_DEFINITION, {
-      binaryPath: "codex",
-      realCommandPath: "/Users/test/.npm-global/lib/node_modules/@openai/codex/bin/codex",
-    });
-
-    assert.deepStrictEqual(capabilities.update, {
-      command: "npm install -g --prefix /Users/test/.npm-global @openai/codex@latest",
-      executable: "npm",
-      args: ["install", "-g", "--prefix", "/Users/test/.npm-global", "@openai/codex@latest"],
-      lockKey: "npm-global",
-    });
-  });
-
   it("pins the npm global prefix that owns the detected binary", () => {
     // npm's global prefix follows the node that runs it, so without --prefix a
     // second node install (e.g. nvm) would receive the update while Synara
@@ -146,6 +180,125 @@ describe("providerMaintenance", () => {
     });
   });
 
+  describe("resolveProviderMaintenanceCapabilitiesEffect", () => {
+    function runWithVirtualFileSystem(
+      presentPaths: ReadonlySet<string>,
+      options: Parameters<typeof resolveProviderMaintenanceCapabilitiesEffect>[1],
+    ) {
+      const probed: string[] = [];
+      const layer = FileSystem.layerNoop({
+        exists: (probedPath: string) =>
+          Effect.sync(() => {
+            probed.push(probedPath);
+            return presentPaths.has(probedPath);
+          }),
+        realPath: (probedPath: string) => Effect.succeed(probedPath),
+      });
+      return Effect.runPromise(
+        resolveProviderMaintenanceCapabilitiesEffect(CODEX_DEFINITION, options).pipe(
+          Effect.provide(layer),
+          Effect.map((capabilities) => ({ capabilities, probed })),
+        ),
+      );
+    }
+
+    it("walks PATH in order and reports the first directory that holds the binary", async () => {
+      const { capabilities, probed } = await runWithVirtualFileSystem(
+        new Set([join("/second", "codex")]),
+        {
+          binaryPath: "codex",
+          platform: "darwin",
+          env: { PATH: "/first:/second:/third" },
+        },
+      );
+
+      assert.deepStrictEqual(probed, [join("/first", "codex"), join("/second", "codex")]);
+      // Resolution stops at the hit, so /third is never touched, and the detected directory is
+      // the PATH entry rather than anything derived from the command name.
+      assert.strictEqual(capabilities.update, null);
+    });
+
+    it("tries the extensionless name before PATHEXT variants on Windows", async () => {
+      const { probed } = await runWithVirtualFileSystem(new Set(), {
+        binaryPath: "codex",
+        platform: "win32",
+        env: { PATH: "C:\\bin", PATHEXT: ".EXE;.CMD" },
+      });
+
+      // An installation can be an extensionless file that nothing could spawn directly; this
+      // resolver is reporting on what is installed, not picking something to run.
+      // Candidates are joined with the host separator, so compare file names rather than paths.
+      assert.deepStrictEqual(probed.map(fileNameOf), [
+        "codex",
+        "codex.EXE",
+        "codex.exe",
+        "codex.CMD",
+        "codex.cmd",
+      ]);
+    });
+
+    it("prefers .BAT over .CMD, matching Windows' own PATHEXT precedence", async () => {
+      // The list this replaced was ["", ".exe", ".cmd", ".bat"], which resolved this pair the
+      // wrong way round whenever both shims existed.
+      const { probed } = await runWithVirtualFileSystem(new Set(), {
+        binaryPath: "codex",
+        platform: "win32",
+        env: { PATH: "C:\\bin" },
+      });
+
+      const batIndex = probed.findIndex((entry) => entry.endsWith("codex.BAT"));
+      const cmdIndex = probed.findIndex((entry) => entry.endsWith("codex.CMD"));
+      assert.ok(batIndex >= 0 && cmdIndex >= 0);
+      assert.ok(batIndex < cmdIndex);
+    });
+
+    it("does not search PATH when a binary path already names a location", async () => {
+      const { probed } = await runWithVirtualFileSystem(new Set(), {
+        binaryPath: "/opt/homebrew/bin/codex",
+        platform: "darwin",
+        env: { PATH: "/first" },
+      });
+
+      assert.deepStrictEqual(probed, []);
+    });
+
+    it("resolves explicit Homebrew symlinks before selecting a cask variant", async () => {
+      const layer = FileSystem.layerNoop({
+        realPath: () => Effect.succeed("/opt/homebrew/Caskroom/claude-code@latest/2.1.100/claude"),
+      });
+
+      const capabilities = await Effect.runPromise(
+        resolveProviderMaintenanceCapabilitiesEffect(CLAUDE_DEFINITION, {
+          binaryPath: "/opt/homebrew/bin/claude",
+          platform: "darwin",
+        }).pipe(Effect.provide(layer)),
+      );
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "brew upgrade --cask claude-code@latest",
+        executable: "brew",
+        args: ["upgrade", "--cask", "claude-code@latest"],
+        lockKey: "homebrew",
+      });
+      assert.deepStrictEqual(capabilities.latestVersionSource, {
+        kind: "homebrew",
+        name: "claude-code@latest",
+        homebrewKind: "cask",
+      });
+    });
+
+    it("probes the native POSIX defaults when the supplied environment has no PATH", async () => {
+      // Do not fall back to process.env: Node itself uses /usr/bin:/bin when PATH is absent.
+      const { probed } = await runWithVirtualFileSystem(new Set(), {
+        binaryPath: "codex",
+        platform: "darwin",
+        env: { HOME: "/home/test" },
+      });
+
+      assert.deepStrictEqual(probed, ["/usr/bin/codex", "/bin/codex"]);
+    });
+  });
+
   it("marks older semver versions as behind latest", () => {
     const advisory = createProviderVersionAdvisory({
       provider: "codex",
@@ -156,5 +309,27 @@ describe("providerMaintenance", () => {
     assert.strictEqual(advisory.status, "behind_latest");
     assert.strictEqual(advisory.currentVersion, "0.129.0");
     assert.strictEqual(advisory.latestVersion, "0.130.0");
+    assert.strictEqual(advisory.latestVersionKnowable, true);
+  });
+
+  it("reports an unknowable latest version for self-updating providers", () => {
+    // `cursor-agent update` exists, but no registry publishes its version, so the
+    // advisory can never reach "current" — callers must not read that as "outdated".
+    const advisory = createProviderVersionAdvisory({
+      provider: "cursor",
+      currentVersion: "2026.07.09-c59fd9a",
+      maintenanceCapabilities: makeProviderMaintenanceCapabilities({
+        provider: "cursor",
+        packageName: null,
+        updateExecutable: "cursor-agent",
+        updateArgs: ["update"],
+        updateLockKey: "cursor-agent",
+      }),
+    });
+
+    assert.strictEqual(advisory.status, "unknown");
+    assert.strictEqual(advisory.latestVersion, null);
+    assert.strictEqual(advisory.latestVersionKnowable, false);
+    assert.strictEqual(advisory.canUpdate, true);
   });
 });

@@ -7,6 +7,8 @@ import type { ServerProviderStatus } from "@synara/contracts";
 
 type ProviderModelDiscoveryFingerprintEntry = readonly [
   provider: ServerProviderStatus["provider"],
+  instanceId: string | null,
+  driver: string | null,
   status: ServerProviderStatus["status"],
   available: boolean,
   authStatus: ServerProviderStatus["authStatus"],
@@ -22,6 +24,8 @@ export function providerModelDiscoveryInvalidationFingerprint(
     .map(
       (provider): ProviderModelDiscoveryFingerprintEntry => [
         provider.provider,
+        provider.instanceId ?? null,
+        provider.driver ?? null,
         provider.status,
         provider.available,
         provider.authStatus,
@@ -30,7 +34,13 @@ export function providerModelDiscoveryInvalidationFingerprint(
         provider.version ?? null,
       ],
     )
-    .toSorted((left, right) => left[0].localeCompare(right[0]));
+    .toSorted((left, right) => {
+      const providerOrder = left[0].localeCompare(right[0]);
+      if (providerOrder !== 0) {
+        return providerOrder;
+      }
+      return (left[1] ?? "").localeCompare(right[1] ?? "");
+    });
 
   return JSON.stringify(entries);
 }

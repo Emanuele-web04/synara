@@ -53,6 +53,17 @@ export type InstallMarkerReadResult =
 
 export type InstallMarkerOutcome = "success" | "failure" | "already-failed" | "stale" | "invalid";
 
+export type InstallMarkerFailureRecordResult =
+  | { readonly status: "recorded" | "already-failed"; readonly marker: UpdateInstallMarker }
+  | { readonly status: "missing" }
+  | { readonly status: "invalid"; readonly error: string }
+  | { readonly status: "mismatch" }
+  | {
+      readonly status: "write-failed";
+      readonly marker: UpdateInstallMarker;
+      readonly error: unknown;
+    };
+
 function isIsoTimestamp(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
@@ -189,6 +200,36 @@ export function markInstallHandoffSync(
   };
   writeInstallMarker(filePath, marker);
   return marker;
+}
+
+export function recordInstallMarkerFailureSync(
+  filePath: string,
+  expected: UpdateInstallHandoffExpectation,
+  nowIso: string,
+): InstallMarkerFailureRecordResult {
+  const result = readInstallMarker(filePath);
+  if (result.status !== "valid") {
+    return result;
+  }
+  if (!installMarkerMatchesHandoffExpectation(result.marker, expected)) {
+    return { status: "mismatch" };
+  }
+  if (result.marker.phase === "failed") {
+    return { status: "already-failed", marker: result.marker };
+  }
+
+  const marker: UpdateInstallMarker = {
+    ...result.marker,
+    phase: "failed",
+    consecutiveFailures: result.marker.consecutiveFailures + 1,
+    lastFailureAt: nowIso,
+  };
+  try {
+    writeInstallMarker(filePath, marker);
+    return { status: "recorded", marker };
+  } catch (error) {
+    return { status: "write-failed", marker, error };
+  }
 }
 
 export function resolveInstallMarkerOutcome(

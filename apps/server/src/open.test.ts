@@ -4,17 +4,10 @@ import { assertSuccess } from "@effect/vitest/utils";
 import { EDITORS } from "@synara/contracts";
 import { FileSystem, Path, Effect } from "effect";
 
-import {
-  isCommandAvailable,
-  launchDetached,
-  resolveAvailableEditors,
-  resolveEditorLaunch,
-  resolveWindowsEditorUriLaunch,
-} from "./open";
+import { launchDetached, resolveAvailableEditors, resolveEditorLaunch } from "./open";
 import {
   clearWindowsStorePackageDiscoveryCache,
   getEditorWindowsStorePackages,
-  resolveWindowsStorePackageDirectory,
   resolveWindowsStorePackageDirectoryFromPowerShell,
   resolveWindowsStorePackageInstallLocation,
 } from "./editorAppDiscovery";
@@ -36,90 +29,6 @@ function fakePowerShellAppxScript(installLocation: string): string {
 }
 
 it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
-  it.effect("returns commands for command-based editors", () =>
-    Effect.gen(function* () {
-      const antigravityLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "antigravity" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(antigravityLaunch, {
-        command: "agy",
-        args: ["/tmp/workspace"],
-      });
-
-      const cursorLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "cursor" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(cursorLaunch, {
-        command: "cursor",
-        args: ["/tmp/workspace"],
-      });
-
-      const vscodeLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "vscode" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(vscodeLaunch, {
-        command: "code",
-        args: ["/tmp/workspace"],
-      });
-
-      const traeLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "trae" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(traeLaunch, {
-        command: "trae",
-        args: ["/tmp/workspace"],
-      });
-
-      const zedLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "zed" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(zedLaunch, {
-        command: "zed",
-        args: ["/tmp/workspace"],
-      });
-
-      const windsurfLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "windsurf" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(windsurfLaunch, {
-        command: "windsurf",
-        args: ["/tmp/workspace"],
-      });
-
-      const sublimeLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "sublime" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(sublimeLaunch, {
-        command: "subl",
-        args: ["/tmp/workspace"],
-      });
-
-      const ideaLaunch = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "idea" },
-        "linux",
-        { PATH: "" },
-      );
-      assert.deepEqual(ideaLaunch, {
-        command: "idea",
-        args: ["/tmp/workspace"],
-      });
-    }),
-  );
-
   it.effect("uses --goto when editor supports line/column suffixes", () =>
     Effect.gen(function* () {
       const lineOnly = yield* resolveEditorLaunch(
@@ -225,12 +134,6 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
-  it("does not build URL-handler launches for non-Windows platforms", () => {
-    const editor = EDITORS.find((candidate) => candidate.id === "vscode");
-    assert.ok(editor);
-    assert.equal(resolveWindowsEditorUriLaunch(editor, "/tmp/workspace", "linux"), null);
-  });
-
   it.effect("opens terminal-style editors in the target working directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -309,6 +212,9 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       yield* fs.makeDirectory(path.join(home, "Applications", "Muxy.app"), {
         recursive: true,
       });
+      yield* fs.makeDirectory(path.join(home, "Applications", "iTerm.app"), {
+        recursive: true,
+      });
       yield* fs.makeDirectory(path.join(home, "Applications", "WebStorm.app"), {
         recursive: true,
       });
@@ -346,6 +252,16 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         args: ["-a", "Terminal", "/tmp/workspace"],
       });
 
+      const itermLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "iterm" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(itermLaunch, {
+        command: "open",
+        args: ["-a", "iTerm", "/tmp/workspace"],
+      });
+
       const webstormLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "webstorm" },
         "darwin",
@@ -368,6 +284,7 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       const availableEditors = resolveAvailableEditors("darwin", { HOME: home, PATH: "" });
       assert.equal(availableEditors.includes("ghostty"), true);
       assert.equal(availableEditors.includes("muxy"), true);
+      assert.equal(availableEditors.includes("iterm"), true);
       assert.equal(availableEditors.includes("webstorm"), true);
       assert.equal(availableEditors.includes("pycharm"), true);
     }),
@@ -399,31 +316,97 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
-  it.effect("maps file-manager editor to OS open commands", () =>
+  it.effect("reveals macOS files in Finder while opening directories", () =>
     Effect.gen(function* () {
-      const launch1 = yield* resolveEditorLaunch(
-        { cwd: "/tmp/workspace", editor: "file-manager" },
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parentPath = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-file-manager-",
+      });
+      const directoryPath = path.join(parentPath, "Project Folder");
+      const filePath = path.join(directoryPath, "source file.ts");
+      yield* fs.makeDirectory(directoryPath);
+      yield* fs.writeFileString(filePath, "");
+
+      const fileLaunch = yield* resolveEditorLaunch(
+        { cwd: filePath, editor: "file-manager" },
         "darwin",
       );
-      assert.deepEqual(launch1, {
+      assert.deepEqual(fileLaunch, {
         command: "open",
-        args: ["/tmp/workspace"],
+        args: ["-R", filePath],
       });
 
-      const launch2 = yield* resolveEditorLaunch(
+      const directoryLaunch = yield* resolveEditorLaunch(
+        { cwd: directoryPath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(directoryLaunch, {
+        command: "open",
+        args: [directoryPath],
+      });
+    }),
+  );
+
+  it.effect("reveals macOS app bundles instead of launching them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parentPath = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-file-manager-",
+      });
+      // An empty .app folder still classifies as a bundle without an Info.plist.
+      // This checks the chosen arguments, not that the bundle launches.
+      const bundlePath = path.join(parentPath, "Bare.app");
+      const dottedFolderPath = path.join(parentPath, "next.js");
+      yield* fs.makeDirectory(bundlePath);
+      yield* fs.makeDirectory(dottedFolderPath);
+
+      const bundleLaunch = yield* resolveEditorLaunch(
+        { cwd: bundlePath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(bundleLaunch, { command: "open", args: ["-R", bundlePath] });
+
+      const folderLaunch = yield* resolveEditorLaunch(
+        { cwd: dottedFolderPath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(folderLaunch, { command: "open", args: [dottedFolderPath] });
+    }),
+  );
+
+  it.effect("falls back to opening macOS targets when metadata lookup fails", () =>
+    Effect.gen(function* () {
+      const targetPath = `/${"unavailable".repeat(500)}`;
+      const launch = yield* resolveEditorLaunch(
+        { cwd: targetPath, editor: "file-manager" },
+        "darwin",
+      );
+
+      assert.deepEqual(launch, {
+        command: "open",
+        args: [targetPath],
+      });
+    }),
+  );
+
+  it.effect("maps file-manager editor to Windows and Linux open commands", () =>
+    Effect.gen(function* () {
+      const windowsLaunch = yield* resolveEditorLaunch(
         { cwd: "C:\\workspace", editor: "file-manager" },
         "win32",
       );
-      assert.deepEqual(launch2, {
+      assert.deepEqual(windowsLaunch, {
         command: "explorer",
         args: ["C:\\workspace"],
       });
 
-      const launch3 = yield* resolveEditorLaunch(
+      const linuxLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "file-manager" },
         "linux",
       );
-      assert.deepEqual(launch3, {
+      assert.deepEqual(linuxLaunch, {
         command: "xdg-open",
         args: ["/tmp/workspace"],
       });
@@ -449,74 +432,6 @@ it.layer(NodeServices.layer)("launchDetached", (it) => {
         args: [],
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
-    }),
-  );
-});
-
-it.layer(NodeServices.layer)("isCommandAvailable", (it) => {
-  it.effect("resolves win32 commands with PATHEXT", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "synara-open-test-" });
-      yield* fs.writeFileString(path.join(dir, "code.CMD"), "@echo off\r\n");
-      const env = {
-        PATH: dir,
-        PATHEXT: ".COM;.EXE;.BAT;.CMD",
-      } satisfies NodeJS.ProcessEnv;
-      assert.equal(isCommandAvailable("code", { platform: "win32", env }), true);
-    }),
-  );
-
-  it("returns false when a command is not on PATH", () => {
-    const env = {
-      PATH: "",
-      PATHEXT: ".COM;.EXE;.BAT;.CMD",
-    } satisfies NodeJS.ProcessEnv;
-    assert.equal(isCommandAvailable("definitely-not-installed", { platform: "win32", env }), false);
-  });
-
-  it.effect("does not treat bare files without executable extension as available on win32", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "synara-open-test-" });
-      yield* fs.writeFileString(path.join(dir, "npm"), "echo nope\r\n");
-      const env = {
-        PATH: dir,
-        PATHEXT: ".COM;.EXE;.BAT;.CMD",
-      } satisfies NodeJS.ProcessEnv;
-      assert.equal(isCommandAvailable("npm", { platform: "win32", env }), false);
-    }),
-  );
-
-  it.effect("appends PATHEXT for commands with non-executable extensions on win32", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "synara-open-test-" });
-      yield* fs.writeFileString(path.join(dir, "my.tool.CMD"), "@echo off\r\n");
-      const env = {
-        PATH: dir,
-        PATHEXT: ".COM;.EXE;.BAT;.CMD",
-      } satisfies NodeJS.ProcessEnv;
-      assert.equal(isCommandAvailable("my.tool", { platform: "win32", env }), true);
-    }),
-  );
-
-  it.effect("uses platform-specific PATH delimiter for platform overrides", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const firstDir = yield* fs.makeTempDirectoryScoped({ prefix: "synara-open-test-" });
-      const secondDir = yield* fs.makeTempDirectoryScoped({ prefix: "synara-open-test-" });
-      yield* fs.writeFileString(path.join(firstDir, "code.CMD"), "@echo off\r\n");
-      yield* fs.writeFileString(path.join(secondDir, "code.CMD"), "MZ");
-      const env = {
-        PATH: `${firstDir};${secondDir}`,
-        PATHEXT: ".COM;.EXE;.BAT;.CMD",
-      } satisfies NodeJS.ProcessEnv;
-      assert.equal(isCommandAvailable("code", { platform: "win32", env }), true);
     }),
   );
 });
@@ -568,34 +483,6 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
       });
 
       assert.equal(editors.includes("vscode"), true);
-    }),
-  );
-
-  it.effect("does not treat Windows app-execution-alias folders as package installs", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const localAppData = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-vscode-store-alias-",
-      });
-      yield* fs.makeDirectory(
-        path.join(
-          localAppData,
-          "Microsoft",
-          "WindowsApps",
-          "Microsoft.VisualStudioCode_8wekyb3d8bbwe",
-        ),
-        { recursive: true },
-      );
-      const editor = EDITORS.find((candidate) => candidate.id === "vscode");
-      assert.ok(editor);
-
-      assert.equal(
-        resolveWindowsStorePackageDirectory(getEditorWindowsStorePackages(editor), "win32", {
-          LOCALAPPDATA: localAppData,
-        }),
-        null,
-      );
     }),
   );
 

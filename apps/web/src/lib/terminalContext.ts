@@ -1,10 +1,19 @@
-import { type ThreadId } from "@synara/contracts";
+import { type MessageId, type ThreadId } from "@synara/contracts";
 import {
   extractTrailingAssistantSelections,
   type ParsedAssistantSelectionEntry,
 } from "./assistantSelections";
+import {
+  buildBrowserAnnotationsPromptBlock,
+  extractTrailingBrowserAnnotations,
+  type BrowserAnnotationDraft,
+} from "./browserAnnotations";
 import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
 import { extractTrailingPastedTexts, type ParsedPastedTextEntry } from "./composerPastedText";
+import {
+  extractTrailingPullRequestContexts,
+  type ParsedPullRequestContextEntry,
+} from "./pullRequestContext";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -36,6 +45,8 @@ export interface DisplayedUserMessageState {
   assistantSelections: ParsedAssistantSelectionEntry[];
   fileComments: ParsedFileCommentEntry[];
   pastedTexts: ParsedPastedTextEntry[];
+  pullRequestContexts: ParsedPullRequestContextEntry[];
+  browserAnnotations: BrowserAnnotationDraft[];
 }
 
 export interface ParsedTerminalContextEntry {
@@ -51,6 +62,7 @@ export const IMAGE_ONLY_VISIBLE_PLACEHOLDER = "(No Content)";
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
 const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
+  /\n*(<pull_request_context>\n[\s\S]*?\n<\/pull_request_context>)\s*$/u,
   /\n*(<pasted_text>\n[\s\S]*?\n<\/pasted_text>)\s*$/u,
   /\n*(<file_comments>\n[\s\S]*?\n<\/file_comments>)\s*$/u,
   /\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>)\s*$/u,
@@ -59,6 +71,7 @@ const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
 
 interface DisplayedUserMessageOptions {
   hideImageOnlyBootstrapPrompt?: boolean;
+  messageId: MessageId | undefined;
 }
 
 export function normalizeTerminalContextText(text: string): string {
@@ -79,18 +92,24 @@ export function filterTerminalContextsWithText<T extends { text: string }>(
   return contexts.filter((context) => hasTerminalContextText(context));
 }
 
-function previewTerminalContextText(text: string): string {
-  const normalized = normalizeTerminalContextText(text);
-  if (normalized.length === 0) {
-    return "";
-  }
-  const lines = normalized.split("\n");
-  const visibleLines = lines.slice(0, 3);
-  if (lines.length > 3) {
-    visibleLines.push("...");
-  }
-  const preview = visibleLines.join("\n");
-  return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
+export function syncTerminalContextsByIds<T extends { id: string }>(
+  contexts: ReadonlyArray<T>,
+  ids: ReadonlyArray<string>,
+): T[] {
+  const contextsById = new Map(contexts.map((context) => [context.id, context]));
+  return ids.flatMap((id) => {
+    const context = contextsById.get(id);
+    return context ? [context] : [];
+  });
+}
+
+export function terminalContextIdListsEqual<T extends { id: string }>(
+  contexts: ReadonlyArray<T>,
+  ids: ReadonlyArray<string>,
+): boolean {
+  return (
+    contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index])
+  );
 }
 
 export function normalizeTerminalContextSelection(
@@ -143,37 +162,13 @@ export function formatInlineTerminalContextLabel(selection: {
   return `@${terminalLabel}:${range}`;
 }
 
-export function buildTerminalContextPreviewTitle(
-  contexts: ReadonlyArray<TerminalContextSelection>,
-): string | null {
-  if (contexts.length === 0) {
-    return null;
-  }
-  const previews = contexts
-    .map((context) => {
-      const normalized = normalizeTerminalContextSelection(context);
-      if (!normalized) {
-        return null;
-      }
-      const preview = previewTerminalContextText(normalized.text);
-      return preview.length > 0
-        ? `${formatTerminalContextLabel(normalized)}\n${preview}`
-        : formatTerminalContextLabel(normalized);
-    })
-    .filter((value): value is string => value !== null)
-    .join("\n\n");
-  return previews.length > 0 ? previews : null;
-}
-
 function buildTerminalContextBodyLines(selection: TerminalContextSelection): string[] {
   return normalizeTerminalContextText(selection.text)
     .split("\n")
     .map((line, index) => `  ${selection.lineStart + index} | ${line}`);
 }
 
-export function buildTerminalContextBlock(
-  contexts: ReadonlyArray<TerminalContextSelection>,
-): string {
+function buildTerminalContextBlock(contexts: ReadonlyArray<TerminalContextSelection>): string {
   const normalizedContexts = contexts
     .map((context) => normalizeTerminalContextSelection(context))
     .filter((context): context is TerminalContextSelection => context !== null);
@@ -192,7 +187,7 @@ export function buildTerminalContextBlock(
   return ["<terminal_context>", ...lines, "</terminal_context>"].join("\n");
 }
 
-export function materializeInlineTerminalContextPrompt(
+function materializeInlineTerminalContextPrompt(
   prompt: string,
   contexts: ReadonlyArray<{
     terminalLabel: string;
@@ -231,21 +226,30 @@ export function appendTerminalContextsToPrompt(
   return trimmedPrompt.length > 0 ? `${trimmedPrompt}\n\n${contextBlock}` : contextBlock;
 }
 
-export function appendOriginalTerminalContextBlock(input: {
-  editedPrompt: string;
-  originalPrompt: string;
-}): string {
-  return appendOriginalComposerPromptBlocks(input);
-}
-
 // Edits operate on visible bubble text. Reattach the hidden composer metadata
 // blocks from the original message so resend keeps the same references.
 export function appendOriginalComposerPromptBlocks(input: {
   editedPrompt: string;
   originalPrompt: string;
+  messageId?: MessageId;
 }): string {
   let remainingPrompt = input.originalPrompt;
   const originalBlocks: string[] = [];
+  if (input.messageId) {
+    const extractedBrowserAnnotations = extractTrailingBrowserAnnotations(
+      input.originalPrompt,
+      input.messageId,
+    );
+    if (extractedBrowserAnnotations.annotations.length > 0) {
+      remainingPrompt = extractedBrowserAnnotations.promptText;
+      originalBlocks.push(
+        buildBrowserAnnotationsPromptBlock(
+          extractedBrowserAnnotations.annotations,
+          input.messageId,
+        ),
+      );
+    }
+  }
   let strippedBlock = true;
   while (strippedBlock) {
     strippedBlock = false;
@@ -297,19 +301,27 @@ export function extractTrailingTerminalContexts(prompt: string): ExtractedTermin
 
 export function deriveDisplayedUserMessageState(
   prompt: string,
-  options?: DisplayedUserMessageOptions,
+  options: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
-  // Trailing blocks are serialized in order: assistant selections, then terminal
-  // contexts, then file comments, then pasted text (outermost). Strip them in
-  // reverse so each extractor sees its block at the end of the remaining text.
-  const extractedPastedTexts = extractTrailingPastedTexts(prompt);
+  // Trailing blocks are serialized in order: assistant selections, terminal
+  // contexts, file comments, pasted text, pull request contexts, then browser
+  // annotations (outermost). Strip them in reverse so each extractor sees its
+  // block at the end.
+  const extractedBrowserAnnotations =
+    options.messageId === undefined
+      ? { promptText: prompt, annotations: [] }
+      : extractTrailingBrowserAnnotations(prompt, options.messageId);
+  const extractedPullRequestContexts = extractTrailingPullRequestContexts(
+    extractedBrowserAnnotations.promptText,
+  );
+  const extractedPastedTexts = extractTrailingPastedTexts(extractedPullRequestContexts.promptText);
   const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
   const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
   const extractedAssistantSelections = extractTrailingAssistantSelections(
     extractedContexts.promptText,
   );
   const hidePrompt =
-    options?.hideImageOnlyBootstrapPrompt === true &&
+    options.hideImageOnlyBootstrapPrompt === true &&
     extractedAssistantSelections.promptText.trim() === IMAGE_ONLY_BOOTSTRAP_PROMPT;
   return {
     // Keep the internal bootstrap prompt hidden while still giving image-only
@@ -324,6 +336,8 @@ export function deriveDisplayedUserMessageState(
     assistantSelections: extractedAssistantSelections.selections,
     fileComments: extractedFileComments.comments,
     pastedTexts: extractedPastedTexts.pastedTexts,
+    pullRequestContexts: extractedPullRequestContexts.pullRequestContexts,
+    browserAnnotations: extractedBrowserAnnotations.annotations,
   };
 }
 

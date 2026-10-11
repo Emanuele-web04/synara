@@ -2,6 +2,7 @@ import {
   CommandId,
   EventId,
   ProjectId,
+  SpaceId,
   ThreadId,
   type OrchestrationEvent,
 } from "@synara/contracts";
@@ -17,6 +18,7 @@ function makeEvent(input: {
   aggregateKind: OrchestrationEvent["aggregateKind"];
   aggregateId: string;
   commandId: string | null;
+  causationEventId?: string | null;
   payload: unknown;
 }): OrchestrationEvent {
   return {
@@ -25,12 +27,14 @@ function makeEvent(input: {
     type: input.type,
     aggregateKind: input.aggregateKind,
     aggregateId:
-      input.aggregateKind === "project"
-        ? ProjectId.makeUnsafe(input.aggregateId)
-        : ThreadId.makeUnsafe(input.aggregateId),
+      input.aggregateKind === "space"
+        ? SpaceId.makeUnsafe(input.aggregateId)
+        : input.aggregateKind === "project"
+          ? ProjectId.makeUnsafe(input.aggregateId)
+          : ThreadId.makeUnsafe(input.aggregateId),
     occurredAt: input.occurredAt,
     commandId: input.commandId === null ? null : CommandId.makeUnsafe(input.commandId),
-    causationEventId: null,
+    causationEventId: input.causationEventId ? EventId.makeUnsafe(input.causationEventId) : null,
     correlationId: null,
     metadata: {},
     payload: input.payload as never,
@@ -117,6 +121,60 @@ async function projectThreadWithRunningTurn(input: { createdAt: string; startedA
 }
 
 describe("orchestration projector", () => {
+  it("records a Stop request against the active turn without settling it", async () => {
+    const before = await projectThreadWithRunningTurn({
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+    });
+    const next = await Effect.runPromise(
+      projectEvent(
+        before,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-interrupt-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-01-01T00:00:02Z",
+          commandId: "cmd-stop",
+          payload: { threadId: "thread-1", requestedBy: "user", createdAt: "2026-01-01T00:00:02Z" },
+        }),
+      ),
+    );
+    expect(next.threads[0]?.activities).toMatchObject([
+      { kind: "turn.stop-requested", turnId: "turn-1", payload: { requestedBy: "user" } },
+    ]);
+    expect(next.threads[0]?.latestTurn?.state).toBe("running");
+  });
+
+  it.each([
+    { commandId: "quit-resume-interrupt:thread-1", causationEventId: null },
+    { commandId: "agent:probe:interrupt", causationEventId: null },
+    { commandId: "agent-recovery:probe", causationEventId: null },
+    { commandId: "cmd-steer", causationEventId: "queued-steer" },
+    { commandId: "unknown-interrupt", causationEventId: null },
+  ])("does not certify $commandId as a user Stop", async ({ commandId, causationEventId }) => {
+    const before = await projectThreadWithRunningTurn({
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+    });
+    const next = await Effect.runPromise(
+      projectEvent(
+        before,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-interrupt-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-01-01T00:00:02Z",
+          commandId,
+          causationEventId,
+          payload: { threadId: "thread-1", createdAt: "2026-01-01T00:00:02Z" },
+        }),
+      ),
+    );
+    expect(next.threads[0]?.activities).toHaveLength(0);
+  });
+
   it("applies thread.created events", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);
@@ -156,6 +214,7 @@ describe("orchestration projector", () => {
         projectId: "project-1",
         title: "demo",
         modelSelection: {
+          instanceId: "codex",
           provider: "codex",
           model: "gpt-5-codex",
         },
@@ -164,22 +223,34 @@ describe("orchestration projector", () => {
         envMode: "local",
         branch: null,
         worktreePath: null,
+        workingDirectory: null,
         associatedWorktreePath: null,
         associatedWorktreeBranch: null,
         associatedWorktreeRef: null,
         createBranchFlowCompleted: false,
         isPinned: false,
         parentThreadId: null,
+        creationSource: null,
+        sourceThreadId: null,
+        sourceTurnId: null,
+        gatewayOperationId: null,
+        gatewayOperationIndex: null,
         subagentAgentId: null,
         subagentNickname: null,
         subagentRole: null,
         forkSourceThreadId: null,
         sidechatSourceThreadId: null,
+        sidechatContext: null,
+        sidechatLastActivityAt: null,
+        sidechatExpiredAt: null,
         lastKnownPr: null,
         latestTurn: null,
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        settledAt: null,
+        snoozedUntil: null,
+        snoozeReminderAt: null,
         deletedAt: null,
         handoff: null,
         messages: [],
@@ -189,6 +260,104 @@ describe("orchestration projector", () => {
         session: null,
       },
     ]);
+  });
+
+  it("projects side chat activity and expiry timestamps", async () => {
+    const createdAt = "2026-08-30T10:00:00.000Z";
+    const activityAt = "2026-08-30T10:15:00.000Z";
+    const expiredAt = "2026-08-30T11:15:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: createdAt,
+          commandId: "cmd-create-sidechat",
+          payload: {
+            threadId: "thread-sidechat",
+            projectId: "project-1",
+            title: "Side investigation",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            sidechatSourceThreadId: "thread-source",
+            sidechatLastActivityAt: createdAt,
+            sidechatExpiredAt: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const afterActivity = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.sidechat-activity-recorded",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: activityAt,
+          commandId: "cmd-sidechat-activity",
+          payload: { threadId: "thread-sidechat", lastActivityAt: activityAt },
+        }),
+      ),
+    );
+    const afterExpiry = await Effect.runPromise(
+      projectEvent(
+        afterActivity,
+        makeEvent({
+          sequence: 3,
+          type: "thread.sidechat-expired",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: expiredAt,
+          commandId: "cmd-sidechat-expire",
+          payload: {
+            threadId: "thread-sidechat",
+            expectedLastActivityAt: activityAt,
+            expiredAt,
+          },
+        }),
+      ),
+    );
+    const afterStoppedSession = await Effect.runPromise(
+      projectEvent(
+        afterExpiry,
+        makeEvent({
+          sequence: 4,
+          type: "thread.session-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-sidechat",
+          occurredAt: "2026-08-30T11:15:01.000Z",
+          commandId: "cmd-stop-expired-sidechat",
+          payload: {
+            threadId: "thread-sidechat",
+            session: {
+              threadId: "thread-sidechat",
+              status: "stopped",
+              providerName: "codex",
+              providerSessionId: "session-sidechat",
+              providerThreadId: "provider-thread-sidechat",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-08-30T11:15:01.000Z",
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(afterStoppedSession.threads[0]).toMatchObject({
+      sidechatLastActivityAt: activityAt,
+      sidechatExpiredAt: expiredAt,
+      updatedAt: "2026-08-30T11:15:01.000Z",
+    });
   });
 
   it("updates thread settings from turn start events", async () => {
@@ -251,11 +420,22 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "pi",
+      instanceId: "pi",
       model: "openai/gpt-5.5",
     });
     expect(next.threads[0]?.runtimeMode).toBe("approval-required");
     expect(next.threads[0]?.interactionMode).toBe("default");
     expect(next.threads[0]?.updatedAt).toBe(turnRequestedAt);
+    expect(next.threads[0]?.session).toEqual({
+      threadId: "thread-1",
+      status: "starting",
+      providerName: "pi",
+      providerInstanceId: "pi",
+      runtimeMode: "approval-required",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: turnRequestedAt,
+    });
   });
 
   it("lets empty threads adopt the requested first-turn provider", async () => {
@@ -318,7 +498,130 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
       model: "openai/gpt-5",
+    });
+    expect(next.threads[0]?.session).toMatchObject({
+      status: "starting",
+      providerName: "opencode",
+    });
+  });
+
+  it("updates sessionless imported threads from exact routed turn selections", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const messageAt = "2026-02-23T08:00:03.000Z";
+    const turnRequestedAt = "2026-02-23T08:00:05.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: "codex",
+              instanceId: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const afterMessages = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message-1",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            role: "user",
+            text: "Existing conversation",
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+      ),
+    );
+
+    const afterImportedMessages = await Effect.runPromise(
+      projectEvent(
+        afterMessages,
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message-2",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-2",
+            role: "assistant",
+            text: "Imported response",
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+      ),
+    );
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        afterImportedMessages,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-start-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: turnRequestedAt,
+          commandId: "cmd-turn-start",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-3",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-sonnet-4-6",
+            },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt: turnRequestedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.modelSelection).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
     });
   });
 
@@ -451,7 +754,7 @@ describe("orchestration projector", () => {
     expect(thread?.session?.status).toBe("running");
   });
 
-  it("keeps latest turn running for interim and explicitly preserving diff events", async () => {
+  it("keeps latest turn running for checkpoint diff events", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const startedAt = "2026-02-23T08:00:05.000Z";
     const placeholderAt = "2026-02-23T08:00:06.000Z";
@@ -544,11 +847,44 @@ describe("orchestration projector", () => {
       completedAt: null,
     });
 
-    const afterPreservedDiff = await Effect.runPromise(
+    const afterRealCheckpoint = await Effect.runPromise(
       projectEvent(
         afterPlaceholder,
         makeEvent({
           sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: placeholderAt,
+          commandId: "cmd-real-checkpoint",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: placeholderAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterRealCheckpoint.threads[0]?.checkpoints).toMatchObject([
+      { turnId: "turn-1", status: "ready", files: [] },
+    ]);
+    expect(afterRealCheckpoint.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "running",
+      completedAt: null,
+    });
+
+    const afterPreservedDiff = await Effect.runPromise(
+      projectEvent(
+        afterRealCheckpoint,
+        makeEvent({
+          sequence: 5,
           type: "thread.turn-diff-completed",
           aggregateKind: "thread",
           aggregateId: "thread-1",
@@ -580,7 +916,6 @@ describe("orchestration projector", () => {
     { status: "ready", expectedState: "completed" },
     { status: "interrupted", expectedState: "interrupted" },
     { status: "stopped", expectedState: "interrupted" },
-    { status: "error", expectedState: "error" },
   ] as const)(
     "settles a running latest turn when the session leaves running ($status → $expectedState)",
     async ({ status, expectedState }) => {
@@ -599,7 +934,7 @@ describe("orchestration projector", () => {
             occurredAt: settledAt,
             status,
             activeTurnId: null,
-            lastError: status === "error" ? "provider crashed" : null,
+            lastError: null,
             updatedAt: settledAt,
           }),
         ),
@@ -615,7 +950,7 @@ describe("orchestration projector", () => {
     },
   );
 
-  it.each([{ status: "idle" }, { status: "starting" }] as const)(
+  it.each([{ status: "starting" }] as const)(
     "keeps a running latest turn untouched for $status session updates",
     async ({ status }) => {
       const createdAt = "2026-02-23T08:00:00.000Z";
@@ -697,6 +1032,34 @@ describe("orchestration projector", () => {
       turnId: "turn-1",
       state: "completed",
       completedAt: settledAt,
+    });
+  });
+
+  it("settles an errored turn even when the session still retains the active turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const erroredAt = "2026-02-23T08:00:10.000Z";
+
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+    const afterError = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-error",
+          occurredAt: erroredAt,
+          status: "error",
+          activeTurnId: "turn-1",
+          lastError: "provider crashed",
+          updatedAt: erroredAt,
+        }),
+      ),
+    );
+
+    expect(afterError.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "error",
+      completedAt: erroredAt,
     });
   });
 
@@ -784,7 +1147,63 @@ describe("orchestration projector", () => {
     expect(afterRealCheckpoint.threads[0]?.latestTurn).toMatchObject({
       turnId: "turn-1",
       state: "completed",
-      completedAt: checkpointAt,
+      completedAt: settledAt,
+    });
+  });
+
+  it("does not let a successful checkpoint overwrite an interrupted turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const interruptedAt = "2026-02-23T08:00:10.000Z";
+    const checkpointAt = "2026-02-23T08:00:11.000Z";
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+    const afterInterrupted = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-interrupted",
+          occurredAt: interruptedAt,
+          status: "interrupted",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: interruptedAt,
+        }),
+      ),
+    );
+
+    const afterCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterInterrupted,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: checkpointAt,
+          commandId: "cmd-checkpoint-after-interrupt",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: checkpointAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterCheckpoint.threads[0]?.checkpoints).toMatchObject([
+      { turnId: "turn-1", status: "ready", files: [], assistantMessageId: null },
+    ]);
+    expect(afterCheckpoint.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "interrupted",
+      completedAt: interruptedAt,
+      assistantMessageId: null,
     });
   });
 
@@ -882,6 +1301,8 @@ describe("orchestration projector", () => {
       completedAt,
       assistantMessageId: null,
     });
+    // The stale event's earlier occurredAt must not regress the thread stamp.
+    expect(afterStaleRunningSession.threads[0]?.updatedAt).toBe(completedAt);
   });
 
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {
@@ -1670,5 +2091,148 @@ describe("orchestration projector", () => {
       "accepted-first-user",
       "accepted-first-assistant",
     ]);
+  });
+
+  it("accumulates streaming deltas in place without reordering the transcript", async () => {
+    const createdAt = "2026-07-20T09:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-stream",
+          occurredAt: createdAt,
+          commandId: "cmd-create-stream",
+          payload: {
+            threadId: "thread-stream",
+            projectId: "project-1",
+            title: "Streaming",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const messageEvent = (input: {
+      readonly sequence: number;
+      readonly messageId: string;
+      readonly role: "user" | "assistant";
+      readonly text: string;
+      readonly streaming: boolean;
+      readonly turnId: string | null;
+    }) =>
+      makeEvent({
+        sequence: input.sequence,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-stream",
+        occurredAt: createdAt,
+        commandId: `cmd-${input.sequence}`,
+        payload: {
+          threadId: "thread-stream",
+          messageId: input.messageId,
+          role: input.role,
+          text: input.text,
+          turnId: input.turnId,
+          streaming: input.streaming,
+          source: "native",
+          createdAt,
+          updatedAt: `2026-07-20T09:00:${String(input.sequence).padStart(2, "0")}.000Z`,
+        },
+      });
+
+    const deltas = ["Hel", "lo, ", "wor", "ld"];
+    const events = [
+      messageEvent({
+        sequence: 2,
+        messageId: "user-1",
+        role: "user",
+        text: "hi",
+        streaming: false,
+        turnId: "turn-1",
+      }),
+      ...deltas.map((delta, index) =>
+        messageEvent({
+          sequence: 3 + index,
+          messageId: "assistant-1",
+          role: "assistant",
+          text: delta,
+          streaming: true,
+          // First delta arrives without a turn binding; later deltas must not
+          // rebind an already-bound message.
+          turnId: index < 2 ? null : index === 3 ? "turn-other" : "turn-1",
+        }),
+      ),
+      messageEvent({
+        sequence: 7,
+        messageId: "user-2",
+        role: "user",
+        text: "next",
+        streaming: false,
+        turnId: "turn-2",
+      }),
+      // A late delta for an earlier message must update it in place.
+      messageEvent({
+        sequence: 8,
+        messageId: "assistant-1",
+        role: "assistant",
+        text: "!",
+        streaming: true,
+        turnId: "turn-other",
+      }),
+    ];
+
+    const state = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then(async (current) => {
+          const next = await Effect.runPromise(projectEvent(current, event));
+          if (event.sequence === 4) {
+            expect(next.threads[0]?.messages[1]?.turnId).toBeNull();
+          }
+          return next;
+        }),
+      Promise.resolve(afterCreate),
+    );
+
+    const thread = state.threads[0];
+    expect(thread?.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-2",
+    ]);
+    const assistant = thread?.messages[1];
+    expect(assistant?.text).toBe(`${deltas.join("")}!`);
+    expect(assistant?.streaming).toBe(true);
+    expect(assistant?.turnId).toBe("turn-1");
+    expect(thread?.messages[2]?.text).toBe("next");
+
+    // The non-streaming finalization replaces the accumulated text.
+    const finalized = await Effect.runPromise(
+      projectEvent(
+        state,
+        messageEvent({
+          sequence: 9,
+          messageId: "assistant-1",
+          role: "assistant",
+          text: "Hello, world!",
+          streaming: false,
+          turnId: "turn-1",
+        }),
+      ),
+    );
+    expect(finalized.threads[0]?.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-2",
+    ]);
+    expect(finalized.threads[0]?.messages[1]?.text).toBe("Hello, world!");
+    expect(finalized.threads[0]?.messages[1]?.streaming).toBe(false);
   });
 });

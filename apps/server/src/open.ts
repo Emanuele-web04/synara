@@ -6,13 +6,15 @@
  *
  * @module Open
  */
-import { spawn } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { createBatchExecutableResolver, resolveExecutable } from "@synara/shared/executable";
+import { spawnProcess } from "@synara/shared/processRuntime";
+import { statSync } from "node:fs";
+import { dirname, extname } from "node:path";
 import pathWin32 from "node:path/win32";
 
 import { EDITORS, type EditorId } from "@synara/contracts";
-import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
+import { isMacAppBundlePath } from "@synara/shared/filesystemPlatform";
+import { resolveWindowsSystemRoot } from "@synara/shared/platformEnvironment";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
@@ -124,10 +126,10 @@ function resolveMacOpenArgs(
 
 function resolveAvailableCommand(
   commands: ReadonlyArray<string>,
-  options: CommandAvailabilityOptions = {},
+  resolve: (command: string) => string | null,
 ): string | null {
   for (const command of commands) {
-    if (isCommandAvailable(command, options)) {
+    if (resolve(command) !== null) {
       return command;
     }
   }
@@ -144,6 +146,23 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
     default:
       return "xdg-open";
   }
+}
+
+// `open` launches an app bundle like a double-click, so reveal those as well as files.
+function shouldRevealInFinder(target: string): boolean {
+  try {
+    const stat = statSync(target, { throwIfNoEntry: false });
+    return stat !== undefined && (!stat.isDirectory() || isMacAppBundlePath(target, "darwin"));
+  } catch {
+    return false;
+  }
+}
+
+function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
+  const command = fileManagerCommandForPlatform(platform);
+  const shouldReveal = platform === "darwin" && shouldRevealInFinder(target);
+
+  return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
 
 // Terminal integrations should receive a directory even when the source target is file:line:column.
@@ -249,7 +268,7 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
   return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
-export function resolveWindowsEditorUriLaunch(
+function resolveWindowsEditorUriLaunch(
   editor: EditorDefinition,
   target: string,
   platform: NodeJS.Platform = process.platform,
@@ -264,109 +283,8 @@ export function resolveWindowsEditorUriLaunch(
   };
 }
 
-function stripWrappingQuotes(value: string): string {
-  return value.replace(/^"+|"+$/g, "");
-}
-
-function resolvePathEnvironmentVariable(env: NodeJS.ProcessEnv): string {
-  return env.PATH ?? env.Path ?? env.path ?? "";
-}
-
-function resolveWindowsPathExtensions(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
-  const rawValue = env.PATHEXT;
-  const fallback = [".COM", ".EXE", ".BAT", ".CMD"];
-  if (!rawValue) return fallback;
-
-  const parsed = rawValue
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => (entry.startsWith(".") ? entry.toUpperCase() : `.${entry.toUpperCase()}`));
-  return parsed.length > 0 ? Array.from(new Set(parsed)) : fallback;
-}
-
-function resolveCommandCandidates(
-  command: string,
-  platform: NodeJS.Platform,
-  windowsPathExtensions: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  if (platform !== "win32") return [command];
-  const extension = extname(command);
-  const normalizedExtension = extension.toUpperCase();
-
-  if (extension.length > 0 && windowsPathExtensions.includes(normalizedExtension)) {
-    const commandWithoutExtension = command.slice(0, -extension.length);
-    return Array.from(
-      new Set([
-        command,
-        `${commandWithoutExtension}${normalizedExtension}`,
-        `${commandWithoutExtension}${normalizedExtension.toLowerCase()}`,
-      ]),
-    );
-  }
-
-  const candidates: string[] = [];
-  for (const extension of windowsPathExtensions) {
-    candidates.push(`${command}${extension}`);
-    candidates.push(`${command}${extension.toLowerCase()}`);
-  }
-  return Array.from(new Set(candidates));
-}
-
-function isExecutableFile(
-  filePath: string,
-  platform: NodeJS.Platform,
-  windowsPathExtensions: ReadonlyArray<string>,
-): boolean {
-  try {
-    const stat = statSync(filePath);
-    if (!stat.isFile()) return false;
-    if (platform === "win32") {
-      const extension = extname(filePath);
-      if (extension.length === 0) return false;
-      return windowsPathExtensions.includes(extension.toUpperCase());
-    }
-    accessSync(filePath, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolvePathDelimiter(platform: NodeJS.Platform): string {
-  return platform === "win32" ? ";" : ":";
-}
-
-export function isCommandAvailable(
-  command: string,
-  options: CommandAvailabilityOptions = {},
-): boolean {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
-  const windowsPathExtensions = platform === "win32" ? resolveWindowsPathExtensions(env) : [];
-  const commandCandidates = resolveCommandCandidates(command, platform, windowsPathExtensions);
-
-  if (command.includes("/") || command.includes("\\")) {
-    return commandCandidates.some((candidate) =>
-      isExecutableFile(candidate, platform, windowsPathExtensions),
-    );
-  }
-
-  const pathValue = resolvePathEnvironmentVariable(env);
-  if (pathValue.length === 0) return false;
-  const pathEntries = pathValue
-    .split(resolvePathDelimiter(platform))
-    .map((entry) => stripWrappingQuotes(entry.trim()))
-    .filter((entry) => entry.length > 0);
-
-  for (const pathEntry of pathEntries) {
-    for (const candidate of commandCandidates) {
-      if (isExecutableFile(join(pathEntry, candidate), platform, windowsPathExtensions)) {
-        return true;
-      }
-    }
-  }
-  return false;
+function isCommandAvailable(command: string, options: CommandAvailabilityOptions = {}): boolean {
+  return resolveExecutable(command, options) !== null;
 }
 
 export function resolveAvailableEditors(
@@ -374,10 +292,12 @@ export function resolveAvailableEditors(
   env: NodeJS.ProcessEnv = process.env,
 ): ReadonlyArray<EditorId> {
   const available: EditorId[] = [];
+  // One PATH scan for every editor: per-command probing is seconds of sync IO on Windows.
+  const resolve = createBatchExecutableResolver({ platform, env });
 
   for (const editor of EDITORS) {
     if (editor.commands !== null) {
-      if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
+      if (resolveAvailableCommand(editor.commands, resolve) !== null) {
         available.push(editor.id);
         continue;
       }
@@ -401,7 +321,7 @@ export function resolveAvailableEditors(
 
     if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
-      if (isCommandAvailable(command, { platform, env })) {
+      if (resolve(command) !== null) {
         available.push(editor.id);
       }
     }
@@ -460,7 +380,9 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   }
 
   if (editorDef.commands) {
-    const command = resolveAvailableCommand(editorDef.commands, { platform, env });
+    const command = resolveAvailableCommand(editorDef.commands, (candidate) =>
+      resolveExecutable(candidate, { platform, env }),
+    );
     if (command) {
       return {
         command,
@@ -499,7 +421,7 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     return yield* new OpenError({ message: `Unsupported editor: ${input.editor}` });
   }
 
-  return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
+  return resolveFileManagerLaunch(input.cwd, platform);
 });
 
 function editorLaunchesEqual(left: EditorLaunch, right: EditorLaunch): boolean {
@@ -533,13 +455,10 @@ export const launchDetached = (launch: EditorLaunch) =>
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        const prepared = prepareWindowsSafeProcess(launch.command, launch.args);
-        child = spawn(prepared.command, prepared.args, {
+        child = spawnProcess(launch.command, launch.args, {
           detached: true,
           stdio: "ignore",
-          shell: prepared.shell,
-          windowsHide: prepared.windowsHide,
-          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+          requireExecutable: true,
         });
       } catch (error) {
         return resume(

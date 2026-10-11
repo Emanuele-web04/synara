@@ -18,7 +18,9 @@ import {
 import {
   canReuseCachedRemoteStatus,
   type CachedGitStatus,
+  isCachedRemoteStatusFresh,
   makeCachedStatusValue,
+  setCachedGitStatus,
   splitLocalStatus,
   splitLocalStatusDetails,
   splitRemoteStatus,
@@ -61,8 +63,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
         const nextLocal = makeCachedStatusValue(local);
         const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
           const previous = cache.get(cwd) ?? { local: null, remote: null };
-          const nextCache = new Map(cache);
-          nextCache.set(cwd, { ...previous, local: nextLocal });
+          const nextCache = setCachedGitStatus(cache, cwd, { ...previous, local: nextLocal });
           return [previous.local?.fingerprint !== nextLocal.fingerprint, nextCache] as const;
         });
 
@@ -85,8 +86,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
         const nextRemote = makeCachedStatusValue(remote);
         const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
           const previous = cache.get(cwd) ?? { local: null, remote: null };
-          const nextCache = new Map(cache);
-          nextCache.set(cwd, { ...previous, remote: nextRemote });
+          const nextCache = setCachedGitStatus(cache, cwd, { ...previous, remote: nextRemote });
           return [previous.remote?.fingerprint !== nextRemote.fingerprint, nextCache] as const;
         });
 
@@ -112,7 +112,12 @@ export const GitStatusBroadcasterLive = Layer.effect(
       Effect.gen(function* () {
         const normalizedCwd = normalizeCwd(input.cwd);
         const cached = yield* getCachedStatus(normalizedCwd);
-        if (cached?.local && cached.remote) {
+        // Only probe git for details when the cached remote metadata could still be
+        // reused. `statusDetails` spawns several git subprocesses, and a full status
+        // load runs it again, so probing against expired cache state would double the
+        // git work on every poll (the sidebar polls at 60 s against a 30 s TTL, so the
+        // reuse check could never pass on that path).
+        if (cached?.remote && isCachedRemoteStatusFresh({ cached })) {
           const details = yield* gitCore.statusDetails(normalizedCwd);
           if (canReuseCachedRemoteStatus({ cached, details })) {
             const local = yield* updateCachedLocalStatus(

@@ -2,7 +2,22 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-import { buildProviderChildEnvironment } from "./providerChildEnvironment";
+import {
+  buildProviderChildEnvironment,
+  registerProviderCredentialKey,
+  withoutProviderCredentialEnvironment,
+} from "./providerChildEnvironment";
+
+it("removes registered ambient provider credentials from account-scoped environments", () => {
+  registerProviderCredentialKey("ACME_PROVIDER_TOKEN");
+  expect(
+    withoutProviderCredentialEnvironment({
+      PATH: "/usr/bin",
+      OPENAI_API_KEY: "ambient-openai",
+      ACME_PROVIDER_TOKEN: "ambient-custom",
+    }),
+  ).toEqual({ PATH: "/usr/bin" });
+});
 
 describe("buildProviderChildEnvironment", () => {
   it("strips Synara control-plane and inherited native capabilities", () => {
@@ -14,6 +29,8 @@ describe("buildProviderChildEnvironment", () => {
         GEMINI_API_KEY: "provider-key",
         SYNARA_AUTH_TOKEN: "control-plane-secret",
         SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/browser.sock",
+        SYNARA_BROWSER_HOST_CAPABILITY: "private-desktop-capability",
+        SYNARA_BROWSER_HOST_CAPABILITY_FD: "3",
         NODE_OPTIONS: "--require=/tmp/inject.js",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/other.sock",
       },
@@ -84,7 +101,22 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["codex", "kilo", "opencode", "pi"] as const)(
+  it.each(["claude", "cursor", "droid", "antigravity", "grok"] as const)(
+    "does not leak OpenAI credentials into restricted %s children",
+    (provider) => {
+      const env = buildProviderChildEnvironment({
+        provider,
+        baseEnv: {
+          PATH: "/usr/bin",
+          OPENAI_API_KEY: "unrelated-openai-secret",
+        },
+      });
+
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+    },
+  );
+
+  it.each(["codex", "opencode", "pi"] as const)(
     "preserves upstream credential discovery for multi-provider %s",
     (provider) => {
       const env = buildProviderChildEnvironment({
@@ -92,11 +124,13 @@ describe("buildProviderChildEnvironment", () => {
         baseEnv: {
           ANTHROPIC_API_KEY: "anthropic-secret",
           GEMINI_API_KEY: "gemini-secret",
+          OPENAI_API_KEY: "openai-secret",
         },
       });
 
       expect(env.ANTHROPIC_API_KEY).toBe("anthropic-secret");
       expect(env.GEMINI_API_KEY).toBe("gemini-secret");
+      expect(env.OPENAI_API_KEY).toBe("openai-secret");
     },
   );
 
@@ -119,5 +153,18 @@ describe("buildProviderChildEnvironment", () => {
 
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ xai: "grok-secret" });
+  });
+
+  it("matches declared provider credential grants case-insensitively", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "claude",
+      baseEnv: {
+        anthropic_api_key: "native-provider-secret",
+        gemini_api_key: "unrelated-provider-secret",
+      },
+    });
+
+    expect(env.anthropic_api_key).toBe("native-provider-secret");
+    expect(env.gemini_api_key).toBeUndefined();
   });
 });

@@ -1,14 +1,33 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, deriveLiteralCommand, deriveCommandReadTargets, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
+import {
+  COMPUTER_TOOL_TITLES,
+  computerToolName,
+  type ComputerToolName,
+} from "./computerToolPresentation";
+import { basenameOfPath } from "../file-icons";
+import { extractToolArgumentField } from "./toolArgumentSummary";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
-    .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
+    .trimEnd()
+    .replace(/\s(?:complete|completed|done|finished|success|succeeded|started|running)$/i, "")
+    .trim();
+}
+
+// Canonical form for comparing tool display strings (heading vs preview vs
+// label): ignores case, whitespace runs, and trailing status words so dedup
+// decisions behave identically in the work-log builder and the timeline rows.
+export function normalizeToolTextForComparison(value: string | undefined): string {
+  return normalizeCompactToolLabel(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -48,9 +67,8 @@ export function extractWebFetchUrl(input: {
   if (!detail) {
     return null;
   }
-  const fieldMatch = /"(?:url|uri)"\s*:\s*"([^"]+)"/i.exec(detail);
   const candidate =
-    fieldMatch?.[1]?.trim() ??
+    extractToolArgumentField(detail, ["url", "uri"]) ??
     /https?:\/\/[^\s"'<>)\]}]+/i.exec(detail)?.[0]?.replace(/[.,;:!?]+$/, "");
   if (candidate && /^https?:\/\//i.test(candidate)) {
     return candidate;
@@ -91,10 +109,539 @@ export interface ReadableToolTitleInput {
   readonly title?: string | null;
   readonly fallbackLabel: string;
   readonly itemType?: ToolLifecycleItemType | undefined;
-  readonly requestKind?: "command" | "file-read" | "file-change" | undefined;
+  readonly requestKind?:
+    | "command"
+    | "file-read"
+    | "file-change"
+    | "permissions"
+    | "tool"
+    | undefined;
   readonly command?: string | null;
   readonly payload?: Record<string, unknown> | null;
   readonly isRunning?: boolean;
+}
+
+interface SynaraMcpToolPresentation {
+  readonly running: string;
+  readonly completed: string;
+  readonly failed: string;
+}
+
+// Historical messages still contain retired tools; presentation does not expose them to agents.
+const BROWSER_HISTORY_TITLES = {
+  ...BROWSER_TOOL_TITLES,
+  browser_snapshot: "Snapshot browser page",
+  browser_webmcp_tools: "Discover page WebMCP tools",
+  browser_webmcp_call: "Call page WebMCP tool",
+  browser_click: "Click browser target",
+  browser_hover: "Hover browser target",
+  browser_drag: "Drag between browser targets",
+  browser_type: "Type into browser target",
+  browser_select: "Select browser options",
+  browser_press: "Press browser keys",
+  browser_scroll: "Scroll browser page",
+  browser_wait: "Wait for browser condition",
+  browser_evaluate: "Evaluate browser expression",
+} as const;
+type BrowserHistoryToolName = keyof typeof BROWSER_HISTORY_TITLES;
+type SynaraBrowserToolName = `synara_${BrowserHistoryToolName}`;
+const BROWSER_HISTORY_TOOL_NAMES = Object.keys(BROWSER_HISTORY_TITLES) as BrowserHistoryToolName[];
+const BROWSER_TOOL_NAME_SET = new Set<string>(BROWSER_HISTORY_TOOL_NAMES);
+
+const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
+  BROWSER_HISTORY_TOOL_NAMES.map((toolName) => {
+    const title = BROWSER_HISTORY_TITLES[toolName];
+    return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
+  }),
+) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
+
+/**
+ * The desktop tools, spoken. Every browser tool had a curated presentation and
+ * every computer tool had none, so the most consequential rows in the
+ * transcript — an agent moving a pointer on the user's own machine — fell
+ * through to the invented "Synara is handling computer click" fallback.
+ *
+ * The wording deliberately keeps the machine in the sentence ("this computer's
+ * desktop") rather than saying "the desktop", because on the backends that
+ * matter it is the user's own.
+ */
+const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
+  synara_computer_screenshot: presentComputerTool("taking a screenshot", "took a screenshot"),
+  synara_computer_get_state: presentComputerTool("reading the screen", "read the screen"),
+  synara_computer_get_screen_size: presentComputerTool(
+    "measuring the screen",
+    "measured the screen",
+  ),
+  synara_computer_list_windows: presentComputerTool("listing windows", "listed the windows"),
+  synara_computer_list_apps: presentComputerTool("listing apps", "listed the apps"),
+  synara_computer_verify_state: presentComputerTool(
+    "checking desktop state",
+    "checked desktop state",
+  ),
+  synara_computer_zoom: presentComputerTool("zooming into a window", "zoomed into a window"),
+  synara_computer_get_accessibility_tree: presentComputerTool(
+    "listing apps and windows",
+    "listed apps and windows",
+  ),
+  synara_computer_get_cursor_position: presentComputerTool(
+    "reading the cursor position",
+    "read the cursor position",
+  ),
+  synara_computer_help: presentComputerTool(
+    "reading the Computer playbook",
+    "read the Computer playbook",
+  ),
+  synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
+  synara_computer_move_cursor: presentComputerTool("moving the cursor", "moved the cursor"),
+  synara_computer_drag: presentComputerTool("dragging on the desktop", "dragged on the desktop"),
+  synara_computer_scroll: presentComputerTool("scrolling the desktop", "scrolled the desktop"),
+  synara_computer_type_text: presentComputerTool("typing on the desktop", "typed on the desktop"),
+  synara_computer_press_key: presentComputerTool("pressing a key", "pressed a key"),
+  synara_computer_set_value: presentComputerTool("setting a field", "set a field"),
+  synara_computer_select_text: presentComputerTool("selecting text", "selected text"),
+  synara_computer_perform_action: presentComputerTool(
+    "activating a control",
+    "activated a control",
+  ),
+  synara_computer_launch_app: presentComputerTool("opening an app", "opened an app"),
+  synara_computer_activate_window: presentComputerTool("activating a window", "activated a window"),
+  synara_computer_set_window_frame: presentComputerTool(
+    "moving or resizing a window",
+    "moved or resized a window",
+  ),
+  synara_computer_invoke_menu: presentComputerTool("invoking a menu item", "invoked a menu item"),
+  synara_computer_kill_app: presentComputerTool("force-quitting an app", "force-quit an app"),
+  synara_computer_set_window_minimized: presentComputerTool(
+    "changing a window's visibility",
+    "changed a window's visibility",
+  ),
+  synara_computer_set_app_visibility: presentComputerTool(
+    "changing an app's visibility",
+    "changed an app's visibility",
+  ),
+  synara_computer_wait: presentComputerTool("waiting for the desktop", "waited for the desktop"),
+  synara_computer_read_clipboard: presentComputerTool(
+    "reading the clipboard",
+    "read the clipboard",
+  ),
+  synara_computer_write_clipboard: presentComputerTool(
+    "writing to the clipboard",
+    "wrote to the clipboard",
+  ),
+  synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
+  synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
+  synara_computer_inspect: presentComputerTool("inspecting the computer", "inspected the computer"),
+  synara_computer_spaces: presentComputerTool(
+    "inspecting desktop Spaces",
+    "inspected desktop Spaces",
+  ),
+  synara_computer_browser_state: presentComputerTool(
+    "reading the browser page",
+    "read the browser page",
+  ),
+  synara_computer_browser_prepare: presentComputerTool("preparing a browser", "prepared a browser"),
+  synara_computer_browser_navigate: presentComputerTool(
+    "opening a browser page",
+    "opened a browser page",
+  ),
+  synara_computer_browser_click: presentComputerTool(
+    "clicking in the browser",
+    "clicked in the browser",
+  ),
+  synara_computer_browser_type: presentComputerTool(
+    "typing in a browser field",
+    "typed in a browser field",
+  ),
+  synara_computer_browser_dialog: presentComputerTool(
+    "handling a browser dialog",
+    "handled a browser dialog",
+  ),
+  synara_computer_browser_upload: presentComputerTool(
+    "attaching files in the browser",
+    "attached files in the browser",
+  ),
+  synara_computer_browser_download: presentComputerTool("downloading a file", "downloaded a file"),
+  synara_computer_browser_pointer: presentComputerTool(
+    "using the pointer in the browser",
+    "used the pointer in the browser",
+  ),
+  synara_computer_browser_press: presentComputerTool(
+    "pressing Enter in the browser",
+    "pressed Enter in the browser",
+  ),
+} as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
+
+function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {
+  return {
+    running: `Synara is ${present}`,
+    completed: `Synara ${past}`,
+    failed: `Synara couldn't finish ${present}`,
+  };
+}
+
+const SYNARA_MCP_TOOL_PRESENTATIONS = {
+  synara_context: {
+    running: "Synara is checking its context",
+    completed: "Synara checked its context",
+    failed: "Synara couldn't check its context",
+  },
+  synara_capabilities: {
+    running: "Synara is checking available agents",
+    completed: "Synara checked available agents",
+    failed: "Synara couldn't check available agents",
+  },
+  synara_overview: {
+    running: "Synara is gathering an overview",
+    completed: "Synara gathered an overview",
+    failed: "Synara couldn't gather an overview",
+  },
+  synara_list_allowed_projects: {
+    running: "Synara is listing allowed projects",
+    completed: "Synara listed allowed projects",
+    failed: "Synara couldn't list allowed projects",
+  },
+  synara_create_task: {
+    running: "Synara is creating a task",
+    completed: "Synara created a task",
+    failed: "Synara couldn't create a task",
+  },
+  synara_wait_for_task: {
+    running: "Synara is waiting for a task",
+    completed: "Synara finished waiting for a task",
+    failed: "Synara couldn't wait for a task",
+  },
+  synara_read_task: {
+    running: "Synara is reading a task",
+    completed: "Synara read a task",
+    failed: "Synara couldn't read a task",
+  },
+  synara_list_projects: {
+    running: "Synara is listing projects",
+    completed: "Synara listed projects",
+    failed: "Synara couldn't list projects",
+  },
+  synara_list_threads: {
+    running: "Synara is listing threads",
+    completed: "Synara listed threads",
+    failed: "Synara couldn't list threads",
+  },
+  synara_read_thread: {
+    running: "Synara is reading a thread",
+    completed: "Synara read a thread",
+    failed: "Synara couldn't read a thread",
+  },
+  synara_read_thread_activity: {
+    running: "Synara is reading thread activity",
+    completed: "Synara read thread activity",
+    failed: "Synara couldn't read thread activity",
+  },
+  synara_read_thread_events: {
+    running: "Synara is reading thread events",
+    completed: "Synara read thread events",
+    failed: "Synara couldn't read thread events",
+  },
+  synara_read_thread_runtime_events: {
+    running: "Synara is reading thread runtime events",
+    completed: "Synara read thread runtime events",
+    failed: "Synara couldn't read thread runtime events",
+  },
+  synara_diagnose_thread: {
+    running: "Synara is diagnosing a thread",
+    completed: "Synara diagnosed a thread",
+    failed: "Synara couldn't diagnose a thread",
+  },
+  synara_create_thread: {
+    running: "Synara is creating a thread",
+    completed: "Synara created a thread",
+    failed: "Synara couldn't create a thread",
+  },
+  synara_create_threads: {
+    running: "Synara is creating threads",
+    completed: "Synara created threads",
+    failed: "Synara couldn't create threads",
+  },
+  synara_wait_for_threads: {
+    running: "Synara is waiting for threads",
+    completed: "Synara finished waiting for threads",
+    failed: "Synara couldn't wait for threads",
+  },
+  synara_send_message: {
+    running: "Synara is sending a message",
+    completed: "Synara sent a message",
+    failed: "Synara couldn't send a message",
+  },
+  synara_read_kanban_board: {
+    running: "Synara is reading the board",
+    completed: "Synara read the board",
+    failed: "Synara couldn't read the board",
+  },
+  synara_read_kanban_card: {
+    running: "Synara is reading a board card",
+    completed: "Synara read a board card",
+    failed: "Synara couldn't read a board card",
+  },
+  synara_create_kanban_task: {
+    running: "Synara is creating a board task",
+    completed: "Synara created a board task",
+    failed: "Synara couldn't create a board task",
+  },
+  synara_move_kanban_card: {
+    running: "Synara is moving a board card",
+    completed: "Synara moved a board card",
+    failed: "Synara couldn't move a board card",
+  },
+  synara_create_todo: {
+    running: "Synara is adding a to-do",
+    completed: "Synara added a to-do",
+    failed: "Synara couldn't add a to-do",
+  },
+  synara_list_todos: {
+    running: "Synara is reading your to-dos",
+    completed: "Synara read your to-dos",
+    failed: "Synara couldn't read your to-dos",
+  },
+  synara_update_todo: {
+    running: "Synara is updating a to-do",
+    completed: "Synara updated a to-do",
+    failed: "Synara couldn't update a to-do",
+  },
+  synara_interrupt_thread: {
+    running: "Synara is interrupting a thread",
+    completed: "Synara interrupted a thread",
+    failed: "Synara couldn't interrupt a thread",
+  },
+  synara_set_thread_title: {
+    running: "Synara is renaming a thread",
+    completed: "Synara renamed a thread",
+    failed: "Synara couldn't rename a thread",
+  },
+  synara_set_thread_archived: {
+    running: "Synara is updating a thread",
+    completed: "Synara updated a thread",
+    failed: "Synara couldn't update a thread",
+  },
+  synara_create_automation: {
+    running: "Synara is creating an automation",
+    completed: "Synara created an automation",
+    failed: "Synara couldn't create an automation",
+  },
+  synara_list_automations: {
+    running: "Synara is listing automations",
+    completed: "Synara listed automations",
+    failed: "Synara couldn't list automations",
+  },
+  synara_view_automation: {
+    running: "Synara is viewing an automation",
+    completed: "Synara viewed an automation",
+    failed: "Synara couldn't view an automation",
+  },
+  synara_update_automation: {
+    running: "Synara is updating an automation",
+    completed: "Synara updated an automation",
+    failed: "Synara couldn't update an automation",
+  },
+  synara_update_automation_memory: {
+    running: "Synara is updating automation memory",
+    completed: "Synara updated automation memory",
+    failed: "Synara couldn't update automation memory",
+  },
+  synara_report_automation_result: {
+    running: "Synara is reporting an automation result",
+    completed: "Synara reported an automation result",
+    failed: "Synara couldn't report an automation result",
+  },
+  synara_cancel_automation: {
+    running: "Synara is stopping an automation",
+    completed: "Synara stopped an automation",
+    failed: "Synara couldn't stop an automation",
+  },
+  ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
+  ...SYNARA_COMPUTER_TOOL_PRESENTATIONS,
+} as const satisfies Record<string, SynaraMcpToolPresentation>;
+
+function normalizeSynaraMcpIdentifier(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION = new Map<string, SynaraBrowserToolName>(
+  BROWSER_HISTORY_TOOL_NAMES.map((toolName) => [
+    normalizeSynaraMcpIdentifier(BROWSER_HISTORY_TITLES[toolName]),
+    `synara_${toolName}`,
+  ]),
+);
+
+const SYNARA_MCP_TOOL_PRESENTATION_ENTRIES = Object.entries(SYNARA_MCP_TOOL_PRESENTATIONS).map(
+  ([toolName, presentation]) => ({
+    toolName,
+    presentation,
+    normalizedRunning: normalizeSynaraMcpIdentifier(presentation.running),
+    normalizedCompleted: normalizeSynaraMcpIdentifier(presentation.completed),
+    normalizedFailed: normalizeSynaraMcpIdentifier(presentation.failed),
+  }),
+);
+
+function extractSynaraMcpToolName(normalizedCandidate: string): string | null {
+  if (BROWSER_TOOL_NAME_SET.has(normalizedCandidate)) {
+    return `synara_${normalizedCandidate}`;
+  }
+  if (normalizedCandidate.startsWith("mcp_synara_synara_")) {
+    return normalizedCandidate.slice("mcp_synara_".length);
+  }
+  if (normalizedCandidate.startsWith("mcp_synara_")) {
+    return `synara_${normalizedCandidate.slice("mcp_synara_".length)}`;
+  }
+  if (normalizedCandidate.startsWith("synara_synara_")) {
+    return normalizedCandidate.slice("synara_".length);
+  }
+  if (normalizedCandidate.startsWith("synara_")) {
+    return normalizedCandidate;
+  }
+  return null;
+}
+
+function resolveSynaraBrowserToolName(
+  candidates: ReadonlyArray<string | null | undefined>,
+): SynaraBrowserToolName | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
+    const extractedToolName = extractSynaraMcpToolName(normalizedCandidate);
+    const candidateToolName =
+      extractedToolName ??
+      SYNARA_BROWSER_TOOL_NAME_BY_PRESENTATION.get(normalizedCandidate) ??
+      normalizedCandidate;
+    if (candidateToolName in SYNARA_BROWSER_TOOL_PRESENTATIONS) {
+      return candidateToolName as SynaraBrowserToolName;
+    }
+  }
+  return null;
+}
+
+function fallbackSynaraMcpToolPresentation(toolName: string): SynaraMcpToolPresentation {
+  const action =
+    toolName
+      .replace(/^synara_/, "")
+      .replace(/_+/g, " ")
+      .trim() || "an action";
+  return {
+    running: `Synara is handling ${action}`,
+    completed: `Synara handled ${action}`,
+    failed: `Synara couldn't handle ${action}`,
+  };
+}
+
+function resolveSynaraMcpToolPresentation(
+  candidates: ReadonlyArray<string | null | undefined>,
+): SynaraMcpToolPresentation | null {
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const normalizedCandidate = normalizeSynaraMcpIdentifier(candidate);
+    for (const entry of SYNARA_MCP_TOOL_PRESENTATION_ENTRIES) {
+      if (
+        normalizedCandidate === entry.normalizedRunning ||
+        normalizedCandidate === entry.normalizedCompleted ||
+        normalizedCandidate === entry.normalizedFailed
+      ) {
+        return entry.presentation;
+      }
+    }
+    const toolName = extractSynaraMcpToolName(normalizedCandidate);
+    const knownPresentation = toolName
+      ? (SYNARA_MCP_TOOL_PRESENTATIONS[toolName as keyof typeof SYNARA_MCP_TOOL_PRESENTATIONS] as
+          | SynaraMcpToolPresentation
+          | undefined)
+      : undefined;
+    if (knownPresentation) {
+      return knownPresentation;
+    }
+    // Free-text summaries (e.g. reconciler activity lines) can begin with the
+    // word "Synara" and normalize into a fake tool identifier; only
+    // identifier-shaped candidates may take an invented fallback presentation.
+    if (/\s/.test(candidate.trim())) {
+      continue;
+    }
+    if (normalizedCandidate.startsWith("synara_is_handling_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_handled_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+      );
+    }
+    if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
+      return fallbackSynaraMcpToolPresentation(
+        `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+      );
+    }
+    if (!toolName) {
+      continue;
+    }
+    return fallbackSynaraMcpToolPresentation(toolName);
+  }
+  return null;
+}
+
+export type SynaraMcpToolStatus = "running" | "completed" | "failed" | "cancelled";
+
+export interface SynaraMcpToolTitleInput {
+  readonly toolName?: string | null | undefined;
+  readonly title?: string | null | undefined;
+  readonly fallbackLabel?: string | null | undefined;
+  readonly status?: SynaraMcpToolStatus | undefined;
+}
+
+export function isSynaraBrowserToolCall(input: SynaraMcpToolTitleInput): boolean {
+  return resolveSynaraBrowserToolName([input.toolName, input.title, input.fallbackLabel]) !== null;
+}
+
+// Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
+// file-change rows can all represent the same gateway action. Normalize by tool
+// identity instead of provider item type so transport details never reach the UI.
+export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
+  const presentation = resolveSynaraMcpToolPresentation([
+    input.toolName,
+    input.title,
+    input.fallbackLabel,
+  ]);
+  if (!presentation) {
+    return null;
+  }
+  switch (input.status ?? "completed") {
+    case "running":
+      return presentation.running;
+    case "completed":
+      return presentation.completed;
+    case "failed":
+      return presentation.failed;
+    case "cancelled":
+      return presentation.running.startsWith("Synara is ")
+        ? `Synara stopped ${presentation.running.slice("Synara is ".length)}`
+        : `Cancelled ${presentation.running}`;
+  }
+}
+
+export function sanitizeSynaraMcpToolPreview(input: {
+  readonly preview?: string | null | undefined;
+  readonly heading: string;
+  readonly status?: SynaraMcpToolStatus | undefined;
+}): string | null {
+  const preview = input.preview?.trim();
+  if (!preview) return null;
+  const previewTitle = deriveSynaraMcpToolTitle({ title: preview, status: input.status });
+  if (
+    previewTitle &&
+    normalizeSynaraMcpIdentifier(previewTitle) === normalizeSynaraMcpIdentifier(input.heading)
+  ) {
+    return null;
+  }
+  return preview;
 }
 
 export function deriveReadableToolTitle(input: ReadableToolTitleInput): string | null {
@@ -109,12 +656,10 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
-    return normalizedTitle;
-  }
-
-  // Use verbal requestKind label before falling back to raw descriptors
-  if (requestKindLabel) {
-    return requestKindLabel;
+    return (input.itemType === "mcp_tool_call" || input.itemType === "dynamic_tool_call") &&
+      /[_-]/.test(normalizedTitle)
+      ? (normalizeToolDescriptor(normalizedTitle) ?? normalizedTitle)
+      : normalizedTitle;
   }
 
   if (commandLike && commandLabel) {
@@ -124,6 +669,12 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
   if (descriptor && !isGenericToolTitle(descriptor)) {
     return descriptor;
+  }
+
+  // A generic request kind describes the transport, while the payload can name
+  // the actual tool. Only use it after the provider metadata has been checked.
+  if (requestKindLabel) {
+    return requestKindLabel;
   }
 
   if (normalizedFallback.length > 0 && !isGenericToolTitle(normalizedFallback)) {
@@ -144,7 +695,9 @@ export interface ReadableCommandDisplay {
   readonly fullCommand: string;
 }
 
-export type CommandVisualKind = "inspect" | "git" | "github" | "terminal";
+// "read" and "search" split the read-only inspections so a file read and a
+// pattern search wear different glyphs; listings (`ls`) are plain commands.
+export type CommandVisualKind = "read" | "search" | "git" | "github" | "terminal";
 
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
@@ -152,6 +705,7 @@ function humanizeRequestKind(
 ): string | null {
   if (requestKind === "file-read") return "Read";
   if (requestKind === "file-change" || itemType === "file_change") return "Edited";
+  if (requestKind === "tool") return "Tool";
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
   if (itemType === "web_search") return "Searched the web";
   if (itemType === "image_generation") return "Generated image";
@@ -188,6 +742,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (!value) {
     return null;
   }
+  const computerTool = computerToolName(value);
+  if (computerTool) {
+    return COMPUTER_TOOL_TITLES[computerTool];
+  }
   const mcpIdentifier = humanizeMcpToolIdentifier(value);
   if (mcpIdentifier) {
     return mcpIdentifier;
@@ -214,7 +772,8 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
     return "Search";
   }
-  return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
+  const readable = /[_-]/.test(value) ? humanizeMcpToken(collapsed) : collapsed;
+  return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}...` : readable;
 }
 
 function humanizeMcpToken(value: string | undefined): string {
@@ -285,7 +844,17 @@ function extractMcpServerToolDescriptor(value: unknown, depth: number): string |
   if (typeof record.server === "string" && typeof record.tool === "string") {
     return humanizeMcpServerTool(record.server, record.tool);
   }
-  for (const nestedKey of ["item", "data", "event", "payload", "result", "input", "call"]) {
+  for (const nestedKey of [
+    "item",
+    "data",
+    "event",
+    "payload",
+    "result",
+    "input",
+    "call",
+    "invocation",
+    "source",
+  ]) {
     const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
     if (nested) {
       return nested;
@@ -342,23 +911,14 @@ function collectDescriptorCandidates(
   }
 }
 
-// Read-only inspection commands surfaced with the search/magnifying-glass icon in
-// the timeline (reads, searches, finds, listings), as opposed to commands that
-// mutate or execute, which keep the terminal icon. These sets are the single
-// source of truth for both the command labels below and the icon decision.
+// Read-only inspection commands: file reads wear the file glyph, searches and
+// finds the magnifier; listings and everything else keep the terminal icon.
+// These sets are the single source of truth for both the command labels below
+// and the icon decision.
 const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
 const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
 const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);
 const LIST_COMMAND_TOOLS = new Set(["ls"]);
-
-function isInspectCommandTool(tool: string): boolean {
-  return (
-    READ_FILE_COMMAND_TOOLS.has(tool) ||
-    SEARCH_COMMAND_TOOLS.has(tool) ||
-    FIND_COMMAND_TOOLS.has(tool) ||
-    LIST_COMMAND_TOOLS.has(tool)
-  );
-}
 
 // Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
 export function deriveReadableCommandDisplay(
@@ -453,20 +1013,44 @@ export function deriveReadableCommandDisplay(
   }
 }
 
-// Whether a shell command is a read-only inspection (read/search/find/list).
-// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
-// timeline search icon stays in sync with the derived command label.
-export function isInspectCommand(rawCommand: string): boolean {
-  return resolveCommandVisualKind(rawCommand) === "inspect";
+function firstCommandExecutable(rawCommand: string): string {
+  const trimmed = rawCommand.trim();
+  const match = /^(?:"([^"]+)"|'([^']+)'|(\S+))/u.exec(trimmed);
+  const executable = match?.[1] ?? match?.[2] ?? match?.[3] ?? "";
+  return executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
+}
+
+// The object half of a command row's sentence ("Searched <for foo in src>"),
+// kept short enough to read inline. Shell wrappers that carry no meaning for a
+// human (a full pwsh.exe path) collapse to the shell's friendly name.
+export function deriveFriendlyCommandTarget(rawCommand: string): string {
+  const executable = firstCommandExecutable(rawCommand);
+  if (
+    executable === "pwsh" ||
+    executable === "pwsh.exe" ||
+    executable === "powershell" ||
+    executable === "powershell.exe"
+  ) {
+    return "PowerShell";
+  }
+  if (executable === "cmd" || executable === "cmd.exe") {
+    return "Command Prompt";
+  }
+
+  const target = deriveReadableCommandDisplay(rawCommand).target.trim();
+  return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
 // Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
 // This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
+  if (deriveCommandReadTargets(rawCommand) !== null) {
+    return "read";
+  }
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
-  if (isInspectCommandTool(tool)) {
-    return "inspect";
+  if (SEARCH_COMMAND_TOOLS.has(tool) || FIND_COMMAND_TOOLS.has(tool)) {
+    return "search";
   }
   if (tool === "git") {
     return "git";
@@ -479,6 +1063,134 @@ export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind 
 
 export function deriveInlineCommandCall(rawCommand: string): string {
   return stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+}
+
+// The command a row shows: what actually ran, minus the shell wrapper
+// (`/bin/zsh -lc "…"`) and leading `cd <dir> &&` preambles. Pipes, chains and
+// quoting stay verbatim, unlike `deriveInlineCommandCall`, which keeps only the
+// first pipeline stage for classification.
+export function deriveLiteralCommand(rawCommand: string): string {
+  let value = rawCommand.trim();
+  const lowered = value.toLowerCase();
+  for (const prefix of SHELL_WRAPPER_PREFIXES) {
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    value = value.slice(prefix.length).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1).trim();
+    }
+    break;
+  }
+  return stripLeadingShellPreambles(value).replace(/\s+/g, " ").trim();
+}
+
+// Files a command only reads, or null when the command does anything else.
+// A row may say "Read <file>" instead of the literal command only when that
+// is the whole story: no pipes, chains, redirects or substitutions, and no
+// in-place edit (`sed -i`).
+export function deriveCommandReadTargets(rawCommand: string): string[] | null {
+  const literal = deriveLiteralCommand(rawCommand);
+  if (literal.length === 0 || hasUnquotedShellOperator(literal)) {
+    return null;
+  }
+  const [tool, args] = splitToolAndArgs(stripCommandDisplayWrappers(literal));
+  if (!READ_FILE_COMMAND_TOOLS.has(tool)) {
+    return null;
+  }
+  const tokens = tokenizeCommandArgs(args);
+  const files: string[] = [];
+  let skipNext = false;
+  let sedScriptPending = tool === "sed";
+  let sedPrintOnly = false;
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith("-") && token.length > 1) {
+      if (tool === "sed") {
+        if (token === "-i" || token.startsWith("-i") || token.startsWith("--in-place")) {
+          return null;
+        }
+        if (token === "-n" || token === "--quiet" || token === "--silent") {
+          sedPrintOnly = true;
+        }
+        if (token === "-e" || token === "--expression") {
+          sedScriptPending = false;
+          skipNext = true;
+        }
+      }
+      if ((tool === "head" || tool === "tail") && (token === "-n" || token === "-c")) {
+        skipNext = true;
+      }
+      continue;
+    }
+    if (sedScriptPending) {
+      sedScriptPending = false;
+      continue;
+    }
+    files.push(compactPath(token));
+  }
+  if (tool === "sed" && !sedPrintOnly) {
+    return null;
+  }
+  return files.length > 0 ? files : null;
+}
+
+const SHELL_WRAPPER_PREFIXES = [
+  "/usr/bin/bash -lc ",
+  "/usr/bin/bash -c ",
+  "/bin/bash -lc ",
+  "/bin/bash -c ",
+  "/usr/bin/zsh -lc ",
+  "/usr/bin/zsh -c ",
+  "/bin/zsh -lc ",
+  "/bin/zsh -c ",
+  "/bin/sh -lc ",
+  "/bin/sh -c ",
+  "bash -lc ",
+  "bash -c ",
+  "zsh -lc ",
+  "zsh -c ",
+  "sh -lc ",
+  "sh -c ",
+];
+
+// Pipes, chains, redirects, background jobs and substitutions outside quotes.
+function hasUnquotedShellOperator(value: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (
+      char === "|" ||
+      char === "&" ||
+      char === ";" ||
+      char === ">" ||
+      char === "<" ||
+      char === "`" ||
+      (char === "$" && value[index + 1] === "(")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function humanizeGitCommand(
@@ -807,16 +1519,11 @@ function splitToolAndArgs(command: string): [tool: string, args: string] {
   }
   const separator = normalized.indexOf(" ");
   if (separator === -1) {
-    return [basename(normalized).toLowerCase(), ""];
+    return [basenameOfPath(normalized).toLowerCase(), ""];
   }
-  const tool = basename(normalized.slice(0, separator)).toLowerCase();
+  const tool = basenameOfPath(normalized.slice(0, separator)).toLowerCase();
   const args = normalized.slice(separator + 1).trim();
   return [tool, args];
-}
-
-function basename(value: string): string {
-  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
-  return slash >= 0 ? value.slice(slash + 1) : value;
 }
 
 function unwrapShellCommandIfPresent(rawCommand: string): string {
@@ -825,27 +1532,8 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     return value;
   }
 
-  const shellPrefixes = [
-    "/usr/bin/bash -lc ",
-    "/usr/bin/bash -c ",
-    "/bin/bash -lc ",
-    "/bin/bash -c ",
-    "/usr/bin/zsh -lc ",
-    "/usr/bin/zsh -c ",
-    "/bin/zsh -lc ",
-    "/bin/zsh -c ",
-    "/bin/sh -lc ",
-    "/bin/sh -c ",
-    "bash -lc ",
-    "bash -c ",
-    "zsh -lc ",
-    "zsh -c ",
-    "sh -lc ",
-    "sh -c ",
-  ];
-
   const lowered = value.toLowerCase();
-  for (const prefix of shellPrefixes) {
+  for (const prefix of SHELL_WRAPPER_PREFIXES) {
     if (!lowered.startsWith(prefix)) {
       continue;
     }
@@ -861,7 +1549,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     break;
   }
 
-  const pipeIndex = value.search(/\s*\|\s*/);
+  const pipeIndex = value.indexOf("|");
   if (pipeIndex > 0) {
     value = value.slice(0, pipeIndex).trim();
   }

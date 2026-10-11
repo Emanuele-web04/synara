@@ -3,9 +3,13 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
-import { expect } from "vitest";
-import type { GitActionProgressEvent } from "@synara/contracts";
+import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
+import { expect, vi } from "vitest";
+import * as betaOperationalIssue from "../../betaOperationalIssue";
+import * as processRunner from "../../processRunner";
+import { GitHubCliLive } from "./GitHubCli";
+import { WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
+import { makeGitActionRunner } from "../gitActionRunner";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -15,7 +19,11 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -24,6 +32,8 @@ import {
   type TextGenerationShape,
   TextGeneration,
   type ThreadRecapGenerationInput,
+  type ProjectDigestGenerationInput,
+  type ProjectDigestGenerationResult,
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
@@ -53,6 +63,7 @@ interface FakeGitTextGeneration {
     commitSummary: string;
     diffSummary: string;
     diffPatch: string;
+    prTemplate?: string | undefined;
     codexHomePath?: string;
     providerOptions?: ProviderStartOptions;
     model?: string;
@@ -83,6 +94,9 @@ interface FakeGitTextGeneration {
   generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<{ recap: string }, TextGenerationError>;
+  generateProjectDigest: (
+    input: ProjectDigestGenerationInput,
+  ) => Effect.Effect<ProjectDigestGenerationResult, TextGenerationError>;
   generateAutomationIntent: (
     input: AutomationIntentGenerationInput,
   ) => Effect.Effect<AutomationIntentGenerationResult, TextGenerationError>;
@@ -179,6 +193,11 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         recap: "Update workflow recap",
       }),
+    generateProjectDigest: () =>
+      Effect.succeed({
+        summary: "Update workflow digest",
+        focusItems: [] as ProjectDigestGenerationResult["focusItems"],
+      }),
     generateAutomationIntent: () =>
       Effect.succeed({
         isAutomation: true,
@@ -269,6 +288,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
             }),
         ),
       ),
+    generateProjectDigest: (input) =>
+      implementation.generateProjectDigest(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateProjectDigest",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
     generateAutomationIntent: (input) =>
       implementation.generateAutomationIntent(input).pipe(
         Effect.mapError(
@@ -303,6 +333,10 @@ function runStackedAction(
     commitMessage?: string;
     featureBranch?: boolean;
     filePaths?: readonly string[];
+    prTitle?: string;
+    prBody?: string;
+    prDraft?: boolean;
+    allowDirtyWorkingTree?: boolean;
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
 ) {
@@ -346,6 +380,7 @@ function handoffThread(
 
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
+  github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
@@ -360,7 +395,7 @@ function makeManager(input?: {
   );
 
   const managerLayer = Layer.mergeAll(
-    Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
     Layer.succeed(TextGeneration, textGeneration),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -377,6 +412,128 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("commits and pushes selected files beyond status and argument capture limits", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-many-files-");
+      yield* initRepo(repoDir);
+      const remote = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remote]);
+      const filePaths = Array.from(
+        { length: 6_000 },
+        (_, index) => `${index}-${"file".repeat(48)}.txt`,
+      );
+      yield* Effect.sync(() => {
+        for (const file of filePaths) fs.writeFileSync(path.join(repoDir, file), "content\n");
+        fs.writeFileSync(path.join(repoDir, "excluded.txt"), "keep untracked\n");
+      });
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.hasWorkingTreeChanges).toBe(true);
+      expect(status.workingTree.files).toHaveLength(6_001);
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push",
+        commitMessage: "Add selected files",
+        filePaths,
+      });
+      expect(result.commit.status).toBe("created");
+      expect(result.push.status).toBe("pushed");
+      const localTree = (yield* runGit(repoDir, ["rev-parse", "HEAD^{tree}"])).stdout.trim();
+      const branch = (yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim();
+      expect((yield* runGit(remote, ["rev-parse", `${branch}^{tree}`])).stdout.trim()).toBe(
+        localTree,
+      );
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe(
+        "?? excluded.txt",
+      );
+      const committedCount = (yield* runGit(repoDir, ["diff", "--shortstat", "HEAD~", "HEAD"]))
+        .stdout;
+      expect(committedCount).toContain("6000 files changed");
+    }),
+  );
+
+  it.effect("routes file-scoped working-tree diffs and rejects other scopes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-file-diff-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "selected.txt"), "selected\n");
+        fs.writeFileSync(path.join(repoDir, "other.txt"), "other\n");
+      });
+      const { manager } = yield* makeManager();
+      const { patch } = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir,
+        scope: "workingTree",
+        filePath: "selected.txt",
+      });
+      expect(patch).toContain("selected.txt");
+      expect(patch).not.toContain("other.txt");
+      for (const scope of ["staged", "unstaged", "branch", "ref"] as const) {
+        const exit = yield* manager
+          .readWorkingTreeDiff({
+            cwd: repoDir,
+            scope,
+            filePath: "selected.txt",
+            compareRef: "HEAD",
+          })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit))
+          expect(String(exit.cause)).toContain("only supported for the working tree");
+      }
+      expect(
+        Exit.isFailure(
+          yield* manager
+            .readWorkingTreeDiffStats({
+              cwd: repoDir,
+              scope: "workingTree",
+              filePath: "selected.txt",
+            })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("refuses to summarize a working-tree patch whose capture was truncated", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-truncated-summary-");
+      yield* initRepo(repoDir);
+      yield* Effect.sync(() => {
+        fs.writeFileSync(path.join(repoDir, "oversized.txt"), "generated line\n".repeat(100_000));
+      });
+      let generationCalls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateDiffSummary: () => {
+            generationCalls += 1;
+            return Effect.succeed({ summary: "## Summary\n- Partial input" });
+          },
+        },
+      });
+
+      const captured = yield* manager.readWorkingTreeDiff({
+        cwd: repoDir,
+        scope: "workingTree",
+      });
+      expect(captured.truncated).toBe(true);
+
+      const result = yield* Effect.result(
+        manager.summarizeDiff({ cwd: repoDir, scope: "workingTree" }),
+      );
+
+      expect(result._tag).toBe("Failure");
+      expect(generationCalls).toBe(0);
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "GitManagerError",
+          operation: "summarizeDiff",
+        });
+        expect(result.failure.message).toContain("truncated diff");
+      }
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -422,6 +579,64 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         deletions: 36,
         changedFiles: 3,
       });
+    }),
+  );
+
+  it.effect("status exposes the configured PR merge base", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/configured-pr-base"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/configured-pr-base.gh-merge-base",
+        "release",
+      ]);
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.configuredPrBaseBranch).toBe("release");
+    }),
+  );
+
+  it.effect("resolves a captured branch PR after the checkout has moved elsewhere", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/captured-pr"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/captured-pr"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            "feature/captured-pr": JSON.stringify([
+              {
+                number: 574,
+                title: "Captured branch PR",
+                url: "https://github.com/example-org/sample-repo/pull/574",
+                baseRefName: "main",
+                headRefName: "feature/captured-pr",
+                state: "OPEN",
+              },
+            ]),
+          },
+        },
+      });
+
+      const resolved = yield* manager.pullRequestForBranch({
+        cwd: repoDir,
+        branch: "feature/captured-pr",
+        upstreamRef: "origin/feature/captured-pr",
+      });
+
+      expect(resolved).toMatchObject({ number: 574, headBranch: "feature/captured-pr" });
+      expect(ghCalls.some((call) => call.includes("pr list --head feature/captured-pr"))).toBe(
+        true,
+      );
     }),
   );
 
@@ -631,107 +846,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("falls back to a heuristic commit message when text generation fails", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nfallback\n");
-
-      const { manager } = yield* makeManager({
-        textGeneration: {
-          generateCommitMessage: () =>
-            Effect.fail(
-              new TextGenerationError({
-                operation: "generateCommitMessage",
-                detail: "Codex CLI command failed: skills loader failed",
-              }),
-            ),
-        },
-      });
-
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-      });
-
-      expect(result.commit.status).toBe("created");
-      expect(result.commit.subject).toBe("Update README.md");
-      expect(
-        yield* runGit(repoDir, ["log", "-1", "--pretty=%s"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        ),
-      ).toBe("Update README.md");
-    }),
-  );
-
-  it.effect("uses custom commit message when provided", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\ncustom\n");
-      let generatedCount = 0;
-
-      const { manager } = yield* makeManager({
-        textGeneration: {
-          generateCommitMessage: (input) =>
-            Effect.sync(() => {
-              generatedCount += 1;
-              return {
-                subject: "this should not be used",
-                body: "",
-                ...(input.includeBranch ? { branch: "feature/unused" } : {}),
-              };
-            }),
-        },
-      });
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-        commitMessage: "feat: custom summary line\n\n- details from user",
-      });
-
-      expect(result.branch.status).toBe("skipped_not_requested");
-      expect(result.commit.status).toBe("created");
-      expect(result.commit.subject).toBe("feat: custom summary line");
-      expect(generatedCount).toBe(0);
-      expect(
-        yield* runGit(repoDir, ["log", "-1", "--pretty=%s"]).pipe(
-          Effect.map((result) => result.stdout.trim()),
-        ),
-      ).toBe("feat: custom summary line");
-      expect(
-        yield* runGit(repoDir, ["log", "-1", "--pretty=%b"]).pipe(
-          Effect.map((result) => result.stdout.trim()),
-        ),
-      ).toContain("- details from user");
-    }),
-  );
-
-  it.effect("commits only selected files when filePaths is provided", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      fs.writeFileSync(path.join(repoDir, "a.txt"), "file a\n");
-      fs.writeFileSync(path.join(repoDir, "b.txt"), "file b\n");
-
-      const { manager } = yield* makeManager();
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-        filePaths: ["a.txt"],
-      });
-
-      expect(result.commit.status).toBe("created");
-
-      // b.txt should remain in the working tree
-      const statusStdout = yield* runGit(repoDir, ["status", "--porcelain"]).pipe(
-        Effect.map((r) => r.stdout),
-      );
-      expect(statusStdout).toContain("b.txt");
-      expect(statusStdout).not.toContain("a.txt");
-    }),
-  );
-
   it.effect("creates feature branch, commits, and pushes with featureBranch option", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -854,6 +968,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("created");
       expect(result.commit.subject).toBe("feat: custom summary line");
       expect(generatedCount).toBe(0);
+      expect(
+        yield* runGit(repoDir, ["log", "-1", "--pretty=%b"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        ),
+      ).toContain("- details from user");
 
       const mainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
         Effect.map((r) => r.stdout.trim()),
@@ -863,52 +982,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
       expect(mergeBase).toBe(mainSha);
     }),
-  );
-
-  it.effect(
-    "creates feature branch and pushes already-committed work",
-    () =>
-      Effect.gen(function* () {
-        const repoDir = yield* makeTempDir("synara-git-manager-");
-        yield* initRepo(repoDir);
-        const remoteDir = yield* createBareRemote();
-        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-          Effect.map((gitResult) => gitResult.stdout.trim()),
-        );
-        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\npush-from-default\n");
-        yield* runGit(repoDir, ["add", "README.md"]);
-        yield* runGit(repoDir, ["commit", "-m", "Push from default branch"]);
-
-        const { manager } = yield* makeManager();
-        const result = yield* runStackedAction(manager, {
-          cwd: repoDir,
-          action: "push",
-          featureBranch: true,
-        });
-
-        expect(result.branch.status).toBe("created");
-        expect(result.branch.name).toBe("feature/push-from-default-branch");
-        expect(result.commit.status).toBe("skipped_not_requested");
-        expect(result.push.status).toBe("pushed");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe("feature/push-from-default-branch");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe("origin/feature/push-from-default-branch");
-        expect(
-          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
-            Effect.map((gitResult) => gitResult.stdout.trim()),
-          ),
-        ).toBe(originalMainSha);
-      }),
-    30_000,
   );
 
   it.effect(
@@ -956,6 +1029,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.commit.status).toBe("skipped_not_requested");
         expect(result.push.status).toBe("pushed");
         expect(result.pr.status).toBe("created");
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe("origin/feature/create-pr-from-default-branch");
         expect(
           ghCalls.some((call) =>
             call.includes("pr create --base main --head feature/create-pr-from-default-branch"),
@@ -1072,33 +1150,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("no changes to commit");
-    }),
-  );
-
-  it.effect("commits and pushes with upstream auto-setup when needed", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/stacked-flow"]);
-      const remoteDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-      fs.writeFileSync(path.join(repoDir, "feature.txt"), "feature\n");
-
-      const { manager } = yield* makeManager();
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit_push",
-      });
-
-      expect(result.branch.status).toBe("skipped_not_requested");
-      expect(result.commit.status).toBe("created");
-      expect(result.push.status).toBe("pushed");
-      expect(result.push.setUpstream).toBe(true);
-      expect(
-        yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
-          Effect.map((result) => result.stdout.trim()),
-        ),
-      ).toBe("origin/feature/stacked-flow");
     }),
   );
 
@@ -1256,6 +1307,163 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     30_000,
   );
 
+  it.effect(
+    "uses provided PR title, body, and draft flag without generating content",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/custom-pr-content"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "custom-pr.txt"), "custom pr\n");
+        yield* runGit(repoDir, ["add", "custom-pr.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Custom PR content"]);
+
+        let generateCalls = 0;
+        const { manager, ghCalls } = yield* makeManager({
+          textGeneration: {
+            generatePrContent: () => {
+              generateCalls += 1;
+              return Effect.succeed({ title: "Generated title", body: "Generated body" });
+            },
+          },
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([
+                {
+                  number: 91,
+                  title: "Custom PR title",
+                  url: "https://github.com/example-org/sample-repo/pull/91",
+                  baseRefName: "main",
+                  headRefName: "feature/custom-pr-content",
+                },
+              ]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          prTitle: "Custom PR title",
+          prBody: "Custom PR body.",
+          prDraft: true,
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.pr.title).toBe("Custom PR title");
+        expect(generateCalls).toBe(0);
+        const createCall = ghCalls.find((call) => call.startsWith("pr create "));
+        expect(createCall).toContain(
+          "pr create --base main --head feature/custom-pr-content --title Custom PR title",
+        );
+        expect(createCall).toContain("--draft");
+      }),
+    30_000,
+  );
+
+  it.effect(
+    "rejects create_pr with uncommitted changes unless the caller opts out of the guard",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/dirty-create-pr"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "committed.txt"), "committed\n");
+        yield* runGit(repoDir, ["add", "committed.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Committed work"]);
+        fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "left out\n");
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              "[]",
+              "[]",
+              JSON.stringify([
+                {
+                  number: 92,
+                  title: "Committed work",
+                  url: "https://github.com/example-org/sample-repo/pull/92",
+                  baseRefName: "main",
+                  headRefName: "feature/dirty-create-pr",
+                },
+              ]),
+            ],
+          },
+        });
+        const guardedError = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+        expect(guardedError).toContain("Commit local changes before creating a PR.");
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          allowDirtyWorkingTree: true,
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(result.pr.status).toBe("created");
+        const status = yield* runGit(repoDir, ["status", "--porcelain"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout),
+        );
+        expect(status).toContain("uncommitted.txt");
+      }),
+    30_000,
+  );
+
+  it.effect(
+    "rejects push with uncommitted changes unless the caller opts out of the guard",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/dirty-push"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "committed.txt"), "committed\n");
+        yield* runGit(repoDir, ["add", "committed.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Committed work"]);
+        fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "left out\n");
+
+        const { manager } = yield* makeManager();
+        const guardedError = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+        expect(guardedError).toContain("Commit or stash local changes before pushing.");
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+          allowDirtyWorkingTree: true,
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        const status = yield* runGit(repoDir, ["status", "--porcelain"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout),
+        );
+        expect(status).toContain("uncommitted.txt");
+      }),
+    30_000,
+  );
+
   it.effect("rejects PR creation when base and head resolve to the same branch", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -1289,8 +1497,22 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const forkDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
       yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "target repository template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add target PR template"]);
       yield* runGit(repoDir, ["push", "origin", "main"]);
       yield* runGit(repoDir, ["push", "-u", "fork", "main"]);
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "fork-only template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Change template in fork"]);
+      yield* runGit(repoDir, ["push", "fork", "main"]);
       yield* runGit(repoDir, [
         "config",
         "remote.origin.url",
@@ -1306,8 +1528,18 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       fs.writeFileSync(path.join(repoDir, "cross-repo-pr.txt"), "fork main change\n");
       yield* runGit(repoDir, ["add", "cross-repo-pr.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Cross repo main PR"]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Cross-repository change",
+              body: "Target template body",
+            });
+          },
+        },
         ghScenario: {
           prListByHeadSelector: {
             "octocat:main": "[]",
@@ -1325,7 +1557,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head octocat:main")),
       ).toBe(true);
+      expect(generatedPrTemplate).toBe("target repository template");
     }),
+  );
+
+  it.effect(
+    "uses a supplied PR title to publish unstaged changes from main without text generation",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nupdated\n");
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () => Effect.die("Unnecessary commit generation"),
+            generatePrContent: () => Effect.die("Unnecessary PR generation"),
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          featureBranch: true,
+          prTitle: "Update readme",
+          prBody: "Document the change.",
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.commit.subject).toBe("Update readme");
+        expect(result.branch.name).toBe("feature/update-readme");
+        expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe("");
+        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(mainHead);
+        expect((yield* runGit(remoteDir, ["show", "feature/update-readme:README.md"])).stdout).toBe(
+          "hello\nupdated\n",
+        );
+      }),
   );
 
   it.effect("returns existing PR metadata for commit/push/pr action", () =>
@@ -1483,68 +1753,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
-    "prefers owner-qualified selectors before bare branch names for cross-repo PRs",
-    () =>
-      Effect.gen(function* () {
-        const repoDir = yield* makeTempDir("synara-git-manager-");
-        yield* initRepo(repoDir);
-        yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
-        const forkDir = yield* createBareRemote();
-        yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
-        yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
-        yield* runGit(repoDir, ["checkout", "-b", "synara/pr-142/statemachine"]);
-        yield* runGit(repoDir, ["branch", "--set-upstream-to", "fork-seed/statemachine"]);
-        yield* runGit(repoDir, [
-          "config",
-          "remote.fork-seed.url",
-          "git@github.com:octocat/sample-repo.git",
-        ]);
-
-        const { manager, ghCalls } = yield* makeManager({
-          ghScenario: {
-            prListByHeadSelector: {
-              "synara/pr-142/statemachine": JSON.stringify([]),
-              statemachine: JSON.stringify([
-                {
-                  number: 41,
-                  title: "Unrelated same-repo PR",
-                  url: "https://github.com/example-org/sample-repo/pull/41",
-                  baseRefName: "main",
-                  headRefName: "statemachine",
-                },
-              ]),
-              "octocat:statemachine": JSON.stringify([
-                {
-                  number: 142,
-                  title: "Existing fork PR",
-                  url: "https://github.com/example-org/sample-repo/pull/142",
-                  baseRefName: "main",
-                  headRefName: "statemachine",
-                },
-              ]),
-              "fork-seed:statemachine": JSON.stringify([]),
-            },
-          },
-        });
-
-        const result = yield* runStackedAction(manager, {
-          cwd: repoDir,
-          action: "commit_push_pr",
-        });
-
-        expect(result.pr.status).toBe("opened_existing");
-        expect(result.pr.number).toBe(142);
-
-        const ownerSelectorCallIndex = ghCalls.findIndex((call) =>
-          call.includes("pr list --head octocat:statemachine --state open --limit 1"),
-        );
-        expect(ownerSelectorCallIndex).toBeGreaterThanOrEqual(0);
-        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
-      }),
-    30_000,
-  );
-
-  it.effect(
     "stops probing head selectors after finding an existing PR",
     () =>
       Effect.gen(function* () {
@@ -1602,16 +1810,35 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "## What changed?\n\n## Verification",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add pull request template"]);
       yield* runGit(repoDir, ["checkout", "-b", "feature-create-pr"]);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "origin", "main"]);
+      yield* runGit(repoDir, ["branch", "-f", "main", "HEAD^"]);
       fs.writeFileSync(path.join(repoDir, "changes.txt"), "change\n");
       yield* runGit(repoDir, ["add", "changes.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature-create-pr"]);
       yield* runGit(repoDir, ["config", "branch.feature-create-pr.gh-merge-base", "main"]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Add stacked git actions",
+              body: "## What changed?\nAdded stacked git actions.",
+            });
+          },
+        },
         ghScenario: {
           prListSequence: [
             "[]",
@@ -1637,6 +1864,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("created");
       expect(result.pr.number).toBe(88);
+      expect(generatedPrTemplate).toBe("## What changed?\n\n## Verification");
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);
@@ -1688,10 +1916,23 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("creates cross-repo PRs with the fork owner selector and default base branch", () =>
+  it.effect("uses the local base template when a cross-repo origin ref is absent", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
+      fs.mkdirSync(path.join(repoDir, ".github"));
+      fs.writeFileSync(
+        path.join(repoDir, ".github", "pull_request_template.md"),
+        "local base template",
+      );
+      yield* runGit(repoDir, ["add", ".github/pull_request_template.md"]);
+      yield* runGit(repoDir, ["commit", "-m", "Add local base template"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:example-org/sample-repo.git",
+      ]);
       const forkDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
       yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
@@ -1706,8 +1947,18 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "remote.fork-seed.url",
         "git@github.com:octocat/sample-repo.git",
       ]);
+      let generatedPrTemplate: string | undefined;
 
       const { manager, ghCalls } = yield* makeManager({
+        textGeneration: {
+          generatePrContent: (input) => {
+            generatedPrTemplate = input.prTemplate;
+            return Effect.succeed({
+              title: "Add stacked git actions",
+              body: "Local base template body",
+            });
+          },
+        },
         ghScenario: {
           prListSequence: [
             JSON.stringify([]),
@@ -1744,6 +1995,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           call.includes("pr create --base statemachine --head octocat:statemachine"),
         ),
       ).toBe(false);
+      expect(generatedPrTemplate).toBe("local base template");
     }),
   );
 
@@ -1794,33 +2046,42 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("surfaces gh auth errors with guidance", () =>
+  it.effect("keeps direct PR resolution available during a polling pause", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/gh-auth"]);
-      const remoteDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "feature/gh-auth"]);
-
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          failWith: new GitHubCliError({
-            operation: "execute",
-            detail: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
-          }),
-        },
+      const gh = yield* GitHubCli;
+      const runProcessSpy = vi
+        .spyOn(processRunner, "runProcess")
+        .mockImplementation(async (_command, args) => {
+          if (args[0] === "api") throw new Error("gh: API rate limit exceeded (HTTP 403)");
+          return {
+            stdout: JSON.stringify({
+              number: 42,
+              title: "Agent association",
+              url: "https://github.com/acme/app/pull/42",
+              baseRefName: "main",
+              headRefName: "feature",
+              state: "OPEN",
+            }),
+            stderr: "",
+            code: 0,
+            signal: null,
+            timedOut: false,
+          };
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => runProcessSpy.mockRestore()));
+      const { manager } = yield* makeManager({ github: gh });
+      yield* gh.execute({ cwd: "/agent-association", args: ["api", "user"] }).pipe(Effect.flip);
+      const result = yield* manager.resolvePullRequest({
+        cwd: "/agent-association",
+        reference: "#42",
       });
-
-      const errorMessage = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit_push_pr",
-      }).pipe(
-        Effect.flip,
-        Effect.map((error) => error.message),
-      );
-      expect(errorMessage).toContain("gh auth login");
-    }),
+      expect(result.pullRequest.number).toBe(42);
+      const poll = yield* manager
+        .resolvePullRequest({ cwd: "/agent-association", reference: "#43" }, { background: true })
+        .pipe(Effect.result);
+      expect(poll._tag).toBe("Failure");
+      expect(runProcessSpy).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(GitHubCliLive)),
   );
 
   it.effect("resolves pull requests from #number references", () =>
@@ -1910,7 +2171,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commentsTruncated).toBe(true);
       expect(result.commentsError).toBeNull();
       expect(ghCalls).toContain(
-        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
       );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
       expect(ghCalls).toContain(
@@ -2128,59 +2389,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("preserves fork upstream tracking when preparing a local PR thread", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      const originDir = yield* createBareRemote();
-      const forkDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-      yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-local-fork"]);
-      fs.writeFileSync(path.join(repoDir, "local-fork.txt"), "local fork\n");
-      yield* runGit(repoDir, ["add", "local-fork.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Local fork PR branch"]);
-      yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-local-fork"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
-      yield* runGit(repoDir, ["branch", "-D", "feature/pr-local-fork"]);
-
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          pullRequest: {
-            number: 82,
-            title: "Local Fork PR",
-            url: "https://github.com/example-org/sample-repo/pull/82",
-            baseRefName: "main",
-            headRefName: "feature/pr-local-fork",
-            state: "open",
-            isCrossRepository: true,
-            headRepositoryNameWithOwner: "octocat/sample-repo",
-            headRepositoryOwnerLogin: "octocat",
-          },
-          repositoryCloneUrls: {
-            "octocat/sample-repo": {
-              url: forkDir,
-              sshUrl: forkDir,
-            },
-          },
-        },
-      });
-
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "82",
-        mode: "local",
-      });
-
-      expect(result.worktreePath).toBeNull();
-      expect(result.branch).toBe("feature/pr-local-fork");
-      expect(
-        (yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
-      ).toBe("fork-seed/feature/pr-local-fork");
-    }),
-  );
-
   it.effect("derives fork repository identity from PR URL when GitHub omits nameWithOwner", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2238,43 +2446,52 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("reuses an existing dedicated worktree for the PR head branch", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
-      fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
-      yield* runGit(repoDir, ["add", "existing.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
-      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+  for (const mode of ["local", "worktree"] as const) {
+    it.effect(`reuses an existing dedicated PR worktree in ${mode} mode`, () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
+        yield* runGit(repoDir, ["add", "existing.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+        yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(worktreePath, "existing.txt"), "unsent changes\n");
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
 
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          pullRequest: {
-            number: 78,
-            title: "Existing worktree PR",
-            url: "https://github.com/example-org/sample-repo/pull/78",
-            baseRefName: "main",
-            headRefName: "feature/pr-existing-worktree",
-            state: "open",
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            pullRequest: {
+              number: 78,
+              title: "Existing worktree PR",
+              url: "https://github.com/example-org/sample-repo/pull/78",
+              baseRefName: "main",
+              headRefName: "feature/pr-existing-worktree",
+              state: "open",
+            },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "78",
-        mode: "worktree",
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "78",
+          mode,
+        });
 
-      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
-        fs.realpathSync.native(worktreePath),
-      );
-      expect(result.branch).toBe("feature/pr-existing-worktree");
-    }),
-  );
+        expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+          fs.realpathSync.native(worktreePath),
+        );
+        expect(result.branch).toBe("feature/pr-existing-worktree");
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainHead);
+        expect(fs.readFileSync(path.join(worktreePath, "existing.txt"), "utf8")).toBe(
+          "unsent changes\n",
+        );
+      }),
+    );
+  }
 
   it.effect(
     "does not block fork PR worktree prep when the fork head branch collides with root main",
@@ -2452,6 +2669,84 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("does not reuse a different fork's worktree when preparing a local PR thread", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/shared-name"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "other-fork",
+        "https://github.com/other/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "branch.feature/shared-name.remote", "other-fork"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "octocat",
+        "https://github.com/octocat/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/octocat/feature/shared-name", "HEAD"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/shared-name.merge",
+        "refs/heads/feature/shared-name",
+      ]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const worktreePath = path.join(repoDir, "collision-worktree");
+      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/shared-name"]);
+      fs.writeFileSync(path.join(worktreePath, "README.md"), "unsent other-fork work\n");
+      const worktreeHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Different fork PR",
+            url: "https://github.com/example-org/sample-repo/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/shared-name",
+            state: "open",
+            isCrossRepository: true,
+            headRepositoryNameWithOwner: "octocat/sample-repo",
+            headRepositoryOwnerLogin: "octocat",
+          },
+          repositoryCloneUrls: {
+            "octocat/sample-repo": {
+              url: "https://github.com/octocat/sample-repo.git",
+              sshUrl: "git@github.com:octocat/sample-repo.git",
+            },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "84",
+        mode: "local",
+      }).pipe(Effect.exit);
+
+      expect(
+        (yield* runGit(worktreePath, [
+          "config",
+          "--get",
+          "branch.feature/shared-name.remote",
+        ])).stdout.trim(),
+      ).toBe("other-fork");
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(String(Exit.isFailure(result) ? result.cause : "")).toContain(
+        "different GitHub repository",
+      );
+      expect(ghCalls.some((call) => call.startsWith("pr checkout"))).toBe(false);
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(worktreeHead);
+      expect(fs.readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe(
+        "unsent other-fork work\n",
+      );
+    }),
+  );
+
   it.effect("rejects worktree prep when the PR head branch is checked out in the main repo", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2571,6 +2866,63 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       }),
   );
 
+  it.effect(
+    "finishes a real push after its observer disconnects without repeating the commit",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-reconnect-");
+        yield* initRepo(repoDir);
+        const remote = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remote]);
+        fs.writeFileSync(path.join(repoDir, "reconnect.txt"), "survives disconnect\n");
+        fs.writeFileSync(
+          path.join(repoDir, ".git", "hooks", "pre-push"),
+          "#!/bin/sh\ntouch .git/push-started\nwhile [ ! -f .git/release-push ]; do sleep 0.05; done\n",
+          { mode: 0o755 },
+        );
+        const { manager } = yield* makeManager();
+        let runs = 0;
+        const observe = yield* makeGitActionRunner((input, publish) => {
+          runs++;
+          return manager
+            .runStackedAction(input, {
+              actionId: input.actionId,
+              progressReporter: { publish },
+            })
+            .pipe(Effect.mapError((error) => new WsRpcError({ message: error.message })));
+        });
+        const input = {
+          actionId: "one-commit-one-push",
+          recoverable: true,
+          cwd: repoDir,
+          action: "commit_push" as const,
+          commitMessage: "Survive reconnect",
+        };
+        const first = yield* observe(input).pipe(Stream.runDrain, Effect.forkChild);
+        yield* Effect.promise(async () => {
+          const deadline = Date.now() + 5000;
+          while (!fs.existsSync(path.join(repoDir, ".git", "push-started"))) {
+            if (Date.now() > deadline) throw new Error("Push hook did not start");
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        });
+        yield* Fiber.interrupt(first);
+        fs.writeFileSync(path.join(repoDir, ".git", "release-push"), "ready");
+        const events = yield* observe({ ...input, resume: true }).pipe(Stream.runCollect);
+        expect(events.at(-1)).toMatchObject({
+          kind: "action_finished",
+          result: { commit: { status: "created" }, push: { status: "pushed" } },
+        });
+        const replay = yield* observe({ ...input, resume: true }).pipe(Stream.runCollect);
+        expect(replay).toEqual([events.at(-1)]);
+        expect(runs).toBe(1);
+        expect((yield* runGit(remote, ["rev-parse", "refs/heads/main"])).stdout).toBe(
+          (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout,
+        );
+        expect((yield* runGit(repoDir, ["rev-list", "--count", "HEAD"])).stdout.trim()).toBe("2");
+      }),
+  );
+
   it.effect("emits ordered progress events for commit hooks", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2646,6 +2998,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       const { manager } = yield* makeManager();
+      const issueReport = vi
+        .spyOn(betaOperationalIssue, "reportBetaOperationalIssue")
+        .mockImplementation(() => {});
+      yield* Effect.addFinalizer(() => Effect.sync(() => issueReport.mockRestore()));
       const events: GitActionProgressEvent[] = [];
 
       const errorMessage = yield* runStackedAction(
@@ -2669,6 +3025,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("hook: fail");
+      expect(issueReport).toHaveBeenCalledExactlyOnceWith({
+        code: "git.commit.failed",
+        reason: "unknown",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(issueReport.mock.calls)).not.toContain("hook: fail");
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

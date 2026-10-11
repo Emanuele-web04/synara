@@ -15,8 +15,9 @@ const RUNNING_INDICATOR_OFFSETS_MS = [0, 160, 320, 480] as const;
 
 export default function TerminalActivityIndicator({
   className,
-  state = "running",
+  state: stateProp,
 }: TerminalActivityIndicatorProps) {
+  const state = stateProp ?? "running";
   if (state === "attention" || state === "review") {
     return (
       <span

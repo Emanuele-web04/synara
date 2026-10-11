@@ -2,12 +2,13 @@ import { ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  collectParentDirectoryPaths,
+  normalizeSingleSearchFromPane,
   resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
-  resolveSplitPaneMaximizeDecision,
-  resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
+  stripEditorViewSearchParams,
 } from "./-chatThreadRoute.logic";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
@@ -15,17 +16,6 @@ const SIDECHAT_THREAD_ID = ThreadId.makeUnsafe("thread-sidechat");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-2");
 const TURN_ID = TurnId.makeUnsafe("turn-1");
 const OTHER_TURN_ID = TurnId.makeUnsafe("turn-2");
-
-describe("resolveThreadPickerTitle", () => {
-  it("falls back to a stable untitled label", () => {
-    expect(resolveThreadPickerTitle(null)).toBe("New chat");
-    expect(resolveThreadPickerTitle("")).toBe("New chat");
-  });
-
-  it("preserves non-empty thread titles", () => {
-    expect(resolveThreadPickerTitle("Bug bash")).toBe("Bug bash");
-  });
-});
 
 describe("resolveFilePreviewWorkspaceRoot", () => {
   it("uses the project cwd for local threads", () => {
@@ -36,6 +26,17 @@ describe("resolveFilePreviewWorkspaceRoot", () => {
         threadWorktreePath: null,
       }),
     ).toBe("/repo/project");
+  });
+
+  it("uses a Studio thread working directory ahead of its container project", () => {
+    expect(
+      resolveFilePreviewWorkspaceRoot({
+        projectCwd: "/synara/studio",
+        threadEnvMode: "local",
+        threadWorktreePath: null,
+        threadWorkingDirectory: "/repo/external",
+      }),
+    ).toBe("/repo/external");
   });
 
   it("uses the materialized worktree for worktree-backed threads", () => {
@@ -56,6 +57,58 @@ describe("resolveFilePreviewWorkspaceRoot", () => {
         threadWorktreePath: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("single chat route helpers", () => {
+  it("normalizes split pane browser and diff state for single-chat navigation", () => {
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: "browser",
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/ignored.tsx",
+      }),
+    ).toEqual({ panel: "browser" });
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: "diff",
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/chat.tsx",
+      }),
+    ).toEqual({
+      panel: "diff",
+      diff: "1",
+      diffTurnId: TURN_ID,
+      diffFilePath: "src/chat.tsx",
+    });
+    expect(
+      normalizeSingleSearchFromPane({
+        panel: null,
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/chat.tsx",
+      }),
+    ).toEqual({});
+  });
+
+  it("strips only editor-owned search fields", () => {
+    expect(
+      stripEditorViewSearchParams({
+        view: "editor",
+        editorFilePath: "src/chat.tsx",
+        splitViewId: "split-1",
+        q: "keep",
+      }),
+    ).toEqual({ splitViewId: "split-1", q: "keep" });
+  });
+
+  it("collects workspace-relative parent directories from shallow to deep", () => {
+    expect(collectParentDirectoryPaths("src/components/chat/View.tsx")).toEqual([
+      "src",
+      "src/components",
+      "src/components/chat",
+    ]);
+    expect(collectParentDirectoryPaths("View.tsx")).toEqual([]);
+    expect(collectParentDirectoryPaths("/src//chat/View.tsx")).toEqual(["src", "src/chat"]);
   });
 });
 
@@ -199,40 +252,6 @@ describe("resolveToggledChatPanelPatch", () => {
       diffTurnId: OTHER_TURN_ID,
       diffFilePath: "src/browser.tsx",
     });
-  });
-});
-
-describe("resolveSplitPaneMaximizeDecision", () => {
-  it("targets the focused thread and preserves its panel state for single-chat navigation", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: THREAD_ID,
-        focusedPanelState: {
-          panel: "diff",
-          diffTurnId: TURN_ID,
-          diffFilePath: "src/chat.tsx",
-        },
-      }),
-    ).toEqual({
-      splitViewIdToRemove: "split-1",
-      threadId: THREAD_ID,
-      panelState: {
-        panel: "diff",
-        diffTurnId: TURN_ID,
-        diffFilePath: "src/chat.tsx",
-      },
-    });
-  });
-
-  it("does not invent a target when the focused pane is empty", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: null,
-        focusedPanelState: null,
-      }),
-    ).toBeNull();
   });
 });
 

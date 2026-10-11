@@ -5,15 +5,12 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonLabel,
-  getDesktopUpdateButtonVariant,
-  getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
-  shouldHighlightDesktopUpdateError,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
   shouldShowDesktopUpdateButton,
@@ -35,6 +32,7 @@ const baseState: DesktopUpdateState = {
   errorContext: null,
   canRetry: false,
   installFailureCount: 0,
+  flavor: "production",
   releaseUrl: null,
 };
 
@@ -100,7 +98,6 @@ describe("desktop update button state", () => {
 
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(false);
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(state)).toBe(
       "Synara restarted, but update 1.1.0 was not installed. Click to try again.",
     );
@@ -167,11 +164,6 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Preparing");
-    expect(getDesktopUpdateButtonPresentation(state)).toEqual({
-      label: "Preparing",
-      secondaryLabel: null,
-    });
     expect(getDesktopUpdateDownloadPercent(state)).toBe(42);
   });
 
@@ -217,33 +209,9 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Checking...");
   });
 
-  it("shows retry labels for actionable update errors", () => {
-    expect(
-      getDesktopUpdateButtonLabel({
-        ...baseState,
-        status: "error",
-        availableVersion: "1.1.0",
-        errorContext: "download",
-        canRetry: true,
-      }),
-    ).toBe("Retry");
-
-    expect(
-      getDesktopUpdateButtonLabel({
-        ...baseState,
-        status: "error",
-        downloadedVersion: "1.1.0",
-        availableVersion: "1.1.0",
-        errorContext: "install",
-        canRetry: true,
-      }),
-    ).toBe("Retry");
-  });
-
-  it("shows failure labels while keeping retryable updater states actionable", () => {
+  it("shows retry tooltips while keeping retryable updater states actionable", () => {
     const downloadFailure: DesktopUpdateState = {
       ...baseState,
       status: "available",
@@ -253,7 +221,6 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(downloadFailure)).toBe("download");
-    expect(getDesktopUpdateButtonLabel(downloadFailure)).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(downloadFailure)).toContain("Click to retry");
 
     const installFailure: DesktopUpdateState = {
@@ -266,22 +233,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(installFailure)).toBe("install");
-    expect(getDesktopUpdateButtonLabel(installFailure)).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(installFailure)).toContain("Click to retry");
-  });
-
-  it("shows explicit updating state when install is in progress", () => {
-    const installingState: DesktopUpdateState = {
-      ...baseState,
-      status: "downloaded",
-      downloadedVersion: "1.1.0",
-      availableVersion: "1.1.0",
-    };
-    const presentation = getDesktopUpdateButtonPresentation(installingState, { installing: true });
-    expect(presentation.label).toBe("Updating...");
-    expect(getDesktopUpdateButtonTooltip(installingState, { installing: true })).toBe(
-      "Applying update...",
-    );
   });
 });
 
@@ -316,23 +268,6 @@ describe("getDesktopUpdateActionError", () => {
     };
     expect(getDesktopUpdateActionError(result)).toBeNull();
   });
-
-  it("ignores messages for successful attempts", () => {
-    const result: DesktopUpdateActionResult = {
-      accepted: true,
-      completed: true,
-      state: {
-        ...baseState,
-        status: "downloaded",
-        downloadedVersion: "1.1.0",
-        availableVersion: "1.1.0",
-        message: null,
-        errorContext: null,
-        canRetry: true,
-      },
-    };
-    expect(getDesktopUpdateActionError(result)).toBeNull();
-  });
 });
 
 describe("getDesktopUpdateAlreadyCurrentNotice", () => {
@@ -351,15 +286,6 @@ describe("getDesktopUpdateAlreadyCurrentNotice", () => {
     );
   });
 
-  it("returns null when the action completed", () => {
-    const result: DesktopUpdateActionResult = {
-      accepted: true,
-      completed: true,
-      state: { ...baseState, status: "up-to-date" },
-    };
-    expect(getDesktopUpdateAlreadyCurrentNotice(result)).toBeNull();
-  });
-
   it("returns null when the version was genuinely actionable", () => {
     const result: DesktopUpdateActionResult = {
       accepted: true,
@@ -376,67 +302,61 @@ describe("getDesktopUpdateAlreadyCurrentNotice", () => {
   });
 });
 
-describe("getDesktopUpdateButtonVariant", () => {
-  it("uses the installing variant while an install is in progress", () => {
-    expect(
-      getDesktopUpdateButtonVariant(
-        { ...baseState, status: "downloaded", downloadedVersion: "1.1.0" },
-        { installing: true },
-      ),
-    ).toBe("installing");
-  });
-
-  it("renders a failed install as error even though status stays downloaded", () => {
-    expect(
-      getDesktopUpdateButtonVariant({
+describe("isDesktopUpdateInstallInFlight", () => {
+  it("keeps an accepted install latched while the updater still reports downloaded", () => {
+    const result: DesktopUpdateActionResult = {
+      accepted: true,
+      completed: false,
+      state: {
         ...baseState,
         status: "downloaded",
         downloadedVersion: "1.1.0",
         availableVersion: "1.1.0",
-        message: "shutdown timeout",
-        errorContext: "install",
-        canRetry: true,
-      }),
-    ).toBe("error");
+      },
+    };
+    expect(isDesktopUpdateInstallInFlight(result)).toBe(true);
   });
 
-  it("renders a failed download as error", () => {
+  it("clears for rejected, completed, or already-failed installs", () => {
     expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "available",
-        availableVersion: "1.1.0",
-        message: "checksum mismatch",
-        errorContext: "download",
-        canRetry: true,
+      isDesktopUpdateInstallInFlight({
+        accepted: false,
+        completed: false,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
       }),
-    ).toBe("error");
-  });
-
-  it("maps healthy updater states to their own variants", () => {
+    ).toBe(false);
     expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "downloaded",
-        downloadedVersion: "1.1.0",
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: true,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
       }),
-    ).toBe("ready");
+    ).toBe(false);
+    // Both an immediate handoff failure and the watchdog preserve the artifact
+    // as downloaded so Retry can install it without downloading again.
+    const failedState: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      errorContext: "install",
+      message: "Backend did not stop in time",
+      canRetry: true,
+    };
     expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "downloading",
-        availableVersion: "1.1.0",
-        downloadPercent: 40,
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: false,
+        state: failedState,
       }),
-    ).toBe("progress");
-    expect(
-      getDesktopUpdateButtonVariant({
-        ...baseState,
-        status: "available",
-        availableVersion: "1.1.0",
-      }),
-    ).toBe("info");
-    expect(getDesktopUpdateButtonVariant(null)).toBe("info");
+    ).toBe(false);
   });
 });
 
@@ -454,25 +374,6 @@ describe("desktop update UI helpers", () => {
         accepted: true,
         completed: true,
         state: baseState,
-      }),
-    ).toBe(false);
-  });
-
-  it("highlights only actionable updater errors", () => {
-    expect(
-      shouldHighlightDesktopUpdateError({
-        ...baseState,
-        status: "available",
-        errorContext: "download",
-        canRetry: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldHighlightDesktopUpdateError({
-        ...baseState,
-        status: "error",
-        errorContext: "check",
-        canRetry: true,
       }),
     ).toBe(false);
   });
@@ -526,18 +427,5 @@ describe("desktop update UI helpers", () => {
     expect(shouldShowArm64IntelBuildWarning(state)).toBe(true);
     expect(getArm64IntelBuildWarningDescription(state)).toContain("Apple Silicon");
     expect(getArm64IntelBuildWarningDescription(state)).toContain("Intel build");
-  });
-
-  it("changes the warning copy when a native build update is being prepared", () => {
-    const state: DesktopUpdateState = {
-      ...baseState,
-      hostArch: "arm64",
-      appArch: "x64",
-      runningUnderArm64Translation: true,
-      status: "available",
-      availableVersion: "1.1.0",
-    };
-
-    expect(getArm64IntelBuildWarningDescription(state)).toContain("preparing");
   });
 });

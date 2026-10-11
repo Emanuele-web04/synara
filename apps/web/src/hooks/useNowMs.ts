@@ -4,6 +4,7 @@
 // Exports: useNowMs
 
 import { useEffect, useState } from "react";
+import { startVisibleInterval } from "../lib/visibleInterval";
 
 export function useNowMs(enabled: boolean, intervalMs = 1_000): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -12,13 +13,9 @@ export function useNowMs(enabled: boolean, intervalMs = 1_000): number {
     if (!enabled) {
       return;
     }
-    setNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
+    return startVisibleInterval(() => {
       setNowMs(Date.now());
     }, intervalMs);
-    return () => {
-      window.clearInterval(intervalId);
-    };
   }, [enabled, intervalMs]);
 
   return nowMs;

@@ -51,6 +51,8 @@ function isRenderCancellation(error: unknown): boolean {
   );
 }
 
+const EMPTY_LINKS: PdfLink[] = [];
+
 export function usePdfPageRender(input: {
   document: PDFDocumentProxy;
   pageNumber: number;
@@ -65,15 +67,26 @@ export function usePdfPageRender(input: {
     readonly pageNumber: number;
     readonly page: PDFPageProxy;
   } | null>(null);
-  const [renderedSize, setRenderedSize] = useState<PdfPageIntrinsicSize | null>(null);
-  const [links, setLinks] = useState<PdfLink[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // Render results keyed to the (document, page) they were produced for: a
+  // page/document switch derives straight back to the blank state in the same
+  // render, with no state-resetting effect.
+  const [pageRender, setPageRender] = useState<{
+    doc: PDFDocumentProxy;
+    page: number;
+    renderedSize: PdfPageIntrinsicSize | null;
+    links: PdfLink[];
+    error: string | null;
+  } | null>(null);
+  const isCurrentRender =
+    pageRender !== null && pageRender.doc === pdfDocument && pageRender.page === pageNumber;
+  const renderedSize = isCurrentRender ? pageRender.renderedSize : null;
+  // Links are cleared while the page is far from the viewport (its DOM is
+  // released below); deriving keeps that without a deactivation setState.
+  const links = isCurrentRender && isActive ? pageRender.links : EMPTY_LINKS;
+  const error = isCurrentRender ? pageRender.error : null;
 
   useEffect(() => {
     pageProxyRef.current = null;
-    setRenderedSize(null);
-    setLinks([]);
-    setError(null);
   }, [pageNumber, pdfDocument]);
 
   // Release the page's memory footprint while it is far from the viewport:
@@ -92,7 +105,6 @@ export function usePdfPageRender(input: {
       canvas.height = 0;
     }
     textLayerRef.current?.replaceChildren();
-    setLinks((current) => (current.length > 0 ? [] : current));
   }, [isActive, canvasRef, textLayerRef]);
 
   useEffect(() => {
@@ -102,6 +114,23 @@ export function usePdfPageRender(input: {
     let cancelled = false;
     let renderTask: ReturnType<PDFPageProxy["render"]> | null = null;
     let textLayer: RenderedTextLayer | null = null;
+    const patchRender = (patch: {
+      renderedSize?: PdfPageIntrinsicSize | null;
+      links?: PdfLink[];
+      error?: string | null;
+    }) =>
+      setPageRender((current) =>
+        current !== null && current.doc === pdfDocument && current.page === pageNumber
+          ? { ...current, ...patch }
+          : {
+              doc: pdfDocument,
+              page: pageNumber,
+              renderedSize: null,
+              links: [],
+              error: null,
+              ...patch,
+            },
+      );
 
     (async () => {
       try {
@@ -115,7 +144,9 @@ export function usePdfPageRender(input: {
         }
         pageProxyRef.current = { document: pdfDocument, pageNumber, page };
         const viewport = page.getViewport({ scale });
-        setRenderedSize({ width: viewport.width / scale, height: viewport.height / scale });
+        patchRender({
+          renderedSize: { width: viewport.width / scale, height: viewport.height / scale },
+        });
 
         const canvas = canvasRef.current;
         if (!canvas) {
@@ -141,7 +172,7 @@ export function usePdfPageRender(input: {
         if (cancelled) {
           return;
         }
-        setError(null);
+        patchRender({ error: null });
 
         const textContainer = textLayerRef.current;
         if (textContainer) {
@@ -158,7 +189,7 @@ export function usePdfPageRender(input: {
 
         const pageLinks = await extractPageLinks({ doc: pdfDocument, page, viewport });
         if (!cancelled) {
-          setLinks(pageLinks);
+          patchRender({ links: pageLinks });
         }
       } catch (caught) {
         // A cancelled render rejects; that is expected on scale change / unmount.
@@ -169,8 +200,7 @@ export function usePdfPageRender(input: {
         // must not be a silent white sheet — log it and surface a marker.
         const message = caught instanceof Error ? caught.message : "Failed to render page";
         console.error(`[pdf] failed to render page ${pageNumber}:`, caught);
-        setLinks([]);
-        setError(message);
+        patchRender({ links: [], error: message });
       }
     })();
 

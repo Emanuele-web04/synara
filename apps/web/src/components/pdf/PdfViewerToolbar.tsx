@@ -5,7 +5,7 @@
 // Layer: Web PDF viewer chrome
 // Exports: PdfViewerToolbar
 
-import { memo, useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   ChevronDownIcon,
@@ -13,6 +13,7 @@ import {
   ChevronRightIcon,
   MinusIcon,
   PlusIcon,
+  RefreshCwIcon,
 } from "~/lib/icons";
 import { formatZoomPercent, PDF_ZOOM_PRESETS, type PdfZoomMode } from "~/lib/pdf/pdfZoom";
 import { cn } from "~/lib/utils";
@@ -39,6 +40,7 @@ interface PdfViewerToolbarProps {
   onFitWidth: () => void;
   onFitPage: () => void;
   openInTarget: string | null;
+  onReload?: (() => void) | undefined;
 }
 
 function zoomSelectionValue(mode: PdfZoomMode, scale: number): string {
@@ -51,7 +53,7 @@ function zoomSelectionValue(mode: PdfZoomMode, scale: number): string {
   return String(Math.round(scale * 100));
 }
 
-export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerToolbarProps) {
+export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolbarProps) {
   const selectionValue = zoomSelectionValue(props.zoomMode, props.scale);
 
   return (
@@ -64,7 +66,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="truncate text-[12px] font-medium text-foreground" title={props.fileName}>
+        <span className="truncate text-ui font-medium text-foreground" title={props.fileName}>
           {props.fileName}
         </span>
         <Badge variant="outline" size="sm" className="text-muted-foreground/80">
@@ -82,6 +84,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
           <ChevronLeftIcon aria-hidden="true" className="size-4" />
         </ChatHeaderIconButton>
         <PdfPageIndicator
+          key={props.currentPage}
           currentPage={props.currentPage}
           numPages={props.numPages}
           onJumpToPage={props.onJumpToPage}
@@ -145,6 +148,11 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
           </ChatHeaderIconButton>
         </div>
 
+        {props.onReload ? (
+          <ChatHeaderIconButton label="Reload file from disk" tone="plain" onClick={props.onReload}>
+            <RefreshCwIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
+        ) : null}
         <OpenInPicker
           openInTarget={props.openInTarget}
           labelMode="always"
@@ -153,7 +161,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
       </div>
     </div>
   );
-});
+};
 
 function PdfPageIndicator({
   currentPage,
@@ -164,27 +172,30 @@ function PdfPageIndicator({
   numPages: number;
   onJumpToPage: (pageNumber: number) => void;
 }) {
+  // The caller keys this editor by currentPage, so every navigation gets a new
+  // draft even when the page sequence returns A -> B -> A.
   const [draft, setDraft] = useState(String(currentPage));
-  useEffect(() => {
-    setDraft(String(currentPage));
-  }, [currentPage]);
 
   const commit = () => {
     const parsed = Number.parseInt(draft, 10);
     if (Number.isFinite(parsed)) {
-      onJumpToPage(Math.min(Math.max(parsed, 1), Math.max(numPages, 1)));
+      const clamped = Math.min(Math.max(parsed, 1), Math.max(numPages, 1));
+      onJumpToPage(clamped);
+      // Canonicalize in place for jumps that clamp to the current page: the
+      // keyed remount only resets the draft when the page actually changes.
+      setDraft(String(clamped));
     } else {
       setDraft(String(currentPage));
     }
   };
 
   return (
-    <span className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+    <span className="flex items-center gap-1 text-ui-sm tabular-nums text-muted-foreground">
       <input
         value={draft}
         inputMode="numeric"
         aria-label="Current page"
-        className="h-6 w-8 rounded-sm border border-border/60 bg-transparent text-center text-[11px] text-foreground tabular-nums outline-none focus-visible:border-[color:var(--color-border-focus)]"
+        className="h-6 w-8 rounded-sm border border-border/60 bg-transparent text-center text-ui-sm text-foreground tabular-nums outline-none focus-visible:border-[color:var(--color-border-focus)]"
         onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ""))}
         onBlur={commit}
         onKeyDown={(event) => {

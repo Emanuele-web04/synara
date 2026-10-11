@@ -1,16 +1,15 @@
 import {
+  WS_CLIENT_REQUIRED_CAPABILITIES,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
+  WS_PROJECT_FILE_WATCH_CAPABILITY,
+  WS_SERVER_CAPABILITIES,
 } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import {
-  makeCurrentWsFeatureCompatibilitySearchParams,
-  negotiateWsCompatibility,
-  validateWsFeatureCompatibility,
-} from "./wsCompatibility";
+import { negotiateWsCompatibility } from "./wsCompatibility";
 
 describe("WebSocket compatibility bootstrap", () => {
   it("negotiates the stable epoch/range and returns process/build capabilities", async () => {
@@ -20,7 +19,7 @@ describe("WebSocket compatibility bootstrap", () => {
         minRevision: WS_PROTOCOL_MIN_REVISION,
         maxRevision: WS_PROTOCOL_MAX_REVISION,
         clientBuild: "test-client",
-        requiredCapabilities: ["orchestration.cursor-safe-streams"],
+        requiredCapabilities: [...WS_SERVER_CAPABILITIES],
       }),
     );
 
@@ -31,14 +30,19 @@ describe("WebSocket compatibility bootstrap", () => {
     expect(result.serverBuild.length).toBeGreaterThan(0);
     expect(result.serverInstanceId.length).toBeGreaterThan(0);
     expect(result.capabilities).toContain("orchestration.cursor-safe-streams");
+    expect(result.capabilities).toContain("orchestration.thread-detail-snapshot");
+    expect(result.capabilities).toContain("projects.github-provisioning");
+    expect(result.capabilities).toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
+    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain("projects.github-provisioning");
+    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
   });
 
-  it("returns terminal update guidance and rejects feature calls without negotiated query data", async () => {
+  it("rejects revision-two clients after the pull request list moved to githubInbox.list", async () => {
     const error = await Effect.runPromise(
       negotiateWsCompatibility({
-        protocolEpoch: WS_PROTOCOL_EPOCH - 1,
-        minRevision: 0,
-        maxRevision: 0,
+        protocolEpoch: WS_PROTOCOL_EPOCH,
+        minRevision: 2,
+        maxRevision: 2,
         clientBuild: "stale-client",
         requiredCapabilities: [],
       }).pipe(Effect.flip),
@@ -46,33 +50,24 @@ describe("WebSocket compatibility bootstrap", () => {
 
     expect(error).toMatchObject({
       code: "WS_PROTOCOL_INCOMPATIBLE",
-      retryable: false,
       action: "update-client",
     });
-    expect(validateWsFeatureCompatibility(new URLSearchParams())).toMatchObject({
-      code: "WS_NEGOTIATION_REQUIRED",
-      retryable: false,
-    });
-    expect(
-      validateWsFeatureCompatibility(makeCurrentWsFeatureCompatibilitySearchParams("test-client")),
-    ).toBeNull();
   });
 
-  it("rejects a missing required capability with terminal server-update guidance", async () => {
+  it("rejects revision-one clients after the commit-author wire shape change", async () => {
     const error = await Effect.runPromise(
       negotiateWsCompatibility({
         protocolEpoch: WS_PROTOCOL_EPOCH,
-        minRevision: WS_PROTOCOL_MIN_REVISION,
-        maxRevision: WS_PROTOCOL_MAX_REVISION,
-        clientBuild: "future-client",
-        requiredCapabilities: ["rpc.future-capability"],
+        minRevision: 1,
+        maxRevision: 1,
+        clientBuild: "stale-client",
+        requiredCapabilities: [],
       }).pipe(Effect.flip),
     );
 
     expect(error).toMatchObject({
-      code: "WS_CAPABILITIES_INCOMPATIBLE",
-      retryable: false,
-      action: "update-server",
+      code: "WS_PROTOCOL_INCOMPATIBLE",
+      action: "update-client",
     });
   });
 });

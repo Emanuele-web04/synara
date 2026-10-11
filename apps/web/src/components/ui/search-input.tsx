@@ -10,9 +10,12 @@ import { cn } from "~/lib/utils";
 import { Input, type InputProps } from "./input";
 
 export const SearchInput = forwardRef<HTMLInputElement, InputProps>(function SearchInput(
-  { className, type = "text", size = "sm", variant = "soft", ...props },
+  { className, type: typeProp, size: sizeProp, variant: variantProp, shape, ...props },
   ref,
 ) {
+  const type = typeProp ?? "text";
+  const size = sizeProp ?? "sm";
+  const variant = variantProp ?? "soft";
   return (
     <div className="relative w-full">
       <Input
@@ -20,11 +23,18 @@ export const SearchInput = forwardRef<HTMLInputElement, InputProps>(function Sea
         type={type}
         size={size}
         variant={variant}
-        className={cn("[&>[data-slot=input]]:pl-8", className)}
+        {...(shape ? { shape } : {})}
+        className={cn(
+          shape === "capsule" ? "[&>[data-slot=input]]:pl-9" : "[&>[data-slot=input]]:pl-8",
+          className,
+        )}
         {...props}
       />
       <SearchIcon
-        className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70"
+        className={cn(
+          "pointer-events-none absolute top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70",
+          shape === "capsule" ? "left-3.5" : "left-2.5",
+        )}
         aria-hidden="true"
       />
     </div>

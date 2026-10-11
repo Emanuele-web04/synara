@@ -27,7 +27,12 @@ const CROSS_PROVIDER_SKILL_DIR_NAMES = [
 ] as const;
 
 function pathSegments(path: string): Set<string> {
-  return new Set(nodePath.normalize(path).split(/[\\/]+/));
+  return new Set(
+    nodePath
+      .normalize(path)
+      .split(/[\\/]+/)
+      .map((segment) => segment.toLowerCase()),
+  );
 }
 
 export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: string): boolean {
@@ -36,11 +41,10 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
     case "antigravity":
       return true;
     case "codex":
-      // Codex injects structured skill items only from roots it knows: its own
-      // folders plus `~/.synara/skills`, which Synara registers at session start
-      // via skills/extraRoots/set. Skills resolved from other providers' folders
-      // must be inlined.
-      return [".claude", ".cursor", ".agents"].some((dir) => segments.has(dir));
+      // Codex loads .codex and .agents skills natively, plus ~/.synara/skills
+      // registered via skills/extraRoots/set. Only foreign provider roots
+      // need inline instructions alongside their structured skill reference.
+      return [".claude", ".cursor"].some((dir) => segments.has(dir));
     case "cursor":
       // cursor-agent natively scans .cursor/.agents/.claude/.codex skill roots;
       // only Synara-owned paths need inlining.
@@ -48,12 +52,20 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
     case "claudeAgent":
       // Claude Code only loads skills from .claude/skills folders.
       return !segments.has(".claude");
+    case "devin":
+      return !(
+        [".agents", ".claude", ".codeium", ".cognition", ".devin", ".windsurf"].some((dir) =>
+          segments.has(dir),
+        ) ||
+        ((segments.has(".config") || (segments.has("appdata") && segments.has("roaming"))) &&
+          (segments.has("devin") || segments.has("cognition")))
+      );
     case "pi":
       // Pi loads its own skill set; anything resolved from a cross-provider
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // Antigravity/Grok/Droid/Kilo/OpenCode have no native skill support.
+      // Antigravity/Grok/Droid/OpenCode have no native skill support.
       return true;
   }
 }

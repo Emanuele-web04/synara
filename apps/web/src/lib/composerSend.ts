@@ -10,7 +10,6 @@ import {
   type ModelSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ClaudeCodeEffort,
   type ProviderKind,
   type UploadChatAttachment,
@@ -20,24 +19,31 @@ import {
   ATTACHMENT_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
+import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 
-import type {
-  ComposerAssistantSelectionAttachment,
-  ComposerFileAttachment,
-  ComposerImageAttachment,
-  PersistedComposerImageAttachment,
-} from "../composerDraftStore";
+import {
+  cloneComposerImageAttachment,
+  type ComposerAssistantSelectionAttachment,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+  type PersistedComposerImageAttachment,
+} from "../composerDraftDomain";
 import { readComposerImageBlob } from "./composerImageBlobStore";
-import { normalizeComposerImageSource } from "./composerImageSource";
+import {
+  ComposerImagePreparationError,
+  prepareComposerImageFile,
+  prepareModelScreenImage,
+} from "./composerImagePreparation";
+import { appSnapUploadName, normalizeComposerImageSource } from "./composerImageSource";
 import { randomUUID } from "./utils";
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
 const ATTACHMENT_CANCEL_CONCURRENCY = 2;
 const ATTACHMENT_CANCEL_BODY_MAX_BYTES = 512;
 
-export const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024),
-)}MB`;
+export { cloneComposerImageAttachment };
+export { effectiveComposerAttachmentCount } from "./composerAttachmentCapacity";
+
 export const FILE_SIZE_LIMIT_LABEL = `${Math.round(
   PROVIDER_SEND_TURN_MAX_FILE_BYTES / (1024 * 1024),
 )}MB`;
@@ -50,6 +56,18 @@ export interface ComposerImageBuildResult {
 export interface ComposerFileBuildResult {
   files: ComposerFileAttachment[];
   error: string | null;
+}
+
+function composerImageAttachmentFromFile(file: File): ComposerImageAttachment {
+  return {
+    type: "image",
+    id: randomUUID(),
+    name: file.name || "image",
+    mimeType: file.type,
+    sizeBytes: file.size,
+    previewUrl: URL.createObjectURL(file),
+    file,
+  };
 }
 
 // Centralizes the shared file/count/size guard while each attachment type maps its own draft shape.
@@ -86,32 +104,38 @@ function collectComposerAttachmentFiles(input: {
   return { files, error };
 }
 
-// Converts File objects into the exact attachment draft shape used by the chat composer.
-export function buildComposerImageAttachmentsFromFiles(input: {
+/**
+ * Asynchronous image intake for every user-facing composer entry point. Count
+ * checks happen before decoding, and accepted files are optimized one at a time
+ * to avoid concurrent full-resolution canvas allocations.
+ */
+export async function prepareComposerImageAttachmentsFromFiles(input: {
   files: readonly File[];
   existingAttachmentCount: number;
-}): ComposerImageBuildResult {
-  const result = collectComposerAttachmentFiles({
-    files: input.files,
-    existingAttachmentCount: input.existingAttachmentCount,
-    maxBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-    sizeLimitLabel: IMAGE_SIZE_LIMIT_LABEL,
-    acceptsFile: (file) => file.type.startsWith("image/"),
-    unsupportedFileError: (file) =>
-      `Unsupported file type for '${file.name}'. Please attach image files only.`,
-  });
+}): Promise<ComposerImageBuildResult> {
+  const images: ComposerImageAttachment[] = [];
+  let error: string | null = null;
 
-  const images = result.files.map<ComposerImageAttachment>((file) => ({
-    type: "image",
-    id: randomUUID(),
-    name: file.name || "image",
-    mimeType: file.type,
-    sizeBytes: file.size,
-    previewUrl: URL.createObjectURL(file),
-    file,
-  }));
+  for (const file of input.files) {
+    if (!file.type.startsWith("image/")) {
+      error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
+      continue;
+    }
+    if (input.existingAttachmentCount + images.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`;
+      break;
+    }
+    try {
+      images.push(composerImageAttachmentFromFile(await prepareComposerImageFile(file)));
+    } catch (cause) {
+      error =
+        cause instanceof ComposerImagePreparationError
+          ? cause.message
+          : `Synara could not prepare '${file.name || "image"}'.`;
+    }
+  }
 
-  return { images, error: result.error };
+  return { images, error };
 }
 
 // Converts non-image File objects into in-memory file attachment drafts.
@@ -170,22 +194,6 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export function cloneComposerImageAttachment(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
-    return image;
-  }
-  try {
-    return {
-      ...image,
-      previewUrl: URL.createObjectURL(image.file),
-    };
-  } catch {
-    return image;
-  }
-}
-
 // Provider-specific prompt massaging. Claude prompt-injected efforts must be
 // applied before filtering skill/mention references and before dispatch.
 export function formatOutgoingComposerPrompt(params: {
@@ -196,6 +204,14 @@ export function formatOutgoingComposerPrompt(params: {
 }): string {
   const caps = getModelCapabilities(params.provider, params.model);
   if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
+    const computerInvocation = parseComputerInvocation(params.text);
+    if (computerInvocation) {
+      const prompt = applyClaudePromptEffortPrefix(
+        computerInvocation.prompt,
+        params.effort as ClaudeCodeEffort | null,
+      );
+      return `/computer-use ${prompt}`;
+    }
     return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
   }
   return params.text;
@@ -217,8 +233,13 @@ export function resolvePromptEffortFromModelSelection(
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
+    case "omp":
       return modelSelection.options?.thinkingLevel ?? null;
-    case "kilo":
+    case "devin":
+      return (
+        modelSelection.options?.reasoningEffort ??
+        (modelSelection.options?.fastMode === true ? "fast" : null)
+      );
     case "opencode":
       return null;
   }
@@ -292,18 +313,23 @@ export async function stageUploadComposerAttachments(input: {
   const managedAttachmentIds: string[] = [];
   try {
     for (const attachment of [...input.images, ...(input.files ?? [])]) {
+      const appSnapSource =
+        attachment.type === "image" ? normalizeComposerImageSource(attachment.source) : null;
+      const uploadFile = appSnapSource
+        ? await prepareModelScreenImage(attachment.file)
+        : attachment.file;
       const params = new URLSearchParams({
         threadId: input.threadId,
         type: attachment.type,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
+        name: appSnapSource ? appSnapUploadName(appSnapSource, uploadFile.name) : attachment.name,
+        mimeType: appSnapSource ? uploadFile.type : attachment.mimeType,
       });
       const response = await fetch(
         resolveWsHttpUrl(`${ATTACHMENT_UPLOAD_ROUTE_PATH}?${params.toString()}`),
         {
           method: "POST",
           credentials: "include",
-          body: attachment.file,
+          body: uploadFile,
         },
       );
       const payload = (await response.json().catch(() => null)) as
@@ -349,52 +375,6 @@ export async function stageUploadComposerAttachments(input: {
   };
 
   return { attachments, commit, cleanup, runWithDispatch };
-}
-
-// Compatibility wrapper for callers that have not yet adopted the explicit
-// commit/cleanup lifecycle. Sequential upload failure compensation still applies.
-export async function buildUploadComposerAttachments(input: {
-  threadId: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  files?: ReadonlyArray<ComposerFileAttachment>;
-  assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
-}): Promise<UploadChatAttachment[]> {
-  return (await stageUploadComposerAttachments(input)).attachments;
-}
-
-interface AttachmentIdCarrier {
-  id: string;
-}
-
-interface EffectiveComposerAttachmentCountDraft {
-  images?: ReadonlyArray<AttachmentIdCarrier> | undefined;
-  files?: ReadonlyArray<unknown> | undefined;
-  assistantSelections?: ReadonlyArray<unknown> | undefined;
-  persistedAttachments?: ReadonlyArray<AttachmentIdCarrier> | undefined;
-}
-
-/**
- * Attachment count a draft must be checked against for the per-turn attachment
- * limit (AppSnap capture, manual image attach, manual file attach). Counts live
- * images/files/assistantSelections plus any `persistedAttachments` rows not yet
- * represented in `images` — persisted rows are common right after a restart,
- * while blob hydration is still pending, and omitting them would let the limit
- * check be bypassed.
- */
-export function effectiveComposerAttachmentCount(
-  draft: EffectiveComposerAttachmentCountDraft | undefined,
-): number {
-  if (!draft) return 0;
-  const hydratedImageIds = new Set((draft.images ?? []).map((image) => image.id));
-  const pendingPersistedCount = (draft.persistedAttachments ?? []).filter(
-    (attachment) => !hydratedImageIds.has(attachment.id),
-  ).length;
-  return (
-    (draft.images?.length ?? 0) +
-    (draft.files?.length ?? 0) +
-    (draft.assistantSelections?.length ?? 0) +
-    pendingPersistedCount
-  );
 }
 
 /**

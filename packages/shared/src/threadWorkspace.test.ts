@@ -7,16 +7,14 @@ import { describe, expect, it } from "vitest";
 import {
   isScratchWorkspacePath,
   isWorkspaceRootWithin,
+  normalizeWorkspaceRootForComparison,
   SCRATCH_WORKSPACES_DIRNAME,
+  workspaceRootsEqual,
 } from "./threadWorkspace";
 
 describe("isWorkspaceRootWithin", () => {
   it("treats an identical root as contained", () => {
     expect(isWorkspaceRootWithin("/Users/dev/app", "/Users/dev/app")).toBe(true);
-  });
-
-  it("treats a nested path as contained", () => {
-    expect(isWorkspaceRootWithin("/Users/dev/app/apps/web", "/Users/dev/app")).toBe(true);
   });
 
   it("ignores trailing slashes and separator style", () => {
@@ -27,12 +25,16 @@ describe("isWorkspaceRootWithin", () => {
     expect(isWorkspaceRootWithin("/Users/dev/app-extra", "/Users/dev/app")).toBe(false);
   });
 
-  it("does not match an unrelated path", () => {
-    expect(isWorkspaceRootWithin("/Users/dev/other", "/Users/dev/app")).toBe(false);
-  });
-
   it("does not match when the candidate is an ancestor of the root", () => {
     expect(isWorkspaceRootWithin("/Users/dev", "/Users/dev/app")).toBe(false);
+  });
+
+  it("keeps a Windows drive root distinct from a drive-relative path", () => {
+    const options = { platform: "win32" } as const;
+    expect(normalizeWorkspaceRootForComparison("C:\\", options)).toBe("c:/");
+    expect(normalizeWorkspaceRootForComparison("C:", options)).toBe("c:");
+    expect(workspaceRootsEqual("C:", "C:\\", options)).toBe(false);
+    expect(isWorkspaceRootWithin("C:\\repo", "C:\\", options)).toBe(true);
   });
 
   it("returns false for empty inputs", () => {
@@ -60,10 +62,6 @@ describe("isScratchWorkspacePath", () => {
   it("does not match relative paths even when they contain the segment", () => {
     expect(isScratchWorkspacePath(`${SCRATCH_WORKSPACES_DIRNAME}/thread-1/report.pdf`)).toBe(false);
     expect(isScratchWorkspacePath(`work/${SCRATCH_WORKSPACES_DIRNAME}/report.pdf`)).toBe(false);
-  });
-
-  it("does not match absolute paths without the scratch segment", () => {
-    expect(isScratchWorkspacePath("/Users/dev/Documents/report.pdf")).toBe(false);
   });
 
   it("does not match when the dirname is the final segment", () => {

@@ -7,7 +7,7 @@ import { Effect, Layer, ServiceMap } from "effect";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { ServerSecretStore, type SecretStoreError } from "./auth/Services/ServerSecretStore";
 
-export type ExternalProviderServer = "kilo" | "opencode";
+export type ExternalProviderServer = "opencode";
 
 const secretName = (provider: ExternalProviderServer): string =>
   `provider-${provider}-server-password`;
@@ -29,12 +29,6 @@ export class ProviderCredentials extends ServiceMap.Service<
   ProviderCredentials,
   ProviderCredentialsShape
 >()("synara/providerCredentials/ProviderCredentials") {}
-
-export const resolveProviderServerPassword = (provider: ExternalProviderServer) =>
-  Effect.gen(function* () {
-    const credentials = yield* ProviderCredentials;
-    return (yield* credentials.getServerPassword(provider)) ?? undefined;
-  }).pipe(Effect.orDie);
 
 export const makeProviderServerPasswordResolver =
   (credentials: ProviderCredentialsShape) =>

@@ -54,6 +54,46 @@ export function sanitizeFeatureBranchName(raw: string): string {
 const AUTO_FEATURE_BRANCH_FALLBACK = "feature/update";
 const SYNARA_BRANCH_FALLBACK = "update";
 
+function resolveUniqueBranchName(
+  existingBranchNames: readonly string[],
+  resolvedBase: string,
+): string {
+  const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
+
+  const conflictComponent = (name: string): number | undefined => {
+    const components = name.split("/");
+    for (let index = 0; index < components.length; index += 1) {
+      if (existingNames.has(components.slice(0, index + 1).join("/"))) {
+        return index;
+      }
+    }
+    if ([...existingNames].some((branch) => branch.startsWith(`${name}/`))) {
+      return components.length - 1;
+    }
+    return undefined;
+  };
+
+  let component = conflictComponent(resolvedBase);
+  if (component === undefined) return resolvedBase;
+
+  const components = resolvedBase.split("/");
+  let suffix = 2;
+  while (true) {
+    const candidateComponents = [...components];
+    candidateComponents[component] = `${components[component]}-${suffix}`;
+    const candidate = candidateComponents.join("/");
+    const conflict = conflictComponent(candidate);
+    if (conflict === undefined) return candidate;
+    // A suffixed candidate can encounter a shorter occupied namespace.
+    if (conflict < component) {
+      component = conflict;
+      suffix = 2;
+    } else {
+      suffix += 1;
+    }
+  }
+}
+
 /**
  * Resolve a unique `feature/…` branch name that doesn't collide with
  * any existing branch. Appends a numeric suffix when needed.
@@ -66,18 +106,7 @@ export function resolveAutoFeatureBranchName(
   const resolvedBase = sanitizeFeatureBranchName(
     preferred && preferred.length > 0 ? preferred : AUTO_FEATURE_BRANCH_FALLBACK,
   );
-  const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
-
-  if (!existingNames.has(resolvedBase)) {
-    return resolvedBase;
-  }
-
-  let suffix = 2;
-  while (existingNames.has(`${resolvedBase}-${suffix}`)) {
-    suffix += 1;
-  }
-
-  return `${resolvedBase}-${suffix}`;
+  return resolveUniqueBranchName(existingBranchNames, resolvedBase);
 }
 
 export function buildSynaraBranchName(preferredBranch?: string | null): string {
@@ -101,18 +130,7 @@ export function resolveUniqueSynaraBranchName(
   preferredBranch?: string | null,
 ): string {
   const resolvedBase = buildSynaraBranchName(preferredBranch);
-  const existingNames = new Set(existingBranchNames.map((branch) => branch.toLowerCase()));
-
-  if (!existingNames.has(resolvedBase)) {
-    return resolvedBase;
-  }
-
-  let suffix = 2;
-  while (existingNames.has(`${resolvedBase}-${suffix}`)) {
-    suffix += 1;
-  }
-
-  return `${resolvedBase}-${suffix}`;
+  return resolveUniqueBranchName(existingBranchNames, resolvedBase);
 }
 
 export function isTemporaryWorktreeBranch(branch: string): boolean {

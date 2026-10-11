@@ -3,10 +3,20 @@
 // Layer: Web helper tests
 // Depends on: projectCreation helper plus mocked NativeApi orchestration calls.
 
-import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
-import { describe, expect, it, vi } from "vitest";
+import {
+  type NativeApi,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+  SpaceId,
+} from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createOrRecoverProjectFromPath } from "./projectCreation";
+import { useSpacesUiStore } from "../spacesUiStore";
+import {
+  createOrRecoverProjectFromPath,
+  PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR,
+} from "./projectCreation";
 
 const NOW_ISO = "2026-06-26T20:00:00.000Z";
 const WORKSPACE_ROOT = "/Users/tester/Developer/synara";
@@ -32,6 +42,7 @@ function makeSnapshot(
 ): OrchestrationShellSnapshot {
   return {
     snapshotSequence: 2,
+    spaces: [],
     projects,
     threads: [],
     updatedAt: NOW_ISO,
@@ -47,6 +58,10 @@ function makeApi(dispatchCommand: ReturnType<typeof vi.fn>): NativeApi {
 }
 
 describe("createOrRecoverProjectFromPath", () => {
+  afterEach(() => {
+    useSpacesUiStore.getState().setActiveSpaceId(null);
+  });
+
   it("dispatches project.create and returns the synced project", async () => {
     let createdProjectId: ProjectId | null = null;
     const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
@@ -100,5 +115,122 @@ describe("createOrRecoverProjectFromPath", () => {
       project: existingProject,
       created: false,
     });
+  });
+
+  it("dispatches the extra folders of a multi-folder project", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      additionalFolders: ["/Users/tester/Developer/api", " "],
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        workspaceRoot: WORKSPACE_ROOT,
+        additionalFolders: ["/Users/tester/Developer/api"],
+      }),
+    );
+  });
+
+  it("refuses to reopen an existing project for a multi-folder create", async () => {
+    const dispatchCommand = vi.fn(async () => {
+      throw new Error(
+        "Orchestration command invariant failed (project.create): Project 'project-existing' already uses workspace root '/Users/tester/Developer/synara'.",
+      );
+    });
+
+    await expect(
+      createOrRecoverProjectFromPath({
+        api: makeApi(dispatchCommand),
+        workspaceRoot: WORKSPACE_ROOT,
+        additionalFolders: ["/Users/tester/Developer/api"],
+        loadSnapshot: async () => makeSnapshot([makeProject("project-existing")]),
+      }),
+    ).rejects.toThrow(PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR);
+  });
+
+  it("seeds the new project's default model selection from the persisted default provider (Devin)", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      defaultProvider: "devin",
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        defaultModelSelection: {
+          provider: "devin",
+          model: "adaptive",
+        },
+      }),
+    );
+  });
+
+  it("falls back to the Codex default model when the persisted default provider is OMP", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      defaultProvider: "omp",
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        defaultModelSelection: {
+          provider: "codex",
+          model: getDefaultModel("codex"),
+        },
+      }),
+    );
+  });
+
+  it("preserves an optimistically selected space before the shell snapshot catches up", async () => {
+    const activeSpaceId = SpaceId.makeUnsafe("space-new");
+    useSpacesUiStore.getState().setActiveSpaceId(activeSpaceId);
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        spaceId: activeSpaceId,
+      }),
+    );
   });
 });

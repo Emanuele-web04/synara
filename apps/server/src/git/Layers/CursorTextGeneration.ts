@@ -1,5 +1,6 @@
-import { Effect, Layer, Option, Ref, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { ServerConfig } from "../../config.ts";
 
 import type { CursorModelSelection, ProviderStartOptions } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
@@ -13,9 +14,8 @@ import {
 import { TextGenerationError } from "../Errors.ts";
 import {
   CursorTextGeneration,
-  type TextGenerationOperation,
-  type TextGenerationShape,
   TextGeneration,
+  type TextGenerationShape,
 } from "../Services/TextGeneration.ts";
 import {
   buildAutomationIntentPrompt,
@@ -25,39 +25,23 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
-  decodeStructuredTextGenerationOutput,
-  type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
   sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
+import {
+  isTextGenerationError,
+  mapError,
+  runAcpTextGeneration,
+  type AcpTextGenerationConfig,
+} from "./AcpTextGeneration.ts";
 
 const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
 
 const CURSOR_TIMEOUT_MS = 180_000;
-
-function mapCursorAcpError(
-  operation: TextGenerationOperation,
-  detail: string,
-  cause: unknown,
-): TextGenerationError {
-  return new TextGenerationError({
-    operation,
-    detail,
-    ...(cause !== undefined ? { cause } : {}),
-  });
-}
-
-function isTextGenerationError(error: unknown): error is TextGenerationError {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "TextGenerationError"
-  );
-}
 
 function resolveCursorModelSelection(input: {
   readonly model?: string;
@@ -74,126 +58,74 @@ function resolveCursorModelSelection(input: {
   return null;
 }
 
-function resolveCursorSettings(
+export function resolveCursorSettings(
   providerOptions: ProviderStartOptions | undefined,
+  serverConfig: { readonly homeDir: string; readonly stateDir: string },
+  instanceId?: string,
 ): CursorAcpRuntimeCursorSettings | undefined {
   const cursorOptions = providerOptions?.cursor;
-  if (!cursorOptions) return undefined;
+  if (!cursorOptions && instanceId === undefined) return undefined;
   return {
-    ...(cursorOptions.binaryPath ? { binaryPath: cursorOptions.binaryPath } : {}),
-    ...(cursorOptions.apiEndpoint ? { apiEndpoint: cursorOptions.apiEndpoint } : {}),
+    homeDir: serverConfig.homeDir,
+    isolationRootDir: serverConfig.stateDir,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    ...(cursorOptions?.binaryPath ? { binaryPath: cursorOptions.binaryPath } : {}),
+    ...(cursorOptions?.apiEndpoint ? { apiEndpoint: cursorOptions.apiEndpoint } : {}),
+    ...(cursorOptions?.environment !== undefined ? { environment: cursorOptions.environment } : {}),
   };
 }
 
-const makeCursorTextGeneration = Effect.gen(function* () {
-  const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-  const runCursorJson = <S extends Schema.Top>({
-    operation,
-    cwd,
-    prompt,
-    outputSchemaJson,
-    rawTextFallback,
+const makeCursorAcpConfig = (serverConfig: {
+  readonly homeDir: string;
+  readonly stateDir: string;
+}): AcpTextGenerationConfig<CursorModelSelection, CursorAcpRuntimeCursorSettings> => ({
+  providerLabel: CURSOR_TEXT_GENERATION_LABEL,
+  timeoutMs: CURSOR_TIMEOUT_MS,
+  resolveModelSelection: resolveCursorModelSelection,
+  resolveSettings: (providerOptions, modelSelection) =>
+    resolveCursorSettings(providerOptions, serverConfig, modelSelection.instanceId),
+  makeRuntime: ({ childProcessSpawner, settings, cwd }) =>
+    makeCursorAcpRuntime({
+      cursorSettings: settings,
+      childProcessSpawner,
+      cwd,
+      clientInfo: { name: "synara-git-text", version: "0.0.0" },
+    }),
+  prepareRuntime: ({
+    runtime,
     modelSelection,
-    providerOptions,
-  }: {
-    operation: TextGenerationOperation;
-    cwd: string;
-    prompt: string;
-    outputSchemaJson: S;
-    rawTextFallback?: RawTextFallback;
-    modelSelection: CursorModelSelection;
-    providerOptions?: ProviderStartOptions;
-  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+    operation: _operation,
+    mapError: mapErrorForOperation,
+  }) =>
     Effect.gen(function* () {
-      const outputRef = yield* Ref.make("");
-      const runtime = yield* makeCursorAcpRuntime({
-        cursorSettings: resolveCursorSettings(providerOptions),
-        childProcessSpawner: commandSpawner,
-        cwd,
-        clientInfo: { name: "synara-git-text", version: "0.0.0" },
-      });
-
-      yield* runtime.handleSessionUpdate((notification) => {
-        const update = notification.update;
-        if (update.sessionUpdate !== "agent_message_chunk") {
-          return Effect.void;
-        }
-        const content = update.content;
-        if (content.type !== "text") {
-          return Effect.void;
-        }
-        return Ref.update(outputRef, (current) => current + content.text);
-      });
-
-      const promptResult = yield* Effect.gen(function* () {
-        yield* runtime.start();
-        yield* Effect.ignore(runtime.setMode("ask"));
-        yield* applyCursorAcpModelSelection({
-          runtime,
-          model: modelSelection.model,
-          options: modelSelection.options,
-          mapError: ({ cause, configId, step }) =>
-            mapCursorAcpError(
-              operation,
-              step === "set-config-option"
-                ? `Failed to set Cursor ACP config option "${configId}" for text generation.`
-                : "Failed to set Cursor ACP base model for text generation.",
-              cause,
-            ),
-        });
-
-        return yield* runtime.prompt({
-          prompt: [{ type: "text", text: prompt }],
-        });
-      }).pipe(
-        Effect.timeoutOption(CURSOR_TIMEOUT_MS),
-        Effect.flatMap(
-          Option.match({
-            onNone: () =>
-              Effect.fail(
-                new TextGenerationError({
-                  operation,
-                  detail: "Cursor Agent request timed out.",
-                }),
-              ),
-            onSome: (value) => Effect.succeed(value),
-          }),
-        ),
-        Effect.mapError((cause) =>
-          isTextGenerationError(cause)
-            ? cause
-            : mapCursorAcpError(operation, "Cursor ACP request failed.", cause),
-        ),
-      );
-
-      const rawResult = (yield* Ref.get(outputRef)).trim();
-      if (!rawResult) {
-        return yield* new TextGenerationError({
-          operation,
-          detail:
-            promptResult.stopReason === "cancelled"
-              ? "Cursor ACP request was cancelled."
-              : "Cursor Agent returned empty output.",
-        });
-      }
-
-      return yield* decodeStructuredTextGenerationOutput({
-        schema: outputSchemaJson,
-        raw: rawResult,
-        operation,
-        providerLabel: CURSOR_TEXT_GENERATION_LABEL,
-        ...(rawTextFallback ? { rawTextFallback } : {}),
+      yield* runtime.start();
+      yield* Effect.ignore(runtime.setMode("ask"));
+      yield* applyCursorAcpModelSelection({
+        runtime,
+        model: modelSelection.model,
+        options: modelSelection.options,
+        mapError: ({ cause, step, configId }) =>
+          mapErrorForOperation(
+            step === "set-config-option"
+              ? `Failed to set Cursor ACP config option "${configId}" for text generation.`
+              : "Failed to set Cursor ACP base model for text generation.",
+            cause,
+          ),
       });
     }).pipe(
       Effect.mapError((cause) =>
         isTextGenerationError(cause)
           ? cause
-          : mapCursorAcpError(operation, "Cursor ACP text generation failed.", cause),
+          : mapErrorForOperation("Cursor ACP request failed.", cause),
       ),
-      Effect.scoped,
-    );
+    ),
+  mapError,
+});
 
+const makeCursorTextGeneration = Effect.gen(function* () {
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const serverConfig = yield* ServerConfig;
+  const cursorAcpConfig = makeCursorAcpConfig(serverConfig);
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = Effect.fn(
     "CursorTextGeneration.generateCommitMessage",
   )(function* (input) {
@@ -206,18 +138,20 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     }
 
     const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+      writingPreferences: input.writingPreferences,
       branch: input.branch,
       stagedSummary: input.stagedSummary,
       stagedPatch: input.stagedPatch,
       includeBranch: input.includeBranch === true,
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateCommitMessage",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
@@ -241,19 +175,22 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     }
 
     const { prompt, outputSchemaJson } = buildPrContentPrompt({
+      writingPreferences: input.writingPreferences,
       baseBranch: input.baseBranch,
       headBranch: input.headBranch,
       commitSummary: input.commitSummary,
       diffSummary: input.diffSummary,
       diffPatch: input.diffPatch,
+      ...(input.prTemplate !== undefined ? { prTemplate: input.prTemplate } : {}),
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generatePrContent",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
@@ -276,14 +213,15 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     const { prompt, outputSchemaJson, rawTextFallback } = buildDiffSummaryPrompt({
       patch: input.patch,
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateDiffSummary",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       rawTextFallback,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
@@ -306,14 +244,15 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       message: input.message,
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateBranchName",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       rawTextFallback,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
@@ -334,16 +273,18 @@ const makeCursorTextGeneration = Effect.gen(function* () {
 
     const { prompt, outputSchemaJson, rawTextFallback } = buildThreadTitlePrompt({
       message: input.message,
+      ...(input.context ? { context: input.context } : {}),
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateThreadTitle",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       rawTextFallback,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
@@ -367,19 +308,48 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       newMaterial: input.newMaterial,
       ...(input.currentState ? { currentState: input.currentState } : {}),
     });
-    const generated = yield* runCursorJson({
+    const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateThreadRecap",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       rawTextFallback,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
 
     return {
       recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
     };
+  });
+
+  const generateProjectDigest: TextGenerationShape["generateProjectDigest"] = Effect.fn(
+    "CursorTextGeneration.generateProjectDigest",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateProjectDigest",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+    const { prompt, outputSchemaJson, rawTextFallback } = buildProjectDigestPrompt({
+      ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+      activity: input.activity,
+      coverage: input.coverage,
+      pinnedFocus: input.pinnedFocus,
+    });
+    return yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
+      operation: "generateProjectDigest",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      rawTextFallback,
+      modelSelection,
+      providerOptions: input.providerOptions,
+    });
   });
 
   const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
@@ -398,13 +368,14 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
       nowIso: input.nowIso,
     });
-    return yield* runCursorJson({
+    return yield* runAcpTextGeneration(cursorAcpConfig, {
+      childProcessSpawner,
       operation: "generateAutomationIntent",
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
       modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      providerOptions: input.providerOptions,
     });
   });
 
@@ -419,13 +390,14 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       }
 
       const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
-      return yield* runCursorJson({
+      return yield* runAcpTextGeneration(cursorAcpConfig, {
+        childProcessSpawner,
         operation: "evaluateAutomationCompletion",
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
         modelSelection,
-        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+        providerOptions: input.providerOptions,
       });
     });
 
@@ -436,6 +408,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateProjectDigest,
     generateAutomationIntent,
     evaluateAutomationCompletion,
   } satisfies TextGenerationShape;

@@ -21,6 +21,60 @@ describe("runProcess", () => {
     expect(result.stderrTruncated).toBe(false);
   });
 
+  it("does not emit a replacement character when truncation splits UTF-8 output", async () => {
+    const result = await runProcess("node", ["-e", "process.stdout.write('ab€cd')"], {
+      maxBufferBytes: 4,
+      outputMode: "truncate",
+    });
+
+    expect(result.stdout).toBe("ab");
+    expect(result.stdoutTruncated).toBe(true);
+  });
+
+  it("preserves UTF-8 characters split across process chunks and live observers", async () => {
+    const stdoutChunks: string[] = [];
+    const result = await runProcess(
+      "node",
+      [
+        "-e",
+        "process.stdout.write(Buffer.from([0xe2])); setTimeout(() => process.stdout.write(Buffer.from([0x82, 0xac])), 25)",
+      ],
+      { onStdoutChunk: (chunk) => stdoutChunks.push(chunk) },
+    );
+
+    expect(result.stdout).toBe("€");
+    expect(stdoutChunks.join("")).toBe("€");
+  });
+
+  it("reports live stdout and stderr chunks while retaining the final output", async () => {
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const result = await runProcess(
+      "node",
+      ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
+      {
+        onStdoutChunk: (chunk) => stdoutChunks.push(chunk),
+        onStderrChunk: (chunk) => stderrChunks.push(chunk),
+      },
+    );
+
+    expect(stdoutChunks.join("")).toBe("out");
+    expect(stderrChunks.join("")).toBe("err");
+    expect(result.stdout).toBe("out");
+    expect(result.stderr).toBe("err");
+  });
+
+  it("keeps output observers isolated from the child-process lifecycle", async () => {
+    const result = await runProcess("node", ["-e", "process.stdout.write('ok')"], {
+      onStdoutChunk: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    expect(result.stdout).toBe("ok");
+    expect(result.code).toBe(0);
+  });
+
   it("rejects without spawning when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -71,5 +125,30 @@ describe("runProcess", () => {
       name: "Error",
       message: expect.stringContaining("timed out"),
     });
+  });
+});
+
+// The owned ChildProcess handle is sufficient for POSIX cancellation. A missing
+// ps executable must never turn a timeout/abort into a wait for natural exit.
+describe.skipIf(process.platform === "win32")("cancellation without ps on PATH", () => {
+  it.each(["timeout", "abort"] as const)("terminates an owned child on %s", async (cause) => {
+    const previousPath = process.env.PATH;
+    const controller = new AbortController();
+    const started = Date.now();
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      process.env.PATH = "/synara-test-no-executables";
+      const running = runProcess(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], {
+        timeoutMs: cause === "timeout" ? 30 : 5000,
+        signal: controller.signal,
+      });
+      if (cause === "abort") abortTimer = setTimeout(() => controller.abort(), 30);
+      await expect(running).rejects.toThrow(cause === "timeout" ? "timed out" : "aborted");
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 });

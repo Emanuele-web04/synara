@@ -4,14 +4,11 @@ import { Effect, Schema } from "effect";
 import {
   AutomationCreateInput,
   AutomationDefinition,
-  AutomationCompletionPolicy,
   AutomationRun,
   AutomationRunResult,
   AutomationSchedule,
   AutomationRunStatus,
-  AutomationStreamEvent,
   DEFAULT_AUTOMATION_RUNTIME_MODE,
-  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
 } from "./automation";
 
 const decode = <S extends Schema.Top>(
@@ -45,6 +42,31 @@ it.effect("defaults automation runtime mode to approval-required", () =>
     assert.strictEqual(parsed.misfirePolicy, "coalesce");
     assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
     assert.deepStrictEqual(parsed.acknowledgedRisks, []);
+    assert.isNull(parsed.proposalState);
+    assert.strictEqual(parsed.notificationPolicy, "all");
+    assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.isUndefined(parsed.stopAfterConsecutiveFailures);
+    assert.isUndefined(parsed.stopOnError);
+  }),
+);
+
+it.effect("rejects debug interaction mode for automations", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decode(AutomationCreateInput, {
+        name: "Debug recurring failures",
+        projectId: "project-1",
+        prompt: "Investigate the latest failure.",
+        schedule: { type: "manual" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: "debug",
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 
@@ -69,7 +91,6 @@ it.effect("decodes legacy automation definitions without completion policies", (
       mode: "heartbeat",
       targetThreadId: "thread-1",
       maxIterations: null,
-      stopOnError: true,
       minimumIntervalSeconds: 60,
       maxRuntimeSeconds: 3600,
       retryPolicy: { type: "none" },
@@ -84,22 +105,13 @@ it.effect("decodes legacy automation definitions without completion policies", (
     assert.deepStrictEqual(parsed.completionPolicy, { type: "none" });
     assert.strictEqual(parsed.completionPolicyVersion, 0);
     assert.strictEqual(parsed.completionPolicyUpdatedAt, "1970-01-01T00:00:00.000Z");
-  }),
-);
-
-it.effect("accepts AI-evaluated automation completion policies", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationCompletionPolicy, {
-      type: "ai-evaluated",
-      stopWhen: "the PR is ready to merge",
-      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
-    });
-
-    assert.strictEqual(parsed.type, "ai-evaluated");
-    if (parsed.type !== "ai-evaluated") {
-      assert.fail("Expected AI-evaluated completion policy.");
-    }
-    assert.strictEqual(parsed.confidenceThreshold, DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD);
+    assert.isNull(parsed.proposalState);
+    assert.strictEqual(parsed.notificationPolicy, "all");
+    assert.strictEqual(parsed.heartbeatCooldownSeconds, 60);
+    assert.strictEqual(parsed.stopAfterConsecutiveFailures, 3);
+    assert.strictEqual(parsed.consecutiveFailureCount, 0);
+    assert.isNull(parsed.disabledReason);
+    assert.isNull(parsed.disabledAt);
   }),
 );
 
@@ -130,6 +142,7 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
           model: "gpt-5-codex",
         },
         completionPolicyVersion: 7,
+        iterationNumber: 3,
         runtimeMode: "approval-required",
         interactionMode: "default",
         worktreeMode: "worktree",
@@ -142,7 +155,9 @@ it.effect("accepts automation runs with immutable permission snapshots", () =>
 
     assert.strictEqual(parsed.permissionSnapshot.runtimeMode, "approval-required");
     assert.strictEqual(parsed.permissionSnapshot.completionPolicyVersion, 7);
+    assert.strictEqual(parsed.permissionSnapshot.iterationNumber, 3);
     assert.strictEqual(parsed.status, "running");
+    assert.isNull(parsed.deferredUntil);
   }),
 );
 
@@ -194,37 +209,20 @@ it.effect("accepts legacy UTC and timezone-aware wall-clock schedules", () =>
   }),
 );
 
-it.effect("accepts typed automation run results", () =>
+it.effect("accepts structured automation notify and silent decisions", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(AutomationRunResult, {
-      outcome: "needs-attention",
-      summary: "Approval required.",
-      severity: "warning",
-      unread: true,
+      outcome: "unknown",
+      title: "Build is healthy",
+      summary: "No action is required.",
+      decision: "silent",
+      unread: false,
       archivedAt: null,
     });
 
-    assert.strictEqual(parsed.outcome, "needs-attention");
-    assert.strictEqual(parsed.unread, true);
-  }),
-);
-
-it.effect("accepts automation run result completion evaluations", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationRunResult, {
-      outcome: "no-findings",
-      summary: "Stopped: PR is ready.",
-      severity: "info",
-      unread: true,
-      archivedAt: null,
-      completionEvaluation: {
-        stopMatched: true,
-        confidence: 0.94,
-        reason: "The assistant says the PR is ready.",
-      },
-    });
-
-    assert.strictEqual(parsed.completionEvaluation?.stopMatched, true);
+    assert.strictEqual(parsed.title, "Build is healthy");
+    assert.strictEqual(parsed.decision, "silent");
+    assert.strictEqual(parsed.unread, false);
   }),
 );
 
@@ -246,48 +244,5 @@ it.effect("rejects unknown automation run status values", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(decode(AutomationRunStatus, "unknown"));
     assert.strictEqual(result._tag, "Failure");
-  }),
-);
-
-it.effect("accepts automation stream run updates", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(AutomationStreamEvent, {
-      type: "run-upserted",
-      run: {
-        id: "run-1",
-        automationId: "automation-1",
-        projectId: "project-1",
-        threadId: null,
-        trigger: { type: "scheduled" },
-        status: "pending",
-        scheduledFor: "2026-06-16T10:00:00.000Z",
-        claimedBy: null,
-        claimedAt: null,
-        leaseExpiresAt: null,
-        startedAt: null,
-        finishedAt: null,
-        threadCreateCommandId: null,
-        turnStartCommandId: null,
-        messageId: null,
-        error: null,
-        result: null,
-        permissionSnapshot: {
-          provider: "codex",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          worktreeMode: "worktree",
-          allowedCapabilities: ["send-turn"],
-          createdAt: "2026-06-16T10:00:00.000Z",
-        },
-        createdAt: "2026-06-16T10:00:00.000Z",
-        updatedAt: "2026-06-16T10:00:00.000Z",
-      },
-    });
-
-    assert.strictEqual(parsed.type, "run-upserted");
   }),
 );

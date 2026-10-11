@@ -3,7 +3,9 @@ import {
   type AutomationDefinition,
   type AutomationId,
   type AutomationListResult,
+  type AutomationMemory,
   type AutomationMode,
+  type AutomationNotificationPolicy,
   type AutomationRun,
   type AutomationRunResult,
   type AutomationStreamEvent,
@@ -14,22 +16,27 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@synara/contracts";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import type { Thread } from "~/types";
 import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "~/components/chat/ComposerPickerMenuPopup";
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
+import { RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import {
   Menu,
-  MenuCheckboxItem,
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
@@ -42,38 +49,37 @@ import {
 } from "~/components/ui/menu";
 import { TimePicker } from "~/components/ui/time-picker";
 import { toastManager } from "~/components/ui/toast";
-import {
-  hasBlockingAutomationDraftWarnings,
-  type AutomationDraftWarning,
-  type AutomationDraftWarningId,
-} from "~/lib/automationDraft";
+import type { AutomationDraftWarning, AutomationDraftWarningId } from "~/lib/automationDraft";
 import {
   acknowledgedRiskIdsForFormWarnings,
   applyScheduleToForm,
   automationFastIntervalLimitMessage,
+  automationFormSubmitBlockReason,
+  automationIntervalPresetOptions,
   buildAutomationFormWarnings,
   createInputFromForm,
   datetimeLocalFromIso,
   defaultModelSelection,
   formatCadence,
+  formatCadenceLong,
   formatClockTime,
   formatDateTime,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
-  groupHeartbeatAutomationsByTargetThread,
-  heartbeatAutomationsForThread,
+  groupAutomationsByContinuedThread,
+  automationsForThread,
+  intervalFormPartsFromSeconds,
   isFormSubmittable,
   isoFromDatetimeLocal,
   modelSelectionForProjectChange,
   projectModelSelection,
-  providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
   scheduleFromForm,
   scheduleFromKind,
   scheduleKindFromSchedule,
   SCHEDULE_KIND_OPTIONS,
   TIME_OF_DAY_PATTERN,
-  updateInputFromForm,
   updateWeeklyScheduleDay,
   updateWeeklyScheduleTime,
   weekdayLabel,
@@ -81,9 +87,20 @@ import {
   type IntervalUnit,
   type ScheduleKind,
 } from "~/lib/automationForm";
-import { SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
+import {
+  automationFailurePolicyOptions,
+  type AutomationFailurePolicyValue,
+} from "~/lib/automationFailurePolicy";
+import { ClockIcon, FolderIcon, SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
+import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
+import {
+  normalizeRuntimeModeForProvider,
+  providerModelSupportsAutoRuntimeMode,
+  providerSupportsAutoRuntimeMode,
+} from "~/lib/runtimeMode";
+import { findProviderStatus } from "~/lib/providerAvailability";
 import { cn } from "~/lib/utils";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
@@ -92,37 +109,59 @@ import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useStore } from "~/store";
 import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 export const automationQueryKey = ["automations"] as const;
-export const EMPTY_AUTOMATION_LIST: AutomationListResult = { definitions: [], runs: [] };
+export const EMPTY_AUTOMATION_LIST: AutomationListResult = {
+  definitions: [],
+  runs: [],
+  memories: [],
+};
+const AUTOMATION_DEFINITION_UPDATE_SCOPE = {
+  id: "automation-definition-updates",
+} as const;
+
+export function automationTargetThreads<
+  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId" | "sidechatContext">,
+>(threads: readonly TThread[], projectId: string): readonly TThread[] {
+  return threads.filter((thread) => thread.projectId === projectId && !isSidechatThread(thread));
+}
+
+export function automationDefinitionUpdateMutationOptions(
+  mutationFn: (input: AutomationUpdateInput) => Promise<AutomationDefinition>,
+) {
+  return { scope: AUTOMATION_DEFINITION_UPDATE_SCOPE, mutationFn };
+}
 
 export {
   acknowledgedRiskIdsForFormWarnings,
   applyScheduleToForm,
   automationFastIntervalLimitMessage,
+  automationFormSubmitBlockReason,
+  automationIntervalPresetOptions,
   buildAutomationFormWarnings,
   createInputFromForm,
   datetimeLocalFromIso,
   defaultModelSelection,
   formatCadence,
+  formatCadenceLong,
   formatClockTime,
   formatDateTime,
+  formatNextRun,
   formatSchedule,
   formFromDefinition,
-  groupHeartbeatAutomationsByTargetThread,
-  heartbeatAutomationsForThread,
+  groupAutomationsByContinuedThread,
+  automationsForThread,
   isFormSubmittable,
   isoFromDatetimeLocal,
   modelSelectionForProjectChange,
   projectModelSelection,
-  providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
   scheduleFromForm,
   scheduleFromKind,
   scheduleKindFromSchedule,
   SCHEDULE_KIND_OPTIONS,
   TIME_OF_DAY_PATTERN,
-  updateInputFromForm,
   updateWeeklyScheduleDay,
   updateWeeklyScheduleTime,
   weekdayLabel,
@@ -258,15 +297,13 @@ export function RunStatusIndicator({
 }
 
 export function isTriageRun(run: AutomationRun): boolean {
-  if (run.result) {
-    return isUnresolvedTriageResult(run.result);
+  if (run.status === "waiting-for-approval") {
+    return true;
   }
-  return (
-    run.status === "failed" ||
-    run.status === "cancelled" ||
-    run.status === "interrupted" ||
-    run.status === "waiting-for-approval"
-  );
+  if (run.result) {
+    return run.finishedAt !== null && isUnresolvedTriageResult(run.result);
+  }
+  return run.status === "failed" || run.status === "cancelled" || run.status === "interrupted";
 }
 
 export function isUnresolvedTriageResult(result: AutomationRunResult | null): boolean {
@@ -275,15 +312,6 @@ export function isUnresolvedTriageResult(result: AutomationRunResult | null): bo
 
 export function unresolvedTriageRuns(runs: readonly AutomationRun[]): AutomationRun[] {
   return runs.filter((run) => isTriageRun(run));
-}
-
-export function allVisibleTriageRuns(runs: readonly AutomationRun[]): AutomationRun[] {
-  return runs.filter((run) => {
-    if (run.result) {
-      return run.result.archivedAt === null;
-    }
-    return isTriageRun(run);
-  });
 }
 
 export function automationAttentionCount(runs: readonly AutomationRun[]): number {
@@ -332,6 +360,11 @@ export function runResultSummary(run: AutomationRun): string {
   }
 }
 
+export function runResultTitle(run: AutomationRun): string | null {
+  const title = run.result?.title?.trim();
+  return title ? title : null;
+}
+
 export function canCancelAutomationRun(run: AutomationRun): boolean {
   return (
     run.status === "pending" ||
@@ -341,20 +374,77 @@ export function canCancelAutomationRun(run: AutomationRun): boolean {
   );
 }
 
-export function automationStatusDotClass(
+/**
+ * Plain-language warning for a latest run that needs the user's attention, or null when
+ * the run ended normally (or is still progressing). Drives the amber glyph and the
+ * subtitle warning segment on automation list rows.
+ */
+export function automationAttentionLabel(run: AutomationRun): string | null {
+  switch (run.status) {
+    case "waiting-for-approval":
+      return "Waiting for approval";
+    case "failed":
+      return "Last run failed";
+    case "cancelled":
+      return "Last run cancelled";
+    case "interrupted":
+      return "Last run interrupted";
+    default:
+      return null;
+  }
+}
+
+type LiveAutomationRun = AutomationRun & {
+  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
+};
+
+export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
+  return (
+    run?.status === "pending" ||
+    run?.status === "claimed" ||
+    run?.status === "running" ||
+    run?.status === "waiting-for-approval"
+  );
+}
+
+/**
+ * Icon + tint for an automation list row's leading status glyph.
+ * - Live runs spin with a circular loading glyph.
+ * - Completed successful runs show a checkmark circle.
+ * - Failed/cancelled/interrupted runs keep the warning exclamation.
+ * - Scheduled (enabled with a future next run) shows a clock.
+ * - Paused automations show a pause glyph.
+ */
+export function automationListRowIcon(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
-): string {
-  if (!definition.enabled) return "text-muted-foreground/40";
-  if (
-    latestRun?.status === "running" ||
-    latestRun?.status === "pending" ||
-    latestRun?.status === "claimed"
-  ) {
-    return "text-blue-500";
+): { readonly name: string; readonly className: string } {
+  // Pausing prevents future dispatches but does not cancel an in-flight run, so the
+  // active run state must take precedence over the definition's enabled flag.
+  if (isLiveRun(latestRun)) {
+    return {
+      name: "loading-circle",
+      className: "size-4 animate-spin text-blue-500 motion-reduce:animate-none",
+    };
   }
-  if (latestRun && isTriageRun(latestRun)) return "text-destructive";
-  return "text-emerald-500";
+  if (!definition.enabled) {
+    // Auto-disabled after consecutive failures is a problem to look at, not a pause the
+    // user chose — keep the warning glyph so the row doesn't read as intentionally idle.
+    if (definition.disabledReason === "failures") {
+      return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+    }
+    return { name: "pause", className: "size-4 text-muted-foreground/40" };
+  }
+  if (latestRun?.status === "succeeded") {
+    return { name: "circle-check", className: "size-4 text-green-500" };
+  }
+  if (latestRun && automationAttentionLabel(latestRun) !== null) {
+    return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+  }
+  if (definition.nextRunAt) {
+    return { name: "clock", className: "size-4 text-foreground/70" };
+  }
+  return { name: "circle-placeholder-on", className: "size-4 text-foreground/70" };
 }
 
 const deletedAutomationIdsInCache = new Set<string>();
@@ -443,6 +533,52 @@ function upsertRunByUpdatedAt(
     : [incoming, ...runs];
 }
 
+function mergeMemoriesByUpdatedAt(
+  snapshotMemories: readonly AutomationMemory[],
+  previousMemories: readonly AutomationMemory[],
+  visibleAutomationIds: ReadonlySet<AutomationId>,
+): AutomationMemory[] {
+  const previousByAutomationId = new Map(
+    previousMemories.map((memory) => [memory.automationId, memory]),
+  );
+  const seen = new Set<AutomationId>();
+  const memories: AutomationMemory[] = [];
+  for (const snapshotMemory of snapshotMemories) {
+    if (!visibleAutomationIds.has(snapshotMemory.automationId)) {
+      continue;
+    }
+    seen.add(snapshotMemory.automationId);
+    const previousMemory = previousByAutomationId.get(snapshotMemory.automationId);
+    memories.push(
+      previousMemory && isSameOrNewerTimestamp(previousMemory.updatedAt, snapshotMemory.updatedAt)
+        ? previousMemory
+        : snapshotMemory,
+    );
+  }
+  for (const previousMemory of previousMemories) {
+    if (
+      !seen.has(previousMemory.automationId) &&
+      visibleAutomationIds.has(previousMemory.automationId)
+    ) {
+      memories.push(previousMemory);
+    }
+  }
+  return memories;
+}
+
+function upsertMemoryByUpdatedAt(
+  memories: readonly AutomationMemory[],
+  incoming: AutomationMemory,
+): AutomationMemory[] {
+  const existing = memories.find((memory) => memory.automationId === incoming.automationId);
+  if (existing && isNewerTimestamp(existing.updatedAt, incoming.updatedAt)) {
+    return [...memories];
+  }
+  return existing
+    ? memories.map((memory) => (memory.automationId === incoming.automationId ? incoming : memory))
+    : [incoming, ...memories];
+}
+
 export function applyAutomationEvent(
   prev: AutomationListResult | undefined,
   event: AutomationStreamEvent,
@@ -455,6 +591,11 @@ export function applyAutomationEvent(
       return {
         definitions,
         runs: mergeRunsByUpdatedAt(event.runs, base.runs, visibleAutomationIds),
+        memories: mergeMemoriesByUpdatedAt(
+          event.memories ?? [],
+          base.memories ?? [],
+          visibleAutomationIds,
+        ),
       };
     }
     case "definition-upserted": {
@@ -463,22 +604,68 @@ export function applyAutomationEvent(
       }
       deletedAutomationIdsInCache.delete(event.definition.id);
       const definitions = upsertDefinitionByUpdatedAt(base.definitions, event.definition);
-      return { definitions, runs: base.runs };
+      return { definitions, runs: base.runs, memories: base.memories ?? [] };
     }
     case "definition-deleted":
       deletedAutomationIdsInCache.add(event.automationId);
       return {
         definitions: base.definitions.filter((definition) => definition.id !== event.automationId),
         runs: base.runs.filter((run) => run.automationId !== event.automationId),
+        memories: (base.memories ?? []).filter(
+          (memory) => memory.automationId !== event.automationId,
+        ),
       };
     case "run-upserted": {
       if (deletedAutomationIdsInCache.has(event.run.automationId)) {
         return base;
       }
       const runs = upsertRunByUpdatedAt(base.runs, event.run);
-      return { definitions: base.definitions, runs };
+      return { definitions: base.definitions, runs, memories: base.memories ?? [] };
+    }
+    case "memory-upserted": {
+      const currentMemories = base.memories ?? [];
+      const memories = upsertMemoryByUpdatedAt(currentMemories, event.memory);
+      return { definitions: base.definitions, runs: base.runs, memories };
     }
   }
+}
+
+/**
+ * Roll back only the fields a failed update patched. Restoring the whole pre-mutation list
+ * snapshot would also clobber everything that landed after it — a second inline edit's
+ * optimistic merge, stream upserts — so the failed patch's keys are restored from the
+ * pre-merge definition into the definition as it exists in the cache *now*. Input keys the
+ * definition never had (legacy aliases) are removed rather than restored.
+ */
+export function rollbackAutomationDefinitionPatch(
+  list: AutomationListResult,
+  input: AutomationUpdateInput,
+  previousDefinition: AutomationDefinition,
+): AutomationListResult {
+  return {
+    definitions: list.definitions.map((definition) => {
+      if (definition.id !== input.id) return definition;
+      const next: Record<string, unknown> = { ...definition };
+      for (const key of Object.keys(input)) {
+        if (key === "id") continue;
+        // A newer optimistic patch or authoritative stream event may already have
+        // replaced this field while the failed request was in flight. Only undo the
+        // value this mutation itself installed; otherwise an older failure can erase
+        // the newer edit.
+        if (!Object.is(next[key], (input as unknown as Record<string, unknown>)[key])) {
+          continue;
+        }
+        if (key in previousDefinition) {
+          next[key] = (previousDefinition as unknown as Record<string, unknown>)[key];
+        } else {
+          delete next[key];
+        }
+      }
+      return next as unknown as AutomationDefinition;
+    }),
+    runs: list.runs,
+    memories: list.memories ?? [],
+  };
 }
 
 export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
@@ -496,11 +683,15 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });
   const updateMutation = useMutation({
-    mutationFn: (input: AutomationUpdateInput) => ensureNativeApi().automation.update(input),
+    ...automationDefinitionUpdateMutationOptions((input) =>
+      ensureNativeApi().automation.update(input),
+    ),
     // Optimistically merge the patch so inline edits on the detail page feel instant; the
     // server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
     onMutate: (input) => {
       const previous = queryClient.getQueryData<AutomationListResult>(automationQueryKey);
+      const previousDefinition =
+        previous?.definitions.find((definition) => definition.id === input.id) ?? null;
       queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) => {
         const base = prev ?? EMPTY_AUTOMATION_LIST;
         return {
@@ -510,16 +701,21 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
               : definition,
           ),
           runs: base.runs,
+          memories: base.memories ?? [],
         };
       });
-      return { previous };
+      return { previousDefinition };
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: automationQueryKey }),
-    onError: (error, _input, context) => {
-      // A failed update would otherwise leave the incomplete optimistic merge in the cache
-      // until the next stream tick; restore the pre-edit snapshot so the UI reflects reality.
-      if (context?.previous) {
-        queryClient.setQueryData<AutomationListResult>(automationQueryKey, context.previous);
+    onError: (error, input, context) => {
+      // A failed update would otherwise leave its optimistic merge in the cache until the
+      // next stream tick. Roll back just this patch's fields — not the whole snapshot, which
+      // would also erase concurrent edits' merges (see rollbackAutomationDefinitionPatch).
+      const previousDefinition = context?.previousDefinition;
+      if (previousDefinition) {
+        queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) =>
+          prev ? rollbackAutomationDefinitionPatch(prev, input, previousDefinition) : prev,
+        );
       }
       toastManager.add({ type: "error", title: error.message });
     },
@@ -557,18 +753,15 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     onError: (error) => toastManager.add({ type: "error", title: error.message }),
   });
 
-  const runsByAutomationId = useMemo(() => {
-    const map = new Map<string, AutomationRun[]>();
-    for (const run of data.runs) {
-      const runs = map.get(run.automationId) ?? [];
-      runs.push(run);
-      map.set(run.automationId, runs);
-    }
-    for (const runs of map.values()) {
-      runs.sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor));
-    }
-    return map;
-  }, [data.runs]);
+  const runsByAutomationId = new Map<string, AutomationRun[]>();
+  for (const run of data.runs) {
+    const runs = runsByAutomationId.get(run.automationId) ?? [];
+    runs.push(run);
+    runsByAutomationId.set(run.automationId, runs);
+  }
+  for (const runs of runsByAutomationId.values()) {
+    runs.sort((left, right) => right.scheduledFor.localeCompare(left.scheduledFor));
+  }
 
   return {
     data,
@@ -589,29 +782,6 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
 const CHIP_CLASS =
   "gap-1.5 rounded-lg px-2 font-normal text-[var(--color-text-foreground-secondary)]";
 type CadenceOption = { readonly value: string; readonly label: string };
-type IntervalCadenceOption = {
-  readonly amount: string;
-  readonly unit: IntervalUnit;
-  readonly label: string;
-};
-
-/** Interval cadence presets shown by default; second-level intervals are preserved when present. */
-const INTERVAL_PRESETS: readonly IntervalCadenceOption[] = [
-  { amount: "15", unit: "minutes", label: "Every 15 min" },
-  { amount: "30", unit: "minutes", label: "Every 30 min" },
-  { amount: "120", unit: "minutes", label: "Every 2 hours" },
-  { amount: "360", unit: "minutes", label: "Every 6 hours" },
-  { amount: "720", unit: "minutes", label: "Every 12 hours" },
-  { amount: "1440", unit: "minutes", label: "Every 24 hours" },
-];
-
-function intervalOptionValue(option: Pick<IntervalCadenceOption, "amount" | "unit">): string {
-  return `${option.unit}:${option.amount}`;
-}
-
-function intervalOptionLabel(amount: string, unit: IntervalUnit): string {
-  return unit === "seconds" ? `Every ${amount} sec` : `Every ${amount} min`;
-}
 
 /** Heartbeat run-count presets ("" = unlimited). */
 const MAX_ITERATION_PRESETS: readonly CadenceOption[] = [
@@ -663,7 +833,7 @@ export function AutomationApprovalBanner({
         </span>
         <ul className="flex flex-col gap-1.5">
           {warnings.map((warning) => (
-            <li key={warning.id} className="text-xs">
+            <li key={warning.id} className="text-ui leading-snug">
               <span className="font-medium text-foreground/90">{warning.title}</span>
               <span className="block">{warning.detail}</span>
             </li>
@@ -685,16 +855,25 @@ export function AutomationApprovalBanner({
 export function AutomationModelPicker({
   value,
   projectCwd,
+  disabled,
   onChange,
+  onAutoModeSupportChange,
 }: {
   readonly value: ModelSelection;
   readonly projectCwd: string | null;
+  readonly disabled?: boolean;
   readonly onChange: (value: ModelSelection) => void;
+  readonly onAutoModeSupportChange?: (supported: boolean) => void;
 }) {
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
+    [settings, value.instanceId, value.provider],
+  );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [value.provider]: value.model }),
     [value.model, value.provider],
@@ -704,12 +883,41 @@ export function AutomationModelPicker({
     activeProjectCwd: projectCwd,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider, loadingModelProviders } = useProviderModelCatalog({
+  const {
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    loadingModelProviders,
+    discoveryErrorsByProvider,
+    runtimeModelsByProvider,
+    selectedRuntimeModel,
+  } = useProviderModelCatalog({
     selectedProvider: value.provider,
+    selectedProviderInstanceId,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
   });
+  const providerStatus = findProviderStatus(
+    providerStatuses,
+    value.provider,
+    selectedProviderInstanceId,
+  );
+  const persistedRuntimeModel =
+    value.provider === "claudeAgent" && typeof value.supportsAutoMode === "boolean"
+      ? {
+          slug: value.model,
+          name: value.model,
+          supportsAutoMode: value.supportsAutoMode,
+        }
+      : undefined;
+  const autoModeSupported = providerModelSupportsAutoRuntimeMode(
+    value.provider,
+    selectedRuntimeModel ?? persistedRuntimeModel,
+    providerStatus,
+  );
+  useEffect(() => {
+    onAutoModeSupportChange?.(autoModeSupported);
+  }, [autoModeSupported, onAutoModeSupportChange]);
 
   return (
     <ProviderModelPicker
@@ -719,24 +927,55 @@ export function AutomationModelPicker({
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
+      discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      disabled={disabled ?? false}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => onChange(buildModelSelection(provider, model))}
+      onProviderModelChange={(provider, model, instanceId) => {
+        const runtimeModel = resolveRuntimeModelDescriptor({
+          provider,
+          model,
+          runtimeModels: runtimeModelsByProvider[provider],
+        });
+        onChange(
+          buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode, {
+            instanceId: instanceId ?? provider,
+          }),
+        );
+      }}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
     />
   );
 }
 
+export function reconcileAutomationFormAutoModeSupport(
+  form: AutomationFormState,
+  supported: boolean,
+): AutomationFormState {
+  const modelSelection =
+    form.modelSelection.provider === "claudeAgent" &&
+    form.modelSelection.supportsAutoMode !== supported
+      ? { ...form.modelSelection, supportsAutoMode: supported }
+      : form.modelSelection;
+  const runtimeMode =
+    !supported && form.runtimeMode === "auto" ? "approval-required" : form.runtimeMode;
+  return modelSelection !== form.modelSelection || runtimeMode !== form.runtimeMode
+    ? { ...form, modelSelection, runtimeMode }
+    : form;
+}
+
 export function AutomationDialog({
   open,
-  editing,
   form,
   projects,
   threads,
-  warnings = [],
-  acknowledgedWarningIds = new Set(),
+  warnings: warningsProp,
+  acknowledgedWarningIds: acknowledgedWarningIdsProp,
   onOpenChange,
   onFormChange,
   onToggleWarning,
@@ -744,10 +983,11 @@ export function AutomationDialog({
   busy,
 }: {
   readonly open: boolean;
-  readonly editing: boolean;
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
-  readonly threads: readonly Thread[];
+  readonly threads: ReadonlyArray<
+    Pick<Thread, "id" | "projectId" | "title" | "sidechatSourceThreadId" | "sidechatContext">
+  >;
   readonly warnings?: readonly AutomationDraftWarning[];
   readonly acknowledgedWarningIds?: ReadonlySet<AutomationDraftWarningId>;
   readonly onOpenChange: (open: boolean) => void;
@@ -756,45 +996,60 @@ export function AutomationDialog({
   readonly onSubmit: () => void;
   readonly busy: boolean;
 }) {
+  const warnings: readonly AutomationDraftWarning[] = warningsProp ?? [];
+  const acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId> =
+    acknowledgedWarningIdsProp ?? new Set<AutomationDraftWarningId>();
   const setField = <K extends keyof AutomationFormState>(key: K, value: AutomationFormState[K]) =>
     onFormChange({ ...form, [key]: value });
-  const projectThreads = threads.filter((thread) => thread.projectId === form.projectId);
+  const projectThreads = automationTargetThreads(threads, form.projectId);
   const selectedProject = projects.find((project) => project.id === form.projectId);
+  const [selectedModelSupportsAuto, setSelectedModelSupportsAuto] = useState(() =>
+    form.modelSelection.provider === "claudeAgent"
+      ? form.modelSelection.supportsAutoMode !== false
+      : providerSupportsAutoRuntimeMode(form.modelSelection.provider),
+  );
+  const handleAutoModeSupportChange = useCallback(
+    (supported: boolean) => {
+      setSelectedModelSupportsAuto(supported);
+      const reconciled = reconcileAutomationFormAutoModeSupport(form, supported);
+      if (reconciled !== form) {
+        onFormChange(reconciled);
+      }
+    },
+    [form, onFormChange],
+  );
   const schedule = scheduleFromForm(form);
   const fastIntervalLimitMessage = automationFastIntervalLimitMessage(form);
-  const hasBlockingWarning = hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds);
-  const submittable = isFormSubmittable(form) && !hasBlockingWarning;
-  const intervalValue = intervalOptionValue({
-    amount: form.intervalAmount,
-    unit: form.intervalUnit,
-  });
+  const submitBlockReason = automationFormSubmitBlockReason(form, warnings, acknowledgedWarningIds);
+  const submittable = submitBlockReason === null;
   const maxIterationPresets = maxIterationOptions(form.maxIterations);
-  const intervalPresets = INTERVAL_PRESETS.some(
-    (preset) => intervalOptionValue(preset) === intervalValue,
-  )
-    ? INTERVAL_PRESETS
-    : [
-        {
-          amount: form.intervalAmount,
-          unit: form.intervalUnit,
-          label: intervalOptionLabel(form.intervalAmount, form.intervalUnit),
-        },
-        ...INTERVAL_PRESETS,
-      ];
+  const intervalAmount = Number.parseInt(form.intervalAmount, 10);
+  const intervalSeconds = Number.isFinite(intervalAmount)
+    ? form.intervalUnit === "seconds"
+      ? intervalAmount
+      : intervalAmount * 60
+    : undefined;
+  // "Hourly" is its own ScheduleKind in this dialog, so the interval list skips it.
+  const intervalPresetOptions = automationIntervalPresetOptions({
+    currentSeconds: intervalSeconds,
+    includeHourly: false,
+  });
 
   const chooseProject = (projectId: string) => {
     const targetStillMatches =
       form.targetThreadId.length > 0 &&
       threads.some((thread) => thread.id === form.targetThreadId && thread.projectId === projectId);
+    const modelSelection = modelSelectionForProjectChange(
+      projects,
+      form.projectId,
+      projectId,
+      form.modelSelection,
+    );
     onFormChange({
       ...form,
       projectId,
-      modelSelection: modelSelectionForProjectChange(
-        projects,
-        form.projectId,
-        projectId,
-        form.modelSelection,
-      ),
+      modelSelection,
+      runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, modelSelection.provider),
       targetThreadId: targetStillMatches ? form.targetThreadId : "",
     });
   };
@@ -817,10 +1072,8 @@ export function AutomationDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogPopup surface="solid" showCloseButton={false} className="max-w-3xl">
-        <DialogTitle className="sr-only">
-          {editing ? "Edit automation" : "New automation"}
-        </DialogTitle>
+      <DialogPopup showCloseButton={false} className="max-w-3xl">
+        <DialogTitle className="sr-only">New automation</DialogTitle>
 
         <div className="flex items-start gap-3 px-5 pt-5">
           <input
@@ -878,7 +1131,7 @@ export function AutomationDialog({
             }}
             placeholder="Add prompt e.g. look for crashes in $sentry"
             aria-label="Automation prompt"
-            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
+            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
           />
 
           {warnings.length > 0 ? (
@@ -886,7 +1139,7 @@ export function AutomationDialog({
               {warnings.map((warning) => (
                 <label
                   key={warning.id}
-                  className="flex items-start gap-2 text-xs text-muted-foreground"
+                  className="flex items-start gap-2 text-ui leading-snug text-muted-foreground"
                 >
                   {warning.requiresAcknowledgement ? (
                     <input
@@ -907,7 +1160,7 @@ export function AutomationDialog({
             </div>
           ) : null}
           {fastIntervalLimitMessage ? (
-            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui leading-snug text-amber-700 dark:text-amber-300">
               {fastIntervalLimitMessage}
             </div>
           ) : null}
@@ -915,7 +1168,9 @@ export function AutomationDialog({
 
         <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-1">
           <div className="flex flex-1 flex-wrap items-center gap-0.5">
-            {form.mode === "standalone" ? (
+            {/* Heartbeat runs inherit the target thread's environment; every other mode
+                opens its own thread and therefore picks one. */}
+            {automationRequiresTargetThread(form.mode) ? null : (
               <Menu>
                 <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
                   <WorktreeIcon className="size-4" />
@@ -937,11 +1192,11 @@ export function AutomationDialog({
                   </MenuRadioGroup>
                 </ComposerPickerMenuPopup>
               </Menu>
-            ) : null}
+            )}
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="folder-2" className="size-4" />
+                <FolderIcon className="size-4" />
                 <span className="max-w-[10rem] truncate">
                   {selectedProject?.name ?? "Select project"}
                 </span>
@@ -961,12 +1216,19 @@ export function AutomationDialog({
             <AutomationModelPicker
               value={form.modelSelection}
               projectCwd={selectedProject?.cwd ?? null}
-              onChange={(value) => setField("modelSelection", value)}
+              onChange={(value) => {
+                onFormChange({
+                  ...form,
+                  modelSelection: value,
+                  runtimeMode: normalizeRuntimeModeForProvider(form.runtimeMode, value.provider),
+                });
+              }}
+              onAutoModeSupportChange={handleAutoModeSupportChange}
             />
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="clock" className="size-4" />
+                <ClockIcon className="size-4" />
                 <span>{formatCadence(schedule)}</span>
                 <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>
@@ -990,23 +1252,20 @@ export function AutomationDialog({
                     <MenuGroup>
                       <MenuGroupLabel>Every</MenuGroupLabel>
                       <MenuRadioGroup
-                        value={intervalValue}
+                        value={intervalSeconds === undefined ? "" : String(intervalSeconds)}
                         onValueChange={(value) => {
-                          const [unit, amount] = value.split(":");
-                          if (unit === "seconds" || unit === "minutes") {
-                            onFormChange({
-                              ...form,
-                              intervalUnit: unit,
-                              intervalAmount: amount ?? "1",
-                            });
-                          }
+                          const seconds = Number.parseInt(value, 10);
+                          if (!Number.isFinite(seconds) || seconds <= 0) return;
+                          const parts = intervalFormPartsFromSeconds(seconds);
+                          onFormChange({
+                            ...form,
+                            intervalUnit: parts.unit,
+                            intervalAmount: parts.amount,
+                          });
                         }}
                       >
-                        {intervalPresets.map((preset) => (
-                          <MenuRadioItem
-                            key={intervalOptionValue(preset)}
-                            value={intervalOptionValue(preset)}
-                          >
+                        {intervalPresetOptions.map((preset) => (
+                          <MenuRadioItem key={preset.value} value={preset.value}>
                             {preset.label}
                           </MenuRadioItem>
                         ))}
@@ -1025,7 +1284,7 @@ export function AutomationDialog({
                           step={1}
                           value={form.onceRunAt}
                           onChange={(event) => setField("onceRunAt", event.target.value)}
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1041,7 +1300,7 @@ export function AutomationDialog({
                           value={form.cronExpression}
                           onChange={(event) => setField("cronExpression", event.target.value)}
                           placeholder="0 9 * * *"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1102,7 +1361,7 @@ export function AutomationDialog({
                           value={form.timezone}
                           onChange={(event) => setField("timezone", event.target.value)}
                           placeholder="Europe/Rome"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1133,10 +1392,13 @@ export function AutomationDialog({
                     onValueChange={(value) => setField("mode", value as AutomationMode)}
                   >
                     <MenuRadioItem value="standalone">Standalone</MenuRadioItem>
+                    <MenuRadioItem value="dedicated">Dedicated thread</MenuRadioItem>
                     <MenuRadioItem value="heartbeat">Heartbeat</MenuRadioItem>
                   </MenuRadioGroup>
                 </MenuGroup>
-                {form.mode === "heartbeat" ? (
+                {/* Only heartbeat continues a thread the user picks; a dedicated automation
+                    creates and keeps its own. */}
+                {automationRequiresTargetThread(form.mode) ? (
                   <>
                     <MenuSeparator />
                     <MenuGroup>
@@ -1158,27 +1420,36 @@ export function AutomationDialog({
                         </MenuRadioGroup>
                       )}
                     </MenuGroup>
-                    <MenuSeparator />
-                    <MenuGroup>
-                      <MenuGroupLabel>Stop when</MenuGroupLabel>
-                      <div className="px-2 py-1">
-                        <input
-                          value={form.stopWhen}
-                          onChange={(event) => setField("stopWhen", event.target.value)}
-                          placeholder="PR is ready to merge"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        />
-                      </div>
-                    </MenuGroup>
-                    <MenuSeparator />
-                    <MenuCheckboxItem
-                      checked={form.stopOnError}
-                      onCheckedChange={(checked) => setField("stopOnError", checked)}
-                    >
-                      Stop on error
-                    </MenuCheckboxItem>
                   </>
                 ) : null}
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>Stop when</MenuGroupLabel>
+                  <div className="px-2 py-1">
+                    <input
+                      value={form.stopWhen}
+                      onChange={(event) => setField("stopWhen", event.target.value)}
+                      placeholder="PR is ready to merge"
+                      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                </MenuGroup>
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>On failure</MenuGroupLabel>
+                  <MenuRadioGroup
+                    value={form.stopAfterFailures}
+                    onValueChange={(value) =>
+                      setField("stopAfterFailures", value as AutomationFailurePolicyValue)
+                    }
+                  >
+                    {automationFailurePolicyOptions(form.stopAfterFailures).map((option) => (
+                      <MenuRadioItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                </MenuGroup>
                 <MenuSeparator />
                 <MenuGroup>
                   <MenuGroupLabel>Max iterations</MenuGroupLabel>
@@ -1191,6 +1462,19 @@ export function AutomationDialog({
                         {preset.label}
                       </MenuRadioItem>
                     ))}
+                  </MenuRadioGroup>
+                </MenuGroup>
+                <MenuSeparator />
+                <MenuGroup>
+                  <MenuGroupLabel>Notify</MenuGroupLabel>
+                  <MenuRadioGroup
+                    value={form.notificationPolicy}
+                    onValueChange={(value) =>
+                      setField("notificationPolicy", value as AutomationNotificationPolicy)
+                    }
+                  >
+                    <MenuRadioItem value="all">All runs</MenuRadioItem>
+                    <MenuRadioItem value="failed-runs-only">Failed runs only</MenuRadioItem>
                   </MenuRadioGroup>
                 </MenuGroup>
               </ComposerPickerMenuPopup>
@@ -1208,7 +1492,19 @@ export function AutomationDialog({
                   />
                 }
               >
-                <CentralIcon name="brain" className="size-4" />
+                <CentralIcon
+                  name={
+                    form.runtimeMode === "auto"
+                      ? "shield-code"
+                      : form.runtimeMode === "full-access"
+                        ? "shield-access"
+                        : "brain"
+                  }
+                  className={cn(
+                    "size-4",
+                    form.runtimeMode === "auto" && RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME,
+                  )}
+                />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-48">
                 <MenuRadioGroup
@@ -1216,13 +1512,30 @@ export function AutomationDialog({
                   onValueChange={(value) => setField("runtimeMode", value as RuntimeMode)}
                 >
                   <MenuRadioItem value="approval-required">Approval required</MenuRadioItem>
+                  {selectedModelSupportsAuto ? (
+                    <MenuRadioItem value="auto">
+                      <CentralIcon
+                        name="shield-code"
+                        className={cn("size-4", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
+                      />
+                      Auto
+                    </MenuRadioItem>
+                  ) : null}
                   <MenuRadioItem value="full-access">Full access</MenuRadioItem>
                 </MenuRadioGroup>
               </ComposerPickerMenuPopup>
             </Menu>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 shrink-0 items-center gap-2">
+            {submitBlockReason ? (
+              <span
+                className="min-w-0 truncate text-ui leading-snug text-muted-foreground"
+                role="status"
+              >
+                {submitBlockReason}
+              </span>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -1231,8 +1544,13 @@ export function AutomationDialog({
             >
               Cancel
             </Button>
-            <Button type="button" onClick={submit} disabled={busy || !submittable}>
-              {editing ? "Save" : "Create"}
+            <Button
+              type="button"
+              onClick={submit}
+              disabled={busy || !submittable}
+              title={submitBlockReason ?? undefined}
+            >
+              Create
             </Button>
           </div>
         </div>

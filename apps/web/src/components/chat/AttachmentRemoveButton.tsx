@@ -39,11 +39,14 @@ interface AttachmentRemoveButtonProps {
 export function AttachmentRemoveButton({
   onRemove,
   label,
-  size = "md",
-  placement = "corner",
-  tone = "solid",
+  size: sizeProp,
+  placement: placementProp,
+  tone: toneProp,
   className,
 }: AttachmentRemoveButtonProps) {
+  const size = sizeProp ?? "md";
+  const placement = placementProp ?? "corner";
+  const tone = toneProp ?? "solid";
   const styles = ATTACHMENT_REMOVE_BUTTON_SIZE_STYLES[size];
   return (
     <button

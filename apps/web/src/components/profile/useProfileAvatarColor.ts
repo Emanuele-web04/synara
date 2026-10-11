@@ -3,7 +3,6 @@
 // initials). Backs the avatar "edit" affordance in the Edit-profile dialog. Local-only, no I/O.
 // Layer: web profile feature.
 
-import { useCallback } from "react";
 import { Schema } from "effect";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 
@@ -35,12 +34,9 @@ export function useProfileAvatarColor() {
 
   const color = stored.trim().length > 0 ? stored.trim() : DEFAULT_AVATAR_COLOR;
 
-  const setColor = useCallback(
-    (next: string) => {
-      setStored(next === DEFAULT_AVATAR_COLOR ? "" : next);
-    },
-    [setStored],
-  );
+  const setColor = (next: string) => {
+    setStored(next === DEFAULT_AVATAR_COLOR ? "" : next);
+  };
 
   return { color, setColor } as const;
 }

@@ -3,16 +3,8 @@
 // Layer: Release/build helper
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  lstatSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { hashFile } from "./file-digest.ts";
+import { lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -31,6 +23,7 @@ export interface ReleaseArtifactProvenanceInput {
   readonly lockfileSha256: string;
   readonly publication: boolean;
   readonly signed: boolean;
+  readonly allowUnsignedWindowsPublication?: boolean;
   readonly expectedMacTeamId?: string;
   readonly expectedWindowsPublisher?: string;
   readonly expectedWindowsSubjectDn?: string;
@@ -88,6 +81,12 @@ type SigningEvidence =
       readonly scheme: "none";
       readonly identity: null;
       readonly checks: ReadonlyArray<string>;
+    }
+  | {
+      readonly status: "unsigned-explicit-release";
+      readonly scheme: "none";
+      readonly identity: null;
+      readonly checks: ReadonlyArray<string>;
     };
 
 export interface ReleaseArtifactProvenanceManifest {
@@ -135,16 +134,6 @@ function requireSingleArtifact(
     throw new Error(`Expected exactly one ${suffix} artifact, found ${matches.length}.`);
   }
   return matches[0]!;
-}
-
-function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolveHash, reject) => {
-    const hash = createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolveHash(hash.digest("hex")));
-  });
 }
 
 export async function collectReleaseArtifactDigests(
@@ -251,6 +240,7 @@ function verifyMacSignatures(
       "--verbose=4",
       diskImagePath,
     ]);
+    runCommand("xcrun", ["stapler", "validate", diskImagePath]);
 
     return {
       status: "verified",
@@ -267,6 +257,7 @@ function verifyMacSignatures(
         "stapler validate app",
         "codesign --verify dmg",
         "spctl --assess dmg",
+        "stapler validate dmg",
       ],
     };
   } finally {
@@ -398,6 +389,15 @@ function resolveSigningEvidence(
 
   if (!input.signed) {
     if (input.publication) {
+      if (input.platform === "win" && input.allowUnsignedWindowsPublication === true) {
+        requireSingleArtifact(artifacts, ".exe");
+        return {
+          status: "unsigned-explicit-release",
+          scheme: "none",
+          identity: null,
+          checks: ["explicit version-scoped Windows release exception"],
+        };
+      }
       throw new Error(`Publishing ${input.platform} artifacts requires verified signing.`);
     }
     requireSingleArtifact(artifacts, input.platform === "mac" ? ".dmg" : ".exe");

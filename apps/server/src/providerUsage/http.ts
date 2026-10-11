@@ -19,9 +19,17 @@ export async function fetchJson(input: {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: unknown;
+  /** How to encode `body`: JSON (default) or application/x-www-form-urlencoded (OAuth endpoints). */
+  bodyFormat?: "json" | "form";
   timeoutMs?: number;
+  allowLoopbackHttp?: boolean;
 }): Promise<FetchJsonResult> {
-  const encodedBody = input.body === undefined ? undefined : JSON.stringify(input.body);
+  const encodedBody =
+    input.body === undefined
+      ? undefined
+      : input.bodyFormat === "form"
+        ? new URLSearchParams(input.body as Record<string, string>).toString()
+        : JSON.stringify(input.body);
   const response = await outboundHttp.request({
     policy: {
       service: input.service,
@@ -33,6 +41,10 @@ export async function fetchJson(input: {
       maxConcurrent: 4,
       maxQueued: 8,
       requirePublicAddress: true,
+      // Fake-ip DNS proxies resolve the hard-coded provider origins these calls
+      // are pinned to into the RFC 2544 benchmark range.
+      allowBenchmarkAddressRange: true,
+      ...(input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {}),
     },
     url: input.url,
     method: input.method ?? "GET",
@@ -76,9 +88,14 @@ export function parseRetryAfterMs(headers: Headers, nowMs: number): number | und
     return undefined;
   }
   const trimmed = raw.trim();
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds)) {
-    return seconds > 0 ? seconds * 1000 : undefined;
+  if (/^\d+$/u.test(trimmed)) {
+    const milliseconds = Number(trimmed) * 1000;
+    return milliseconds > 0 && Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  }
+  // HTTP-date values begin with a weekday name. Reject alternate JavaScript number spellings
+  // before Date.parse can reinterpret values such as `1.5` or `+10` as implementation-defined dates.
+  if (/^[+\-.\d]/u.test(trimmed)) {
+    return undefined;
   }
   const dateMs = Date.parse(trimmed);
   if (Number.isFinite(dateMs)) {

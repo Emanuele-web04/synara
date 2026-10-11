@@ -13,7 +13,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
-import { memo, useState } from "react";
+import { useState } from "react";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import {
@@ -23,7 +23,6 @@ import {
 import {
   CheckIcon,
   CopyIcon,
-  LoaderIcon,
   PanelCollapseIcon,
   PanelExpandIcon,
   PauseIcon,
@@ -32,10 +31,13 @@ import {
   WorkflowIcon,
   XIcon,
 } from "~/lib/icons";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useNowMs } from "~/hooks/useNowMs";
 import { formatClockDuration } from "../../session-logic";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import {
@@ -53,11 +55,11 @@ import {
   COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
+  COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
 
 interface WorkflowRunCardProps {
   workflowRun: WorkflowRunState;
-  nowMs: number;
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenThread: (threadId: ThreadId) => void;
@@ -148,7 +150,7 @@ function WorkflowAgentDetail({
       className="mb-1 ml-[14px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70">
+        <span className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/70">
           {identityLine}
         </span>
         {threadId ? (
@@ -156,7 +158,7 @@ function WorkflowAgentDetail({
             type="button"
             variant="ghost"
             size="xs"
-            className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground/70"
+            className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground/70"
             onClick={() => onOpenThread(threadId)}
           >
             Open thread
@@ -164,7 +166,7 @@ function WorkflowAgentDetail({
         ) : null}
       </div>
       {statsLine ? (
-        <div className="text-[11px] tabular-nums text-muted-foreground/55">{statsLine}</div>
+        <div className="text-ui-sm tabular-nums text-muted-foreground/55">{statsLine}</div>
       ) : null}
       {agent.promptPreview ? (
         <div>
@@ -175,25 +177,25 @@ function WorkflowAgentDetail({
             onClick={() => setPromptOpen((open) => !open)}
           >
             <DisclosureChevron open={promptOpen} className="shrink-0" />
-            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/45">
+            <span className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">
               Prompt
             </span>
           </button>
           {promptOpen ? null : (
-            <div className="line-clamp-2 whitespace-pre-wrap font-mono text-[11px] leading-4 text-muted-foreground/65">
+            <div className="line-clamp-2 whitespace-pre-wrap font-mono text-ui-sm leading-4 text-muted-foreground/65">
               {agent.promptPreview}
             </div>
           )}
           <DisclosureRegion open={promptOpen}>
-            <div className="whitespace-pre-wrap font-mono text-[11px] leading-4 text-muted-foreground/65">
+            <div className="whitespace-pre-wrap font-mono text-ui-sm leading-4 text-muted-foreground/65">
               {agent.promptPreview}
             </div>
           </DisclosureRegion>
         </div>
       ) : null}
       {agent.recentToolNames.length > 0 ? (
-        <div className="min-w-0 truncate text-[11px] text-muted-foreground/55">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/45">
+        <div className="min-w-0 truncate text-ui-sm text-muted-foreground/55">
+          <span className="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">
             Recent
           </span>{" "}
           <span className="font-mono">{agent.recentToolNames.join(" · ")}</span>
@@ -228,35 +230,30 @@ function WorkflowAgentRowView({
         aria-expanded={expanded}
         onClick={onToggle}
       >
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            subagentStatusDotClassName(agent.statusKind),
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+        <StatusDot className={subagentStatusDotClassName(agent.statusKind)} />
+        <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
           {agent.description}
           {agent.subagentType ? (
-            <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
+            <span className="ml-1 text-ui-sm font-normal text-muted-foreground/55">
               ({agent.subagentType})
             </span>
           ) : null}
           {agent.modelLabel ? (
-            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+            <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">
               {agent.modelLabel}
             </span>
           ) : null}
           {agent.effortLabel ? (
-            <span className="ml-1 text-[11px] font-normal text-muted-foreground/35">
+            <span className="ml-1 text-ui-sm font-normal text-muted-foreground/35">
               {agent.effortLabel}
             </span>
           ) : null}
         </span>
         {meta ? (
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{meta}</span>
+          <span className="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">{meta}</span>
         ) : null}
         <span
-          className={cn("shrink-0 text-[11px]", subagentStatusTextToneClassName(agent.statusKind))}
+          className={cn("shrink-0 text-ui-sm", subagentStatusTextToneClassName(agent.statusKind))}
         >
           {agent.statusLabel}
         </span>
@@ -275,9 +272,8 @@ function WorkflowAgentRowView({
   );
 }
 
-export const WorkflowRunCard = memo(function WorkflowRunCard({
+export function WorkflowRunCard({
   workflowRun,
-  nowMs,
   compact,
   onCompactChange,
   onOpenThread,
@@ -285,8 +281,11 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
   onPause,
   onResume,
   onDismiss,
-  attachedToPrevious = false,
+  attachedToPrevious: attachedToPreviousProp,
 }: WorkflowRunCardProps) {
+  // Keep elapsed-time ticks local to the card instead of rerendering ChatView.
+  const nowMs = useNowMs(!workflowRun.settled);
+  const attachedToPrevious = attachedToPreviousProp ?? false;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   // Default view lists every phase's agents (grouped); a pill click narrows to
   // one phase, clicking it again returns to the full list.
@@ -356,7 +355,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
       <ComposerStackedPanelHeaderRow>
         <ComposerStackedPanelRowMain title={workflowRun.description ?? undefined}>
           {compact && workflowRun.runningCount > 0 ? (
-            <LoaderIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "animate-spin")} />
+            <LiveStatusSpinner className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           ) : (
             <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
@@ -435,9 +434,9 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
             title={compact ? "Expand workflow panel" : "Collapse workflow panel"}
           >
             {compact ? (
-              <PanelExpandIcon className="size-3" />
+              <PanelExpandIcon className="size-3" strokeWidth={2} />
             ) : (
-              <PanelCollapseIcon className="size-3" />
+              <PanelCollapseIcon className="size-3" strokeWidth={2} />
             )}
           </Button>
         </div>
@@ -456,7 +455,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                   type="button"
                   data-testid="workflow-phase-rail-item"
                   className={cn(
-                    "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] transition-colors",
+                    "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-ui-sm transition-colors",
                     phase.title === selectedPhaseTitle
                       ? "bg-[var(--color-background-button-secondary)] text-foreground/85"
                       : "text-muted-foreground/60 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/70",
@@ -477,12 +476,15 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
               ))}
             </div>
           ) : null}
-          <div className="space-y-0" data-testid="workflow-phase-group">
+          <div
+            className={cn("space-y-0", COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME)}
+            data-testid="workflow-phase-group"
+          >
             {visibleGroups ? (
               visibleGroups.length > 0 ? (
                 visibleGroups.map(({ phase, agents }) => (
                   <div key={phase.title}>
-                    <div className="pt-1 text-[10px] font-medium text-muted-foreground/50">
+                    <div className="pt-1 text-ui-xs font-medium text-muted-foreground/50">
                       {phase.title}
                     </div>
                     {agents.map((agent) => (
@@ -498,7 +500,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                   </div>
                 ))
               ) : (
-                <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+                <div className="py-1 text-ui-sm text-muted-foreground/45">No agents yet</div>
               )
             ) : workflowRun.agents.length > 0 ? (
               workflowRun.agents.map((agent) => (
@@ -512,7 +514,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                 />
               ))
             ) : (
-              <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+              <div className="py-1 text-ui-sm text-muted-foreground/45">No agents yet</div>
             )}
           </div>
           {savedLine.length > 0 ? (
@@ -520,9 +522,9 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
               data-testid="workflow-saved-line"
               className="mt-0.5 flex min-w-0 items-center gap-1.5"
             >
-              <span className="shrink-0 text-[11px] text-muted-foreground/50">Saved</span>
+              <span className="shrink-0 text-ui-sm text-muted-foreground/50">Saved</span>
               <span
-                className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/45"
+                className="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/45"
                 title={savedLine}
               >
                 {workflowRun.runId ?? workflowRun.scriptPath}
@@ -544,4 +546,4 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
       </DisclosureRegion>
     </ComposerStackedPanel>
   );
-});
+}

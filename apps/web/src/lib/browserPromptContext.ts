@@ -1,19 +1,7 @@
-import {
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-  type BrowserCaptureScreenshotResult,
-  type NativeApi,
-  type ThreadId,
-} from "@synara/contracts";
+import type { BrowserCaptureScreenshotResult, NativeApi, ThreadId } from "@synara/contracts";
 
 import type { ComposerImageAttachment } from "../composerDraftStore";
-
-const EXPLICIT_COMPUTER_USE_PATTERNS = [
-  "computer use",
-  "computer-use",
-  "@computer-use",
-  "@computer use",
-  "mcp__computer_use__",
-];
+import { prepareComposerImageAttachmentsFromFiles } from "./composerSend";
 
 const INTERNAL_BROWSER_SCOPE_PATTERNS = [
   "browser interno",
@@ -53,11 +41,6 @@ function normalizePromptForMatching(prompt: string): string {
   return prompt.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export function promptRequestsExplicitComputerUse(prompt: string): boolean {
-  const normalized = normalizePromptForMatching(prompt);
-  return EXPLICIT_COMPUTER_USE_PATTERNS.some((pattern) => normalized.includes(pattern));
-}
-
 export function promptLooksLikeInternalBrowserTask(prompt: string): boolean {
   const normalized = normalizePromptForMatching(prompt);
   const mentionsInternalBrowser = INTERNAL_BROWSER_SCOPE_PATTERNS.some((pattern) =>
@@ -83,26 +66,25 @@ function fileFromBrowserScreenshot(screenshot: BrowserCaptureScreenshotResult): 
   });
 }
 
-export function composerImageFromBrowserScreenshot(
+export async function prepareComposerImageFromBrowserScreenshot(
   screenshot: BrowserCaptureScreenshotResult,
-): ComposerImageAttachment {
+): Promise<ComposerImageAttachment> {
   const file = fileFromBrowserScreenshot(screenshot);
-  const previewUrl = URL.createObjectURL(file);
-  return {
-    type: "image",
-    id: crypto.randomUUID(),
-    name: file.name,
-    mimeType: screenshot.mimeType,
-    sizeBytes: screenshot.sizeBytes,
-    previewUrl,
-    file,
-  };
+  const result = await prepareComposerImageAttachmentsFromFiles({
+    files: [file],
+    existingAttachmentCount: 0,
+  });
+  const image = result.images[0];
+  if (!image) {
+    throw new Error(result.error ?? "Browser screenshot could not be prepared.");
+  }
+  return image;
 }
 
 export interface BrowserPromptAttachmentResolution {
   requested: boolean;
   image: ComposerImageAttachment | null;
-  reason?: "no-open-browser" | "no-active-tab" | "attachment-too-large";
+  reason?: "no-open-browser" | "no-active-tab" | "attachment-processing-failed";
 }
 
 export async function maybeResolveBrowserPromptAttachment(input: {
@@ -110,10 +92,7 @@ export async function maybeResolveBrowserPromptAttachment(input: {
   threadId: ThreadId;
   prompt: string;
 }): Promise<BrowserPromptAttachmentResolution> {
-  if (
-    promptRequestsExplicitComputerUse(input.prompt) ||
-    !promptLooksLikeInternalBrowserTask(input.prompt)
-  ) {
+  if (!promptLooksLikeInternalBrowserTask(input.prompt)) {
     return { requested: false, image: null };
   }
 
@@ -136,12 +115,12 @@ export async function maybeResolveBrowserPromptAttachment(input: {
     threadId: input.threadId,
     tabId: activeTab.id,
   });
-  if (screenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-    return { requested: true, image: null, reason: "attachment-too-large" };
+  try {
+    return {
+      requested: true,
+      image: await prepareComposerImageFromBrowserScreenshot(screenshot),
+    };
+  } catch {
+    return { requested: true, image: null, reason: "attachment-processing-failed" };
   }
-
-  return {
-    requested: true,
-    image: composerImageFromBrowserScreenshot(screenshot),
-  };
 }

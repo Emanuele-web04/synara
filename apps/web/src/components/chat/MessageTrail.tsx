@@ -6,19 +6,23 @@
 //   `onSelect` jumps (shadcn's scrollToMessage). The hot path writes tick width /
 //   opacity straight to the DOM inside one coalesced rAF — no React state per move
 //   — so it stays smooth and never re-renders the heavy timeline.
+//   With `subscribeAudioLevel`, the resting ticks also ripple with sound (the
+//   Mac's audio output and/or the microphone), outward from the middle of the
+//   visible rail; pointer/keyboard magnification always wins over the wave.
 // Layer: Chat transcript shell (presentation)
 // Depends on: pure magnification math in messageTrail.logic.ts (unit-tested).
 
 import { type MessageId } from "@synara/contracts";
 import {
-  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   type FocusEvent as ReactFocusEvent,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -35,6 +39,10 @@ import {
   computeSigma,
   computeTickStyles,
   computeTrailGeometry,
+  computeTrailWindow,
+  computeAudioTickWidths,
+  createAudioLevelShaper,
+  stepAudioEnvelope,
   type ActiveTrailStore,
   type MessageTrailItem,
   type TickStyle,
@@ -46,12 +54,14 @@ interface MessageTrailProps {
   /** Stable holder for current + visible highlights; only this component re-renders on change. */
   activeStore: ActiveTrailStore;
   onSelect: (messageId: MessageId) => void;
+  contentInsetRightPx?: number | undefined;
+  /** Source of audio levels (0..1); omitted, the rail ignores sound. */
+  subscribeAudioLevel?: ((listener: (level: number) => void) => () => void) | undefined;
 }
 
-// Rail only renders once the centered transcript column (max 46rem) leaves a left
-// gutter wide enough for the rail to sit clear of message text. Measured off the
-// pane so a docked side panel / the sidebar is accounted for.
-const MIN_PANE_WIDTH_PX = 864;
+// Leave breathing room between the rail and the selected chat column, including
+// the space reserved by the transcript scrollbar.
+const RAIL_CONTENT_CLEARANCE_PX = 16;
 // Fixed rail box. Ticks grow rightward inside it (left-aligned, like the Dock).
 const RAIL_WIDTH_PX = 56;
 // Cap the scrollable tick viewport a bit below the full pane height so the rail
@@ -77,21 +87,35 @@ const TICK_ANCHOR_OPACITY = 0.9;
 // Only the single tick directly under the pointer/keyboard focus goes full black —
 // its neighbours just grow in size, they don't darken (no opacity falloff).
 const TICK_FOCUS_OPACITY = 1;
+// Audio wave: each tick lags its inner neighbour by this many frames, and the
+// envelope keeps this much of its height per frame once the sound drops.
+const AUDIO_FRAMES_PER_TICK = 3;
+const AUDIO_RELEASE_PER_FRAME = 0.82;
+const AUDIO_HISTORY_FRAMES = 120;
+const AUDIO_SILENCE_LEVEL = 0.002;
 const TOOLTIP_ESTIMATED_H_PX = 56;
 const TOOLTIP_OFFSET_X_PX = 8;
 
-export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps) {
+export function MessageTrail({
+  items,
+  activeStore,
+  onSelect,
+  contentInsetRightPx = 0,
+  subscribeAudioLevel,
+}: MessageTrailProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const tooltipMessageRef = useRef<HTMLDivElement | null>(null);
   const tooltipResponseRef = useRef<HTMLDivElement | null>(null);
-  const tickRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const tickRefs = useRef(new Map<number, HTMLButtonElement>());
+  const pendingFocusRef = useRef<number | null>(null);
   const tooltipId = useId();
 
   const [hasGutter, setHasGutter] = useState(false);
   const [rovingIndex, setRovingIndex] = useState(0);
+  const [viewportBounds, setViewportBounds] = useState({ scrollTop: 0, height: 0 });
 
   // Reading-position highlights — fed by the timeline via a stable store so only
   // this rail re-renders when they change.
@@ -100,24 +124,14 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     activeStore.get,
     activeStore.get,
   );
-  const anchorIndex = useMemo(
-    () => items.findIndex((item) => item.id === trailSnapshot.currentId),
-    [items, trailSnapshot.currentId],
-  );
-  const visibleIndexes = useMemo(() => {
-    if (trailSnapshot.visibleIds.length === 0) {
-      return [];
-    }
-    const visibleIds = new Set(trailSnapshot.visibleIds);
-    const indexes: number[] = [];
-    items.forEach((item, index) => {
-      if (visibleIds.has(item.id)) {
-        indexes.push(index);
-      }
-    });
-    return indexes;
-  }, [items, trailSnapshot.visibleIds]);
-  const visibleIndexSet = useMemo(() => new Set(visibleIndexes), [visibleIndexes]);
+  const indexById = useMemo(() => new Map(items.map((item, index) => [item.id, index])), [items]);
+  const anchorIndex =
+    trailSnapshot.currentId === null ? -1 : (indexById.get(trailSnapshot.currentId) ?? -1);
+  const visibleIndexes = trailSnapshot.visibleIds.flatMap((id) => {
+    const index = indexById.get(id);
+    return index === undefined ? [] : [index];
+  });
+  const visibleIndexSet = new Set(visibleIndexes);
 
   const visible = hasGutter && items.length > 1;
 
@@ -128,6 +142,17 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     () => computeTrailGeometry({ count: items.length, spacingPx: TICK_SPACING_PX }),
     [items.length],
   );
+  const trailWindow = computeTrailWindow(geometry, viewportBounds.scrollTop, viewportBounds.height);
+  const trailWindowRef = useRef(trailWindow);
+  const tabStop = clampNumber(rovingIndex, 0, Math.max(0, items.length - 1));
+  const renderedIndexes = Array.from(
+    { length: trailWindow.end - trailWindow.start },
+    (_, index) => trailWindow.start + index,
+  );
+  // Keep exactly one tab stop mounted when the rail scrolls away from it.
+  if (items.length > 0 && (tabStop < trailWindow.start || tabStop >= trailWindow.end)) {
+    renderedIndexes.push(tabStop);
+  }
 
   // --- Hot-path refs (read inside rAF; never trigger renders) ---------------
   const rafIdRef = useRef<number | null>(null);
@@ -136,49 +161,55 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   const latestPointerClientYRef = useRef<number | null>(null);
   const focusOverrideIndexRef = useRef<number | null>(null);
   const geometryRef = useRef<TrailGeometry | null>(geometry);
-  geometryRef.current = geometry;
   const viewportTopRef = useRef(0);
   const tooltipIndexRef = useRef(-1);
   const reducedMotionRef = useRef(false);
+  // Audio wave state: latest reported level, smoothed envelope, and its recent
+  // history (newest first) that the travelling wave reads from.
+  const audioTargetRef = useRef(0);
+  const audioEnvelopeRef = useRef(0);
+  const audioHistoryRef = useRef<number[]>([]);
+  const audioRafIdRef = useRef<number | null>(null);
   // Mirror render values into refs so the rAF/handlers stay stable and current.
+  // Mirrored in an effect (not during render) so the component stays eligible
+  // for React Compiler; the rAF loop and handlers only fire post-commit.
   const itemsRef = useRef(items);
-  itemsRef.current = items;
   const anchorIndexRef = useRef(anchorIndex);
-  anchorIndexRef.current = anchorIndex;
   const visibleIndexesRef = useRef(visibleIndexes);
-  visibleIndexesRef.current = visibleIndexes;
   const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
   const visibleRef = useRef(visible);
-  visibleRef.current = visible;
-
-  // Keep the tick-ref array sized to the message count (drop stale trailing refs).
-  if (tickRefs.current.length !== items.length) {
-    tickRefs.current = Array.from<HTMLButtonElement | null>({ length: items.length }).fill(null);
-  }
+  useEffect(() => {
+    geometryRef.current = geometry;
+    itemsRef.current = items;
+    anchorIndexRef.current = anchorIndex;
+    visibleIndexesRef.current = visibleIndexes;
+    onSelectRef.current = onSelect;
+    visibleRef.current = visible;
+    trailWindowRef.current = trailWindow;
+  }, [geometry, items, anchorIndex, visibleIndexes, onSelect, visible, trailWindow]);
 
   // --- Imperative writers ----------------------------------------------------
-  const writeStyles = useCallback((styles: readonly TickStyle[]) => {
+  const writeStyles = (styles: readonly TickStyle[]) => {
     const refs = tickRefs.current;
     for (let i = 0; i < styles.length; i += 1) {
-      const el = refs[i];
+      const el = refs.get(trailWindowRef.current.start + i);
       if (!el) {
         continue;
       }
       el.style.width = `${styles[i]!.width}px`;
       el.style.opacity = `${styles[i]!.opacity}`;
     }
-  }, []);
+  };
 
-  const hideTooltip = useCallback(() => {
+  const hideTooltip = () => {
     tooltipIndexRef.current = -1;
     const tip = tooltipRef.current;
     if (tip) {
       tip.style.visibility = "hidden";
     }
-  }, []);
+  };
 
-  const showTooltip = useCallback((index: number, geometry: TrailGeometry) => {
+  const showTooltip = (index: number, geometry: TrailGeometry) => {
     const tip = tooltipRef.current;
     const item = itemsRef.current[index];
     if (!tip || !item) {
@@ -208,46 +239,109 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     const offsetTop = viewport?.offsetTop ?? 0;
     tip.style.top = `${offsetTop + clampTooltipTop(visibleY, tooltipHeight, viewportHeight)}px`;
     tip.style.visibility = "visible";
-  }, []);
+  };
 
-  const applyHighlightFloors = useCallback((styles: TickStyle[]) => {
+  const applyHighlightFloors = (styles: TickStyle[]) => {
     const anchorIndexValue = anchorIndexRef.current;
     for (const index of visibleIndexesRef.current) {
-      const style = styles[index];
+      const style = styles[index - trailWindowRef.current.start];
       if (style) {
         style.opacity = Math.max(style.opacity, TICK_VISIBLE_OPACITY);
       }
     }
-    const anchorStyle = anchorIndexValue >= 0 ? styles[anchorIndexValue] : undefined;
+    const anchorStyle = styles[anchorIndexValue - trailWindowRef.current.start];
     if (anchorStyle) {
       anchorStyle.opacity = Math.max(anchorStyle.opacity, TICK_ANCHOR_OPACITY);
     }
-  }, []);
+  };
 
   // Pointer/keyboard away: restore the resting rail (anchor tick highlighted).
-  const applyRest = useCallback(() => {
+  const applyRest = () => {
     const styles = computeRestStyles(
-      itemsRef.current.length,
-      anchorIndexRef.current,
+      trailWindowRef.current.end - trailWindowRef.current.start,
+      anchorIndexRef.current - trailWindowRef.current.start,
       TICK_BASE_W,
       TICK_REST_OPACITY,
       TICK_ANCHOR_OPACITY,
     );
     applyHighlightFloors(styles);
+    applyAudioWidths(styles);
     writeStyles(styles);
     hideTooltip();
-  }, [applyHighlightFloors, hideTooltip, writeStyles]);
+  };
+
+  // Resting ticks follow the audio wave, centred on the middle of the visible rail.
+  const applyAudioWidths = (styles: TickStyle[]) => {
+    const history = audioHistoryRef.current;
+    const geometryValue = geometryRef.current;
+    const viewport = viewportRef.current;
+    if (history.length === 0 || !geometryValue || !viewport) {
+      return;
+    }
+    const centerIndex = computeFocusedIndex(
+      viewport.scrollTop + viewport.clientHeight / 2,
+      geometryValue,
+    );
+    const widths = computeAudioTickWidths({
+      count: styles.length,
+      startIndex: trailWindowRef.current.start,
+      centerIndex,
+      history,
+      framesPerTick: AUDIO_FRAMES_PER_TICK,
+      baseW: TICK_BASE_W,
+      maxW: TICK_MAX_W,
+    });
+    for (let i = 0; i < styles.length; i += 1) {
+      const style = styles[i]!;
+      style.width = Math.max(style.width, widths[i] ?? TICK_BASE_W);
+    }
+  };
+
+  // One envelope step per frame; runs only while there is sound left to draw.
+  const renderAudioFrame = () => {
+    audioRafIdRef.current = null;
+    const envelope = stepAudioEnvelope(
+      audioEnvelopeRef.current,
+      audioTargetRef.current,
+      AUDIO_RELEASE_PER_FRAME,
+    );
+    audioEnvelopeRef.current = envelope < AUDIO_SILENCE_LEVEL ? 0 : envelope;
+    const history = audioHistoryRef.current;
+    history.unshift(audioEnvelopeRef.current);
+    if (history.length > AUDIO_HISTORY_FRAMES) {
+      history.length = AUDIO_HISTORY_FRAMES;
+    }
+    const settled = history.every((level) => level === 0);
+    if (settled) {
+      history.length = 0;
+    }
+    if (
+      visibleRef.current &&
+      latestPointerClientYRef.current === null &&
+      focusOverrideIndexRef.current === null
+    ) {
+      applyRest();
+    }
+    if (!settled) {
+      audioRafIdRef.current = requestAnimationFrame(renderAudioFrame);
+    }
+  };
+
+  const cancelAudioFrame = () => {
+    if (audioRafIdRef.current !== null) {
+      cancelAnimationFrame(audioRafIdRef.current);
+      audioRafIdRef.current = null;
+    }
+  };
 
   // Position the ticks vertically in content space and reset to rest when idle.
   // Width changes never reflow this, so it only runs when the layout changes.
-  const layoutTicks = useCallback(() => {
+  const layoutTicks = () => {
     const geometryValue = geometryRef.current;
     if (!geometryValue) {
       return;
     }
-    const refs = tickRefs.current;
-    for (let i = 0; i < refs.length; i += 1) {
-      const el = refs[i];
+    for (const [i, el] of tickRefs.current) {
       if (!el) {
         continue;
       }
@@ -257,16 +351,17 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     if (latestPointerClientYRef.current === null && focusOverrideIndexRef.current === null) {
       applyRest();
     }
-  }, [applyRest]);
+  };
 
   // --- The magnification frame (single coalesced rAF) ------------------------
-  const renderFrame = useCallback(() => {
+  const renderFrame = () => {
     rafIdRef.current = null;
     const geometry = geometryRef.current;
     if (!geometry || !visibleRef.current) {
       return;
     }
-    const count = itemsRef.current.length;
+    const { start, end } = trailWindowRef.current;
+    const count = end - start;
     if (count === 0) {
       return;
     }
@@ -283,7 +378,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       applyRest();
       return;
     }
-    const anchor = anchorIndexRef.current;
+    const anchor = anchorIndexRef.current - start;
     const focusedIndex = computeFocusedIndex(activeY, geometry);
 
     let styles: TickStyle[];
@@ -297,7 +392,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         TICK_REST_OPACITY,
         TICK_ANCHOR_OPACITY,
       );
-      const focusedStyle = styles[focusedIndex];
+      const focusedStyle = styles[focusedIndex - start];
       if (focusedStyle) {
         focusedStyle.width = TICK_MAX_W;
       }
@@ -306,7 +401,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       // the focal tick reaches the full TICK_MAX_W regardless of how tight the
       // vertical spacing is — it never overlaps its neighbours.
       const sigma = computeSigma(geometry.spacing);
-      const weights = computeGaussianWeights(geometry.centerYs, activeY, sigma);
+      const weights = computeGaussianWeights(geometry.centerYs.slice(start, end), activeY, sigma);
       styles = computeTickStyles(
         weights,
         anchor,
@@ -318,40 +413,39 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     }
     applyHighlightFloors(styles);
     // Darken only the focused tick — neighbours keep their state colour.
-    const focusedStyle = styles[focusedIndex];
+    const focusedStyle = styles[focusedIndex - start];
     if (focusedStyle) {
       focusedStyle.opacity = TICK_FOCUS_OPACITY;
     }
     writeStyles(styles);
     showTooltip(focusedIndex, geometry);
-  }, [applyHighlightFloors, applyRest, showTooltip, writeStyles]);
+  };
 
-  const scheduleFrame = useCallback(() => {
+  const scheduleFrame = () => {
     if (rafIdRef.current === null) {
       rafIdRef.current = requestAnimationFrame(renderFrame);
     }
-  }, [renderFrame]);
+  };
 
-  const cancelFrame = useCallback(() => {
+  const cancelFrame = () => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
-  }, []);
+  };
 
   // --- Gutter visibility: rail only shows when the pane is wide enough --------
   // Width-only ResizeObserver; the tick layout is count-driven (see `geometry`),
   // so observing size never feeds back into the layout.
   useEffect(() => {
     const root = rootRef.current;
-    const pane = root?.parentElement;
-    if (!pane || typeof ResizeObserver === "undefined") {
+    if (!root || typeof ResizeObserver === "undefined") {
       return;
     }
     let pendingRaf: number | null = null;
     const measure = () => {
       pendingRaf = null;
-      setHasGutter(pane.clientWidth >= MIN_PANE_WIDTH_PX);
+      setHasGutter(root.clientWidth >= RAIL_WIDTH_PX);
     };
     const schedule = () => {
       if (pendingRaf === null) {
@@ -360,7 +454,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     };
     schedule();
     const observer = new ResizeObserver(schedule);
-    observer.observe(pane);
+    observer.observe(root);
     return () => {
       if (pendingRaf !== null) {
         cancelAnimationFrame(pendingRaf);
@@ -369,10 +463,45 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     };
   }, []);
 
-  // Reposition the ticks whenever the layout changes (count → new centres).
+  // Only this small rail window changes when its own viewport scrolls/resizes.
+  // Fixed tick positions and the transcript scroll engine remain independent.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const updateBounds = () => {
+      const scrollTop = viewport.scrollTop;
+      const height = viewport.clientHeight;
+      setViewportBounds((current) =>
+        current.scrollTop === scrollTop && current.height === height
+          ? current
+          : { scrollTop, height },
+      );
+    };
+    updateBounds();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateBounds);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const index = pendingFocusRef.current;
+    if (index === null) return;
+    const tick = tickRefs.current.get(index);
+    if (tick) {
+      pendingFocusRef.current = null;
+      tick.focus({ preventScroll: true });
+    }
+  }, [rovingIndex, trailWindow.start, trailWindow.end]);
+
+  // Reposition committed ticks, then repaint active magnification on the new window.
+  // A scroll frame can run before React mounts that window and publishes its ref.
   useEffect(() => {
     layoutTicks();
-  }, [geometry, layoutTicks]);
+    if (latestPointerClientYRef.current !== null || focusOverrideIndexRef.current !== null) {
+      scheduleFrame();
+    }
+  }, [geometry, layoutTicks, scheduleFrame, trailWindow.start, trailWindow.end]);
 
   // Refresh idle highlights when the current anchor or visible-message set changes.
   useEffect(() => {
@@ -389,9 +518,45 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         : false;
   }, []);
 
+  // The audio subscription must not churn with every render (each re-subscribe
+  // can restart the native reader), so it reaches the frame writers via a ref.
+  const audioFrameHandlersRef = useRef({ renderAudioFrame, cancelAudioFrame, applyRest });
+  useEffect(() => {
+    audioFrameHandlersRef.current = { renderAudioFrame, cancelAudioFrame, applyRest };
+  });
+
+  // Audio wave: listen only while the rail is on screen and motion is allowed.
+  useEffect(() => {
+    if (!subscribeAudioLevel || !visible || reducedMotionRef.current) {
+      return;
+    }
+    const shapeLevel = createAudioLevelShaper();
+    const unsubscribe = subscribeAudioLevel((level) => {
+      const target = shapeLevel(level);
+      audioTargetRef.current = target;
+      if (audioRafIdRef.current === null && (target > 0 || audioHistoryRef.current.length > 0)) {
+        audioRafIdRef.current = requestAnimationFrame(
+          audioFrameHandlersRef.current.renderAudioFrame,
+        );
+      }
+    });
+    return () => {
+      unsubscribe();
+      audioFrameHandlersRef.current.cancelAudioFrame();
+      audioTargetRef.current = 0;
+      audioEnvelopeRef.current = 0;
+      audioHistoryRef.current = [];
+      audioFrameHandlersRef.current.applyRest();
+    };
+  }, [subscribeAudioLevel, visible]);
+
   // Going inert (narrow pane / N<=1): stop the loop and clear transient state.
   useEffect(() => {
     if (!visible) {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement && rootRef.current?.contains(activeElement)) {
+        activeElement.blur();
+      }
       cancelFrame();
       latestPointerClientYRef.current = null;
       focusOverrideIndexRef.current = null;
@@ -404,59 +569,53 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   useEffect(() => cancelFrame, [cancelFrame]);
 
   // --- Pointer handlers (mouse / pen only; touch must not hijack scroll) -----
-  const handlePointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch" || !visibleRef.current) {
-        return;
-      }
-      latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
-      scheduleFrame();
-    },
-    [scheduleFrame],
-  );
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch" || !visibleRef.current) {
+      return;
+    }
+    latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
+    scheduleFrame();
+  };
 
-  const handlePointerEnter = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch" || !visibleRef.current) {
-        return;
-      }
-      const rect = viewportRef.current?.getBoundingClientRect();
-      if (rect) {
-        viewportTopRef.current = rect.top;
-      }
-      latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
-      scheduleFrame();
-    },
-    [scheduleFrame],
-  );
+  const handlePointerEnter = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch" || !visibleRef.current) {
+      return;
+    }
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (rect) {
+      viewportTopRef.current = rect.top;
+    }
+    latestPointerClientYRef.current = event.clientY - viewportTopRef.current;
+    scheduleFrame();
+  };
 
-  const handlePointerLeave = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType === "touch") {
-        return;
-      }
-      latestPointerClientYRef.current = null;
-      cancelFrame();
-      // A keyboard-focused tick keeps its magnification; otherwise go to rest.
-      if (focusOverrideIndexRef.current !== null) {
-        scheduleFrame();
-      } else {
-        applyRest();
-      }
-    },
-    [applyRest, cancelFrame, scheduleFrame],
-  );
+  const handlePointerLeave = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    latestPointerClientYRef.current = null;
+    cancelFrame();
+    // A keyboard-focused tick keeps its magnification; otherwise go to rest.
+    if (focusOverrideIndexRef.current !== null) {
+      scheduleFrame();
+    } else {
+      applyRest();
+    }
+  };
 
   // Rail scrolling under a stationary pointer changes which tick is focused, so
   // keep the magnification + tooltip in sync while the pointer/keyboard is engaged.
-  const handleScroll = useCallback(() => {
+  const handleScroll = () => {
+    const viewport = viewportRef.current;
+    if (viewport)
+      setViewportBounds({ scrollTop: viewport.scrollTop, height: viewport.clientHeight });
     if (latestPointerClientYRef.current !== null || focusOverrideIndexRef.current !== null) {
       scheduleFrame();
     }
-  }, [scheduleFrame]);
+  };
 
   // Big hit-area: clicking anywhere on the rail jumps to the nearest tick.
-  const handleClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+  const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     const geometryValue = geometryRef.current;
     const viewport = viewportRef.current;
     if (!geometryValue || !viewport) {
@@ -468,84 +627,82 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
     if (item) {
       onSelectRef.current(item.id);
     }
-  }, []);
+  };
 
   // --- Keyboard: one tab stop (roving), arrows move, Enter jumps -------------
-  const focusTick = useCallback((index: number) => {
+  const focusTick = (index: number) => {
+    const viewport = viewportRef.current;
+    const centerY = geometryRef.current?.centerYs[index];
+    if (viewport && centerY !== undefined) {
+      viewport.scrollTop = Math.max(0, centerY - viewport.clientHeight / 2);
+      setViewportBounds({ scrollTop: viewport.scrollTop, height: viewport.clientHeight });
+    }
+    const mountedTick = tickRefs.current.get(index);
+    pendingFocusRef.current = mountedTick ? null : index;
     setRovingIndex(index);
-    tickRefs.current[index]?.focus();
-  }, []);
+    mountedTick?.focus({ preventScroll: true });
+  };
 
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLElement>) => {
-      const count = itemsRef.current.length;
-      if (count === 0) {
-        return;
-      }
-      const current = clampNumber(rovingIndex, 0, count - 1);
-      switch (event.key) {
-        case "ArrowDown":
-          event.preventDefault();
-          focusTick(Math.min(count - 1, current + 1));
-          break;
-        case "ArrowUp":
-          event.preventDefault();
-          focusTick(Math.max(0, current - 1));
-          break;
-        case "Home":
-          event.preventDefault();
-          focusTick(0);
-          break;
-        case "End":
-          event.preventDefault();
-          focusTick(count - 1);
-          break;
-        case "Enter":
-        case " ": {
-          event.preventDefault();
-          const item = itemsRef.current[current];
-          if (item) {
-            onSelectRef.current(item.id);
-          }
-          break;
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const count = itemsRef.current.length;
+    if (count === 0) {
+      return;
+    }
+    const current = clampNumber(rovingIndex, 0, count - 1);
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusTick(Math.min(count - 1, current + 1));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusTick(Math.max(0, current - 1));
+        break;
+      case "Home":
+        event.preventDefault();
+        focusTick(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusTick(count - 1);
+        break;
+      case "Enter":
+      case " ": {
+        event.preventDefault();
+        const item = itemsRef.current[current];
+        if (item) {
+          onSelectRef.current(item.id);
         }
-        case "Escape":
-          tickRefs.current[current]?.blur();
-          break;
-        default:
-          break;
+        break;
       }
-    },
-    [focusTick, rovingIndex],
-  );
+      case "Escape":
+        tickRefs.current.get(current)?.blur();
+        break;
+      default:
+        break;
+    }
+  };
 
-  const handleTickFocus = useCallback(
-    (index: number) => {
-      focusOverrideIndexRef.current = index;
-      const geometry = geometryRef.current;
-      if (geometry) {
-        showTooltip(index, geometry); // synchronous for screen readers
-      }
-      scheduleFrame();
-    },
-    [scheduleFrame, showTooltip],
-  );
+  const handleTickFocus = (index: number) => {
+    setRovingIndex(index);
+    focusOverrideIndexRef.current = index;
+    const geometry = geometryRef.current;
+    if (geometry) {
+      showTooltip(index, geometry); // synchronous for screen readers
+    }
+    scheduleFrame();
+  };
 
-  const handleRailBlur = useCallback(
-    (event: ReactFocusEvent<HTMLElement>) => {
-      const root = rootRef.current;
-      if (root && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
-        return; // focus moved between ticks — still inside the rail
-      }
-      focusOverrideIndexRef.current = null;
-      if (latestPointerClientYRef.current === null) {
-        applyRest();
-      }
-    },
-    [applyRest],
-  );
-
-  const tabStop = clampNumber(rovingIndex, 0, Math.max(0, items.length - 1));
+  const handleRailBlur = (event: ReactFocusEvent<HTMLElement>) => {
+    const root = rootRef.current;
+    if (root && event.relatedTarget instanceof Node && root.contains(event.relatedTarget)) {
+      return; // focus moved between ticks — still inside the rail
+    }
+    focusOverrideIndexRef.current = null;
+    if (latestPointerClientYRef.current === null) {
+      applyRest();
+    }
+  };
 
   return (
     <nav
@@ -557,9 +714,18 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       className={cn(
         "absolute inset-y-0 left-0 z-20 hidden flex-col justify-center sm:flex",
         DISCLOSURE_CONTENT_MOTION_CLASS,
+        "transition-[opacity,translate,--message-trail-content-inset]",
         visible ? "opacity-100" : "pointer-events-none opacity-0",
       )}
-      style={{ width: RAIL_WIDTH_PX }}
+      style={
+        {
+          "--message-trail-content-inset": `${contentInsetRightPx}px`,
+          width: RAIL_WIDTH_PX,
+          // CSS resolves rem, percentage/full-width, and live preference changes.
+          // Observe this constrained box, rather than assuming a fixed 46rem column.
+          maxWidth: `max(0px, calc((100% - var(--app-chat-max-width, 46rem) - var(--message-trail-content-inset)) / 2 - ${RAIL_CONTENT_CLEARANCE_PX}px))`,
+        } as CSSProperties
+      }
     >
       {/* Capped, centered, scrollable viewport. `scroll-fade-y` masks the top/bottom
           edges only while there is overflow to scroll (auto-off when it all fits). */}
@@ -577,34 +743,39 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         style={{ maxHeight: `${RAIL_MAX_HEIGHT_RATIO * 100}%` }}
       >
         <div ref={trackRef} className="relative w-full" style={{ height: geometry?.contentHeight }}>
-          {items.map((item, index) => (
-            <button
-              key={item.id}
-              ref={(el) => {
-                tickRefs.current[index] = el;
-              }}
-              type="button"
-              tabIndex={visible && index === tabStop ? 0 : -1}
-              aria-label={`Message ${item.ordinal}: ${item.preview.slice(0, 60)}`}
-              aria-describedby={tooltipId}
-              aria-current={index === anchorIndex ? "location" : undefined}
-              onFocus={() => handleTickFocus(index)}
-              className="absolute rounded-full transition-[width,opacity] duration-[90ms] ease-out outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border)] motion-reduce:transition-none"
-              style={{
-                left: TICK_LEFT_PAD_PX,
-                height: TICK_HEIGHT_PX,
-                width: TICK_BASE_W,
-                opacity:
-                  index === anchorIndex
-                    ? TICK_ANCHOR_OPACITY
-                    : visibleIndexSet.has(index)
-                      ? TICK_VISIBLE_OPACITY
-                      : TICK_REST_OPACITY,
-                backgroundColor: "var(--color-text-foreground)",
-                willChange: "width, opacity",
-              }}
-            />
-          ))}
+          {renderedIndexes.map((index) => {
+            const item = items[index]!;
+            return (
+              <button
+                key={item.id}
+                ref={(el) => {
+                  if (el) tickRefs.current.set(index, el);
+                  else tickRefs.current.delete(index);
+                }}
+                type="button"
+                tabIndex={visible && index === tabStop ? 0 : -1}
+                aria-label={`Message ${item.ordinal}: ${item.preview.slice(0, 60)}`}
+                aria-describedby={tooltipId}
+                aria-current={index === anchorIndex ? "location" : undefined}
+                onFocus={() => handleTickFocus(index)}
+                className="absolute rounded-full transition-[width,opacity] duration-[90ms] ease-out outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border)] motion-reduce:transition-none"
+                style={{
+                  left: TICK_LEFT_PAD_PX,
+                  top: (geometry?.centerYs[index] ?? 0) - TICK_HEIGHT_PX / 2,
+                  height: TICK_HEIGHT_PX,
+                  width: TICK_BASE_W,
+                  opacity:
+                    index === anchorIndex
+                      ? TICK_ANCHOR_OPACITY
+                      : visibleIndexSet.has(index)
+                        ? TICK_VISIBLE_OPACITY
+                        : TICK_REST_OPACITY,
+                  backgroundColor: "var(--color-text-foreground)",
+                  willChange: "width, opacity",
+                }}
+              />
+            );
+          })}
         </div>
       </div>
       <div
@@ -615,17 +786,23 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
           APP_TOOLTIP_SURFACE_CLASS_NAME,
           "pointer-events-none invisible absolute z-30 w-64 -translate-y-1/2 rounded-xl p-2",
         )}
-        style={{ left: RAIL_WIDTH_PX + TOOLTIP_OFFSET_X_PX, top: 0 }}
+        style={{
+          left: RAIL_WIDTH_PX + TOOLTIP_OFFSET_X_PX,
+          top: 0,
+          // This inline preview sits inside the transcript's compositing layer;
+          // backdrop blur alone cannot reliably obscure the message beneath it.
+          backgroundColor: "var(--popover)",
+        }}
       >
         {/* The sent message: dark, max two lines (matches the projects/threads card title). */}
         <div
           ref={tooltipMessageRef}
-          className="line-clamp-2 text-xs leading-snug font-medium text-foreground"
+          className="line-clamp-2 text-ui leading-snug font-medium text-foreground"
         />
         {/* The turn's first reply: muted gray, max three lines. */}
         <div
           ref={tooltipResponseRef}
-          className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground"
+          className="mt-1 line-clamp-3 text-ui leading-snug text-muted-foreground"
         />
       </div>
     </nav>

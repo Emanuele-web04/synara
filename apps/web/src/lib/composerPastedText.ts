@@ -7,10 +7,6 @@
 // Depends on: nothing (kept import-free so both composer state and message display
 //   can consume it without cycles).
 
-export interface PastedTextSelection {
-  text: string;
-}
-
 export interface PastedTextDraft {
   id: string;
   createdAt: string;

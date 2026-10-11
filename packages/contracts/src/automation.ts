@@ -13,15 +13,11 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import {
-  ModelSelection,
-  ProviderInteractionMode,
-  ProviderKind,
-  ProviderStartOptions,
-  RuntimeMode,
-} from "./orchestration";
+import { ModelSelection, ProviderKind, ProviderStartOptions, RuntimeMode } from "./orchestration";
 
 export const DEFAULT_AUTOMATION_RUNTIME_MODE: RuntimeMode = "approval-required";
+export const AutomationInteractionMode = Schema.Literals(["default", "plan"]);
+export type AutomationInteractionMode = typeof AutomationInteractionMode.Type;
 
 const AutomationIsoDateTime = IsoDateTime.check(
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/),
@@ -40,6 +36,10 @@ export type AutomationCronExpression = typeof AutomationCronExpression.Type;
 
 export const AutomationSchedule = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
+  Schema.Struct({
+    type: Schema.Literal("project-event"),
+    projectId: ProjectId,
+  }),
   Schema.Struct({
     type: Schema.Literal("once"),
     runAt: AutomationIsoDateTime,
@@ -77,16 +77,30 @@ export const AutomationWorktreeMode = Schema.Literals(["auto", "local", "worktre
 export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 
 /**
- * Automation execution model.
+ * Automation execution model. It selects *where* runs execute; it never restricts
+ * which stop conditions an automation may use.
  * - `standalone`: every run creates a fresh thread + turn (project task on a schedule).
  * - `heartbeat`: every run continues an existing target thread (a self-resuming loop).
+ * - `dedicated`: the first run creates a thread the automation owns, and every later
+ *   run continues that same thread — one growing conversation instead of one thread
+ *   per run, without ever writing into somebody else's thread.
  */
-export const AutomationMode = Schema.Literals(["standalone", "heartbeat"]);
+export const AutomationMode = Schema.Literals(["standalone", "heartbeat", "dedicated"]);
 export type AutomationMode = typeof AutomationMode.Type;
+
+export const AutomationProposalState = Schema.Literals(["pending", "accepted", "dismissed"]);
+export type AutomationProposalState = typeof AutomationProposalState.Type;
+
+export const AutomationNotificationPolicy = Schema.Literals(["all", "failed-runs-only"]);
+export type AutomationNotificationPolicy = typeof AutomationNotificationPolicy.Type;
+
+export const DEFAULT_AUTOMATION_NOTIFICATION_POLICY: AutomationNotificationPolicy = "all";
+export const DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS = 60;
 
 export const AutomationTrigger = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({ type: Schema.Literal("scheduled") }),
+  Schema.Struct({ type: Schema.Literal("project-event") }),
 ]);
 export type AutomationTrigger = typeof AutomationTrigger.Type;
 
@@ -112,6 +126,8 @@ export const AutomationRunResult = Schema.Struct({
     "unknown",
   ]),
   summary: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+  decision: Schema.optional(Schema.Literals(["notify", "silent"])),
   severity: Schema.optional(Schema.Literals(["info", "warning", "error"])),
   unread: Schema.Boolean,
   archivedAt: Schema.NullOr(AutomationIsoDateTime),
@@ -140,8 +156,10 @@ export const AutomationPermissionSnapshot = Schema.Struct({
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   completionPolicyVersion: Schema.optional(NonNegativeInt),
+  /** Stable one-based iteration ordinal claimed for this run. */
+  iterationNumber: Schema.optional(PositiveInt),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: AutomationInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   allowedCapabilities: Schema.Array(AutomationAllowedCapability),
   createdAt: AutomationIsoDateTime,
@@ -167,13 +185,25 @@ export type AutomationRetryPolicy = typeof AutomationRetryPolicy.Type;
 export const AutomationMisfirePolicy = Schema.Literals(["skip", "coalesce", "run-latest"]);
 export type AutomationMisfirePolicy = typeof AutomationMisfirePolicy.Type;
 
+export const AutomationDisabledReason = Schema.Literals([
+  "failures",
+  "max-iterations",
+  "completion",
+  "schedule",
+  "user",
+]);
+export type AutomationDisabledReason = typeof AutomationDisabledReason.Type;
+
 export const DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS = 60;
 export const DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS = 10;
 export const DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS = 60 * 60;
+export const DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES = 3;
 export const DEFAULT_AUTOMATION_RETRY_POLICY: AutomationRetryPolicy = { type: "none" };
 export const DEFAULT_AUTOMATION_MISFIRE_POLICY: AutomationMisfirePolicy = "coalesce";
 export const DEFAULT_AUTOMATION_COMPLETION_POLICY = { type: "none" } as const;
 export const DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD = 0.8;
+export const AUTOMATION_NAME_MAX_LENGTH = 160;
+export const AUTOMATION_PROMPT_MAX_LENGTH = 64_000;
 
 export const AutomationCompletionPolicy = Schema.Union([
   Schema.Struct({ type: Schema.Literal("none") }),
@@ -191,24 +221,51 @@ export const AutomationDefinition = Schema.Struct({
   id: AutomationId,
   projectId: ProjectId,
   sourceThreadId: Schema.NullOr(ThreadId),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
-  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
   schedule: AutomationSchedule,
   enabled: Schema.Boolean,
   nextRunAt: Schema.NullOr(AutomationIsoDateTime),
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
+  interactionMode: AutomationInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   mode: AutomationMode,
-  /** Heartbeat target thread continued on each wake. Null for standalone automations. */
+  /**
+   * Thread continued on each wake: the user-chosen target for heartbeat, or the
+   * automation's own thread for dedicated (server-assigned after its first run).
+   * Always null for standalone automations.
+   */
   targetThreadId: Schema.NullOr(ThreadId),
+  /** Suggested agent-created automations require an explicit user resolution. */
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  /** Successful-run attention policy. Null legacy rows decode as the default "all". */
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
+  ),
+  /** Minimum quiet period after the continued thread's last completed turn. */
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
+  ),
   /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
   maxIterations: Schema.NullOr(PositiveInt),
-  /** When true, a failed run disables the automation (stops a runaway loop). */
-  stopOnError: Schema.Boolean,
-  /** Heartbeat-only natural language stop condition. Standalone runs ignore it for now. */
+  /** Consecutive failed runs allowed before auto-disable. Null = never auto-disable. */
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES),
+  ),
+  consecutiveFailureCount: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => 0),
+  ),
+  disabledReason: Schema.optional(Schema.NullOr(AutomationDisabledReason)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  disabledAt: Schema.optional(Schema.NullOr(AutomationIsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  /** Natural language stop condition, evaluated in every mode. */
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
@@ -229,6 +286,8 @@ export const AutomationDefinition = Schema.Struct({
   ),
   /** Number of runs created so far; used to enforce maxIterations. */
   iterationCount: NonNegativeInt,
+  /** Project Coordinator owns this definition; ordinary automation edits cannot change ownership. */
+  managedByProject: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: AutomationIsoDateTime,
   updatedAt: AutomationIsoDateTime,
   archivedAt: Schema.NullOr(AutomationIsoDateTime),
@@ -240,8 +299,8 @@ const AutomationDefinitionConfig = Schema.Struct({
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
-  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
   schedule: AutomationSchedule,
   enabled: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
   modelSelection: ModelSelection,
@@ -249,7 +308,7 @@ const AutomationDefinitionConfig = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeMode).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_RUNTIME_MODE),
   ),
-  interactionMode: Schema.optional(ProviderInteractionMode).pipe(
+  interactionMode: Schema.optional(AutomationInteractionMode).pipe(
     Schema.withDecodingDefault(() => "default" as const),
   ),
   worktreeMode: Schema.optional(AutomationWorktreeMode).pipe(
@@ -261,10 +320,21 @@ const AutomationDefinitionConfig = Schema.Struct({
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
+  ),
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
+  ),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  stopOnError: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => true)),
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)),
+  /** @deprecated Use stopAfterConsecutiveFailures. */
+  stopOnError: Schema.optional(Schema.Boolean),
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
@@ -292,18 +362,27 @@ export const AutomationUpdateInput = Schema.Struct({
   id: AutomationId,
   projectId: Schema.optional(ProjectId),
   sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
-  name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
-  prompt: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64_000))),
+  name: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_NAME_MAX_LENGTH)),
+  ),
+  prompt: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(AUTOMATION_PROMPT_MAX_LENGTH)),
+  ),
   schedule: Schema.optional(AutomationSchedule),
   enabled: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   runtimeMode: Schema.optional(RuntimeMode),
-  interactionMode: Schema.optional(ProviderInteractionMode),
+  interactionMode: Schema.optional(AutomationInteractionMode),
   worktreeMode: Schema.optional(AutomationWorktreeMode),
   mode: Schema.optional(AutomationMode),
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)),
+  notificationPolicy: Schema.optional(AutomationNotificationPolicy),
+  heartbeatCooldownSeconds: Schema.optional(NonNegativeInt),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
+  stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)),
+  /** @deprecated Use stopAfterConsecutiveFailures. */
   stopOnError: Schema.optional(Schema.Boolean),
   completionPolicy: Schema.optional(AutomationCompletionPolicy),
   minimumIntervalSeconds: Schema.optional(PositiveInt),
@@ -321,11 +400,27 @@ export const AutomationDeleteInput = Schema.Struct({
 });
 export type AutomationDeleteInput = typeof AutomationDeleteInput.Type;
 
+export const AutomationResolveProposalInput = Schema.Struct({
+  automationId: AutomationId,
+  resolution: Schema.Literals(["accepted", "dismissed"]),
+});
+export type AutomationResolveProposalInput = typeof AutomationResolveProposalInput.Type;
+
+export const AutomationResolveProposalResult = Schema.Struct({
+  definition: AutomationDefinition,
+});
+export type AutomationResolveProposalResult = typeof AutomationResolveProposalResult.Type;
+
 export const AutomationListInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   includeArchived: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type AutomationListInput = typeof AutomationListInput.Type;
+
+export const AutomationGetMemoryInput = Schema.Struct({
+  automationId: AutomationId,
+});
+export type AutomationGetMemoryInput = typeof AutomationGetMemoryInput.Type;
 
 export const AutomationRunNowInput = Schema.Struct({
   automationId: AutomationId,
@@ -358,6 +453,9 @@ export const AutomationRun = Schema.Struct({
   trigger: AutomationTrigger,
   status: AutomationRunStatus,
   scheduledFor: AutomationIsoDateTime,
+  deferredUntil: Schema.optional(Schema.NullOr(AutomationIsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   claimedBy: Schema.NullOr(TrimmedNonEmptyString),
   claimedAt: Schema.NullOr(AutomationIsoDateTime),
   leaseExpiresAt: Schema.NullOr(AutomationIsoDateTime),
@@ -374,9 +472,19 @@ export const AutomationRun = Schema.Struct({
 });
 export type AutomationRun = typeof AutomationRun.Type;
 
+export const AutomationMemory = Schema.Struct({
+  automationId: AutomationId,
+  content: Schema.String.check(Schema.isMaxLength(32 * 1_024)),
+  updatedAt: AutomationIsoDateTime,
+});
+export type AutomationMemory = typeof AutomationMemory.Type;
+
 export const AutomationListResult = Schema.Struct({
   definitions: Schema.Array(AutomationDefinition),
   runs: Schema.Array(AutomationRun),
+  memories: Schema.optional(Schema.Array(AutomationMemory)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
 });
 export type AutomationListResult = typeof AutomationListResult.Type;
 
@@ -400,6 +508,9 @@ export const AutomationStreamEvent = Schema.Union([
     type: Schema.Literal("snapshot"),
     definitions: Schema.Array(AutomationDefinition),
     runs: Schema.Array(AutomationRun),
+    memories: Schema.optional(Schema.Array(AutomationMemory)).pipe(
+      Schema.withDecodingDefault(() => []),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("definition-upserted"),
@@ -412,6 +523,10 @@ export const AutomationStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("run-upserted"),
     run: AutomationRun,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("memory-upserted"),
+    memory: AutomationMemory,
   }),
 ]);
 export type AutomationStreamEvent = typeof AutomationStreamEvent.Type;

@@ -38,7 +38,7 @@ interface ComposerColumnFrameProps {
 }
 
 /** Centers the composer column at the shared chat max width. */
-export const ComposerColumnFrame = memo(function ComposerColumnFrame({
+export const ComposerColumnFrame = function ComposerColumnFrame({
   children,
   className,
 }: ComposerColumnFrameProps) {
@@ -47,7 +47,7 @@ export const ComposerColumnFrame = memo(function ComposerColumnFrame({
       <div className={cn(COMPOSER_COLUMN_FRAME_CLASS_NAME, className)}>{children}</div>
     </ComposerColumnFrameContext.Provider>
   );
-});
+};
 
 interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
@@ -61,9 +61,10 @@ export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFra
   children,
   className,
   ref,
-  passthroughSideMargins = false,
+  passthroughSideMargins: passthroughSideMarginsProp,
   ...rest
 }: ComposerStackedHeaderFrameProps) {
+  const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   useComposerColumnFrameContext("ComposerStackedHeaderFrame");
 
   const frameClassName = cn(COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME, className);

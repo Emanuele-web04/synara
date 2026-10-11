@@ -24,8 +24,8 @@ export function selectAppSnapIconEvictionKeys(
 ): string[] {
   const overflow = Math.max(0, entries.length - Math.max(0, maximumEntries));
   if (overflow === 0) return [];
-  return [...entries]
-    .sort(
+  return entries
+    .toSorted(
       (left, right) =>
         left.updatedAt - right.updatedAt ||
         left.bundleIdentifier.localeCompare(right.bundleIdentifier),

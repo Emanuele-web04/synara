@@ -8,6 +8,7 @@ import {
   OrchestrationEventDelivery,
   OrchestrationEventDeliveryRepository,
   ProviderBlockingDeliveryEvidence,
+  providerThreadProcessedConsumerName,
   type OrchestrationEventDeliveryRepositoryShape,
 } from "../Services/OrchestrationEventDeliveries.ts";
 
@@ -56,6 +57,32 @@ const makeRepository = Effect.gen(function* () {
     getConsumerStateRow(consumerName).pipe(
       Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.getConsumerState")),
     );
+
+  const recordThreadProcessedSequence: OrchestrationEventDeliveryRepositoryShape["recordThreadProcessedSequence"] =
+    (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const source = yield* sql<{
+              eventType: string;
+            }>`SELECT event_type AS eventType FROM orchestration_events WHERE sequence = ${input.eventSequence} AND aggregate_kind = 'thread' AND stream_id = ${input.threadId}`;
+            if (source.length === 0) return false;
+            const consumerName = providerThreadProcessedConsumerName(input.threadId);
+            if (source[0]!.eventType === "thread.deleted") {
+              yield* sql`DELETE FROM orchestration_consumer_state WHERE consumer_name = ${consumerName}`;
+              return true;
+            }
+            yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+      VALUES (${consumerName}, ${input.eventSequence}, ${input.updatedAt}, ${input.updatedAt})
+      ON CONFLICT (consumer_name) DO UPDATE SET last_acked_sequence = MAX(last_acked_sequence, excluded.last_acked_sequence), updated_at = CASE WHEN excluded.last_acked_sequence > last_acked_sequence THEN excluded.updated_at ELSE updated_at END`;
+            return true;
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            toPersistenceSqlError("OrchestrationEventDelivery.recordThreadProcessedSequence"),
+          ),
+        );
 
   const getDelivery: OrchestrationEventDeliveryRepositoryShape["getDelivery"] = (input) =>
     getDeliveryRow(input.consumerName, input.eventSequence).pipe(
@@ -262,6 +289,10 @@ const makeRepository = Effect.gen(function* () {
     (input) => {
       const threadFilter =
         input.threadId === undefined ? sql`` : sql`AND d.thread_id = ${input.threadId}`;
+      const cursorFilter =
+        input.afterEventSequence === undefined
+          ? sql``
+          : sql`AND d.event_sequence > ${input.afterEventSequence}`;
       return sql<ProviderBlockingDeliveryEvidence>`
         SELECT
           d.consumer_name AS "consumerName",
@@ -292,6 +323,7 @@ const makeRepository = Effect.gen(function* () {
         WHERE d.consumer_name = ${input.consumerName}
           AND d.state IN ('dead', 'uncertain')
           ${threadFilter}
+          ${cursorFilter}
         ORDER BY d.event_sequence ASC
         LIMIT ${input.limit}
       `.pipe(
@@ -311,13 +343,17 @@ const makeRepository = Effect.gen(function* () {
             WHERE consumer_name = ${consumerName}
           )
           AND state IN ('retry', 'inflight')
-          AND EXISTS (
+          AND (EXISTS (
             SELECT 1
             FROM provider_delivery_reconciliations r
             WHERE r.consumer_name = orchestration_event_deliveries.consumer_name
               AND r.event_sequence = orchestration_event_deliveries.event_sequence
               AND r.outcome = 'safe_retry'
-          )
+          ) OR EXISTS (
+            SELECT 1 FROM orchestration_events e
+            WHERE e.sequence = orchestration_event_deliveries.event_sequence
+              AND e.event_type = 'thread.claude-cache-response-requested'
+          ))
         ORDER BY event_sequence ASC
       `.pipe(
         Effect.mapError(
@@ -373,6 +409,7 @@ const makeRepository = Effect.gen(function* () {
 
   return {
     getConsumerState,
+    recordThreadProcessedSequence,
     getDelivery,
     claim,
     markRetryable,

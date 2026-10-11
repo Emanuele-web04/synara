@@ -43,8 +43,9 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 
 - **State:** `CODE COMPLETE`
 - **Active workstream:** none; the shortened 17-workstream controller is implemented.
-- **Active phase:** the net-negative consolidation closeout is implemented. Focused server and web
-  unit gates pass; the browser gate is blocked by its pre-existing incomplete welcome fixture.
+- **Active phase:** the ACP compatibility-package deletion is implemented. Focused ACP/provider
+  gates, conformance, server build, benchmark smoke, and residual checks pass; heavyweight workspace
+  verification remains deferred by instruction.
 - **Phase boundary:** only the existing 17-workstream controller is in scope. No audit expansion,
   P4/P5 work, or unrelated product roadmap additions.
 
@@ -97,7 +98,7 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 |    12 | `P1-GIT-01`              | Canonical repository mutation/worktree saga                      | `P1-DELIVERY-01` where accepted work crosses workspace preparation | CODE COMPLETE — migration 68 journals handoff phases; stored Git results replay before command readiness and pre-result interruptions fail closed |
 |    13 | `P1-SETTINGS-01`         | Revisioned settings/provider configuration authority             | `P0-SEC-01`, `P1-PROVIDER-01`                                      | CODE COMPLETE — server owns serialized intent commits; no client CAS path remains                                                                 |
 |    14 | `P1-AUTO-01`             | One revision-fenced automation run saga                          | `P1-DELIVERY-01`, `P1-PROVIDER-01`, `P1-SETTINGS-01`               | CODE COMPLETE — bounded keyset recovery and one web summary subscription owner                                                                    |
-|    15 | `P2-ACP-01`              | Official ACP SDK production wire authority                       | `P1-PROVIDER-01`, `P1-RUNTIME-01`                                  | CODE COMPLETE — official SDK owns production and canary wire paths; private client/agent/protocol stack deleted                                   |
+|    15 | `P2-ACP-01`              | Official ACP SDK production wire authority                       | `P1-PROVIDER-01`, `P1-RUNTIME-01`                                  | CODE COMPLETE — official SDK is the sole standard type/wire authority; the residual compatibility package is deleted                              |
 |    16 | `P2-WEB-STATE-01`        | Normalized frontend entity and persistence authority             | `P1-IDENTITY-01`, `P1-TRANSPORT-01`                                | CODE COMPLETE — normalized slices are the only runtime thread authority                                                                           |
 |    17 | `P2-PROVIDER-META-01`    | One provider metadata/discovery/health/usage descriptor          | `P0-SEC-01`, `P1-SETTINGS-01`                                      | CODE COMPLETE — descriptor order, revision-fenced health, and account-safe usage ownership                                                        |
 
@@ -142,9 +143,10 @@ No roadmap scope was added. The checkpoint changed only the seven existing rows:
   longer falls back to a new session. The deprecated constructor and legacy production wire branch
   are deleted; explicit extensions use SDK parsers and raw logging wraps bytes without a second
   parser. The mock agent now uses the official SDK too. The private `effect-acp` client, agent,
-  protocol, RPC, terminal, stdio helpers, tests, examples, and fixtures are deleted; the package now
-  exports only the still-consumed Effect error/schema adapters. Focused evidence: prior **40/40**
-  sweep plus the current **48/48** ACP/adapter/attachment gates.
+  protocol, RPC, terminal, stdio helpers, tests, examples, fixtures, generated compatibility schema,
+  and workspace package are deleted. `AcpErrors.ts` and `AcpExtensions.ts` retain only Synara-owned
+  runtime policy and non-standard extension decoding. Focused evidence: prior **40/40** and **48/48**
+  sweeps plus the current **168/168** ACP/provider gates.
 - `P2-WEB-STATE-01`: normalized slices are the only runtime thread authority. The derived `threads`
   property, every transition-side synchronization branch, and the one-way legacy-fixture gate were
   deleted; the two remaining production reads use the existing cached derivation helper. Phase
@@ -170,9 +172,8 @@ this closeout is **+426 / -2,943 (net -2,517 LOC)**; total code change including
 the official mock agent is approximately **net -4,590 LOC**. Focused gates pass **48/48 server** and
 **29/29 web unit**. The browser rerun exposed and fixed the missing registry reset operation, then hit
 the existing incomplete WebSocket welcome fixture (`protocolEpoch` missing); no replacement scaffold
-was added. Remaining deletion work is limited to replacing the still-consumed `effect-acp`
-schema/error adapters with official SDK types and completing the already-recorded stdout
-backpressure gate.
+was added. The residual `effect-acp` schema/error compatibility layer is now deleted. The separately
+recorded stdout backpressure gate remains open.
 
 ## Dirty worktree reconciliation
 
@@ -1089,6 +1090,14 @@ backpressure gate.
   Focused send persistence and overlapping steer/review generation gates pass 2/2; `git diff --check`
   passes. Cumulative pruning runtime change: **-1004 LOC**. The user then explicitly unfroze every
   remaining consolidated roadmap row for sequential implementation followed by one sweep.
+- `PRUNE-173` — the residual `effect-acp` compatibility layer is deleted. Shared runtime/model code,
+  Grok, Droid, Cursor, and focused tests use official SDK types directly; local `AcpErrors.ts` and
+  `AcpExtensions.ts` retain only Effect-native runtime errors and non-standard extension codecs. The
+  generated schema, workspace package, server dependency, release manifest entry, historical
+  benchmark engine, and lockfile entries are gone. Focused ACP/provider gates pass **168/168** with
+  3 environment-dependent tests skipped; official conformance passes **10/10**, the server build and
+  official-only benchmark smoke pass, and zero-import plus `git diff --check` searches pass.
+  Heavyweight workspace verification remains deferred by instruction.
 
 ## Per-workstream loop
 
@@ -1110,8 +1119,8 @@ backpressure gate.
 SDK facade exists. Grok, Droid, and Cursor all fail through the official SDK path—an operation is
 never retried through `effect-acp`. The official SDK owns validation, JSON-RPC correlation and
 cancellation, handler dispatch, and NDJSON encoding. Synara retains Effect lifecycle, bounded
-admission, process teardown, product/session policy, normalized events, and type-only Effect
-schema/error adapters.
+admission, process teardown, product/session policy, normalized events, three local Effect-native
+errors, and minimal non-standard extension codecs. No `effect-acp` package or import remains.
 
 ## Completion rule
 

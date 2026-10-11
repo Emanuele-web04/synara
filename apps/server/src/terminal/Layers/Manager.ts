@@ -21,7 +21,6 @@ import {
 import { describeErrorMessage } from "@synara/shared/errorMessages";
 import {
   consumeTerminalIdentityInput,
-  deriveTerminalProcessIdentity,
   terminalCliKindFromValue,
   SYNARA_TERMINAL_HOOK_OSC_PREFIX,
   SYNARA_TERMINAL_CLI_KIND_ENV_KEY,
@@ -33,8 +32,8 @@ import { Effect, Encoding, Layer, Schema } from "effect";
 
 import { createLogger } from "../../logger";
 import { PtyAdapter, PtyAdapterShape, type PtyExitEvent, type PtyProcess } from "../Services/PTY";
-import { runProcess } from "../../processRunner";
 import { ServerConfig } from "../../config";
+import { ServerSettingsService } from "../../serverSettings";
 import {
   ensurePrivateDirectorySync,
   PRIVATE_FILE_MODE,
@@ -43,12 +42,21 @@ import {
 import {
   applyManagedTerminalAgentWrapperEnv,
   prepareManagedTerminalAgentWrappers,
+  type ManagedTerminalProfile,
 } from "../managedTerminalWrappers";
+import { prepareProcess } from "@synara/shared/platformProcess";
+import {
+  prepareProviderAuthenticationSettings,
+  resolveProviderAuthenticationLaunch,
+  type ProviderAuthenticationLaunch,
+} from "../providerAuthentication";
+import { deriveManagedTerminalProfiles } from "../providerTerminalProfiles";
 import {
   ShellCandidate,
   TerminalError,
   TerminalManager,
   TerminalManagerShape,
+  type TerminalCloseOpenedAtOrBeforeInput,
   TerminalSessionState,
   TerminalStartInput,
 } from "../Services/Manager";
@@ -61,11 +69,21 @@ import {
 import { createTerminalModeReplayTracker } from "../terminalModeReplay";
 import {
   defaultProcessTreeKiller,
-  parseProcessChildrenMap,
-  type ProcessChildrenMap,
   type ProcessTreeKiller,
   type TerminalKillSignal,
 } from "../processTreeKiller";
+import {
+  captureProcessChildrenMap,
+  defaultSubprocessChecker,
+  inspectSubprocessActivity,
+  type TerminalSubprocessActivity,
+} from "../subprocessActivity";
+import {
+  createWindowsProcessSnapshotObserver,
+  type ProcessChildrenSnapshotObserver,
+} from "../windowsProcessSnapshot";
+
+export type { TerminalSubprocessActivity } from "../subprocessActivity";
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
@@ -99,7 +117,6 @@ const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
 const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
-const POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED = 256;
 const SHUTDOWN_ESCALATION_SETTLE_MS = 25;
 const TERMINAL_ENV_BLOCKLIST = new Set([
   "PORT",
@@ -116,6 +133,16 @@ const TERMINAL_ENV_BLOCKLIST = new Set([
   "TERM_PROGRAM",
   "TERM_PROGRAM_VERSION",
   "TERM_SESSION_ID",
+  // Color-control identity is also the host's, not the PTY's: a server launched
+  // from a non-interactive harness shell (e.g. `codex exec` sets NO_COLOR=1)
+  // would otherwise blank every ANSI color in every spawned terminal. COLORTERM
+  // is stripped here and pinned below alongside TERM.
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "COLORFGBG",
+  "COLORTERM",
   "GHOSTTY_RESOURCES_DIR",
   "GHOSTTY_BIN_DIR",
   "ITERM_PROFILE",
@@ -146,13 +173,6 @@ const decodeTerminalAckOutputInput = Schema.decodeUnknownSync(TerminalAckOutputI
 const decodeTerminalResizeInput = Schema.decodeUnknownSync(TerminalResizeInput);
 const decodeTerminalClearInput = Schema.decodeUnknownSync(TerminalClearInput);
 const decodeTerminalCloseInput = Schema.decodeUnknownSync(TerminalCloseInput);
-
-export interface TerminalSubprocessActivity {
-  cliKind: TerminalCliKind | null;
-  hasRunningSubprocess: boolean;
-  hasProviderDescendant: boolean;
-  hasNonProviderSubprocess: boolean;
-}
 
 type TerminalSubprocessChecker = (
   terminalPid: number,
@@ -350,249 +370,6 @@ function isRetryableShellSpawnError(error: unknown): boolean {
   );
 }
 
-async function checkWindowsSubprocessActivity(
-  terminalPid: number,
-): Promise<TerminalSubprocessActivity> {
-  const command = [
-    `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${terminalPid}" -ErrorAction SilentlyContinue`,
-    "if ($children) { exit 0 }",
-    "exit 1",
-  ].join("; ");
-  try {
-    const result = await runProcess(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", command],
-      {
-        timeoutMs: 1_500,
-        allowNonZeroExit: true,
-        maxBufferBytes: 32_768,
-        outputMode: "truncate",
-      },
-    );
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: result.code === 0,
-    };
-  } catch {
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: false,
-    };
-  }
-}
-
-const SHELL_LIKE_PROCESS_NAMES = new Set([
-  "bash",
-  "dash",
-  "fish",
-  "ksh",
-  "login",
-  "nu",
-  "screen",
-  "sh",
-  "tcsh",
-  "tmux",
-  "zellij",
-  "zsh",
-]);
-
-function emptySubprocessActivity(): TerminalSubprocessActivity {
-  return {
-    cliKind: null,
-    hasNonProviderSubprocess: false,
-    hasProviderDescendant: false,
-    hasRunningSubprocess: false,
-  };
-}
-
-function isShellLikeProcessName(command: string): boolean {
-  const normalized = path.basename(command.trim().split(/\s+/g)[0] ?? "").toLowerCase();
-  return SHELL_LIKE_PROCESS_NAMES.has(normalized);
-}
-
-/**
- * Walk the process tree below `parentPid` using a pre-captured children map.
- * Pure and synchronous, so a single captured snapshot can be reused across many
- * polled terminals without re-scanning the system per terminal.
- */
-export function inspectSubprocessActivity(
-  parentPid: number,
-  childrenByParentPid: ProcessChildrenMap,
-): TerminalSubprocessActivity {
-  const children = childrenByParentPid.get(parentPid) ?? [];
-  let cliKind: TerminalCliKind | null = null;
-  let hasNonProviderSubprocess = false;
-  let hasProviderDescendant = false;
-  let hasRunningSubprocess = false;
-  for (const child of children) {
-    const nestedActivity = inspectSubprocessActivity(child.pid, childrenByParentPid);
-    const childCliKind = deriveTerminalProcessIdentity(child.command)?.cliKind ?? null;
-    if (childCliKind || nestedActivity.hasProviderDescendant) {
-      hasProviderDescendant = true;
-    }
-    if (
-      (!childCliKind && !isShellLikeProcessName(child.command)) ||
-      nestedActivity.hasNonProviderSubprocess
-    ) {
-      hasNonProviderSubprocess = true;
-    }
-    cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
-    if (!isShellLikeProcessName(child.command) || nestedActivity.hasRunningSubprocess) {
-      hasRunningSubprocess = true;
-    }
-  }
-  return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
-}
-
-/**
- * Capture the whole-system process tree as a children-by-ppid map with a single
- * `ps` invocation. Returns null when `ps` is unavailable or fails. Sharing one
- * snapshot across all polled terminals turns an O(running-terminals) burst of
- * full-system scans per poll cycle into a single scan.
- */
-async function captureProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
-  try {
-    const psResult = await runProcess("ps", ["-eo", "pid=,ppid=,command="], {
-      timeoutMs: 1_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: 262_144,
-      outputMode: "truncate",
-    });
-    if (psResult.code !== 0) return null;
-    if (psResult.stdoutTruncated) return null;
-
-    return parseProcessChildrenMap(psResult.stdout);
-  } catch {
-    return null;
-  }
-}
-
-async function readPosixChildPids(parentPid: number): Promise<number[]> {
-  try {
-    const pgrepResult = await runProcess("pgrep", ["-P", String(parentPid)], {
-      timeoutMs: 1_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: 32_768,
-      outputMode: "truncate",
-    });
-    if (pgrepResult.code === 1) return [];
-    if (pgrepResult.code !== 0) return [];
-    return pgrepResult.stdout
-      .split(/\s+/g)
-      .map((value) => Number(value))
-      .filter((pid) => Number.isInteger(pid) && pid > 0);
-  } catch {
-    return [];
-  }
-}
-
-async function readPosixCommand(pid: number): Promise<string> {
-  try {
-    const psResult = await runProcess("ps", ["-p", String(pid), "-o", "command="], {
-      timeoutMs: 1_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: 32_768,
-      outputMode: "truncate",
-    });
-    return psResult.code === 0 ? psResult.stdout.trim() : "";
-  } catch {
-    return "";
-  }
-}
-
-async function checkPosixSubprocessActivityByTreeWalk(
-  terminalPid: number,
-): Promise<TerminalSubprocessActivity> {
-  let visited = 0;
-
-  // Fallback for hosts where `ps -eo` was unavailable/truncated. It is slower,
-  // but bounded and only used when the shared snapshot cannot be trusted.
-  const inspectPid = async (parentPid: number): Promise<TerminalSubprocessActivity> => {
-    if (visited >= POSIX_SUBPROCESS_TREE_WALK_MAX_VISITED) {
-      return {
-        cliKind: null,
-        hasNonProviderSubprocess: true,
-        hasProviderDescendant: false,
-        hasRunningSubprocess: true,
-      };
-    }
-
-    const childPids = await readPosixChildPids(parentPid);
-    let cliKind: TerminalCliKind | null = null;
-    let hasNonProviderSubprocess = false;
-    let hasProviderDescendant = false;
-    let hasRunningSubprocess = false;
-
-    for (const childPid of childPids) {
-      visited += 1;
-      const command = await readPosixCommand(childPid);
-      if (!command) continue;
-      const nestedActivity = await inspectPid(childPid);
-      const childCliKind = deriveTerminalProcessIdentity(command)?.cliKind ?? null;
-      if (childCliKind || nestedActivity.hasProviderDescendant) {
-        hasProviderDescendant = true;
-      }
-      if (
-        (!childCliKind && !isShellLikeProcessName(command)) ||
-        nestedActivity.hasNonProviderSubprocess
-      ) {
-        hasNonProviderSubprocess = true;
-      }
-      cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
-      if (!isShellLikeProcessName(command) || nestedActivity.hasRunningSubprocess) {
-        hasRunningSubprocess = true;
-      }
-    }
-
-    return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
-  };
-
-  return inspectPid(terminalPid);
-}
-
-async function checkPosixSubprocessActivity(
-  terminalPid: number,
-): Promise<TerminalSubprocessActivity> {
-  // Cheap fast path: skip the full process scan when the shell has no children.
-  try {
-    const pgrepResult = await runProcess("pgrep", ["-P", String(terminalPid)], {
-      timeoutMs: 1_000,
-      allowNonZeroExit: true,
-      maxBufferBytes: 32_768,
-      outputMode: "truncate",
-    });
-    if (pgrepResult.code === 1) return emptySubprocessActivity();
-    if (pgrepResult.code === 0 && pgrepResult.stdout.trim().length === 0) {
-      return emptySubprocessActivity();
-    }
-  } catch {
-    // Fall back to ps when pgrep is unavailable.
-  }
-
-  const childrenByParentPid = await captureProcessChildrenMap();
-  if (childrenByParentPid === null) return checkPosixSubprocessActivityByTreeWalk(terminalPid);
-  return inspectSubprocessActivity(terminalPid, childrenByParentPid);
-}
-
-async function defaultSubprocessChecker(terminalPid: number): Promise<TerminalSubprocessActivity> {
-  if (!Number.isInteger(terminalPid) || terminalPid <= 0) {
-    return {
-      cliKind: null,
-      hasNonProviderSubprocess: false,
-      hasProviderDescendant: false,
-      hasRunningSubprocess: false,
-    };
-  }
-  if (process.platform === "win32") {
-    return checkWindowsSubprocessActivity(terminalPid);
-  }
-  return checkPosixSubprocessActivity(terminalPid);
-}
-
 function isCsiFinalByte(codePoint: number): boolean {
   return codePoint >= 0x40 && codePoint <= 0x7e;
 }
@@ -668,6 +445,30 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
+/**
+ * Upper bound on how much is held back while waiting for a control-sequence terminator.
+ *
+ * String sequences (OSC/DCS/PM/APC) only end on BEL/ST, so a truncated program, a
+ * crashed TUI, or `cat` on a binary can leave one open forever. Without a bound the
+ * carryover buffer grows without limit, every flush rescans it from the start
+ * (quadratic), and nothing ever reaches scrollback — the terminal silently freezes.
+ * Real emulators abandon an over-long sequence and resume, so we do the same.
+ *
+ * The bound counts what `.length` counts — UTF-16 code units, not bytes — so an
+ * all-ASCII payload is capped at exactly 64 KiB while a non-ASCII one can be a few
+ * times that on the wire. That imprecision is deliberate: this is a runaway guard,
+ * and it only has to sit far above legitimate traffic. It is generous for the same
+ * reason, since inline-image protocols (sixel DCS, iTerm2 OSC 1337) do send large
+ * payloads. Payloads above it are abandoned for scrollback only: live output is
+ * streamed as raw PTY bytes and is never sanitized, so the visible terminal is
+ * unaffected. Scrollback itself is capped at 1 MB, so a payload this large could not
+ * survive there anyway.
+ */
+const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 65_536;
+
+/** ESC + backslash: the 7-bit String Terminator that closes an OSC/DCS/PM/APC sequence. */
+const STRING_TERMINATOR = "\u001b\\";
+
 function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
@@ -687,18 +488,37 @@ function sanitizeTerminalHistoryChunk(
     visibleText += value;
   };
 
+  /**
+   * Stop parsing at an incomplete control sequence and carry it into the next
+   * chunk — unless the carryover exceeds the safety bound, in which case the
+   * sequence is abandoned: the buffered bytes are emitted (terminated by ST so a
+   * replayed transcript cannot wedge the client parser) and the parser resets.
+   */
+  const suspend = (start: number) => {
+    const pending = input.slice(start);
+    if (pending.length > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
+      return {
+        visibleText: `${visibleText}${pending}${STRING_TERMINATOR}`,
+        pendingControlSequence: "",
+        titleSignals,
+        hookEvents,
+      };
+    }
+    return {
+      visibleText,
+      pendingControlSequence: pending,
+      titleSignals,
+      hookEvents,
+    };
+  };
+
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
 
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
 
       if (nextCodePoint === 0x5b) {
@@ -716,12 +536,7 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return {
-            visibleText,
-            pendingControlSequence: input.slice(index),
-            titleSignals,
-            hookEvents,
-          };
+          return suspend(index);
         }
         continue;
       }
@@ -734,12 +549,7 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return {
-            visibleText,
-            pendingControlSequence: input.slice(index),
-            titleSignals,
-            hookEvents,
-          };
+          return suspend(index);
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
@@ -762,12 +572,7 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       const sequence = input.slice(index, escapeSequenceEndIndex);
       if (sequence !== "\u001b7" && sequence !== "\u001b8") {
@@ -792,12 +597,7 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       continue;
     }
@@ -805,12 +605,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return {
-          visibleText,
-          pendingControlSequence: input.slice(index),
-          titleSignals,
-          hookEvents,
-        };
+        return suspend(index);
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
@@ -837,6 +632,11 @@ function sanitizeTerminalHistoryChunk(
 
   return { visibleText, pendingControlSequence: "", titleSignals, hookEvents };
 }
+
+export const __terminalHistorySanitizeTesting = {
+  sanitizeTerminalHistoryChunk,
+  maxPendingControlSequenceLength: MAX_PENDING_CONTROL_SEQUENCE_LENGTH,
+};
 
 function legacySafeThreadId(threadId: string): string {
   return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -879,9 +679,11 @@ function createTerminalSpawnEnv(
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
   }
-  // Pin TERM to the embedded renderer's capabilities; a caller-provided
-  // runtimeEnv may still override it deliberately below.
+  // Pin TERM/COLORTERM to the embedded renderer's capabilities (xterm.js
+  // renders truecolor SGR); a caller-provided runtimeEnv may still override
+  // them deliberately below.
   spawnEnv.TERM = TERMINAL_SPAWN_TERM;
+  spawnEnv.COLORTERM = "truecolor";
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {
       spawnEnv[key] = value;
@@ -954,10 +756,13 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
+  processSnapshotObserver?: ProcessChildrenSnapshotObserver;
   processTreeKiller?: ProcessTreeKiller;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+  managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
+  providerAuthResolver?: (instanceId: string) => Promise<ProviderAuthenticationLaunch>;
 }
 
 interface KillEscalationHandle {
@@ -972,6 +777,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly logsDir: string;
   private managedWrapperBinDir: string | null;
   private managedWrapperZshDir: string | null;
+  private readonly managedWrapperRootDir: string | null;
+  private readonly managedWrapperZshRootDir: string | null;
   private readonly historyLineLimit: number;
   private readonly historyByteLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
@@ -991,6 +798,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly subprocessChecker: TerminalSubprocessChecker;
   private readonly processTreeKiller: ProcessTreeKiller;
   private readonly useDefaultSubprocessChecker: boolean;
+  private readonly processSnapshotObserver: ProcessChildrenSnapshotObserver | null;
   private readonly subprocessPollIntervalMs: number;
   private readonly processKillGraceMs: number;
   private readonly maxRetainedInactiveSessions: number;
@@ -1000,16 +808,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private currentSubprocessPollDelayMs = 0;
   private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
+  private readonly managedProfileResolver:
+    | (() => Promise<ReadonlyArray<ManagedTerminalProfile>>)
+    | undefined;
+  private readonly providerAuthResolver: TerminalManagerOptions["providerAuthResolver"];
+  private managedProfileRefresh: Promise<void> | null = null;
 
   constructor(options: TerminalManagerOptions) {
     super();
     this.logsDir = options.logsDir ?? path.resolve(process.cwd(), ".logs", "terminals");
-    this.managedWrapperBinDir =
+    this.managedWrapperRootDir =
       process.platform === "win32"
         ? null
         : path.join(this.logsDir, MANAGED_TERMINAL_WRAPPER_DIRNAME);
-    this.managedWrapperZshDir =
+    this.managedWrapperZshRootDir =
       process.platform === "win32" ? null : path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME);
+    this.managedWrapperBinDir = this.managedWrapperRootDir;
+    this.managedWrapperZshDir = this.managedWrapperZshRootDir;
     this.historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
     this.historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
     this.ptyAdapter = options.ptyAdapter;
@@ -1020,11 +835,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     // Only the built-in checker can share a single process snapshot across the
     // poll cycle; injected checkers (tests) keep the per-pid path.
     this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
+    this.processSnapshotObserver =
+      options.processSnapshotObserver ??
+      (this.useDefaultSubprocessChecker && process.platform === "win32"
+        ? createWindowsProcessSnapshotObserver()
+        : null);
     this.subprocessPollIntervalMs =
       options.subprocessPollIntervalMs ?? DEFAULT_SUBPROCESS_POLL_INTERVAL_MS;
     this.processKillGraceMs = options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
     this.maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
+    this.managedProfileResolver = options.managedProfileResolver;
+    this.providerAuthResolver = options.providerAuthResolver;
     ensurePrivateDirectorySync(this.logsDir);
     if (this.managedWrapperBinDir) {
       try {
@@ -1048,12 +870,43 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
+  private async refreshManagedProfileWrappers(): Promise<void> {
+    if (!this.managedProfileResolver || !this.managedWrapperRootDir) return;
+    if (this.managedProfileRefresh) return this.managedProfileRefresh;
+    const targetDir = this.managedWrapperRootDir;
+    const refresh = (async () => {
+      try {
+        const profiles = await this.managedProfileResolver!();
+        const preparedWrappers = prepareManagedTerminalAgentWrappers({
+          baseEnv: process.env,
+          profiles,
+          targetDir,
+          zshDir:
+            this.managedWrapperZshRootDir ?? path.join(this.logsDir, MANAGED_TERMINAL_ZSH_DIRNAME),
+        });
+        this.managedWrapperBinDir = preparedWrappers.binDir;
+        this.managedWrapperZshDir = preparedWrappers.zshDir;
+      } catch (error) {
+        this.logger.warn("failed to refresh provider terminal profiles", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    this.managedProfileRefresh = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.managedProfileRefresh === refresh) this.managedProfileRefresh = null;
+    }
+  }
+
   private historyLimits(): HistoryLimits {
     return { maxLines: this.historyLineLimit, maxBytes: this.historyByteLimit };
   }
 
   async open(raw: TerminalOpenInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalOpenInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
@@ -1061,9 +914,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const existing = this.sessions.get(sessionKey);
       if (!existing) {
         await this.flushPersistQueue(input.threadId, input.terminalId);
-        const history = await this.readHistory(input.threadId, input.terminalId);
+        const history = input.providerAuthInstanceId
+          ? ""
+          : await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
+        const openedAt = new Date().toISOString();
         const session: TerminalSessionState = {
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -1074,7 +930,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
-          updatedAt: new Date().toISOString(),
+          updatedAt: openedAt,
+          lastOpenedAt: openedAt,
           cols,
           rows,
           process: null,
@@ -1087,6 +944,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentState: null,
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
+          ...(input.providerAuthInstanceId
+            ? { providerAuthInstanceId: input.providerAuthInstanceId }
+            : {}),
           pendingInputBuffer: "",
           modeReplayTracker: null,
           pendingOutputChunks: [],
@@ -1109,6 +969,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      if (existing.providerAuthInstanceId !== input.providerAuthInstanceId) {
+        throw new Error("A terminal cannot switch its authentication account.");
+      }
+      existing.lastOpenedAt = new Date().toISOString();
+      // Reconnect preserves a finished login; it must never start another login.
+      if (existing.providerAuthInstanceId) {
+        if (existing.process) {
+          existing.cols = input.cols ?? existing.cols;
+          existing.rows = input.rows ?? existing.rows;
+          existing.process.resize(existing.cols, existing.rows);
+        }
+        return this.snapshot(existing);
+      }
       // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
       // when explicitly provided, otherwise keep the session's current mode.
       if (input.streamOutput !== undefined) {
@@ -1186,6 +1059,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   async write(raw: TerminalWriteInput): Promise<void> {
     const input = decodeTerminalWriteInput(raw);
+    if (input.onlyIfIdle) {
+      return this.runWithThreadLock(input.threadId, async () => {
+        await this.assertSessionIdle(input.threadId, input.terminalId);
+        await this.write({ ...input, onlyIfIdle: false });
+      });
+    }
     const session = this.requireSession(input.threadId, input.terminalId);
     if (!session.process || session.status !== "running") {
       if (session.status === "exited") {
@@ -1265,14 +1144,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   async restart(raw: TerminalRestartInput): Promise<TerminalSessionSnapshot> {
     const input = decodeTerminalRestartInput(raw);
+    await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
       await this.assertValidCwd(input.cwd);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       let session = this.sessions.get(sessionKey);
+      if (session?.providerAuthInstanceId)
+        throw new Error("Close this authentication window and start a new sign-in attempt.");
       if (!session) {
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
+        const openedAt = new Date().toISOString();
         session = {
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -1283,7 +1166,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
-          updatedAt: new Date().toISOString(),
+          updatedAt: openedAt,
+          lastOpenedAt: openedAt,
           cols,
           rows,
           process: null,
@@ -1328,6 +1212,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         );
       }
 
+      session.lastOpenedAt = new Date().toISOString();
       const cols = input.cols ?? session.cols;
       const rows = input.rows ?? session.rows;
 
@@ -1341,27 +1226,96 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   async close(raw: TerminalCloseInput): Promise<void> {
     const input = decodeTerminalCloseInput(raw);
     await this.runWithThreadLock(input.threadId, async () => {
+      if (input.onlyIfIdle && !input.terminalId) {
+        throw new Error("An idle-only close requires a terminalId.");
+      }
       if (input.terminalId) {
+        if (input.onlyIfIdle) {
+          await this.assertSessionIdle(input.threadId, input.terminalId);
+        }
         await this.closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
         return;
       }
 
-      const threadSessions = this.sessionsForThread(input.threadId);
-      for (const session of threadSessions) {
-        this.stopProcess(session);
-        this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
-      }
-      await Promise.all(
-        threadSessions.map((session) =>
-          this.flushPersistQueue(session.threadId, session.terminalId),
-        ),
-      );
-
-      if (input.deleteHistory) {
-        await this.deleteAllHistoryForThread(input.threadId);
-      }
-      this.updateSubprocessPollingState();
+      await this.closeThreadSessions(input.threadId, input.deleteHistory === true);
     });
+  }
+
+  private async assertSessionIdle(threadId: string, terminalId: string): Promise<void> {
+    const session = this.sessions.get(toSessionKey(threadId, terminalId));
+    if (!session?.process) return;
+    if (session.status !== "running" || session.pid === null) {
+      throw new Error("Unable to verify terminal activity. Try again when it is ready.");
+    }
+
+    const inspectionStartedAt = Date.now();
+    let activity: TerminalSubprocessActivity;
+    if (this.processSnapshotObserver || this.useDefaultSubprocessChecker) {
+      // Unlike activity polling, destructive operations cannot fall back to a
+      // best-effort probe that treats a failed process lookup as an idle shell.
+      // An observer shares an in-flight poll. Drain it first so the snapshot
+      // authorizing this operation was requested after the operation began.
+      const pendingSnapshot = this.processSnapshotObserver
+        ? await this.processSnapshotObserver.capture()
+        : undefined;
+      const children = this.processSnapshotObserver
+        ? pendingSnapshot === null
+          ? null
+          : await this.processSnapshotObserver.capture()
+        : await captureProcessChildrenMap();
+      if (children === null) {
+        throw new Error("Unable to verify terminal activity. The terminal was kept open.");
+      }
+      activity = inspectSubprocessActivity(session.pid, children);
+    } else {
+      activity = normalizeSubprocessActivity(await this.subprocessChecker(session.pid));
+    }
+    if (
+      activity.hasRunningSubprocess ||
+      session.managedAgentRunning ||
+      (session.lastInputAt !== null && session.lastInputAt >= inspectionStartedAt)
+    ) {
+      throw new Error("The terminal is busy. Stop its command before running this action.");
+    }
+  }
+
+  async closeSessionsOpenedAtOrBefore(input: TerminalCloseOpenedAtOrBeforeInput): Promise<void> {
+    const cutoff = Date.parse(input.openedAtOrBefore);
+    if (!Number.isFinite(cutoff)) {
+      throw new Error(`Invalid terminal archive fence timestamp: ${input.openedAtOrBefore}`);
+    }
+    await this.runWithThreadLock(input.threadId, () =>
+      this.closeThreadSessions(
+        input.threadId,
+        false,
+        (session) => Date.parse(session.lastOpenedAt) <= cutoff,
+      ),
+    );
+  }
+
+  private async closeThreadSessions(
+    threadId: string,
+    deleteHistory: boolean,
+    shouldClose: (session: TerminalSessionState) => boolean = () => true,
+  ): Promise<void> {
+    const threadSessions = this.sessionsForThread(threadId).filter(shouldClose);
+    for (const session of threadSessions) {
+      this.stopProcess(session);
+      this.sessions.delete(toSessionKey(session.threadId, session.terminalId));
+    }
+    await Promise.all(
+      threadSessions.map((session) => this.flushPersistQueue(session.threadId, session.terminalId)),
+    );
+    for (const session of threadSessions) {
+      this.releasePersistedHistoryCache(session.threadId, session.terminalId);
+    }
+
+    if (deleteHistory) {
+      await this.deleteAllHistoryForThread(threadId);
+    }
+    if (threadSessions.length > 0) {
+      this.updateSubprocessPollingState();
+    }
   }
 
   dispose(): void {
@@ -1380,6 +1334,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private disposeInternal(options: { keepEscalationTimers: boolean }): number {
     this.stopSubprocessPolling();
+    this.processSnapshotObserver?.dispose();
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     for (const session of sessions) {
@@ -1438,11 +1393,28 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     let ptyProcess: PtyProcess | null = null;
     let startedShell: string | null = null;
     try {
-      const shellCandidates = resolveShellCandidates(this.shellResolver);
-      const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
-        binDir: this.managedWrapperBinDir,
-        zshDir: this.managedWrapperZshDir,
-      });
+      let shellCandidates: ShellCandidate[];
+      let terminalEnv: NodeJS.ProcessEnv;
+      let windowsVerbatimArguments: true | undefined;
+      if (session.providerAuthInstanceId) {
+        if (!this.providerAuthResolver) throw new Error("Provider authentication is unavailable.");
+        const launch = await this.providerAuthResolver(session.providerAuthInstanceId);
+        const plan = prepareProcess(launch.command, launch.args, {
+          env: launch.env,
+          cwd: launch.cwd,
+          requireExecutable: true,
+        });
+        shellCandidates = [{ shell: plan.command, args: plan.args }];
+        windowsVerbatimArguments = plan.windowsVerbatimArguments;
+        terminalEnv = launch.env;
+        session.cwd = launch.cwd;
+      } else {
+        shellCandidates = resolveShellCandidates(this.shellResolver);
+        terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
+          binDir: this.managedWrapperBinDir,
+          zshDir: this.managedWrapperZshDir,
+        });
+      }
       let lastSpawnError: unknown = null;
 
       const spawnWithCandidate = (candidate: ShellCandidate) =>
@@ -1450,6 +1422,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           this.ptyAdapter.spawn({
             shell: candidate.shell,
             ...(candidate.args ? { args: candidate.args } : {}),
+            ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
             cwd: session.cwd,
             cols: session.cols,
             rows: session.rows,
@@ -1915,8 +1888,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         includeRootTree: options.includeRootTree,
         onError: (error, context) => {
           this.logger.warn(
-            context.source === "tree-kill"
-              ? `tree-kill ${signal} failed`
+            context.source === "root-tree"
+              ? `root tree ${signal} failed`
               : `captured process ${signal} failed`,
             {
               threadId,
@@ -1966,7 +1939,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private evictInactiveSessionsIfNeeded(): void {
     const inactiveSessions = [...this.sessions.values()].filter(
-      (session) => session.status !== "running",
+      (session) => session.status !== "running" && !session.providerAuthInstanceId,
     );
     if (inactiveSessions.length <= this.maxRetainedInactiveSessions) {
       return;
@@ -1993,7 +1966,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         session.terminalId,
         session.history.toString(),
       ).finally(() => {
-        this.persistedHistoryByKey.delete(key);
+        this.releasePersistedHistoryCache(session.threadId, session.terminalId);
       });
       this.clearKillEscalationTimer(session.process);
     }
@@ -2006,6 +1979,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
    * always persists the latest content, even after the session is removed.
    */
   private queuePersist(session: TerminalSessionState): void {
+    if (session.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(session.threadId, session.terminalId);
     this.pendingPersistHistory.set(persistenceKey, () => session.history.toString());
     this.schedulePersist(session.threadId, session.terminalId);
@@ -2016,6 +1990,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     terminalId: string,
     history: string,
   ): Promise<void> {
+    if (this.sessions.get(toSessionKey(threadId, terminalId))?.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(threadId, terminalId);
     this.clearPersistTimer(threadId, terminalId);
     this.pendingPersistHistory.delete(persistenceKey);
@@ -2225,10 +2200,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     for (const session of this.sessions.values()) {
       if (session.status !== "running" || session.pid === null) continue;
       if (session.hasRunningSubprocess || isProviderSessionBusy(session, now)) {
-        return base;
+        return Math.max(base, this.processSnapshotObserver?.retryDelayMs() ?? 0);
       }
     }
-    return base * SUBPROCESS_IDLE_POLL_MULTIPLIER;
+    return Math.max(
+      base * SUBPROCESS_IDLE_POLL_MULTIPLIER,
+      this.processSnapshotObserver?.retryDelayMs() ?? 0,
+    );
   }
 
   private async runSubprocessPollCycle(): Promise<void> {
@@ -2293,16 +2271,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     this.subprocessPollInFlight = true;
-    // Capture the whole process tree once per cycle (built-in POSIX checker
-    // only); every running terminal is then inspected against this shared
-    // snapshot instead of each spawning its own full-system `ps`.
-    const sharedChildrenMap =
-      this.useDefaultSubprocessChecker && process.platform !== "win32"
+    // Capture the whole process tree once per cycle. POSIX uses one `ps`; Windows
+    // uses one persistent observer process. Every running terminal is then
+    // inspected synchronously against the same immutable snapshot.
+    const sharedChildrenMap = this.processSnapshotObserver
+      ? await this.processSnapshotObserver.capture()
+      : this.useDefaultSubprocessChecker && process.platform !== "win32"
         ? await captureProcessChildrenMap()
         : null;
+    const sharedSnapshotUnavailable =
+      this.processSnapshotObserver !== null && sharedChildrenMap === null;
     try {
       await Promise.all(
         runningSessions.map(async (session) => {
+          // A failed Windows snapshot proves nothing. Preserve the last known
+          // activity state while the observer backs off instead of reporting a
+          // false idle transition or falling back to per-terminal processes.
+          if (sharedSnapshotUnavailable) return;
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
           let shouldClearDetectedCliKind = false;
@@ -2401,9 +2386,24 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     this.updateSubprocessPollingState();
     await this.flushPersistQueue(threadId, terminalId);
+    this.releasePersistedHistoryCache(threadId, terminalId);
     if (deleteHistory) {
       await this.deleteHistory(threadId, terminalId);
     }
+  }
+
+  /**
+   * Drop the write-dedup entry for a session that is no longer resident.
+   *
+   * `persistedHistoryByKey` only exists to skip a redundant rewrite of identical
+   * history, and the final persist re-populates it *after* the session was removed.
+   * Without this release every closed-but-not-deleted session (archiving keeps its
+   * history on disk) would pin up to `historyByteLimit` of scrollback in memory for
+   * the lifetime of the process. Dropping the entry costs at most one redundant file
+   * write later; `readHistory` re-populates it when the terminal is reopened.
+   */
+  private releasePersistedHistoryCache(threadId: string, terminalId: string): void {
+    this.persistedHistoryByKey.delete(toSessionKey(threadId, terminalId));
   }
 
   private sessionsForThread(threadId: string): TerminalSessionState[] {
@@ -2512,11 +2512,54 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 export const TerminalManagerLive = Layer.effect(
   TerminalManager,
   Effect.gen(function* () {
-    const { terminalLogsDir } = yield* ServerConfig;
+    const { homeDir, stateDir, terminalLogsDir } = yield* ServerConfig;
+    const serverSettings = yield* ServerSettingsService;
 
     const ptyAdapter = yield* PtyAdapter;
     const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() => new TerminalManagerRuntime({ logsDir: terminalLogsDir, ptyAdapter })),
+      Effect.sync(
+        () =>
+          new TerminalManagerRuntime({
+            logsDir: terminalLogsDir,
+            ptyAdapter,
+            providerAuthResolver: async (instanceId) => {
+              let settings = await Effect.runPromise(serverSettings.getSettings);
+              const patch = prepareProviderAuthenticationSettings({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+              });
+              if (patch)
+                settings = await Effect.runPromise(
+                  serverSettings.updateSettings(
+                    patch,
+                    (current) =>
+                      prepareProviderAuthenticationSettings({
+                        settings: current,
+                        instanceId,
+                        homeDir,
+                        stateDir,
+                      }) ?? {},
+                  ),
+                );
+              return resolveProviderAuthenticationLaunch({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+                baseEnv: process.env,
+              });
+            },
+            managedProfileResolver: async () =>
+              deriveManagedTerminalProfiles({
+                settings: await Effect.runPromise(serverSettings.getSettings),
+                baseEnv: process.env,
+                homeDir,
+                stateDir,
+              }),
+          }),
+      ),
       (r) => Effect.promise(() => r.disposeForShutdown()),
     );
 
@@ -2555,6 +2598,12 @@ export const TerminalManagerLive = Layer.effect(
         Effect.tryPromise({
           try: () => runtime.close(input),
           catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
+        }),
+      closeSessionsOpenedAtOrBefore: (input) =>
+        Effect.tryPromise({
+          try: () => runtime.closeSessionsOpenedAtOrBefore(input),
+          catch: (cause) =>
+            terminalErrorFromCause("Failed to close archived thread terminals", cause),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

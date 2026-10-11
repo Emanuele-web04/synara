@@ -8,15 +8,20 @@ import {
   AutomationListInput,
   AutomationListResult,
   AutomationMarkRunReadInput,
+  AutomationMemory,
+  AutomationResolveProposalInput,
+  AutomationResolveProposalResult,
+  AutomationRun,
   AutomationRunActionResult,
   AutomationRunNowInput,
   AutomationRunNowResult,
   AutomationStreamEvent,
   AutomationUpdateInput,
   ThreadId,
+  TurnId,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Effect, Option, Stream } from "effect";
 
 import type { AutomationServiceError } from "../Errors.ts";
 
@@ -27,10 +32,46 @@ export interface AutomationServiceShape {
   readonly create: (
     input: AutomationCreateInput,
   ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;
+  readonly createProjectManaged: (
+    input: AutomationCreateInput,
+  ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;
   readonly update: (
     input: AutomationUpdateInput,
   ) => Effect.Effect<AutomationDefinition, AutomationServiceError>;
   readonly delete: (input: AutomationDeleteInput) => Effect.Effect<void, AutomationServiceError>;
+  readonly resolveProposal: (
+    input: AutomationResolveProposalInput,
+  ) => Effect.Effect<AutomationResolveProposalResult, AutomationServiceError>;
+  readonly getMemory: (
+    automationId: AutomationDefinition["id"],
+  ) => Effect.Effect<AutomationMemory | null, AutomationServiceError>;
+  readonly listRunsForDefinition: (input: {
+    readonly automationId: AutomationDefinition["id"];
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationServiceError>;
+  readonly updateMemory: (input: {
+    /** null resolves to the automation that dispatched the caller's active turn. */
+    readonly automationId: AutomationDefinition["id"] | null;
+    readonly content: string;
+    readonly callerThreadId: ThreadId;
+    readonly callerTurnId: TurnId | null;
+  }) => Effect.Effect<AutomationMemory, AutomationServiceError>;
+  readonly reportResult: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly callerTurnId: TurnId | null;
+    readonly decision: "notify" | "silent";
+    readonly title?: string;
+    readonly summary?: string;
+  }) => Effect.Effect<AutomationRun, AutomationServiceError>;
+  /**
+   * The automation run that dispatched the caller's active turn, when there is one.
+   * Standalone runs execute in a per-run thread, so this is their only claim to their
+   * own automation; ownership by source/target thread never matches for them.
+   */
+  readonly resolveCallerRun: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly callerTurnId: TurnId | null;
+  }) => Effect.Effect<Option.Option<AutomationRun>, AutomationServiceError>;
   readonly runNow: (
     input: AutomationRunNowInput,
   ) => Effect.Effect<AutomationRunNowResult, AutomationServiceError>;

@@ -1,9 +1,12 @@
+import { ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { AutomationId } from "@synara/contracts";
 
 import {
   computeAutomationScheduleSpacingSeconds,
   computeNextAutomationRunAt,
   computeNextAutomationRunAtAfter,
+  deterministicAutomationJitterSeconds,
 } from "./schedule.ts";
 
 // Render a UTC instant as "YYYY-MM-DD HH:MM" wall-clock in a timezone, so DST
@@ -25,19 +28,6 @@ function wallClockInZone(iso: string, timeZone: string): string {
 }
 
 describe("computeNextAutomationRunAt", () => {
-  it("returns null for manual schedules", () => {
-    expect(computeNextAutomationRunAt({ type: "manual" }, "2026-06-16T10:00:00.000Z")).toBeNull();
-  });
-
-  it("adds interval seconds", () => {
-    expect(
-      computeNextAutomationRunAt(
-        { type: "interval", everySeconds: 300 },
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-16T10:05:00.000Z");
-  });
-
   it("returns a future one-shot run time once", () => {
     expect(
       computeNextAutomationRunAt(
@@ -51,12 +41,6 @@ describe("computeNextAutomationRunAt", () => {
         "2026-06-16T10:00:00.000Z",
       ),
     ).toBeNull();
-  });
-
-  it("uses the next UTC daily time", () => {
-    expect(
-      computeNextAutomationRunAt({ type: "daily", timeOfDay: "09:30" }, "2026-06-16T10:00:00.000Z"),
-    ).toBe("2026-06-17T09:30:00.000Z");
   });
 
   it("uses the next UTC weekly day and time", () => {
@@ -130,15 +114,6 @@ describe("computeNextAutomationRunAt", () => {
       "2026-11-01T05:45:00.000Z", // 01:45 EDT — still before the second 01:30 (06:30Z)
     );
     expect(afterInRepeatedHour).toBe("2026-11-02T06:30:00.000Z");
-  });
-
-  it("uses timezone-aware daily slots when timezone is present", () => {
-    expect(
-      computeNextAutomationRunAt(
-        { type: "daily", timeOfDay: "09:30", timezone: "Europe/Rome" },
-        "2026-06-16T06:00:00.000Z",
-      ),
-    ).toBe("2026-06-16T07:30:00.000Z");
   });
 
   it("computes constrained cron schedules", () => {
@@ -239,16 +214,6 @@ describe("computeNextAutomationRunAt", () => {
 });
 
 describe("computeNextAutomationRunAtAfter", () => {
-  it("returns null for manual schedules", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "manual" },
-        "2026-06-16T10:00:00.000Z",
-        "2026-06-16T10:11:00.000Z",
-      ),
-    ).toBeNull();
-  });
-
   it("returns null after a one-shot occurrence is consumed", () => {
     expect(
       computeNextAutomationRunAtAfter(
@@ -282,18 +247,6 @@ describe("computeNextAutomationRunAtAfter", () => {
     ).toBe("2026-06-16T10:05:00.000Z");
   });
 
-  it("coalesces more than a day of missed interval slots into one aligned slot", () => {
-    // Hourly interval anchored at midnight, process down ~30h. We must land on the
-    // first aligned slot after now (07:00 the next day), not replay ~30 backlog ticks.
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "interval", everySeconds: 3_600 },
-        "2026-06-16T00:00:00.000Z",
-        "2026-06-17T06:15:00.000Z",
-      ),
-    ).toBe("2026-06-17T07:00:00.000Z");
-  });
-
   it("lands exactly on the next slot boundary, not the missed one", () => {
     // notBefore sits exactly on 10:05; the strictly-after slot is 10:10.
     expect(
@@ -303,26 +256,6 @@ describe("computeNextAutomationRunAtAfter", () => {
         "2026-06-16T10:05:00.000Z",
       ),
     ).toBe("2026-06-16T10:10:00.000Z");
-  });
-
-  it("delegates daily schedules to the next future wall-clock slot", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "daily", timeOfDay: "09:30" },
-        "2026-06-16T09:30:00.000Z",
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-17T09:30:00.000Z");
-  });
-
-  it("delegates weekly schedules to the next future wall-clock slot", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "weekly", dayOfWeek: 2, timeOfDay: "09:30" },
-        "2026-06-16T09:30:00.000Z",
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-23T09:30:00.000Z");
   });
 
   it("delegates weekday schedules, skipping the weekend after downtime", () => {
@@ -341,6 +274,12 @@ describe("computeAutomationScheduleSpacingSeconds", () => {
   it("reports null for manual and one-shot schedules", () => {
     expect(
       computeAutomationScheduleSpacingSeconds({ type: "manual" }, "2026-06-16T10:00:00.000Z"),
+    ).toBeNull();
+    expect(
+      computeAutomationScheduleSpacingSeconds(
+        { type: "project-event", projectId: ProjectId.makeUnsafe("project-1") },
+        "2026-06-16T10:00:00.000Z",
+      ),
     ).toBeNull();
     expect(
       computeAutomationScheduleSpacingSeconds(
@@ -363,5 +302,86 @@ describe("computeAutomationScheduleSpacingSeconds", () => {
         "2026-06-16T10:00:00.000Z",
       ),
     ).toBe(60);
+  });
+});
+
+describe("deterministic automation schedule jitter", () => {
+  const context = {
+    installSalt: "install-salt",
+    automationId: AutomationId.makeUnsafe("automation-a"),
+  };
+
+  it("derives one stable 0-119 second phase offset per automation", () => {
+    expect(deterministicAutomationJitterSeconds(context)).toBe(15);
+    expect(deterministicAutomationJitterSeconds(context)).toBe(15);
+    expect(
+      deterministicAutomationJitterSeconds({
+        ...context,
+        automationId: AutomationId.makeUnsafe("automation-b"),
+      }),
+    ).toBe(38);
+  });
+
+  it("jitters wall-clock and cron occurrences", () => {
+    expect(
+      computeNextAutomationRunAt(
+        { type: "daily", timeOfDay: "09:30" },
+        "2026-06-16T10:00:00.000Z",
+        context,
+      ),
+    ).toBe("2026-06-17T09:30:15.000Z");
+
+    const cron = { type: "cron", expression: "30 9 * * *", timezone: "UTC" } as const;
+    const unjittered = computeNextAutomationRunAt(cron, "2026-06-16T10:00:00.000Z");
+    const jittered = computeNextAutomationRunAt(cron, "2026-06-16T10:00:00.000Z", context);
+    expect(Date.parse(jittered!) - Date.parse(unjittered!)).toBeGreaterThanOrEqual(0);
+    expect(Date.parse(jittered!) - Date.parse(unjittered!)).toBeLessThanOrEqual(119_000);
+  });
+
+  it("jitters dense cron occurrences", () => {
+    const cron = { type: "cron", expression: "* * * * *", timezone: "UTC" } as const;
+
+    const first = computeNextAutomationRunAt(cron, "2026-06-16T10:00:00.000Z", context);
+    const second = computeNextAutomationRunAtAfter(cron, first!, first!, context);
+
+    expect(first).toBe("2026-06-16T10:00:15.000Z");
+    expect(second).toBe("2026-06-16T10:01:15.000Z");
+    expect(Date.parse(second!) - Date.parse(first!)).toBe(60_000);
+  });
+
+  it("preserves dense cron cadence when jitter exceeds one minute", () => {
+    const cron = { type: "cron", expression: "* * * * *", timezone: "UTC" } as const;
+    const longJitterContext = {
+      installSalt: "install-salt",
+      automationId: AutomationId.makeUnsafe("automation-0"),
+    };
+    expect(deterministicAutomationJitterSeconds(longJitterContext)).toBe(93);
+
+    const first = computeNextAutomationRunAt(cron, "2026-06-16T10:00:00.000Z", longJitterContext);
+    const second = computeNextAutomationRunAtAfter(cron, first!, first!, longJitterContext);
+
+    expect(first).toBe("2026-06-16T10:00:33.000Z");
+    expect(second).toBe("2026-06-16T10:01:33.000Z");
+    expect(Date.parse(second!) - Date.parse(first!)).toBe(60_000);
+  });
+
+  it("never jitters interval, once, or manual schedules", () => {
+    expect(
+      computeNextAutomationRunAt(
+        { type: "interval", everySeconds: 300 },
+        "2026-06-16T10:00:00.000Z",
+        context,
+      ),
+    ).toBe("2026-06-16T10:05:00.000Z");
+    expect(
+      computeNextAutomationRunAt(
+        { type: "once", runAt: "2026-06-16T10:05:00.000Z" },
+        "2026-06-16T10:00:00.000Z",
+        context,
+      ),
+    ).toBe("2026-06-16T10:05:00.000Z");
+    expect(
+      computeNextAutomationRunAt({ type: "manual" }, "2026-06-16T10:00:00.000Z", context),
+    ).toBeNull();
   });
 });

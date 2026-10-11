@@ -1,8 +1,7 @@
 import { performance } from "node:perf_hooks";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
-type Engine = "effect-acp" | "official-sdk";
+type Engine = "official-sdk";
 
 interface BenchmarkAdapter {
   readonly request: (payload: Record<string, unknown>) => Promise<unknown>;
@@ -154,64 +153,6 @@ async function makeOfficialAdapter(): Promise<BenchmarkAdapter> {
   };
 }
 
-async function makeEffectAdapter(effectRoot: string): Promise<BenchmarkAdapter> {
-  const serverRoot = path.join(effectRoot, "apps/server");
-  const resolveDependency = (specifier: string) =>
-    pathToFileURL(Bun.resolveSync(specifier, serverRoot)).href;
-  const [Effect, Exit, Queue, Scope, Protocol, Stdio] = await Promise.all([
-    import(resolveDependency("effect/Effect")),
-    import(resolveDependency("effect/Exit")),
-    import(resolveDependency("effect/Queue")),
-    import(resolveDependency("effect/Scope")),
-    import(pathToFileURL(path.join(effectRoot, "packages/effect-acp/src/protocol.ts")).href),
-    import(pathToFileURL(path.join(effectRoot, "packages/effect-acp/src/_internal/stdio.ts")).href),
-  ]);
-  const scope = await Effect.runPromise(Scope.make());
-  const provideScope = (effect: unknown) => Effect.provideService(effect, Scope.Scope, scope);
-  const memory = await Effect.runPromise(Stdio.makeInMemoryStdio());
-  const protocol = await Effect.runPromise(
-    provideScope(
-      Protocol.makeAcpPatchedProtocol({
-        stdio: memory.stdio,
-        serverRequestMethods: new Set(),
-      }),
-    ),
-  );
-  let stopped = false;
-  let peerDelayMs = 0;
-  const peer = (async () => {
-    while (!stopped) {
-      const chunk = await Effect.runPromise(Queue.take(memory.output));
-      for (const rawLine of chunk.split("\n")) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        if (peerDelayMs > 0) await sleep(peerDelayMs);
-        const message: unknown = JSON.parse(line);
-        if (isRequest(message)) {
-          await Effect.runPromise(Queue.offer(memory.input, encoder.encode(makeResponse(message))));
-        }
-      }
-    }
-  })().catch((error) => {
-    if (!stopped) throw error;
-  });
-
-  return {
-    request: (payload) => Effect.runPromise(protocol.request("x/benchmark", payload)),
-    notify: (payload) => Effect.runPromise(protocol.notify("x/benchmark-notification", payload)),
-    setPeerDelayMs: (delayMs) => {
-      peerDelayMs = delayMs;
-    },
-    close: async () => {
-      stopped = true;
-      await Effect.runPromise(Queue.shutdown(memory.output));
-      await Effect.runPromise(Queue.shutdown(memory.input));
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-      await peer.catch(() => undefined);
-    },
-  };
-}
-
 async function measureScenario(input: {
   readonly name: string;
   readonly operations: number;
@@ -250,8 +191,8 @@ async function measureScenario(input: {
 
 async function run(): Promise<void> {
   const engine = readArgument("engine") as Engine | undefined;
-  if (engine !== "effect-acp" && engine !== "official-sdk") {
-    throw new Error("Pass --engine=effect-acp or --engine=official-sdk");
+  if (engine !== "official-sdk") {
+    throw new Error("Pass --engine=official-sdk");
   }
   const samples = readPositiveInteger("samples", 12);
   const warmups = readPositiveInteger("warmups", 4);
@@ -263,18 +204,10 @@ async function run(): Promise<void> {
       .map((name) => name.trim())
       .filter(Boolean),
   );
-  const effectRoot = readArgument("effect-root");
-  if (engine === "effect-acp" && !effectRoot) {
-    throw new Error("The historical Effect engine requires --effect-root=/path/to/checkout");
-  }
   const beforeSetupRssBytes = process.memoryUsage().rss;
-  const repositoryRoot =
-    engine === "effect-acp" ? (effectRoot as string) : path.resolve(import.meta.dir, "../../..");
+  const repositoryRoot = path.resolve(import.meta.dir, "../../..");
   const setupStartedAt = performance.now();
-  const adapter =
-    engine === "official-sdk"
-      ? await makeOfficialAdapter()
-      : await makeEffectAdapter(effectRoot as string);
+  const adapter = await makeOfficialAdapter();
   const setupMs = performance.now() - setupStartedAt;
   forceGc();
   const afterSetupRssBytes = process.memoryUsage().rss;

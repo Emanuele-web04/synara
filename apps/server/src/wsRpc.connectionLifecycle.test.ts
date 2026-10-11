@@ -1,9 +1,28 @@
+import { makeGitActionRunner } from "./git/gitActionRunner";
 import http from "node:http";
 
-import type { AuthSessionId } from "@synara/contracts";
+import {
+  EventId,
+  ThreadId,
+  WsRpcError,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
+  WS_BOOTSTRAP_METHOD,
+  WS_METHODS,
+  WsGitRunStackedActionRpc,
+  WS_BOOTSTRAP_PATH,
+  WS_COMPATIBILITY_QUERY,
+  WS_NEGOTIATE_HTTP_PATH,
+  WS_NEGOTIATE_QUERY,
+  WS_PROTOCOL_EPOCH,
+  WS_PROTOCOL_MAX_REVISION,
+  WS_PROTOCOL_MIN_REVISION,
+  type AuthSessionId,
+  type ComputerEvent,
+  type WsBootstrapNegotiateResult,
+} from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
-import { HttpRouter } from "effect/unstable/http";
+import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
+import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
@@ -21,8 +40,17 @@ import {
 import { ServerConfig } from "./config";
 import { makeBoundedNodeHttpServer, MAX_WEBSOCKET_MESSAGE_BYTES } from "./nodeHttpServer";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
-import { makeWebsocketRpcRouteLayer } from "./wsRpc";
+import { makeWebsocketNegotiationRouteLayer, makeWebsocketRpcRouteLayer } from "./wsRpc";
+import {
+  makeWsConnectionSessions,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+  type WsConnectionSessionsShape,
+} from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import { bufferLiveUiStream } from "./wsStreamBackpressure";
+import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
+import { ComputerEventInterests } from "./computer/computerEventInterests";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -32,7 +60,13 @@ const SlowRpc = Rpc.make("test.slow", {
   payload: Schema.Struct({}),
   success: Schema.String,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc);
+const BudgetStreamRpc = Rpc.make("test.budget-stream", {
+  payload: Schema.Struct({ mode: Schema.Literals(["replay", "stalled", "healthy"]) }),
+  success: Schema.Number,
+  error: WsRpcError,
+  stream: true,
+});
+const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -40,7 +74,13 @@ interface RunningTestServer {
   readonly logout: (sessionId: AuthSessionId) => Promise<boolean>;
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
+  readonly observedGitAction: { started: number; finalized: number };
+  readonly releaseGitAction: () => Promise<void>;
+  readonly observedBudgetStream: { finalized: number };
+  readonly releaseBudgetStream: () => Promise<void>;
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
+  readonly connectionSessions: WsConnectionSessionsShape;
+  readonly observedConnectionSessionKeys: string[];
   readonly close: () => Promise<void>;
 }
 
@@ -51,9 +91,12 @@ afterEach(() => {
   openSockets.clear();
 });
 
-function connect(url: string): Promise<WebSocket> {
+function connect(
+  url: string,
+  options?: { readonly perMessageDeflate?: boolean },
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { perMessageDeflate: false });
+    const socket = new WebSocket(url, { perMessageDeflate: options?.perMessageDeflate ?? false });
     openSockets.add(socket);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -114,11 +157,13 @@ function makeRpcFrame(totalBytes: number, requestId: string): string {
 function sendFragment(
   socket: WebSocket,
   data: string,
-  options: { readonly fin: boolean },
+  options: { readonly fin: boolean; readonly compress?: boolean },
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    socket.send(data, { binary: false, compress: false, fin: options.fin }, (error) =>
-      error ? reject(error) : resolve(),
+    socket.send(
+      data,
+      { binary: false, compress: options.compress ?? false, fin: options.fin },
+      (error) => (error ? reject(error) : resolve()),
     );
   });
 }
@@ -224,32 +269,140 @@ async function startTestServer(): Promise<RunningTestServer> {
       };
     },
   });
+  const observedGitAction = { started: 0, finalized: 0 };
+  const gitRelease = await Effect.runPromise(Deferred.make<void>());
+  const observedBudgetStream = { finalized: 0 };
+  const budgetRelease = await Effect.runPromise(Deferred.make<void>());
   const handlerLayer = PingRpcGroup.toLayer(
-    Effect.succeed({
-      "test.ping": (_input: { readonly label: string }) =>
-        Effect.sync(() => {
-          observedRpc.handlerCalls += 1;
-          return "ok";
-        }),
-      "test.slow": () =>
+    Effect.gen(function* () {
+      const runGitAction = yield* makeGitActionRunner((input, publish) =>
         Effect.gen(function* () {
-          observedSlowRpc.started += 1;
-          yield* Effect.sleep(Duration.seconds(30));
-          observedSlowRpc.completed += 1;
-          return "ok";
+          observedGitAction.started++;
+          yield* Deferred.await(gitRelease);
+          yield* publish({
+            ...input,
+            kind: "action_finished",
+            result: {
+              action: "push",
+              branch: { status: "skipped_not_requested" },
+              commit: { status: "skipped_not_requested" },
+              push: { status: "pushed" },
+              pr: { status: "skipped_not_requested" },
+            },
+          });
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              observedSlowRpc.finalized += 1;
+              observedGitAction.finalized++;
             }),
           ),
         ),
+      );
+      return {
+        [WS_METHODS.gitRunStackedAction]: runGitAction,
+        "test.budget-stream": ({
+          mode,
+        }: {
+          readonly mode: "replay" | "stalled" | "healthy";
+        }): Stream.Stream<number, WsRpcError> => {
+          if (mode === "healthy") return Stream.make(42);
+          if (mode === "stalled")
+            return bufferLiveUiStream(
+              Stream.concat(
+                Stream.make(1),
+                Stream.fromEffect(Deferred.await(budgetRelease)).pipe(
+                  Stream.flatMap(() => Stream.make(2, 3)),
+                  Stream.concat(Stream.never),
+                ),
+              ).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    observedBudgetStream.finalized++;
+                  }),
+                ),
+              ),
+              { capacity: 2, overflowStrategy: "fail" },
+            );
+          return makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(Stream.never),
+            snapshot: Effect.succeed(0),
+            snapshotSequence: (snapshot) => snapshot,
+            getHighWaterSequence: Effect.succeed(1100),
+            replay: () =>
+              Stream.range(1, 1100).pipe(
+                Stream.map((sequence) => ({
+                  sequence,
+                  eventId: EventId.makeUnsafe(`replay-${sequence}`),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.makeUnsafe("rpc-replay"),
+                  occurredAt: "2026-10-06T00:00:00.000Z",
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.activity-appended" as const,
+                  payload: {
+                    threadId: ThreadId.makeUnsafe("rpc-replay"),
+                    activity: {
+                      id: EventId.makeUnsafe(`activity-${sequence}`),
+                      tone: "info" as const,
+                      kind: "tool.progress",
+                      summary: "progress",
+                      payload: null,
+                      turnId: null,
+                      createdAt: "2026-10-06T00:00:00.000Z",
+                    },
+                  },
+                })),
+              ),
+          }).pipe(
+            Stream.take(1101),
+            Stream.map((item) =>
+              item.kind === "snapshot"
+                ? item.snapshot
+                : item.kind === "event"
+                  ? item.event.sequence
+                  : item.events.length,
+            ),
+          );
+        },
+        "test.ping": (_input: { readonly label: string }) =>
+          Effect.sync(() => {
+            observedRpc.handlerCalls += 1;
+            return "ok";
+          }),
+        "test.slow": () =>
+          Effect.gen(function* () {
+            observedSlowRpc.started += 1;
+            yield* Effect.sleep(Duration.seconds(30));
+            observedSlowRpc.completed += 1;
+            return "ok";
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                observedSlowRpc.finalized += 1;
+              }),
+            ),
+          ),
+      };
     }),
   );
-  const rpcHttpEffectSource = RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(
-    Effect.provide(handlerLayer.pipe(Layer.provideMerge(serializationLayer))),
+  const connectionSessions = await Effect.runPromise(makeWsConnectionSessions);
+  const observedConnectionSessionKeys: string[] = [];
+  const rpcHttpEffectSource = Effect.gen(function* () {
+    const handlers = yield* Layer.buildWithScope(
+      handlerLayer.pipe(Layer.provideMerge(serializationLayer)),
+      yield* Effect.scope,
+    );
+    return yield* RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(Effect.provide(handlers));
+  }).pipe(
     Effect.map((httpEffect) =>
-      httpEffect.pipe(
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const sessionKey = request.headers[WS_CONNECTION_SESSION_HEADER];
+        if (typeof sessionKey === "string") observedConnectionSessionKeys.push(sessionKey);
+        return yield* httpEffect;
+      }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             transportFinalizers.count += 1;
@@ -258,7 +411,13 @@ async function startTestServer(): Promise<RunningTestServer> {
       ),
     ),
   );
-  const routeLayer = makeWebsocketRpcRouteLayer(rpcHttpEffectSource);
+  // The negotiation layer owns WS_BOOTSTRAP_PATH, which the compression tests
+  // also need: which underlying ws server (compressed vs uncompressed) handles
+  // an upgrade is decided by path in nodeHttpServer.
+  const routeLayer = Layer.merge(
+    makeWebsocketNegotiationRouteLayer(),
+    makeWebsocketRpcRouteLayer(rpcHttpEffectSource),
+  ).pipe(Layer.provide(Layer.succeed(WsConnectionSessions, connectionSessions)));
   const scope = await Effect.runPromise(Scope.make("sequential"));
   const context = await Effect.runPromise(
     Layer.buildWithScope(
@@ -295,6 +454,14 @@ async function startTestServer(): Promise<RunningTestServer> {
     transportFinalizers,
     observedRpc,
     observedSlowRpc,
+    observedGitAction,
+    observedBudgetStream,
+    releaseBudgetStream: () =>
+      Effect.runPromise(Deferred.succeed(budgetRelease, undefined).pipe(Effect.asVoid)),
+    releaseGitAction: () =>
+      Effect.runPromise(Deferred.succeed(gitRelease, undefined).pipe(Effect.asVoid)),
+    connectionSessions,
+    observedConnectionSessionKeys,
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
 }
@@ -302,6 +469,7 @@ async function startTestServer(): Promise<RunningTestServer> {
 async function connectSession(
   server: RunningTestServer,
   ttl?: Duration.Duration,
+  options?: { readonly perMessageDeflate?: boolean },
 ): Promise<{
   readonly sessionId: AuthSessionId;
   readonly token: string;
@@ -309,7 +477,7 @@ async function connectSession(
 }> {
   const issued = await Effect.runPromise(server.sessions.issue(ttl ? { ttl } : undefined));
   const websocket = await Effect.runPromise(server.sessions.issueWebSocketToken(issued.sessionId));
-  const socket = await connect(featureSocketUrl(server, websocket.token));
+  const socket = await connect(featureSocketUrl(server, websocket.token), options);
   return { sessionId: issued.sessionId, token: websocket.token, socket };
 }
 
@@ -325,6 +493,36 @@ async function connectExistingSession(
 function featureSocketUrl(server: RunningTestServer, token: string): string {
   const searchParams = makeCurrentWsFeatureCompatibilitySearchParams("test-client");
   searchParams.set("wsToken", token);
+  return `${server.origin}/ws?${searchParams.toString()}`;
+}
+
+function negotiateHttpUrl(
+  server: RunningTestServer,
+  overrides?: Readonly<Record<string, string>>,
+): string {
+  const searchParams = new URLSearchParams({
+    [WS_NEGOTIATE_QUERY.clientBuild]: "test-client",
+    [WS_NEGOTIATE_QUERY.protocolEpoch]: String(WS_PROTOCOL_EPOCH),
+    [WS_NEGOTIATE_QUERY.minRevision]: String(WS_PROTOCOL_MIN_REVISION),
+    [WS_NEGOTIATE_QUERY.maxRevision]: String(WS_PROTOCOL_MAX_REVISION),
+    ...overrides,
+  });
+  const httpOrigin = server.origin.replace(/^ws:/, "http:");
+  return `${httpOrigin}${WS_NEGOTIATE_HTTP_PATH}?${searchParams.toString()}`;
+}
+
+function featureSocketUrlFromNegotiation(
+  server: RunningTestServer,
+  negotiation: WsBootstrapNegotiateResult,
+  token: string,
+): string {
+  const searchParams = new URLSearchParams({
+    [WS_COMPATIBILITY_QUERY.clientBuild]: "test-client",
+    [WS_COMPATIBILITY_QUERY.protocolEpoch]: String(negotiation.protocolEpoch),
+    [WS_COMPATIBILITY_QUERY.protocolRevision]: String(negotiation.negotiatedRevision),
+    [WS_COMPATIBILITY_QUERY.serverInstanceId]: negotiation.serverInstanceId,
+    wsToken: token,
+  });
   return `${server.origin}/ws?${searchParams.toString()}`;
 }
 
@@ -352,6 +550,173 @@ describe("websocket RPC payload admission", () => {
 
       const admitted = await connect(featureSocketUrl(server, websocket.token));
       await expect(ping(admitted)).resolves.toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("negotiates over HTTP and admits the feature socket in one WebSocket handshake", async () => {
+    const server = await startTestServer();
+    try {
+      const response = await fetch(negotiateHttpUrl(server));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const negotiation = (await response.json()) as WsBootstrapNegotiateResult;
+      expect(negotiation).toMatchObject({
+        protocolEpoch: WS_PROTOCOL_EPOCH,
+        negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+      });
+      expect(negotiation.serverInstanceId.length).toBeGreaterThan(0);
+      expect(negotiation.capabilities).toContain("transport.http-negotiate");
+
+      const issued = await Effect.runPromise(server.sessions.issue());
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const socket = await connect(
+        featureSocketUrlFromNegotiation(server, negotiation, websocket.token),
+      );
+      await expect(ping(socket)).resolves.toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses HTTP negotiation with 426 for missing or incompatible parameters", async () => {
+    const server = await startTestServer();
+    try {
+      const missing = await fetch(
+        `${server.origin.replace(/^ws:/, "http:")}${WS_NEGOTIATE_HTTP_PATH}`,
+      );
+      expect(missing.status).toBe(426);
+      expect(await missing.json()).toMatchObject({
+        code: "WS_NEGOTIATION_REQUIRED",
+        retryable: false,
+      });
+
+      const staleEpoch = await fetch(
+        negotiateHttpUrl(server, {
+          [WS_NEGOTIATE_QUERY.protocolEpoch]: String(WS_PROTOCOL_EPOCH - 1),
+        }),
+      );
+      expect(staleEpoch.status).toBe(426);
+      expect(await staleEpoch.json()).toMatchObject({
+        code: "WS_PROTOCOL_INCOMPATIBLE",
+        retryable: false,
+        action: "update-client",
+      });
+
+      const missingCapability = await fetch(
+        negotiateHttpUrl(server, {
+          [WS_NEGOTIATE_QUERY.requiredCapability]: "rpc.future-capability",
+        }),
+      );
+      expect(missingCapability.status).toBe(426);
+      expect(await missingCapability.json()).toMatchObject({
+        code: "WS_CAPABILITIES_INCOMPATIBLE",
+        retryable: false,
+        action: "update-server",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("gates HTTP negotiation on trusted origins and reflects CORS for none else", async () => {
+    const server = await startTestServer();
+    try {
+      // An untrusted origin must be refused before any negotiation data is
+      // produced, and must never see an Access-Control-Allow-Origin header.
+      const untrusted = await fetch(negotiateHttpUrl(server), {
+        headers: { origin: "http://evil.example" },
+      });
+      expect(untrusted.status).toBe(403);
+      expect(untrusted.headers.get("access-control-allow-origin")).toBeNull();
+      expect(untrusted.headers.get("cache-control")).toBe("no-store");
+      expect(untrusted.headers.get("vary")).toBe("Origin");
+
+      // A lookalike of the desktop scheme is not the desktop scheme.
+      const lookalike = await fetch(negotiateHttpUrl(server), {
+        headers: { origin: "synara://app.evil.com" },
+      });
+      expect(lookalike.status).toBe(403);
+      expect(lookalike.headers.get("access-control-allow-origin")).toBeNull();
+
+      // The desktop origin is reflected, and only that origin.
+      const desktop = await fetch(negotiateHttpUrl(server), {
+        headers: { origin: "synara://app" },
+      });
+      expect(desktop.status).toBe(200);
+      expect(desktop.headers.get("access-control-allow-origin")).toBe("synara://app");
+      expect(desktop.headers.get("vary")).toBe("Origin");
+
+      // No Origin at all (CLI clients) passes without reflection, matching
+      // the WS upgrade's own behavior.
+      const noOrigin = await fetch(negotiateHttpUrl(server));
+      expect(noOrigin.status).toBe(200);
+      expect(noOrigin.headers.get("access-control-allow-origin")).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects numeric negotiation params the RPC schema would reject", async () => {
+    const server = await startTestServer();
+    try {
+      // Number() accepts hex and exponential notation; Schema.Int does not.
+      // The two transports must decode identically.
+      for (const raw of ["0x1", "1e0", " 1 ", "+1", "1.0"]) {
+        const response = await fetch(
+          negotiateHttpUrl(server, { [WS_NEGOTIATE_QUERY.minRevision]: raw }),
+        );
+        expect(response.status, raw).toBe(426);
+        expect(await response.json(), raw).toMatchObject({ code: "WS_NEGOTIATION_REQUIRED" });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps the legacy bootstrap socket negotiating for older clients", async () => {
+    const server = await startTestServer();
+    try {
+      const socket = await connect(`${server.origin}${WS_BOOTSTRAP_PATH}`);
+      const exit = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for bootstrap negotiation exit")),
+          2_000,
+        );
+        socket.on("message", (data: RawData) => {
+          const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (frame._tag !== "Exit") return;
+          clearTimeout(timeout);
+          resolve(frame);
+        });
+      });
+      socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "1",
+          tag: WS_BOOTSTRAP_METHOD,
+          payload: {
+            protocolEpoch: WS_PROTOCOL_EPOCH,
+            minRevision: WS_PROTOCOL_MIN_REVISION,
+            maxRevision: WS_PROTOCOL_MAX_REVISION,
+            clientBuild: "legacy-client",
+            requiredCapabilities: [],
+          },
+          headers: [],
+        }),
+      );
+
+      const frame = await exit;
+      expect(frame.exit).toMatchObject({
+        _tag: "Success",
+        value: {
+          protocolEpoch: WS_PROTOCOL_EPOCH,
+          negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+        },
+      });
     } finally {
       await server.close();
     }
@@ -452,7 +817,312 @@ describe("websocket RPC payload admission", () => {
   });
 });
 
+describe("websocket permessage-deflate negotiation", () => {
+  it("never negotiates compression on the pre-auth bootstrap socket", async () => {
+    const server = await startTestServer();
+    try {
+      // Offer compression on the bootstrap path: the server must decline the
+      // extension (compression is a post-authentication privilege; pre-auth
+      // connections must not be able to multiply per-connection zlib memory).
+      const bootstrapSocket = await connect(`${server.origin}/ws/bootstrap`, {
+        perMessageDeflate: true,
+      });
+      expect(bootstrapSocket.extensions).not.toContain("permessage-deflate");
+      bootstrapSocket.terminate();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("declines compression on every spelling the router still routes to bootstrap", async () => {
+    const server = await startTestServer();
+    try {
+      // The router matches case-insensitively and normalizes duplicate
+      // slashes, percent-encoding, and `;params`; the upgrade dispatcher must
+      // use the same semantics or an alias would reach bootstrap compressed.
+      for (const alias of [
+        "/WS/BOOTSTRAP",
+        "/ws//bootstrap",
+        "/ws/%62ootstrap",
+        "/ws/bootstrap;sid=1",
+        // Absolute-form targets cannot be expressed through a ws:// client
+        // URL; nodeHttpServer.upgradePath.test.ts covers them directly.
+      ]) {
+        const socket = await connect(`${server.origin}${alias}`, { perMessageDeflate: true });
+        expect(socket.extensions, alias).not.toContain("permessage-deflate");
+        socket.terminate();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("negotiates compression when the client offers it and serves RPC over the compressed socket", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+
+      const exit = waitForRpcExit(connected.socket, "201");
+      connected.socket.send(makeRpcFrame(256, "201"));
+      await exit;
+      expect(server.observedRpc).toEqual({ decoderCalls: 1, handlerCalls: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("still serves clients that do not offer compression", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: false });
+      expect(connected.socket.extensions).not.toContain("permessage-deflate");
+
+      const exit = waitForRpcExit(connected.socket, "202");
+      connected.socket.send(makeRpcFrame(256, "202"), { binary: false, compress: false });
+      await exit;
+      expect(server.observedRpc).toEqual({ decoderCalls: 1, handlerCalls: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("enforces the payload ceiling on the decompressed size of a compressed message", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+      const close = waitForCloseInfo(connected.socket);
+
+      // Highly compressible oversized frame: tiny on the wire, over the limit inflated.
+      connected.socket.send(makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "203"), {
+        binary: false,
+        compress: true,
+      });
+
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
+      const splitAt = Math.floor(frame.length / 2);
+      const close = waitForCloseInfo(connected.socket);
+
+      await sendFragment(connected.socket, frame.slice(0, splitAt), {
+        fin: false,
+        compress: true,
+      });
+      void sendFragment(connected.socket, frame.slice(splitAt), {
+        fin: true,
+        compress: true,
+      }).catch(() => {});
+
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("exposes the authenticated session to RPC handlers for the connection lifetime", async () => {
+    const server = await startTestServer();
+    try {
+      // Regression: RPC handlers run on fibers forked from the layer-build
+      // scope, so the upgrade's authenticated role/principal must travel via
+      // the connection-session registry, not fiber context (the owner-only
+      // external MCP methods failed for everyone when this broke).
+      const issued = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const socket = await connect(featureSocketUrl(server, websocket.token));
+
+      expect(server.observedConnectionSessionKeys).toHaveLength(1);
+      const sessionKey = server.observedConnectionSessionKeys[0]!;
+      expect(server.connectionSessions.lookup(sessionKey)).toEqual({
+        role: "owner",
+        attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+      });
+
+      // A client may read Computer state without ever subscribing to its
+      // event stream. The socket scope must still release the remembered view.
+      const interests = new ComputerEventInterests(server.connectionSessions.onClose);
+      const event = {
+        type: "computer.thread-state",
+        state: { threadId: "state-only-view" },
+      } as ComputerEvent;
+      interests.watch(sessionKey, "state-only-view");
+      expect(interests.accepts(sessionKey, event)).toBe(true);
+
+      socket.close();
+      await waitForClose(socket);
+      await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
+      expect(interests.accepts(sessionKey, event)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  }, 4_000);
+
+  it("ACKs finite replay over real RPC and isolates a no-ACK live overflow", async () => {
+    const server = await startTestServer();
+    const pendingAcks = new Set<ReturnType<typeof setTimeout>>();
+    try {
+      const { socket } = await connectSession(server);
+      const replay: number[] = [];
+      const healthy: number[] = [];
+      const exits = new Map<string, unknown>();
+      let stalledBatch = false;
+      socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        const id = String(frame.requestId);
+        if (frame._tag === "Exit") exits.set(id, frame.exit);
+        if (frame._tag !== "Chunk") return;
+        if (id === "510") {
+          stalledBatch = true;
+          return; // No ACK: the first live batch must remain budgeted.
+        }
+        if (id === "511") replay.push(...frame.values);
+        if (id === "512") healthy.push(...frame.values);
+        const timer = setTimeout(() => {
+          pendingAcks.delete(timer);
+          socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }, 1);
+        pendingAcks.add(timer);
+      });
+      const request = (id: string, mode: string) =>
+        socket.send(
+          JSON.stringify({
+            _tag: "Request",
+            id,
+            tag: "test.budget-stream",
+            payload: { mode },
+            headers: [],
+          }),
+        );
+      request("510", "stalled");
+      request("511", "replay");
+      await waitForObserved(() => stalledBatch);
+      await server.releaseBudgetStream();
+      await waitForObserved(() => server.observedBudgetStream.finalized === 1);
+      // Let RpcServer pull again to observe the already-failed subscription.
+      socket.send(JSON.stringify({ _tag: "Ack", requestId: "510" }));
+      await waitForObserved(() => exits.has("510") && exits.has("511"));
+      expect(JSON.stringify(exits.get("510"))).toContain(ORCHESTRATION_STREAM_OVERFLOW_CODE);
+      expect(replay).toEqual(Array.from({ length: 1101 }, (_, sequence) => sequence));
+      request("512", "healthy");
+      await waitForObserved(() => exits.has("512"));
+      expect(healthy).toEqual([42]);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      for (const timer of pendingAcks) clearTimeout(timer);
+      await server.close();
+    }
+  }, 5_000);
+
+  it("reattaches to one Git action after the actual WebSocket closes", async () => {
+    const server = await startTestServer();
+    try {
+      const first = await connectSession(server);
+      const input = {
+        actionId: "socket-reconnect",
+        cwd: "/repo",
+        action: "push",
+        recoverable: true,
+      };
+      first.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "300",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: input,
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedGitAction.started === 1);
+      const closed = waitForClose(first.socket);
+      first.socket.terminate();
+      await closed;
+      await waitForObserved(() => server.transportFinalizers.count >= 1);
+      expect(server.observedGitAction.finalized).toBe(0);
+
+      // Finish while no socket is observing, then recover the retained result.
+      await server.releaseGitAction();
+      await waitForObserved(() => server.observedGitAction.finalized === 1);
+      const second = await connectExistingSession(server, first.sessionId);
+      const events: unknown[] = [];
+      second.socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        if (frame._tag === "Chunk") {
+          events.push(...frame.values);
+          second.socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }
+      });
+      const exit = waitForRpcExit(second.socket, "301");
+      second.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "301",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: { ...input, resume: true },
+          headers: [],
+        }),
+      );
+      await exit;
+      expect(events).toEqual([
+        expect.objectContaining({
+          actionId: input.actionId,
+          kind: "action_finished",
+          result: expect.objectContaining({ push: { status: "pushed" } }),
+        }),
+      ]);
+      expect(server.observedGitAction).toEqual({ started: 1, finalized: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("closes with an established socket and finalizes its RPC work", async () => {
+    const server = await startTestServer();
+    let serverClosed = false;
+    try {
+      const connected = await connectSession(server);
+      connected.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "200",
+          tag: "test.slow",
+          payload: {},
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedSlowRpc.started === 1);
+      const socketClosed = waitForClose(connected.socket);
+
+      await expect(server.close()).resolves.toBeUndefined();
+      serverClosed = true;
+      await socketClosed;
+
+      expect(server.observedSlowRpc).toEqual({
+        started: 1,
+        completed: 0,
+        finalized: 1,
+      });
+      expect(server.transportFinalizers.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (!serverClosed) await server.close();
+    }
+  }, 2_000);
+
   it("interrupts and finalizes cancelled request work exactly once", async () => {
     const server = await startTestServer();
     try {

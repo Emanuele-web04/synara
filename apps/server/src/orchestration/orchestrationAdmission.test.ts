@@ -1,46 +1,47 @@
-import { Effect, Queue } from "effect";
 import { describe, expect, it } from "vitest";
+import {
+  ORCHESTRATION_COMMAND_CONTROL_RESERVE,
+  ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
+  isQuiescingCommandAdmissible,
+  orchestrationCommandLane,
+  usesReservedCommandAdmission,
+} from "./orchestrationAdmission.ts";
 
-import { tryAdmitOrchestrationCommand } from "./orchestrationAdmission.ts";
+describe("orchestration command admission policy", () => {
+  it("reserves part of the bounded admission capacity for lifecycle commands", () => {
+    expect(ORCHESTRATION_COMMAND_QUEUE_CAPACITY).toBe(256);
+    expect(ORCHESTRATION_COMMAND_CONTROL_RESERVE).toBe(32);
+  });
 
-describe("orchestration command admission", () => {
-  it("keeps reserved lifecycle capacity available under normal-command overload", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const queue = yield* Queue.bounded<string>(4);
-        const policy = { capacity: 4, reservedCapacity: 1 } as const;
-        const admit = (
-          envelope: string,
-          commandType: Parameters<typeof tryAdmitOrchestrationCommand<string>>[0]["commandType"],
-        ) => tryAdmitOrchestrationCommand({ queue, envelope, commandType, policy });
+  it.each([
+    "thread.turn.interrupt",
+    "thread.session.stop",
+    "thread.task.stop",
+    "thread.task.background",
+    "thread.approval.respond",
+    "thread.user-input.respond",
+    "thread.message.assistant.complete",
+  ] as const)("gives %s reserved control admission during quiesce", (type) => {
+    expect(usesReservedCommandAdmission(type)).toBe(true);
+    expect(orchestrationCommandLane(type)).toBe("control");
+    expect(isQuiescingCommandAdmissible(type)).toBe(true);
+  });
 
-        expect(admit("normal-1", "project.create")).toEqual({ accepted: true });
-        expect(admit("normal-2", "project.create")).toEqual({ accepted: true });
-        expect(admit("normal-3", "project.create")).toEqual({ accepted: true });
-        expect(admit("normal-overload", "project.create")).toEqual({
-          accepted: false,
-          reason: "overloaded",
-        });
+  it.each([
+    "thread.turn.start",
+    "thread.create",
+    "thread.checkpoint.revert",
+    "thread.conversation.rollback",
+  ] as const)("prioritizes %s without allowing it to consume lifecycle capacity", (type) => {
+    expect(usesReservedCommandAdmission(type)).toBe(false);
+    expect(orchestrationCommandLane(type)).toBe("user");
+    expect(isQuiescingCommandAdmissible(type)).toBe(false);
+  });
 
-        expect(admit("control", "thread.turn.interrupt")).toEqual({ accepted: true });
-        expect(admit("control-overload", "thread.session.stop")).toEqual({
-          accepted: false,
-          reason: "overloaded",
-        });
-
-        // Task stop/background share the interrupt reserve: draining one slot
-        // shows they are admitted past the normal-command limit.
-        yield* Queue.take(queue);
-        expect(admit("task-stop", "thread.task.stop")).toEqual({ accepted: true });
-        yield* Queue.take(queue);
-        expect(admit("task-background", "thread.task.background")).toEqual({ accepted: true });
-
-        yield* Queue.shutdown(queue);
-        expect(admit("after-stop", "thread.turn.interrupt")).toEqual({
-          accepted: false,
-          reason: "stopped",
-        });
-      }),
-    );
+  it("allows settlement diagnostics to quiesce without control priority or reserve", () => {
+    expect(orchestrationCommandLane("thread.activity.append")).toBe("normal");
+    expect(usesReservedCommandAdmission("thread.activity.append")).toBe(false);
+    expect(isQuiescingCommandAdmissible("thread.activity.append")).toBe(true);
+    expect(isQuiescingCommandAdmissible("project.create")).toBe(false);
   });
 });

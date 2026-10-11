@@ -1,78 +1,41 @@
 // FILE: ToolCallDetailsDialog.tsx
-// Purpose: Modal inspector for command and file-change tool calls from transcript rows.
+// Purpose: Inline details content for command and file-change transcript rows.
 // Layer: Chat presentation component
-// Exports: ToolCallDetailsDialog
-// Depends on: WorkLogEntry.toolDetails and shared dialog chrome
+// Exports: ToolCallDetailsContent
+// Depends on: WorkLogEntry.toolDetails
 
 import type { ReactNode } from "react";
-import { PencilIcon, TerminalIcon } from "~/lib/icons";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
+import type { TimestampFormat } from "../../appSettings";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
-import type { WorkLogEntry } from "../../session-logic";
-import ChatMarkdown from "../ChatMarkdown";
+import type { WorkLogLiveActivity } from "../../workLog";
 import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
+  formatLiveActivityElapsed,
+  formatLiveActivityProgress,
+  formatLiveActivityStateLabel,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
+import { formatTimestamp } from "../../timestampFormat";
+import ChatMarkdown from "../ChatMarkdown";
 
-const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
+const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-ui-xs font-medium";
 const DETAIL_CODE_BLOCK_CLASS_NAME =
-  "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-[11px] leading-relaxed text-foreground/88";
-const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
-  "text-[length:var(--app-font-size-ui,12px)] leading-relaxed";
+  "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-chat-code leading-relaxed text-foreground/88";
+const TOOL_DETAILS_MARKDOWN_CLASS_NAME = "text-ui leading-relaxed";
 
-interface ToolCallDetailsDialogProps {
-  entry: WorkLogEntry | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
-  const details = entry?.toolDetails;
-  // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
-  // the central pencil, commands use the terminal — so the dialog header matches
-  // the row the user clicked.
-  const Icon = details?.kind === "file-change" ? PencilIcon : TerminalIcon;
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" className="max-h-[min(86vh,760px)] max-w-4xl gap-0 p-0">
-        <DialogHeader className="border-b border-border/55 pr-10">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/62">
-              <Icon className="size-3.5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <DialogTitle className="truncate text-base">
-                {details?.title ?? "Tool call"}
-              </DialogTitle>
-              <DialogDescription>
-                {details?.kind === "file-change"
-                  ? "Edit payload captured for this tool call."
-                  : "Command payload captured for this tool call."}
-              </DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-        <DialogPanel
-          className="max-h-[min(72vh,620px)] space-y-4 px-4 py-4"
-          data-tool-details-dialog="true"
-        >
-          <ToolCallDetailsContent details={details} />
-        </DialogPanel>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetails | undefined }) {
-  if (!details) {
+export function ToolCallDetailsContent({
+  details,
+  activity,
+  timestampFormat,
+}: {
+  details: WorkLogToolDetails | undefined;
+  activity?: WorkLogLiveActivity | undefined;
+  timestampFormat: TimestampFormat;
+}) {
+  if (!details && !activity) {
     return (
-      <div className="rounded-lg border border-border/45 bg-background/60 px-3 py-2 text-sm text-muted-foreground">
+      <div className="rounded-lg border border-border/45 bg-background/60 px-3 py-2 text-ui leading-snug text-muted-foreground">
         No detailed payload was available for this tool call.
       </div>
     );
@@ -80,7 +43,11 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
 
   return (
     <>
-      {details.command ? (
+      {activity ? (
+        <LiveActivityMetadata activity={activity} timestampFormat={timestampFormat} />
+      ) : null}
+
+      {details?.command ? (
         <div className="space-y-2">
           <MarkdownToolCodeBlock language="bash">
             {formatShellTranscript(details.command, details.output)}
@@ -89,13 +56,13 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </div>
       ) : null}
 
-      {details.files?.length ? (
+      {details?.files?.length ? (
         <ToolDetailSection title="Files">
           <div className="flex flex-wrap gap-1.5">
             {details.files.map((file) => (
               <span
                 key={file}
-                className="max-w-full rounded-md border border-border/45 bg-background/70 px-2 py-1 font-chat-code text-[11px] text-foreground/82"
+                className="max-w-full rounded-md border border-border/45 bg-background/70 px-2 py-1 font-chat-code text-chat-code text-foreground/82"
                 title={file}
               >
                 {file}
@@ -105,13 +72,13 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </ToolDetailSection>
       ) : null}
 
-      {details.diff ? (
+      {details?.diff ? (
         <ToolDetailSection title="Diff">
           <DiffCodeBlock>{details.diff}</DiffCodeBlock>
         </ToolDetailSection>
       ) : null}
 
-      {details.edits?.length ? (
+      {details?.edits?.length ? (
         <ToolDetailSection title="Edits">
           <div className="space-y-3">
             {details.edits.map((edit, index) => (
@@ -120,7 +87,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
                 className="overflow-hidden rounded-lg border border-border/45 bg-background/58"
               >
                 {edit.path ? (
-                  <div className="border-b border-border/45 px-3 py-2 font-chat-code text-[11px] text-muted-foreground/72">
+                  <div className="border-b border-border/45 px-3 py-2 font-chat-code text-chat-code text-muted-foreground/72">
                     {edit.path}
                   </div>
                 ) : null}
@@ -142,14 +109,79 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
         </ToolDetailSection>
       ) : null}
 
-      {details.content ? (
+      {details?.content ? (
         <ToolDetailSection title="Written Content">
           <MarkdownToolCodeBlock language="text">{details.content}</MarkdownToolCodeBlock>
         </ToolDetailSection>
       ) : null}
 
-      {details.output && !details.command ? <ToolOutputSection output={details.output} /> : null}
+      {details?.output && !details.command ? <ToolOutputSection output={details.output} /> : null}
     </>
+  );
+}
+
+function formatActivityTimestamp(value: string, timestampFormat: TimestampFormat): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+  return formatTimestamp(value, timestampFormat);
+}
+
+function LiveActivityMetadata({
+  activity,
+  timestampFormat,
+}: {
+  activity: WorkLogLiveActivity;
+  timestampFormat: TimestampFormat;
+}) {
+  const stateLabel = formatLiveActivityStateLabel(activity.state);
+  const nowMs = useLiveActivityNow(activity);
+  const elapsed = formatLiveActivityElapsed(activity, nowMs);
+  const progress =
+    activity.progress !== undefined ? formatLiveActivityProgress(activity.progress) : null;
+
+  return (
+    <ToolDetailSection title="Activity">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground/56">Status</dt>
+        <dd className="text-foreground/84">{stateLabel}</dd>
+        {activity.startedAt ? (
+          <>
+            <dt className="text-muted-foreground/56">Started</dt>
+            <dd className="text-foreground/84">
+              <time dateTime={activity.startedAt} title={activity.startedAt}>
+                {formatActivityTimestamp(activity.startedAt, timestampFormat)}
+              </time>
+            </dd>
+          </>
+        ) : null}
+        <dt className="text-muted-foreground/56">Last activity</dt>
+        <dd className="text-foreground/84">
+          <time dateTime={activity.lastActivityAt} title={activity.lastActivityAt}>
+            {formatActivityTimestamp(activity.lastActivityAt, timestampFormat)}
+          </time>
+        </dd>
+        {elapsed ? (
+          <>
+            <dt className="text-muted-foreground/56">Elapsed</dt>
+            <dd className="tabular-nums text-foreground/84">{elapsed}</dd>
+          </>
+        ) : null}
+        {progress ? (
+          <>
+            <dt className="text-muted-foreground/56">Progress</dt>
+            <dd className="tabular-nums text-foreground/84">{progress}</dd>
+          </>
+        ) : null}
+        {activity.detail ? (
+          <>
+            <dt className="text-muted-foreground/56">Detail</dt>
+            <dd className="break-words text-foreground/84">{activity.detail}</dd>
+          </>
+        ) : null}
+      </dl>
+    </ToolDetailSection>
   );
 }
 
@@ -166,7 +198,7 @@ function MarkdownToolCodeBlock(props: { language: string; children: string }) {
 function ToolDetailSection(props: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-[11px] font-medium text-muted-foreground/56">{props.title}</h3>
+      <h3 className="text-ui-sm font-medium text-muted-foreground/56">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -177,7 +209,7 @@ function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/68">
+    <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground/68">
       {output.exitCode !== undefined ? (
         <span className="rounded-full border border-border/45 px-2 py-0.5">
           Exit code {output.exitCode}
@@ -271,7 +303,7 @@ function ToolCodeBlock(props: { children: string; tone?: "default" | "command"; 
 function DiffCodeBlock({ children }: { children: string }) {
   const lines = children.split(/\r?\n/);
   return (
-    <pre className="max-h-[min(52vh,34rem)] overflow-auto rounded-lg border border-border/45 bg-background/70 px-0 py-2 font-chat-code text-[11px] leading-relaxed">
+    <pre className="max-h-[min(52vh,34rem)] overflow-auto rounded-lg border border-border/45 bg-background/70 px-0 py-2 font-chat-code text-chat-code leading-relaxed">
       {lines.map((line, index) => (
         <span
           key={`${index}:${line.slice(0, 24)}`}

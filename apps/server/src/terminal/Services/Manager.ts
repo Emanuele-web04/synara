@@ -41,6 +41,8 @@ export interface TerminalSessionState {
   exitCode: number | null;
   exitSignal: number | null;
   updatedAt: string;
+  /** Last open/reattach time; used as an archive-cleanup generation fence. */
+  lastOpenedAt: string;
   cols: number;
   rows: number;
   process: PtyProcess | null;
@@ -55,6 +57,7 @@ export interface TerminalSessionState {
   /** True once at least one hook event (Start/Stop/PermissionRequest) has been observed. */
   managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;
+  providerAuthInstanceId?: string;
   /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;
   /** Live terminal-mode mirror used to replay input modes after renderer reattach. */
@@ -103,6 +106,11 @@ export interface ShellCandidate {
 export interface TerminalStartInput extends TerminalOpenInput {
   cols: number;
   rows: number;
+}
+
+export interface TerminalCloseOpenedAtOrBeforeInput {
+  readonly threadId: string;
+  readonly openedAtOrBefore: string;
 }
 
 /**
@@ -154,6 +162,14 @@ export interface TerminalManagerShape {
    * When `terminalId` is omitted, closes all sessions for the thread.
    */
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+
+  /**
+   * Close only sessions whose latest open/reattach predates an archive event.
+   * The comparison and close run under the same per-thread terminal lock.
+   */
+  readonly closeSessionsOpenedAtOrBefore: (
+    input: TerminalCloseOpenedAtOrBeforeInput,
+  ) => Effect.Effect<void, TerminalError>;
 
   /**
    * Subscribe to terminal runtime events.

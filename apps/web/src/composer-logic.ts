@@ -87,7 +87,8 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
 
   for (const segment of segments) {
     if (segment.type === "mention") {
-      const expandedLength = segment.path.length + 1;
+      // Quoted tokens (`@"name with spaces"`) are longer than path.length + 1.
+      const expandedLength = segment.tokenLength ?? segment.path.length + 1;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -192,7 +193,8 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
 
   for (const segment of segments) {
     if (segment.type === "mention") {
-      const expandedLength = segment.path.length + 1;
+      // Quoted tokens (`@"name with spaces"`) are longer than path.length + 1.
+      const expandedLength = segment.tokenLength ?? segment.path.length + 1;
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -299,8 +301,6 @@ export function isCollapsedCursorAdjacentToInlineToken(
 
   return false;
 }
-
-export const isCollapsedCursorAdjacentToMention = isCollapsedCursorAdjacentToInlineToken;
 
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);

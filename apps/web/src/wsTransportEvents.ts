@@ -3,7 +3,7 @@
 // Layer: Web transport utility
 // Exports: event helpers used by wsNativeApi and terminal runtime recovery.
 
-import type { WsCompatibilityError } from "@synara/contracts";
+import type { ThreadId, WsCompatibilityError } from "@synara/contracts";
 
 export type WsTransportState = "connecting" | "open" | "closed" | "incompatible" | "disposed";
 
@@ -11,6 +11,42 @@ export const SYNARA_WS_TRANSPORT_STATE_EVENT = "synara:ws-transport-state";
 export const SYNARA_WS_COMPATIBILITY_ISSUE_EVENT = "synara:ws-compatibility-issue";
 
 let latestCompatibilityIssue: WsCompatibilityError | null = null;
+let latestTransportState: WsTransportState | null = null;
+
+const turnSettlements = new Map<symbol, ThreadId>();
+const settlementListeners = new Set<() => void>();
+let settlingThreadIds: ReadonlySet<ThreadId> = new Set();
+
+export function getWsSettlingThreadIds(): ReadonlySet<ThreadId> {
+  return settlingThreadIds;
+}
+
+export function subscribeWsTurnSettlements(listener: () => void): () => void {
+  settlementListeners.add(listener);
+  return () => {
+    settlementListeners.delete(listener);
+  };
+}
+
+/** Retains pending UI state across navigation until the original send has a verdict. */
+export function trackWsTurnSettlement(threadId: ThreadId): () => void {
+  const token = Symbol();
+  const notify = () => {
+    settlingThreadIds = new Set(turnSettlements.values());
+    for (const listener of settlementListeners) {
+      try {
+        listener();
+      } catch {
+        // UI listeners must not turn an uncertain send into a reported failure.
+      }
+    }
+  };
+  turnSettlements.set(token, threadId);
+  notify();
+  return () => {
+    if (turnSettlements.delete(token)) notify();
+  };
+}
 
 export interface WsTransportStateEventDetail {
   state: WsTransportState;
@@ -22,6 +58,7 @@ export interface WsCompatibilityIssueEventDetail {
 
 // Emits a browser-local event without leaking transport internals into UI code.
 export function emitWsTransportState(state: WsTransportState): void {
+  latestTransportState = state;
   if (
     typeof window === "undefined" ||
     typeof window.dispatchEvent !== "function" ||
@@ -40,7 +77,11 @@ export function emitWsTransportState(state: WsTransportState): void {
 // Subscribes to the shared transport state event. Returns an idempotent cleanup.
 export function addWsTransportStateListener(
   listener: (state: WsTransportState) => void,
+  options?: { readonly replayCurrent?: boolean },
 ): () => void {
+  if (options?.replayCurrent && latestTransportState) {
+    listener(latestTransportState);
+  }
   if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return () => undefined;
   }

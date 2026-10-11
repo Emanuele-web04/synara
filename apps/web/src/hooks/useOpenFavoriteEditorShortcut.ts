@@ -18,7 +18,7 @@ export function useOpenFavoriteEditorShortcut({
   keybindings,
   availableEditors,
   openInTarget,
-  enabled = true,
+  enabled: enabledProp,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -26,6 +26,7 @@ export function useOpenFavoriteEditorShortcut({
   /** When false the listener is not registered (e.g. temporary threads with no project). */
   enabled?: boolean;
 }): void {
+  const enabled = enabledProp ?? true;
   const [preferredEditor] = usePreferredEditor(availableEditors);
 
   useEffect(() => {

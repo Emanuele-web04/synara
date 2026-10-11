@@ -13,8 +13,8 @@ import { cn } from "~/lib/utils";
 
 const SIZE_CLASS_NAME = {
   sm: "size-4 text-[8px]",
-  md: "size-5 text-[9px]",
-  lg: "size-7 text-[length:var(--app-font-size-ui-sm,11px)]",
+  md: "size-5 text-ui-2xs",
+  lg: "size-7 text-ui-sm",
 } as const;
 
 function initialFor(actor: PullRequestActor | null): string {
@@ -24,13 +24,14 @@ function initialFor(actor: PullRequestActor | null): string {
 
 export function PullRequestAvatar({
   actor,
-  size = "sm",
+  size: sizeProp,
   className,
 }: {
   actor: PullRequestActor | null;
   size?: keyof typeof SIZE_CLASS_NAME;
   className?: string;
 }) {
+  const size = sizeProp ?? "sm";
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClassName = SIZE_CLASS_NAME[size];
   // Only render an image URL that GitHub explicitly attached to this actor. `login` can also

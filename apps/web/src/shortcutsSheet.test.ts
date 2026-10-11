@@ -1,10 +1,8 @@
-// FILE: shortcutsSheet.test.ts
-// Purpose: Verify the shortcuts sheet builder reflects current context and dynamic script bindings.
-// Layer: UI helper tests
-
 import { describe, expect, it } from "vitest";
 
-import { buildShortcutSheetSections } from "./shortcutsSheet";
+import { STATIC_KEYBINDING_COMMANDS } from "@synara/contracts";
+
+import { buildShortcutSheetSections, listShortcutEditorDefinitions } from "./shortcutsSheet";
 import type { ProjectScript } from "./types";
 
 const PROJECT_SCRIPTS: ProjectScript[] = [
@@ -18,6 +16,86 @@ const PROJECT_SCRIPTS: ProjectScript[] = [
 ];
 
 describe("buildShortcutSheetSections", () => {
+  it("lists active thread actions in the reference and shortcut editor", () => {
+    const entries = buildShortcutSheetSections({
+      keybindings: [],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false, terminalWorkspaceOpen: false },
+    }).flatMap((section) => section.entries);
+    for (const [command, label, shortcutLabel] of [
+      ["thread.archive", "Archive thread", "⌥⇧⌘A"],
+      ["thread.snooze", "Snooze thread", "⌥⇧⌘S"],
+      ["thread.markUnread", "Mark thread unread", "⌥⇧⌘U"],
+    ] as const) {
+      expect(entries.find((entry) => entry.command === command)).toMatchObject({
+        label,
+        shortcutLabel,
+      });
+      expect(
+        listShortcutEditorDefinitions().find((entry) => entry.commands.includes(command)),
+      ).toMatchObject({ label });
+    }
+  });
+
+  it("exposes the composer effort shortcut for discovery and customization", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+    });
+
+    expect(sections[0]?.entries.some((entry) => entry.command === "model.effort.next")).toBe(false);
+    const composerSection = sections.find((section) => section.id === "composer-context");
+    expect(
+      composerSection?.entries.find((entry) => entry.command === "model.effort.next"),
+    ).toMatchObject({
+      label: "Next model effort",
+      shortcutLabel: "⇧Tab",
+    });
+    expect(
+      listShortcutEditorDefinitions().find((entry) => entry.commands.includes("model.effort.next")),
+    ).toMatchObject({
+      label: "Next model effort",
+    });
+  });
+
+  it("shows a global custom effort shortcut only once", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [
+        {
+          command: "model.effort.next",
+          shortcut: {
+            key: "e",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: true,
+            modKey: false,
+          },
+        },
+      ],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+    });
+
+    expect(
+      sections
+        .flatMap((section) => section.entries)
+        .filter((entry) => entry.command === "model.effort.next"),
+    ).toHaveLength(1);
+  });
+
   it("includes the help shortcut and current thread jumps outside workspace mode", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [
@@ -53,15 +131,40 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.id === "composer.focus.toggle" && entry.shortcutLabel === "⌘L",
       ),
     ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "chat.find" && entry.shortcutLabel === "⌘F",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "search.files" && entry.shortcutLabel === "⌘P",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "search.content" && entry.shortcutLabel === "⇧⌘F",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "editor.file.save" && entry.label === "Save file",
+      ),
+    ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });
 
-  it("switches to workspace shortcuts when the workspace is open", () => {
+  it("separates macOS workspace tabs from thread jumps while the workspace is open", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [],
       projectScripts: [],
-      platform: "Linux",
+      platform: "MacIntel",
       context: {
         terminalFocus: false,
         terminalOpen: true,
@@ -71,13 +174,13 @@ describe("buildShortcutSheetSections", () => {
 
     expect(
       sections[0]?.entries.some(
-        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "⌃1",
       ),
     ).toBe(true);
     expect(sections[1]?.title).toBe("Outside workspace mode");
     expect(
       sections[1]?.entries.some(
-        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "⌘1",
       ),
     ).toBe(true);
   });
@@ -138,5 +241,41 @@ describe("buildShortcutSheetSections", () => {
     });
 
     expect(sections[0]?.entries.some((entry) => entry.id === "sidebar.toggle")).toBe(true);
+  });
+});
+
+describe("listShortcutEditorDefinitions", () => {
+  it("shows a friendly label instead of the raw command id for every built-in command", () => {
+    const unlabeledCommands = listShortcutEditorDefinitions()
+      .filter(
+        (definition) =>
+          definition.label === definition.commands[0] ||
+          definition.description === "Assign a shortcut to this built-in command.",
+      )
+      .flatMap((definition) => definition.commands);
+
+    expect(unlabeledCommands).toEqual([]);
+  });
+
+  it("lists every active built-in command exactly once", () => {
+    const listed = listShortcutEditorDefinitions().flatMap((definition) => definition.commands);
+
+    expect(listed.toSorted()).toEqual(
+      STATIC_KEYBINDING_COMMANDS.filter(
+        (command) => !command.startsWith("terminal.split"),
+      ).toSorted(),
+    );
+    expect(listed.some((command) => command.startsWith("terminal.split"))).toBe(false);
+  });
+
+  it("gives each numbered family one member per number key", () => {
+    const families = listShortcutEditorDefinitions().filter((definition) => definition.members);
+
+    expect(families.map((family) => family.id)).toEqual(["thread.jump", "space.jump"]);
+    for (const family of families) {
+      expect(family.members?.map((member) => member.commands)).toEqual(
+        family.commands.map((command) => [command]),
+      );
+    }
   });
 });

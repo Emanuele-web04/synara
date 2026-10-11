@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   WS_COMPATIBILITY_QUERY,
+  WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
@@ -82,6 +83,48 @@ export function negotiateWsCompatibility(
     serverInstanceId,
     capabilities: [...WS_SERVER_CAPABILITIES],
   });
+}
+
+// The HTTP negotiate endpoint carries the same input as bootstrap.negotiate,
+// flattened into query params so the request stays a cacheable-free plain GET
+// with no body to decode before the compatibility gate runs.
+// Decimal digits only. `Number()` would accept "0x1" and "1e0", which the RPC
+// path's Schema.Int rejects — the two transports must decode identically or
+// "one negotiation, two transports" is only true for well-formed clients.
+function parseDecimalInteger(raw: string | null): number | null {
+  // No trimming: surrounding whitespace (including a `+` that decodes to a
+  // space) is not a well-formed integer on either transport.
+  if (raw === null || !/^\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function parseWsNegotiateSearchParams(
+  searchParams: URLSearchParams,
+): WsBootstrapNegotiateInput | WsCompatibilityError {
+  const protocolEpoch = parseDecimalInteger(searchParams.get(WS_NEGOTIATE_QUERY.protocolEpoch));
+  const minRevision = parseDecimalInteger(searchParams.get(WS_NEGOTIATE_QUERY.minRevision));
+  const maxRevision = parseDecimalInteger(searchParams.get(WS_NEGOTIATE_QUERY.maxRevision));
+  const clientBuild = searchParams.get(WS_NEGOTIATE_QUERY.clientBuild)?.trim() ?? "";
+  if (
+    protocolEpoch === null ||
+    minRevision === null ||
+    maxRevision === null ||
+    clientBuild.length === 0
+  ) {
+    return incompatibility(
+      "reload",
+      "WebSocket negotiation request is missing required parameters.",
+      "WS_NEGOTIATION_REQUIRED",
+    );
+  }
+  return {
+    protocolEpoch,
+    minRevision,
+    maxRevision,
+    clientBuild,
+    requiredCapabilities: searchParams.getAll(WS_NEGOTIATE_QUERY.requiredCapability),
+  };
 }
 
 export function validateWsFeatureCompatibility(

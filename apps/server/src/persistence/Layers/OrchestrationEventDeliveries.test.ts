@@ -5,6 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   OrchestrationEventDeliveryRepository,
   PROVIDER_COMMAND_REACTOR_CONSUMER,
+  providerThreadProcessedConsumerName,
 } from "../Services/OrchestrationEventDeliveries.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "./OrchestrationEventDeliveries.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
@@ -16,6 +17,82 @@ const layer = it.layer(
 );
 
 layer("OrchestrationEventDeliveryRepository", (it) => {
+  it.effect("persists a monotonic thread quarantine fence without moving the global cursor", () =>
+    Effect.gen(function* () {
+      const repository = yield* OrchestrationEventDeliveryRepository;
+      assert.notStrictEqual(
+        providerThreadProcessedConsumerName("\ud800"),
+        providerThreadProcessedConsumerName("\ufffd"),
+      );
+      const sql = yield* SqlClient.SqlClient;
+      yield* DurableProviderCommandDeliveryMigration;
+      const now = new Date().toISOString();
+      const rows = yield* sql<{ sequence: number }>`
+      INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, command_id, causation_event_id, correlation_id, actor_kind, payload_json, metadata_json)
+      VALUES ('fence-one', 'thread', 'thread-fence', 0, 'thread.turn-start-requested', ${now}, 'fence-one', NULL, NULL, 'user', '{}', '{}'),
+             ('fence-two', 'thread', 'thread-fence', 1, 'thread.task-stop-requested', ${now}, 'fence-two', NULL, NULL, 'user', '{}', '{}') RETURNING sequence`;
+      const first = rows[0]!.sequence;
+      const second = rows[1]!.sequence;
+      assert.isFalse(
+        yield* repository.recordThreadProcessedSequence({
+          threadId: "wrong-thread",
+          eventSequence: second,
+          updatedAt: now,
+        }),
+      );
+      assert.isFalse(
+        yield* repository.recordThreadProcessedSequence({
+          threadId: "thread-fence",
+          eventSequence: second + 1000,
+          updatedAt: now,
+        }),
+      );
+      assert.isTrue(
+        yield* repository.recordThreadProcessedSequence({
+          threadId: "thread-fence",
+          eventSequence: second,
+          updatedAt: now,
+        }),
+      );
+      assert.isTrue(
+        yield* repository.recordThreadProcessedSequence({
+          threadId: "thread-fence",
+          eventSequence: first,
+          updatedAt: now,
+        }),
+      );
+      const state = yield* repository.getConsumerState(
+        providerThreadProcessedConsumerName("thread-fence"),
+      );
+      assert.strictEqual(Option.getOrThrow(state).lastAckedSequence, second);
+      assert.strictEqual(
+        Option.getOrThrow(yield* repository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER))
+          .lastAckedSequence,
+        0,
+      );
+      const count = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM orchestration_consumer_state WHERE consumer_name LIKE 'provider-command-reactor.thread-processed.v1:%'`;
+      assert.strictEqual(count[0]!.count, 1);
+      const deleted = yield* sql<{
+        sequence: number;
+      }>`INSERT INTO orchestration_events (event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at, command_id, causation_event_id, correlation_id, actor_kind, payload_json, metadata_json) VALUES ('fence-deleted', 'thread', 'thread-fence', 2, 'thread.deleted', ${now}, 'fence-deleted', NULL, NULL, 'user', '{}', '{}') RETURNING sequence`;
+      assert.isTrue(
+        yield* repository.recordThreadProcessedSequence({
+          threadId: "thread-fence",
+          eventSequence: deleted[0]!.sequence,
+          updatedAt: now,
+        }),
+      );
+      assert.isTrue(
+        Option.isNone(
+          yield* repository.getConsumerState(providerThreadProcessedConsumerName("thread-fence")),
+        ),
+      );
+      yield* sql`DELETE FROM orchestration_events WHERE stream_id = 'thread-fence'`;
+    }),
+  );
+
   it.effect("claims by reference without copying event payload and completes with its owner", () =>
     Effect.gen(function* () {
       const repository = yield* OrchestrationEventDeliveryRepository;
@@ -290,6 +367,15 @@ layer("OrchestrationEventDeliveryRepository", (it) => {
       assert.strictEqual(blockers.length, 1);
       assert.strictEqual(blockers[0]?.eventId, "evt-reconcile-delivery");
       assert.strictEqual(blockers[0]?.state, "uncertain");
+      assert.strictEqual(
+        (yield* repository.listBlockingDeliveries({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-reconcile",
+          afterEventSequence: eventSequence,
+          limit: 10,
+        })).length,
+        0,
+      );
 
       const stale = yield* repository.reconcile({
         reconciliationId: "reconcile-stale",

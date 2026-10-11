@@ -7,15 +7,17 @@ import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 
+import { resolveExecutable } from "@synara/shared/executable";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import {
   type DroidModelOptions,
   type ProviderListModelsResult,
+  type ProviderInteractionMode,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
-import type * as EffectAcpErrors from "effect-acp/errors";
-import * as EffectAcpErrorsRuntime from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as AcpErrors from "./AcpErrors.ts";
+import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -25,13 +27,19 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
+import {
+  availableAuthMethodIds,
+  buildAcpModelDescriptor,
+  findSelectConfig,
+  flattenConfigOptions,
+} from "./AcpConfigOptions.ts";
 
 export interface DroidAcpRuntimeSettings {
   readonly appendSystemPrompt?: string;
   readonly binaryPath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly model?: string;
   readonly reasoningEffort?: DroidModelOptions["reasoningEffort"];
-  readonly skipPermissionsUnsafe?: boolean;
 }
 
 export interface DroidAcpRuntimeInput extends Omit<
@@ -43,12 +51,12 @@ export interface DroidAcpRuntimeInput extends Omit<
 }
 
 export interface DroidAcpModelSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
+  readonly cause: AcpErrors.AcpError;
   readonly method: "session/set_config_option";
 }
 
 export interface DroidAcpModeSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
+  readonly cause: AcpErrors.AcpError;
   readonly method: "session/set_config_option";
 }
 
@@ -76,26 +84,32 @@ export function hasDroidApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean
   return getDroidApiKeyEnv(env) !== undefined;
 }
 
-/** Honors PATH first, then falls back to Factory's common `~/.local/bin` install location. */
-export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
+export interface DroidCliResolutionOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+  readonly homeDir?: string;
+  readonly pathExists?: (candidate: string) => boolean;
+}
+
+/** Uses shared executable resolution, then Factory's provider-specific POSIX fallback. */
+export function resolveDroidCliBinaryPath(
+  binaryPath?: string | null,
+  options: DroidCliResolutionOptions = {},
+): string {
   const configured = binaryPath?.trim();
   if (configured) {
     return configured;
   }
   const name = "droid";
-  const searchPath = process.env.PATH ?? "";
-  for (const directory of searchPath.split(nodePath.delimiter)) {
-    if (!directory.trim()) {
-      continue;
-    }
-    const candidate = nodePath.join(directory, name);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const resolved = resolveExecutable(name, { platform, env });
+  if (resolved) {
+    return resolved;
   }
-  if (process.platform !== "win32") {
-    const localBin = nodePath.join(nodeOs.homedir(), ".local", "bin", name);
-    if (existsSync(localBin)) {
+  if (supportsPosixPermissions(platform)) {
+    const localBin = nodePath.join(options.homeDir ?? nodeOs.homedir(), ".local", "bin", name);
+    if ((options.pathExists ?? existsSync)(localBin)) {
       return localBin;
     }
   }
@@ -106,10 +120,11 @@ export function buildDroidAcpSpawnInput(
   droidSettings: DroidAcpRuntimeSettings | null | undefined,
   cwd: string,
 ): AcpSpawnInput {
+  const childEnvironment = {
+    ...process.env,
+    ...(droidSettings?.environment ?? {}),
+  };
   const args = ["exec", "--output-format", "acp"];
-  if (droidSettings?.skipPermissionsUnsafe === true) {
-    args.push("--skip-permissions-unsafe");
-  }
   const appendSystemPrompt = droidSettings?.appendSystemPrompt?.trim();
   if (appendSystemPrompt) {
     args.push("--append-system-prompt", appendSystemPrompt);
@@ -124,31 +139,26 @@ export function buildDroidAcpSpawnInput(
   }
 
   return {
-    command: resolveDroidCliBinaryPath(droidSettings?.binaryPath),
+    command: resolveDroidCliBinaryPath(droidSettings?.binaryPath, { env: childEnvironment }),
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "droid" }),
+    env: buildProviderChildEnvironment({ provider: "droid", baseEnv: childEnvironment }),
   };
 }
 
-function availableAuthMethodIds(
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): ReadonlySet<string> {
-  return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
-}
-
 export const resolveDroidAcpAuthMethodId = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+  initializeResult: Acp.InitializeResponse,
+  environment: NodeJS.ProcessEnv = process.env,
+): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasDroidApiKeyEnv() && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
+    if (hasDroidApiKeyEnv(environment) && authMethodIds.has(DROID_API_KEY_AUTH_METHOD_ID)) {
       return DROID_API_KEY_AUTH_METHOD_ID;
     }
     if (authMethodIds.has(DROID_DEVICE_PAIRING_AUTH_METHOD_ID)) {
       return DROID_DEVICE_PAIRING_AUTH_METHOD_ID;
     }
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+    return yield* new AcpErrors.AcpRequestError({
       code: -32602,
       errorMessage: "Droid ACP authentication is unavailable.",
       data: {
@@ -160,13 +170,18 @@ export const resolveDroidAcpAuthMethodId = (
 
 export const makeDroidAcpRuntime = (
   input: DroidAcpRuntimeInput,
-): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
+): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDroidAcpSpawnInput(input.droidSettings, input.cwd),
-        resolveAuthMethodId: resolveDroidAcpAuthMethodId,
+        authPolicy: "on-demand",
+        resolveAuthMethodId: (initializeResult) =>
+          resolveDroidAcpAuthMethodId(initializeResult, {
+            ...process.env,
+            ...(input.droidSettings?.environment ?? {}),
+          }),
         authenticateMeta: { headless: true },
       }).pipe(
         Layer.provide(
@@ -193,7 +208,7 @@ export function applyDroidAcpModelSelection<E>(input: {
   readonly mapError: (context: DroidAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
-    const mapError = (cause: EffectAcpErrors.AcpError) =>
+    const mapError = (cause: AcpErrors.AcpError) =>
       input.mapError({ cause, method: "session/set_config_option" });
     const model = input.model.trim();
     if (model) {
@@ -213,7 +228,7 @@ export function applyDroidAcpModelSelection<E>(input: {
 /** Applies Droid's native read-only spec mode before a Plan-mode prompt is dispatched. */
 export function applyDroidAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: ProviderInteractionMode;
   readonly runtimeMode?: "approval-required" | "full-access";
   readonly mapError: (context: DroidAcpModeSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
@@ -231,99 +246,48 @@ export function applyDroidAcpInteractionMode<E>(input: {
   );
 }
 
-export function flattenDroidConfigOptions(
-  options: EffectAcpSchema.SessionConfigSelectOptions,
-): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
-  return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
-}
-
-function findDroidSelectConfig(
-  options: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
-  input: { readonly id: string; readonly category: string },
-): Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined {
-  return options.find(
-    (option): option is Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> =>
-      option.type === "select" && (option.id === input.id || option.category === input.category),
-  );
-}
-
-function droidModelDescriptor(
-  model: EffectAcpSchema.SessionConfigSelectOption,
-  reasoning: Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined,
-): ProviderModelDescriptor {
-  const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
-  const optionDescriptors = reasoning
-    ? [
-        {
-          id: "reasoningEffort",
-          label: reasoning.name,
-          type: "select" as const,
-          options: efforts.map((effort) => ({
-            id: effort.value,
-            label: effort.name,
-            ...(effort.description ? { description: effort.description } : {}),
-          })),
-          ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
-        },
-      ]
-    : undefined;
-  return {
-    slug: model.value,
-    name: model.name,
-    ...(model.description ? { description: model.description } : {}),
-    supportedReasoningEfforts: efforts.map((effort) => ({
-      value: effort.value,
-      label: effort.name,
-      ...(effort.description ? { description: effort.description } : {}),
-    })),
-    ...(optionDescriptors ? { optionDescriptors } : {}),
-    supportsFastMode: false,
-    supportsThinkingToggle: false,
-  };
-}
-
 /**
  * Reads the model catalog from ACP and reselects each model so Droid returns that
  * model's current reasoning choices. Discovery runs in a disposable session.
  */
 export function discoverDroidAcpModels(
   runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">,
-): Effect.Effect<ProviderListModelsResult, EffectAcpErrors.AcpError> {
+): Effect.Effect<ProviderListModelsResult, AcpErrors.AcpError> {
   return Effect.gen(function* () {
     const initialOptions = yield* runtime.getConfigOptions;
-    const modelConfig = findDroidSelectConfig(initialOptions, {
+    const modelConfig = findSelectConfig(initialOptions, {
       id: DROID_MODEL_CONFIG_ID,
       category: "model",
     });
     if (!modelConfig) {
-      return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+      return yield* new AcpErrors.AcpRequestError({
         code: -32602,
         errorMessage: "Droid ACP did not advertise a model configuration option.",
       });
     }
 
     const originalModel = modelConfig.currentValue;
-    const originalReasoning = findDroidSelectConfig(initialOptions, {
+    const originalReasoning = findSelectConfig(initialOptions, {
       id: DROID_REASONING_EFFORT_CONFIG_ID,
       category: "thought_level",
     })?.currentValue;
-    const models = flattenDroidConfigOptions(modelConfig.options);
+    const models = flattenConfigOptions(modelConfig.options);
     const descriptors = yield* Effect.forEach(
       models,
       (model) =>
         runtime.setConfigOption(modelConfig.id, model.value).pipe(
           Effect.andThen(runtime.getConfigOptions),
           Effect.map((updatedOptions) =>
-            droidModelDescriptor(
+            buildAcpModelDescriptor(
               model,
-              findDroidSelectConfig(updatedOptions, {
+              findSelectConfig(updatedOptions, {
                 id: DROID_REASONING_EFFORT_CONFIG_ID,
                 category: "thought_level",
               }),
             ),
           ),
           // A newly announced model should remain selectable even if its option probe fails.
-          Effect.catch(() => Effect.succeed(droidModelDescriptor(model, undefined))),
+          Effect.catch(() => Effect.succeed(buildAcpModelDescriptor(model, undefined))),
         ),
       { concurrency: 1 },
     );

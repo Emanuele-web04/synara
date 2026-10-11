@@ -3,6 +3,7 @@
 // Layer: Web orchestration helper
 
 import { type ProjectId } from "@synara/contracts";
+import { matchesLegacyHomeChatWorkspaceRoot } from "@synara/shared/projectContainers";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { Project } from "../types";
 import { readNativeApi } from "../nativeApi";
@@ -100,20 +101,6 @@ async function findDuplicateHomeChatContainer(
   return findHomeChatContainerCandidateById(snapshot.projects, projectId, paths);
 }
 
-function matchesLegacyHomeChatWorkspaceRoot(
-  project: Pick<Project, "cwd">,
-  input: ServerWorkspacePaths,
-): boolean {
-  const workspaceRoot = resolveServerChatWorkspaceRoot(input);
-  const homeDir = input.homeDir?.trim() ?? "";
-  if (!workspaceRoot || !homeDir) {
-    return false;
-  }
-  return (
-    workspaceRootsEqual(project.cwd, workspaceRoot) || workspaceRootsEqual(project.cwd, homeDir)
-  );
-}
-
 function isManagedChatWorkspaceProject(
   project: Pick<Project, "cwd" | "kind">,
   input: ServerWorkspacePaths,
@@ -136,7 +123,7 @@ function isLegacyHomeChatContainerProject(
     return false;
   }
   return (
-    matchesLegacyHomeChatWorkspaceRoot(project, input) &&
+    matchesLegacyHomeChatWorkspaceRoot(project.cwd, input) &&
     (project.kind === "chat" || project.remoteName === "Home" || project.name === "Home")
   );
 }
@@ -158,15 +145,6 @@ function scoreHomeChatProject(project: Project, input: ServerWorkspacePaths): nu
   return score;
 }
 
-export function findHomeChatContainerProject<
-  T extends Pick<Project, "cwd" | "kind" | "name" | "remoteName">,
->(projects: readonly T[], paths: ServerWorkspacePaths): T | null {
-  if (!paths.homeDir) {
-    return null;
-  }
-  return projects.find((project) => isHomeChatContainerProject(project, paths)) ?? null;
-}
-
 function findCanonicalHomeProject(input: ServerWorkspacePaths): {
   canonicalProjectId: ProjectId | null;
   duplicateProjectIds: ProjectId[];
@@ -177,7 +155,7 @@ function findCanonicalHomeProject(input: ServerWorkspacePaths): {
     isLegacyHomeChatContainerProject(project, input),
   );
   const canonicalProject =
-    [...homeProjects].sort(
+    homeProjects.toSorted(
       (left, right) => scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
     )[0] ?? null;
   if (!canonicalProject) {
@@ -338,7 +316,7 @@ export function isHomeChatContainerProject(
     return false;
   }
   // Before any server path resolves (first launch, cleared storage), trust the kind alone so
-  // chat-surface projects aren't mis-partitioned during boot — mirrors isStudioContainerProject.
+  // chat-surface projects aren't mis-partitioned during boot — mirrors isGroupContainerProject.
   // Once paths are known, the root checks below decide, so drifted rows stay excluded.
   if (!paths.homeDir && !paths.chatWorkspaceRoot?.trim()) {
     return project.kind === "chat";

@@ -12,63 +12,42 @@ import type {
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
   PinnedMessage,
-  ThreadMarker,
+  PendingClaudeCacheReview,
+  ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
+  SpaceId,
+  SpaceIconName,
   TurnId,
   MessageId,
   ProviderMentionReference,
   ProviderSkillReference,
+  ProviderInstanceId,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
   ProjectKind,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
 } from "@synara/contracts";
+import type { ProjectAppearance } from "./lib/projectAppearance";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
-export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "default";
-export const MAX_TERMINALS_PER_GROUP = 6;
 export type ThreadTerminalPresentationMode = "drawer" | "workspace";
 export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
 export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ThreadPrimarySurface = "chat" | "terminal";
 export type ProjectScript = ContractProjectScript;
-
-export type ThreadTerminalSplitDirection = "horizontal" | "vertical";
-export type ThreadTerminalSplitPosition = "top" | "right" | "bottom" | "left";
-
-export interface ThreadTerminalLeafNode {
-  type: "terminal";
-  paneId: string;
-  terminalIds: string[];
-  activeTerminalId: string;
-}
-
-export interface ThreadTerminalSplitNode {
-  type: "split";
-  id: string;
-  direction: ThreadTerminalSplitDirection;
-  children: ThreadTerminalLayoutNode[];
-  weights: number[];
-}
-
-export type ThreadTerminalLayoutNode = ThreadTerminalLeafNode | ThreadTerminalSplitNode;
-
-export interface ThreadTerminalGroup {
-  id: string;
-  activeTerminalId: string;
-  layout: ThreadTerminalLayoutNode;
-}
 
 export interface ChatImageAttachment {
   type: "image";
@@ -99,17 +78,25 @@ export type ChatAttachment =
   | ChatFileAttachment
   | ChatAssistantSelectionAttachment;
 
+export type OrchestrationMessageTextSegment =
+  import("@synara/contracts").OrchestrationMessageTextSegment;
+
 export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  /** Slices of streamed assistant text between row-making provider events. */
+  textSegments?: OrchestrationMessageTextSegment[];
+  asyncUserInput?: import("@synara/contracts").AsyncUserInput;
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   dispatchOrigin?: MessageDispatchOrigin;
+  startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string | undefined;
   streaming: boolean;
   source?: OrchestrationMessageSource;
@@ -134,6 +121,8 @@ export interface TurnDiffFileChange {
 
 export interface TurnDiffSummary {
   turnId: TurnId;
+  /** When the provider started the turn (absent on older snapshots). */
+  startedAt?: string | undefined;
   completedAt: string;
   status?: string | undefined;
   files: TurnDiffFileChange[];
@@ -144,10 +133,12 @@ export interface TurnDiffSummary {
 }
 
 // Ephemeral client-side progress of the "New worktree" first-send setup
-// sequence (create worktree → link thread → start session). Rendered as a
-// transient transcript row; never persisted.
+// sequence (create branch → create worktree → copy changes → link thread →
+// start session). Rendered as a transient transcript row; never persisted.
 export type WorktreeSetupStepId =
+  | "create-branch"
   | "create-worktree"
+  | "copy-changes"
   | "prepare-thread"
   | "run-setup-action"
   | "start-session";
@@ -163,6 +154,12 @@ export interface WorktreeSetupSnapshot {
   steps: WorktreeSetupStep[];
 }
 
+/**
+ * User choice made from the worktree setup card while preparation is in
+ * flight: abandon the send entirely, or redirect it to the local checkout.
+ */
+export type WorktreeSetupResolutionAction = "cancel" | "work-locally";
+
 export interface Project {
   id: ProjectId;
   kind: ProjectKind;
@@ -170,19 +167,35 @@ export interface Project {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  /** Local look in the sidebar and rail; missing or null is the default folder. */
+  appearance?: ProjectAppearance | null;
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;
+  /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
+  spaceId?: SpaceId | null;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  /** Extra source folders of a multi-folder project; `cwd` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
+}
+
+export interface Space {
+  id: SpaceId;
+  name: string;
+  icon: SpaceIconName;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ThreadWorkspaceState {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -193,6 +206,7 @@ export interface ThreadWorkspacePatch {
   envMode?: ThreadEnvironmentMode | undefined;
   branch?: string | null;
   worktreePath?: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
@@ -200,6 +214,7 @@ export interface ThreadWorkspacePatch {
 }
 
 export interface Thread extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -213,23 +228,42 @@ export interface Thread extends ThreadWorkspaceState {
   error: string | null;
   createdAt: string;
   archivedAt?: string | null;
+  settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  /** Pending request; null means consumed/cancelled, undefined means not observed. */
+  pendingTurnStartMessageId?: MessageId | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  /** Client projection cursor shared by shell and detail cache-review updates. */
+  claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -239,6 +273,7 @@ export interface Thread extends ThreadWorkspaceState {
 }
 
 export interface ThreadShell extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -249,6 +284,9 @@ export interface ThreadShell extends ThreadWorkspaceState {
   error: string | null;
   createdAt: string;
   archivedAt?: string | null;
+  settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   // Per-thread workspace annotations carried through the normalized projection so
@@ -256,17 +294,30 @@ export interface ThreadShell extends ThreadWorkspaceState {
   // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
   // from the previous shell rather than clobbering with `undefined`.
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
+  goal?: string;
+  goalStartedAt?: string | null;
+  goalPausedAt?: string | null;
+  goalAchievements?: ThreadGoalAchievement[];
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -277,6 +328,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  pendingTurnStartMessageId?: MessageId | null;
 }
 
 export interface SidebarThreadSummary {
@@ -288,33 +340,59 @@ export interface SidebarThreadSummary {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  workingDirectory?: string | null;
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
   session: ThreadSession | null;
   createdAt: string;
   archivedAt?: string | null;
+  settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  /** For a nested subagent, the subagent thread that launched it. */
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
   latestUserMessageAt: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
+  pendingBackgroundWorkCount: number;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 
+/** Lightweight composer identity that ignores live turn/status churn. */
+export interface ComposerThreadMentionSource {
+  id: ThreadId;
+  projectId: ProjectId;
+  title: string;
+  provider: ProviderKind;
+  createdAt: string;
+  archivedAt?: string | null;
+  lastVisitedAt?: string | undefined;
+  latestUserMessageAt: string | null;
+}
+
 export interface ThreadSession {
   provider: ProviderKind;
+  runtimeMode?: RuntimeMode;
+  providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

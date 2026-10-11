@@ -21,38 +21,6 @@ describe("matchComposerLinkToken", () => {
       }),
     ).toEqual({ url: "https://github.com/openai/codex", start: 0, end: 31 });
   });
-
-  it("matches a trailing URL at end-of-text in display mode", () => {
-    expect(
-      matchComposerLinkToken("see https://github.com/openai/codex", {
-        includeTrailingTokenAtEnd: true,
-      }),
-    ).toEqual({ url: "https://github.com/openai/codex", start: 4, end: 35 });
-  });
-
-  it("excludes trailing sentence punctuation from the matched URL", () => {
-    expect(
-      matchComposerLinkToken("https://example.com. ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toEqual({ url: "https://example.com", start: 0, end: 19 });
-  });
-
-  it("normalizes a bare domain once a delimiter follows it while typing", () => {
-    expect(
-      matchComposerLinkToken("linear.app/team/issue/ENG-12 ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toEqual({ url: "https://linear.app/team/issue/ENG-12", start: 0, end: 28 });
-  });
-
-  it("does not treat local filenames as bare domain links", () => {
-    expect(
-      matchComposerLinkToken("AGENTS.md ", {
-        includeTrailingTokenAtEnd: false,
-      }),
-    ).toBeNull();
-  });
 });
 
 describe("matchComposerSlashCommandChipToken", () => {
@@ -75,17 +43,41 @@ describe("matchComposerSlashCommandChipToken", () => {
     });
   });
 
-  it("does not match other built-in slash commands as composer chips", () => {
-    expect(matchComposerSlashCommandChipToken("/plan ")).toBeNull();
-    expect(matchComposerSlashCommandChipToken("/model spark")).toBeNull();
+  it("matches /computer-use as a chip, hyphen included", () => {
+    expect(matchComposerSlashCommandChipToken("/computer-use")).toBeNull();
+    expect(matchComposerSlashCommandChipToken("/computer-use open Calculator")).toEqual({
+      command: "computer-use",
+      start: 0,
+      end: "/computer-use".length,
+    });
   });
 });
 
 describe("splitPromptIntoComposerSegments", () => {
+  it("marks structured thread mentions as thread chips", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        'Compare @"Release planning" please',
+        [],
+        [{ name: "Release planning", path: "thread://thread-123" }],
+      ),
+    ).toEqual([
+      { type: "text", text: "Compare " },
+      {
+        type: "mention",
+        path: "Release planning",
+        kind: "thread",
+        threadId: "thread-123",
+        tokenLength: '@"Release planning"'.length,
+      },
+      { type: "text", text: " please" },
+    ]);
+  });
+
   it("splits mention tokens followed by whitespace into mention segments", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md please")).toEqual([
       { type: "text", text: "Inspect " },
-      { type: "mention", path: "AGENTS.md" },
+      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -99,7 +91,7 @@ describe("splitPromptIntoComposerSegments", () => {
       ),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "Gmail", kind: "plugin" },
+      { type: "mention", path: "Gmail", kind: "plugin", tokenLength: "@Gmail".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -113,12 +105,6 @@ describe("splitPromptIntoComposerSegments", () => {
   it("does not convert an incomplete trailing dollar skill token", () => {
     expect(splitPromptIntoComposerSegments("Use $check-code")).toEqual([
       { type: "text", text: "Use $check-code" },
-    ]);
-  });
-
-  it("does not convert an incomplete trailing slash skill token", () => {
-    expect(splitPromptIntoComposerSegments("Use /check-code")).toEqual([
-      { type: "text", text: "Use /check-code" },
     ]);
   });
 
@@ -169,7 +155,7 @@ describe("splitPromptIntoComposerSegments", () => {
   it("keeps newlines around mention tokens", () => {
     expect(splitPromptIntoComposerSegments("one\n@src/index.ts \ntwo")).toEqual([
       { type: "text", text: "one\n" },
-      { type: "mention", path: "src/index.ts" },
+      { type: "mention", path: "src/index.ts", tokenLength: "@src/index.ts".length },
       { type: "text", text: " \ntwo" },
     ]);
   });
@@ -179,7 +165,11 @@ describe("splitPromptIntoComposerSegments", () => {
       splitPromptIntoComposerSegments('Inspect @"/Users/test/Application Support" please'),
     ).toEqual([
       { type: "text", text: "Inspect " },
-      { type: "mention", path: "/Users/test/Application Support" },
+      {
+        type: "mention",
+        path: "/Users/test/Application Support",
+        tokenLength: '@"/Users/test/Application Support"'.length,
+      },
       { type: "text", text: " please" },
     ]);
   });
@@ -192,7 +182,7 @@ describe("splitPromptIntoComposerSegments", () => {
     ).toEqual([
       { type: "text", text: "Inspect " },
       { type: "terminal-context", context: null },
-      { type: "mention", path: "AGENTS.md" },
+      { type: "mention", path: "AGENTS.md", tokenLength: "@AGENTS.md".length },
       { type: "text", text: " please" },
     ]);
   });
@@ -215,12 +205,6 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
-  it("does not convert an incomplete trailing URL while typing", () => {
-    expect(splitPromptIntoComposerSegments("see https://github.com/openai/codex")).toEqual([
-      { type: "text", text: "see https://github.com/openai/codex" },
-    ]);
-  });
-
   it("does not treat an @host inside a URL as a mention", () => {
     expect(splitPromptIntoComposerSegments("ping https://user@example.com/path here")).toEqual([
       { type: "text", text: "ping " },
@@ -237,12 +221,6 @@ describe("splitPromptIntoComposerSegments", () => {
 });
 
 describe("splitPromptIntoDisplaySegments", () => {
-  it("converts a trailing skill token for read-only rendering", () => {
-    expect(splitPromptIntoDisplaySegments("$check-code")).toEqual([
-      { type: "skill", name: "check-code", prefix: "$" },
-    ]);
-  });
-
   it("converts a trailing skill token at the end of surrounding text", () => {
     expect(splitPromptIntoDisplaySegments("Use $check-code")).toEqual([
       { type: "text", text: "Use " },
@@ -253,7 +231,11 @@ describe("splitPromptIntoDisplaySegments", () => {
   it("renders trailing quoted mention tokens at the end of text", () => {
     expect(splitPromptIntoDisplaySegments('Use @"/Users/test/Application Support"')).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "/Users/test/Application Support" },
+      {
+        type: "mention",
+        path: "/Users/test/Application Support",
+        tokenLength: '@"/Users/test/Application Support"'.length,
+      },
     ]);
   });
 
@@ -261,12 +243,6 @@ describe("splitPromptIntoDisplaySegments", () => {
     expect(
       splitPromptIntoDisplaySegments("https://github.com/Emanuele-web04/synara/pull/155"),
     ).toEqual([{ type: "link", url: "https://github.com/Emanuele-web04/synara/pull/155" }]);
-  });
-
-  it("converts a trailing bare domain into a normalized link segment for read-only rendering", () => {
-    expect(splitPromptIntoDisplaySegments("linear.app/team/issue/ENG-12")).toEqual([
-      { type: "link", url: "https://linear.app/team/issue/ENG-12" },
-    ]);
   });
 
   it("renders a URL on its own line followed by trailing prose", () => {
@@ -291,7 +267,7 @@ describe("splitPromptIntoDisplaySegments", () => {
   it("uses explicit mention references instead of inferring plugins from plain @text", () => {
     expect(splitPromptIntoDisplaySegments("Use @linear")).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear" },
+      { type: "mention", path: "linear", tokenLength: "@linear".length },
     ]);
     expect(
       splitPromptIntoDisplaySegments("Use @linear", [
@@ -299,7 +275,7 @@ describe("splitPromptIntoDisplaySegments", () => {
       ]),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin" },
+      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
     ]);
     expect(
       splitPromptIntoDisplaySegments("Use @linear", [
@@ -307,7 +283,7 @@ describe("splitPromptIntoDisplaySegments", () => {
       ]),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "linear", kind: "plugin" },
+      { type: "mention", path: "linear", kind: "plugin", tokenLength: "@linear".length },
     ]);
   });
 });

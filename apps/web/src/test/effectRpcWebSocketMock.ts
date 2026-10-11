@@ -4,6 +4,7 @@
 // Exports: helpers for request parsing plus Exit/Chunk/Pong responses.
 
 import {
+  ORCHESTRATION_WS_METHODS,
   WS_BOOTSTRAP_METHOD,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
@@ -50,6 +51,13 @@ export function readEffectRpcClientMessage(
   }
 
   if (frame._tag === "Request" && typeof frame.id === "string" && typeof frame.tag === "string") {
+    // The transport probes each feature socket with this server-side no-op.
+    // Schema.Void is null on the JSON wire; generic fixture replies ({}) fail
+    // decoding and would keep every initial connection in recovery.
+    if (frame.tag === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
+      sendEffectRpcExit(client, frame.id, null);
+      return { kind: "handled" };
+    }
     if (frame.tag === WS_BOOTSTRAP_METHOD) {
       sendEffectRpcExit(client, frame.id, {
         protocolEpoch: WS_PROTOCOL_EPOCH,
@@ -129,6 +137,9 @@ export function createShellSnapshotFromReadModel(
 ): OrchestrationShellSnapshot {
   return {
     snapshotSequence: snapshot.snapshotSequence,
+    spaces: snapshot.spaces
+      .filter((space) => space.deletedAt === null)
+      .map(({ deletedAt: _deletedAt, ...space }) => space),
     projects: snapshot.projects
       .filter((project) => project.deletedAt === null)
       .map((project) => ({
@@ -138,6 +149,7 @@ export function createShellSnapshotFromReadModel(
         workspaceRoot: project.workspaceRoot,
         defaultModelSelection: project.defaultModelSelection,
         scripts: project.scripts,
+        spaceId: project.spaceId,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),
@@ -162,6 +174,9 @@ export function createShellSnapshotFromReadModel(
         subagentRole: thread.subagentRole ?? null,
         forkSourceThreadId: thread.forkSourceThreadId ?? null,
         sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+        sidechatContext: thread.sidechatContext ?? null,
+        sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
+        sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
         latestTurn: thread.latestTurn,
         latestUserMessageAt: thread.latestUserMessageAt ?? null,
         hasPendingApprovals: thread.hasPendingApprovals ?? false,
@@ -171,6 +186,8 @@ export function createShellSnapshotFromReadModel(
         updatedAt: thread.updatedAt,
         archivedAt: thread.archivedAt ?? null,
         handoff: thread.handoff ?? null,
+        ...(thread.isProjectImport ? { isProjectImport: true } : {}),
+        lastKnownPr: thread.lastKnownPr ?? null,
         session: thread.session,
       })),
     updatedAt: snapshot.updatedAt,

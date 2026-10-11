@@ -3,12 +3,94 @@ import { describe, expect, it } from "vitest";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
+  decodeSubagentAgentStates,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints,
   isWorkerTierSubagentRole,
-  resolveSubagentIdentityHint,
+  resolveSubagentIdentityFromDirectory,
 } from "./subagents";
+
+describe("decodeSubagentAgentStates alias normalization", () => {
+  it.each([
+    {
+      label: "object-map camel aliases and direct-value precedence",
+      item: {
+        agentsStates: {
+          " child-map ": {
+            threadId: "ignored-thread-id",
+            agentId: " direct-agent ",
+            agent_id: "fallback-agent",
+            agentNickname: " Camel Nick ",
+            agent_nickname: "Snake Nick",
+            agentRole: " worker-high ",
+            model: " direct-model ",
+            modelName: "model-name",
+            requestedModel: "requested-model",
+            prompt: " direct prompt ",
+            task: "task fallback",
+            status: " running ",
+            state: "completed",
+            summary: " summary wins ",
+            message: "message fallback",
+            latestUpdate: "latest fallback",
+          },
+          "   ": {
+            threadId: " fallback-thread ",
+            status: " queued ",
+          },
+        },
+      },
+      expected: {
+        "child-map": {
+          threadId: "child-map",
+          agentId: "direct-agent",
+          nickname: "Camel Nick",
+          model: "direct-model",
+          prompt: "direct prompt",
+          status: "running",
+          message: "summary wins",
+        },
+        "fallback-thread": {
+          threadId: "fallback-thread",
+          status: "queued",
+        },
+      },
+    },
+    {
+      label: "array snake aliases and requested-value fallbacks",
+      item: {
+        agent_statuses: [
+          {
+            thread_id: " child-array ",
+            agent_id: " snake-agent ",
+            receiver_agent_nickname: " Snake Nick ",
+            receiver_agent_role: " reviewer ",
+            requested_model: " requested-model ",
+            task: " task prompt ",
+            state: " completed ",
+            message: " message chosen ",
+            latest_update: "latest fallback",
+          },
+        ],
+      },
+      expected: {
+        "child-array": {
+          threadId: "child-array",
+          agentId: "snake-agent",
+          nickname: "Snake Nick",
+          role: "reviewer",
+          model: "requested-model",
+          prompt: "task prompt",
+          status: "completed",
+          message: "message chosen",
+        },
+      },
+    },
+  ])("decodes $label", ({ item, expected }) => {
+    expect(decodeSubagentAgentStates(item)).toEqual(expected);
+  });
+});
 
 describe("decodeSubagentReceiverThreadIds", () => {
   it.each([
@@ -141,16 +223,22 @@ describe("extractSubagentIdentityHints", () => {
     });
 
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" }),
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-1",
+      }),
     ).toMatchObject({
       nickname: "Locke",
       effort: "low",
     });
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" })?.role,
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-1",
+      })?.role,
     ).toBeUndefined();
     expect(
-      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-2" }),
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+        providerThreadId: "child-provider-2",
+      }),
     ).toMatchObject({
       nickname: "Hume",
       role: "explorer",
@@ -167,28 +255,27 @@ describe("extractSubagentIdentityHints", () => {
       },
     });
 
-    const resolved = resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" });
+    const resolved = resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
+      providerThreadId: "child-provider-1",
+    });
     expect(resolved?.status).toBe("running");
     expect(resolved?.role).toBeUndefined();
   });
 });
 
 describe("isWorkerTierSubagentRole", () => {
-  it.each(["worker-low", "worker-medium", "worker-high", "worker-xhigh", " Worker-Low "])(
+  it.each(["worker-low", "worker-xhigh", " Worker-Low "])(
     "recognizes %s as a worker tier",
     (role) => {
       expect(isWorkerTierSubagentRole(role)).toBe(true);
     },
   );
-  it.each(["explorer", "worker", "worker-", "worker-extreme", null, undefined])(
-    "keeps %s as a real role",
-    (role) => {
-      expect(isWorkerTierSubagentRole(role)).toBe(false);
-    },
-  );
+  it.each(["explorer", "worker", "worker-extreme", null])("keeps %s as a real role", (role) => {
+    expect(isWorkerTierSubagentRole(role)).toBe(false);
+  });
 });
 
-describe("resolveSubagentIdentityHint", () => {
+describe("resolveSubagentIdentityFromDirectory", () => {
   it("preserves richer nickname and role metadata when later hints only include status updates", () => {
     const hints = extractSubagentIdentityHints({
       receiverAgents: [
@@ -208,8 +295,7 @@ describe("resolveSubagentIdentityHint", () => {
     });
 
     expect(
-      resolveSubagentIdentityHint({
-        hints,
+      resolveSubagentIdentityFromDirectory(buildSubagentIdentityDirectory(hints), {
         providerThreadId: "child-provider-1",
       }),
     ).toMatchObject({

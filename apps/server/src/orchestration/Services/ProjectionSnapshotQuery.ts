@@ -10,14 +10,17 @@ import type {
   OrchestrationCheckpointSummary,
   OrchestrationProject,
   OrchestrationProjectShell,
+  OrchestrationSpaceShell,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadMessageWindow,
   OrchestrationThread,
   OrchestrationThreadShell,
   CheckpointRef,
   ProjectId,
   ProjectKind,
+  SpaceId,
   ThreadId,
   ThreadEnvironmentMode,
   TurnId,
@@ -26,6 +29,20 @@ import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
+
+export interface OrchestrationThreadMentionContext {
+  readonly id: ThreadId;
+  readonly title: OrchestrationThread["title"];
+  readonly modelSelection: OrchestrationThread["modelSelection"];
+  /** The newest `messageLimit` messages, oldest first. */
+  readonly messages: OrchestrationThread["messages"];
+  /**
+   * How many messages the thread holds in total (capped at the transcript
+   * read limit, matching what a full detail read would have returned), so a
+   * context block can still say how many older messages it omitted.
+   */
+  readonly totalMessageCount: number;
+}
 
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
@@ -43,6 +60,7 @@ export interface ProjectionThreadCheckpointContext {
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
   /** Completed file-change payloads, newest first, when explicitly requested by the caller. */
   readonly fileChangeActivityPayloads?: ReadonlyArray<unknown>;
@@ -65,9 +83,25 @@ export interface ProjectionFullThreadDiffContext {
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
+  readonly workingDirectory: string | null;
   readonly latestCheckpointTurnCount: number;
   readonly baselineCheckpointRef: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;
+}
+
+/**
+ * Narrow projection row backing managed-worktree retention.
+ *
+ * Soft-deleted threads are intentionally included because purge can be deferred
+ * while provider delivery is unresolved; their worktrees must remain eligible
+ * for snapshot and reclaim until the rows are removed.
+ */
+export interface ProjectionManagedWorktreeThread {
+  readonly id: ThreadId;
+  readonly archivedAt: string | null;
+  readonly deletedAt: string | null;
+  readonly worktreePath: string | null;
+  readonly associatedWorktreePath: string | null;
 }
 
 /**
@@ -105,6 +139,26 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
+   * Find only stale threads whose projected session/turn still appears in
+   * flight. Used by the runtime reconciler to avoid hydrating the full shell
+   * snapshot on every polling interval.
+   */
+  readonly listStaleInFlightThreadIds: (input: {
+    readonly updatedBefore: string;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
+   * Read only the columns managed-worktree retention needs, for every thread that
+   * records a worktree path. Avoids hydrating the full read model on a background
+   * prune, while still exposing soft-deleted threads so their worktrees are reclaimed.
+   */
+  readonly listManagedWorktreeThreads: () => Effect.Effect<
+    ReadonlyArray<ProjectionManagedWorktreeThread>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read the latest orchestration shell snapshot.
    *
    * Returns only project rows plus thread shell summaries so clients can
@@ -128,6 +182,19 @@ export interface ProjectionSnapshotQueryShape {
   readonly getProjectShellById: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read active project shells for the given ids in one query.
+   * Missing or deleted ids are omitted rather than returned as none.
+   */
+  readonly getProjectShellsByIds: (
+    projectIds: ReadonlyArray<ProjectId>,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationProjectShell>, ProjectionRepositoryError>;
+
+  /** Read a single active custom space shell row by id. */
+  readonly getSpaceShellById: (
+    spaceId: SpaceId,
+  ) => Effect.Effect<Option.Option<OrchestrationSpaceShell>, ProjectionRepositoryError>;
 
   /**
    * Read the earliest active thread for a project.
@@ -173,11 +240,34 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
-   * Recover the parent thread for legacy synthetic subagent IDs.
+   * Read several active thread shells in one round of queries. Ids without an
+   * active thread are simply absent from the result.
+   */
+  readonly getThreadShellsByIds: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * True when the thread id is already bound to an aggregate, including
+   * soft-deleted threads that the active-only reads above hide.
+   *
+   * Callers that decide whether to dispatch `thread.create` must use this:
+   * the command decider rejects re-creating a thread id that still has a
+   * tombstone, so an active-only existence check would loop on rejections.
+   */
+  readonly threadIdExistsIncludingDeleted: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+
+  /**
+   * Recover the parent thread shell for legacy synthetic subagent IDs.
+   *
+   * Shell-only on purpose: the provider-session resolver that consumes this
+   * runs on every provider intent event and reads just id/session/model.
    */
   readonly findSyntheticSubagentParentThread: (
     threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+  ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.
@@ -185,6 +275,17 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+
+  /**
+   * The bounded slice a `thread://` mention needs: the thread row plus its
+   * newest `messageLimit` messages. Skips plans, activities, pending
+   * interactions, checkpoints, and the full-transcript decode that
+   * `getThreadDetailById` pays, none of which a mention context block reads.
+   */
+  readonly getThreadMentionContextById: (
+    threadId: ThreadId,
+    options: { readonly messageLimit: number },
+  ) => Effect.Effect<Option.Option<OrchestrationThreadMentionContext>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id with the full message history.
@@ -198,6 +299,7 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadDetailSnapshotById: (
     threadId: ThreadId,
+    messageWindow?: OrchestrationThreadMessageWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

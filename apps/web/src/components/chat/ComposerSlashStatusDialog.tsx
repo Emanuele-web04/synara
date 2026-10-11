@@ -86,33 +86,37 @@ export function ComposerSlashStatusDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-sm sm:grid-cols-2">
+          <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-ui-lg leading-snug sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Model</p>
+              <p className="text-ui leading-snug text-muted-foreground">Model</p>
               <p className="font-medium text-foreground">{selectedModel}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Fast Mode</p>
+              <p className="text-ui leading-snug text-muted-foreground">Fast Mode</p>
               <p className="font-medium text-foreground">{fastModeEnabled ? "On" : "Off"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Reasoning</p>
+              <p className="text-ui leading-snug text-muted-foreground">Reasoning</p>
               <p className="font-medium text-foreground">{selectedPromptEffort ?? "Default"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Mode</p>
+              <p className="text-ui leading-snug text-muted-foreground">Mode</p>
               <p className="font-medium text-foreground">
-                {interactionMode === "plan" ? "Plan" : "Default"}
+                {interactionMode === "plan"
+                  ? "Plan"
+                  : interactionMode === "debug"
+                    ? "Debug"
+                    : "Default"}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Environment</p>
+              <p className="text-ui leading-snug text-muted-foreground">Environment</p>
               <p className="font-medium text-foreground">
                 {formatEnvironmentLabel(envMode, envState)}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Branch</p>
+              <p className="text-ui leading-snug text-muted-foreground">Branch</p>
               <p className="font-medium text-foreground">{branch ?? "Unknown"}</p>
             </div>
           </div>
@@ -120,12 +124,12 @@ export function ComposerSlashStatusDialog(props: {
           <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs text-muted-foreground">Context Window</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-ui leading-snug text-muted-foreground">Context Window</p>
+                <p className="text-ui leading-snug text-muted-foreground">
                   Latest usage reported by the active thread.
                 </p>
                 {pendingContextWindowLabel ? (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-ui leading-snug text-muted-foreground">
                     Current session: {activeContextWindowLabel ?? "Unknown"}. Next turn:{" "}
                     {pendingContextWindowLabel}.
                   </p>
@@ -140,48 +144,51 @@ export function ComposerSlashStatusDialog(props: {
                 />
               ) : null}
             </div>
-            {contextWindow ? (
-              <div className="grid gap-3 text-sm sm:grid-cols-2">
+            <div className="grid gap-3 text-ui-lg leading-snug sm:grid-cols-2">
+              {contextWindow ? (
+                <>
+                  <div>
+                    <p className="text-muted-foreground">Used</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.usedTokens)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Remaining</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.remainingTokens)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Window</p>
+                    <p className="font-medium text-foreground">
+                      {formatContextWindowTokens(contextWindow.maxTokens)}
+                    </p>
+                  </div>
+                </>
+              ) : (
                 <div>
-                  <p className="text-muted-foreground">Used</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.usedTokens)}
-                  </p>
+                  <p className="text-muted-foreground">Context usage</p>
+                  <p className="font-medium text-foreground">Not reported yet</p>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Remaining</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.remainingTokens)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Window</p>
-                  <p className="font-medium text-foreground">
-                    {formatContextWindowTokens(contextWindow.maxTokens)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cost</p>
-                  <p className="font-medium text-foreground">
-                    {cumulativeCostUsd !== null
-                      ? formatCostUsd(cumulativeCostUsd)
-                      : "Not available"}
-                  </p>
-                </div>
+              )}
+              <div>
+                <p className="text-muted-foreground">Cost</p>
+                <p className="font-medium text-foreground">
+                  {cumulativeCostUsd !== null ? formatCostUsd(cumulativeCostUsd) : "Not available"}
+                </p>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Context usage has not been reported yet for this thread.
-              </p>
-            )}
+            </div>
           </div>
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">
-            <p className="text-xs text-muted-foreground">Rate Limits</p>
+            <p className="text-ui leading-snug text-muted-foreground">Rate Limits</p>
             {rateLimitStatus ? (
-              <p className="text-sm text-foreground">{formatRateLimitMessage(rateLimitStatus)}</p>
+              <p className="text-ui leading-snug text-foreground">
+                {formatRateLimitMessage(rateLimitStatus)}
+              </p>
             ) : (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-ui leading-snug text-muted-foreground">
                 No active rate-limit warning for this thread.
               </p>
             )}

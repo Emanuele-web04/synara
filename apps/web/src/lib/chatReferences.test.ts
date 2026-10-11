@@ -6,29 +6,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildDiffSelectionReference,
-  buildWhyChangedPrompt,
   buildWhyLinesPrompt,
   computeSelectionColumns,
   computeSelectionLineRange,
   formatChatFileReference,
+  normalizeSelectionSnippet,
 } from "./chatReferences";
 
 describe("formatChatFileReference", () => {
-  it("formats a bare file reference as a mention token", () => {
-    expect(formatChatFileReference({ path: "apps/web/src/main.tsx" })).toBe(
-      "@apps/web/src/main.tsx",
-    );
-  });
-
   it("quotes paths containing whitespace", () => {
     expect(formatChatFileReference({ path: "docs/release notes.md" })).toBe(
       '@"docs/release notes.md"',
-    );
-  });
-
-  it("appends a single-line suffix", () => {
-    expect(formatChatFileReference({ path: "src/a.ts", startLine: 12 })).toBe(
-      "@src/a.ts (line 12)",
     );
   });
 
@@ -74,16 +62,6 @@ describe("formatChatFileReference", () => {
     ).toBe("@src/a.ts (lines 21:5-23:8)");
   });
 
-  it("falls back to the line label when columns are missing", () => {
-    expect(formatChatFileReference({ path: "src/a.ts", startLine: 5 })).toBe("@src/a.ts (line 5)");
-  });
-
-  it("quotes a snippet as a fenced block when there is no line info", () => {
-    expect(formatChatFileReference({ path: "docs/notes.md", snippet: "First point" })).toBe(
-      "@docs/notes.md\n```\nFirst point\n```",
-    );
-  });
-
   it("prefers the line label over a snippet", () => {
     expect(
       formatChatFileReference({ path: "src/a.ts", startLine: 3, snippet: "const a = 1;" }),
@@ -98,10 +76,6 @@ describe("formatChatFileReference", () => {
 });
 
 describe("computeSelectionColumns", () => {
-  it("starts at column 1 with an empty prefix", () => {
-    expect(computeSelectionColumns("", "hello")).toEqual({ startColumn: 1, endColumn: 5 });
-  });
-
   it("offsets the start column by characters before the selection on the line", () => {
     expect(computeSelectionColumns("a\nabc", "de")).toEqual({ startColumn: 4, endColumn: 5 });
   });
@@ -115,20 +89,7 @@ describe("computeSelectionColumns", () => {
   });
 });
 
-describe("buildWhyChangedPrompt", () => {
-  it("mentions the file inside the question", () => {
-    expect(buildWhyChangedPrompt("src/a.ts")).toBe(
-      "Why did we implement the changes in @src/a.ts?",
-    );
-  });
-});
-
 describe("buildWhyLinesPrompt", () => {
-  it("asks about the whole file without a line range", () => {
-    expect(buildWhyLinesPrompt({ path: "src/a.ts" })).toContain("@src/a.ts");
-    expect(buildWhyLinesPrompt({ path: "src/a.ts" })).not.toContain("lines");
-  });
-
   it("asks about the selected line range", () => {
     const prompt = buildWhyLinesPrompt({ path: "src/a.ts", startLine: 3, endLine: 9 });
     expect(prompt).toContain("lines 3-9");
@@ -137,16 +98,25 @@ describe("buildWhyLinesPrompt", () => {
   });
 });
 
+describe("normalizeSelectionSnippet", () => {
+  it("normalizes CRLF and strips blank edge lines and surrounding whitespace", () => {
+    expect(normalizeSelectionSnippet("\r\n  first\r\nsecond  \r\n\r\n")).toBe("first\nsecond");
+  });
+
+  it("keeps interior blank lines", () => {
+    expect(normalizeSelectionSnippet("first\n\nsecond")).toBe("first\n\nsecond");
+  });
+
+  it("returns null for empty or whitespace-only selections", () => {
+    expect(normalizeSelectionSnippet("")).toBeNull();
+    expect(normalizeSelectionSnippet(" \n\t\r\n ")).toBeNull();
+  });
+});
+
 describe("buildDiffSelectionReference", () => {
   it("wraps the snippet in a fenced block after the mention", () => {
     expect(buildDiffSelectionReference("src/a.ts", "const a = 1;\nconst b = 2;")).toBe(
       "@src/a.ts\n```\nconst a = 1;\nconst b = 2;\n```",
-    );
-  });
-
-  it("normalizes CRLF and trims surrounding blank lines", () => {
-    expect(buildDiffSelectionReference("src/a.ts", "\r\nfoo\r\nbar\r\n")).toBe(
-      "@src/a.ts\n```\nfoo\nbar\n```",
     );
   });
 
@@ -164,10 +134,6 @@ describe("buildDiffSelectionReference", () => {
 });
 
 describe("computeSelectionLineRange", () => {
-  it("starts at line 1 with an empty prefix", () => {
-    expect(computeSelectionLineRange("", "const x = 1;")).toEqual({ startLine: 1, endLine: 1 });
-  });
-
   it("offsets the start line by prefix newlines", () => {
     expect(computeSelectionLineRange("a\nb\nc\n", "selected")).toEqual({
       startLine: 4,

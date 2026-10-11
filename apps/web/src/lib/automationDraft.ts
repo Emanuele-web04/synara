@@ -8,15 +8,22 @@ import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contrac
 import type {
   AutomationMode,
   AutomationSchedule,
+  AutomationInteractionMode,
   AutomationWorktreeMode,
   ModelSelection,
   ProjectId,
-  ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
+import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 
 import type { ChatAutomationExecutionScope } from "./automationIntent";
+
+// Heartbeat runs inside a thread the user already owns, so its checkout is the user's
+// concern. Every other mode opens its own thread and may create its own worktree.
+function automationOpensItsOwnCheckout(mode: AutomationMode): boolean {
+  return !automationRequiresTargetThread(mode);
+}
 
 export type AutomationCreationDraftSource = "slash" | "mention" | "dialog" | "generated";
 
@@ -49,10 +56,11 @@ export interface AutomationCreationDraft {
   readonly projectId: ProjectId;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
+  readonly interactionMode: AutomationInteractionMode;
   readonly worktreeMode: AutomationWorktreeMode;
   readonly maxIterations: number | null;
-  readonly stopOnError: boolean;
+  /** Consecutive failed runs before auto-disable; null = never auto-disable. */
+  readonly stopAfterConsecutiveFailures: number | null;
   readonly warnings: readonly AutomationDraftWarning[];
 }
 
@@ -83,8 +91,8 @@ export function buildAutomationDraftWarnings(input: {
   if (input.schedule.type === "manual") {
     warnings.push({
       id: "missing-schedule",
-      title: "Schedule needs review",
-      detail: "Choose when this automation should run before creating it.",
+      title: "Manual runs only",
+      detail: "This automation only runs when you press Run now.",
       requiresAcknowledgement: false,
     });
   }
@@ -106,7 +114,7 @@ export function buildAutomationDraftWarnings(input: {
   }
   if (
     input.worktreeMode === "local" ||
-    (input.mode === "standalone" && input.worktreeMode === "auto")
+    (automationOpensItsOwnCheckout(input.mode) && input.worktreeMode === "auto")
   ) {
     warnings.push({
       id: "local-checkout",
@@ -120,7 +128,7 @@ export function buildAutomationDraftWarnings(input: {
     });
   }
   if (
-    input.mode === "standalone" &&
+    automationOpensItsOwnCheckout(input.mode) &&
     (input.worktreeMode === "worktree" || input.worktreeMode === "auto")
   ) {
     warnings.push({
@@ -174,8 +182,9 @@ export function automationApprovalGaps(input: {
   const acknowledged = new Set(input.acknowledgedRisks);
   const approvalIds = new Set<AutomationDraftWarningId>();
   const maxIterations = maxIterationsForFastIntervalApproval(input);
-  // Definite run blockers: full-access and a standalone local checkout. Heartbeats reuse
-  // their target thread, so local-checkout consent is needed for updates but not dispatch.
+  // Definite run blockers: full-access and a local checkout the automation opens itself.
+  // Heartbeats reuse their target thread, so local-checkout consent is needed for updates
+  // but not dispatch.
   const runBlockingIds = new Set<AutomationDraftWarningId>();
   if (input.runtimeMode === "full-access" && !acknowledged.has("full-access")) {
     approvalIds.add("full-access");
@@ -183,7 +192,7 @@ export function automationApprovalGaps(input: {
   }
   if (input.worktreeMode === "local" && !acknowledged.has("local-checkout")) {
     approvalIds.add("local-checkout");
-    if (input.mode === "standalone") {
+    if (automationOpensItsOwnCheckout(input.mode)) {
       runBlockingIds.add("local-checkout");
     }
   }
@@ -199,7 +208,7 @@ export function automationApprovalGaps(input: {
   }
   if (
     approvalIds.size > 0 &&
-    input.mode === "standalone" &&
+    automationOpensItsOwnCheckout(input.mode) &&
     input.worktreeMode === "auto" &&
     !acknowledged.has("local-checkout")
   ) {
@@ -240,7 +249,7 @@ export function automationApprovalGaps(input: {
 }
 
 // Approval of an enabled legacy fast loop must also satisfy the server's hard iteration cap.
-export function maxIterationsForFastIntervalApproval(input: {
+function maxIterationsForFastIntervalApproval(input: {
   readonly schedule: AutomationSchedule;
   readonly enabled: boolean;
   readonly maxIterations: number | null;
@@ -275,14 +284,18 @@ export function acknowledgedRiskIdsForDraft(
   return risks;
 }
 
-export function warningIdsForAcknowledgedRisks(
-  risks: readonly AutomationAcknowledgedRiskId[],
+export function updateAutomationDraftWarningAcknowledgement(
+  current: ReadonlySet<AutomationDraftWarningId>,
+  warningId: AutomationDraftWarningId,
+  acknowledged: boolean,
 ): ReadonlySet<AutomationDraftWarningId> {
-  const ids = new Set<AutomationDraftWarningId>();
-  for (const risk of risks) {
-    ids.add(risk === "fast-interval" ? "fast-recurring-interval" : risk);
+  const next = new Set(current);
+  if (acknowledged) {
+    next.add(warningId);
+  } else {
+    next.delete(warningId);
   }
-  return ids;
+  return next;
 }
 
 export function hasBlockingAutomationDraftWarnings(
@@ -290,9 +303,7 @@ export function hasBlockingAutomationDraftWarnings(
   acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>,
 ): boolean {
   return warnings.some(
-    (warning) =>
-      warning.id === "missing-schedule" ||
-      (warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id)),
+    (warning) => warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id),
   );
 }
 

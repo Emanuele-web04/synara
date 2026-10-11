@@ -20,7 +20,7 @@ interface PendingProjectInstructionsSave {
   readonly lastCommitted: string;
 }
 
-function useProjectInstructionsAutosave({
+export function useProjectInstructionsAutosave({
   projectId,
   instructions,
   onChange,
@@ -46,6 +46,8 @@ function useProjectInstructionsAutosave({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // Stable identity: `flush` is an effect dependency below, so a per-render
+  // closure would re-run the effects (and the unmount flush) on every keystroke.
   const flush = useCallback(() => {
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
@@ -92,33 +94,30 @@ function useProjectInstructionsAutosave({
     };
   }, [flush]);
 
-  const handleChange = useCallback<ChangeEventHandler<HTMLTextAreaElement>>(
-    (event) => {
-      const nextValue = event.target.value;
-      valueRef.current = nextValue;
-      setValue(nextValue);
-      const currentProjectId = projectIdRef.current;
-      if (!currentProjectId) {
-        pendingSaveRef.current = null;
-        if (debounceRef.current !== null) {
-          window.clearTimeout(debounceRef.current);
-          debounceRef.current = null;
-        }
-        return;
-      }
-      // Keep the project id with the pending payload; active projects can switch before debounce fires.
-      pendingSaveRef.current = {
-        projectId: currentProjectId,
-        value: nextValue,
-        lastCommitted: lastCommittedRef.current,
-      };
+  const handleChange: ChangeEventHandler<HTMLTextAreaElement> = (event) => {
+    const nextValue = event.target.value;
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    const currentProjectId = projectIdRef.current;
+    if (!currentProjectId) {
+      pendingSaveRef.current = null;
       if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
       }
-      debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
-    },
-    [flush],
-  );
+      return;
+    }
+    // Keep the project id with the pending payload; active projects can switch before debounce fires.
+    pendingSaveRef.current = {
+      projectId: currentProjectId,
+      value: nextValue,
+      lastCommitted: lastCommittedRef.current,
+    };
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = window.setTimeout(flush, PROJECT_INSTRUCTIONS_AUTOSAVE_DEBOUNCE_MS);
+  };
 
   return {
     value,
@@ -159,7 +158,7 @@ export function EnvironmentProjectInstructionsSection({
       <div className="flex flex-col gap-2 px-2 pb-1">
         <Textarea
           unstyled
-          className="relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2"
+          className="relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-ui text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2"
           value={autosave.value}
           onChange={autosave.onChange}
           onFocus={autosave.onFocus}

@@ -1,19 +1,36 @@
 import type { OrchestrationCommand } from "@synara/contracts";
-import { Queue } from "effect";
 
 export const ORCHESTRATION_COMMAND_QUEUE_CAPACITY = 256;
 export const ORCHESTRATION_COMMAND_CONTROL_RESERVE = 32;
 export const ORCHESTRATION_EVENT_PUBSUB_CAPACITY = 1_024;
 
-export interface OrchestrationCommandAdmissionPolicy {
-  readonly capacity: number;
-  readonly reservedCapacity: number;
-}
-
 export type OrchestrationCommandAdmissionDecision =
   | { readonly accepted: true }
   | { readonly accepted: false; readonly reason: "overloaded" | "stopped" };
 
+/**
+ * Priority for ready aggregate heads and commit waiters. Commands retain FIFO
+ * within an aggregate key; priority does not preempt an active command/commit.
+ *
+ * - `control`: settle or abort work that already exists (stop, interrupt,
+ *   completion commands). Ahead of other ready keys, with reserved admission.
+ * - `user`: direct user actions that create new work. Ahead of background
+ *   traffic, but behind ready controls. Existing same-key work and occupied
+ *   preparation workers can still delay a control.
+ * - `normal`: retention, projections and every other background command.
+ */
+export type OrchestrationCommandLane = "control" | "user" | "normal";
+
+/**
+ * Commands that may use the reserved capacity and stay admissible while the
+ * engine is quiescing.
+ *
+ * Membership means "this command settles work that is already in flight", so
+ * admitting it can only bring the engine closer to idle. A command that starts
+ * new work must never be listed here: during quiesce it would spawn a provider
+ * turn the shutdown is about to fence, orphaning it. Lane priority for user
+ * actions is expressed by {@link orchestrationCommandLane} instead.
+ */
 export function usesReservedCommandAdmission(type: OrchestrationCommand["type"]): boolean {
   switch (type) {
     case "thread.turn.interrupt":
@@ -36,41 +53,29 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
   }
 }
 
-export function tryAdmitOrchestrationCommand<A>(input: {
-  readonly queue: Queue.Queue<A>;
-  readonly envelope: A;
-  readonly commandType: OrchestrationCommand["type"];
-  readonly policy?: OrchestrationCommandAdmissionPolicy;
-}): OrchestrationCommandAdmissionDecision {
-  const policy = input.policy ?? {
-    capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
-    reservedCapacity: ORCHESTRATION_COMMAND_CONTROL_RESERVE,
-  };
-  if (
-    !Number.isSafeInteger(policy.capacity) ||
-    policy.capacity <= 0 ||
-    !Number.isSafeInteger(policy.reservedCapacity) ||
-    policy.reservedCapacity <= 0 ||
-    policy.reservedCapacity >= policy.capacity
-  ) {
-    throw new RangeError(
-      "Orchestration command admission requires a positive capacity and a smaller positive reserve.",
-    );
-  }
-  if (input.queue.state._tag !== "Open") {
-    return { accepted: false, reason: "stopped" };
-  }
+export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
+  // Settlement diagnostics must survive quiesce, but remain in the normal lane
+  // so activity traffic cannot consume the capacity reserved for stopping work.
+  return usesReservedCommandAdmission(type) || type === "thread.activity.append";
+}
 
-  const admissionLimit = usesReservedCommandAdmission(input.commandType)
-    ? policy.capacity
-    : policy.capacity - policy.reservedCapacity;
-  if (Queue.sizeUnsafe(input.queue) >= admissionLimit) {
-    return { accepted: false, reason: "overloaded" };
+export function orchestrationCommandLane(
+  type: OrchestrationCommand["type"],
+): OrchestrationCommandLane {
+  if (usesReservedCommandAdmission(type)) {
+    return "control";
   }
-  return Queue.offerUnsafe(input.queue, input.envelope)
-    ? { accepted: true }
-    : {
-        accepted: false,
-        reason: input.queue.state._tag === "Open" ? "overloaded" : "stopped",
-      };
+  switch (type) {
+    // Direct user actions must not sit behind retention and other background
+    // projection traffic. They get their own lane rather than the control lane,
+    // so ready turn starts on other keys do not outrank a ready stop.
+    case "thread.create":
+    case "thread.turn.start":
+    case "thread.checkpoint.revert":
+    case "thread.conversation.rollback":
+    case "thread.message.edit-and-resend":
+      return "user";
+    default:
+      return "normal";
+  }
 }
