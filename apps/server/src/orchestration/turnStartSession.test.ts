@@ -56,32 +56,6 @@ describe("deriveTurnStartSession", () => {
     ).toBe(false);
   });
 
-  it("ignores fork-import history when deciding first-turn provider adoption", () => {
-    expect(
-      canAdoptFirstTurnProvider({
-        hasLatestTurn: false,
-        hasSession: false,
-        messages: [{ source: "fork-import" }, { source: "handoff-import" }, { source: "native" }],
-      }),
-    ).toBe(true);
-
-    expect(
-      canAdoptFirstTurnProvider({
-        hasLatestTurn: false,
-        hasSession: false,
-        messages: [{ source: "fork-import" }, { source: "native" }, { source: "native" }],
-      }),
-    ).toBe(false);
-
-    expect(
-      canAdoptFirstTurnProvider({
-        hasLatestTurn: true,
-        hasSession: false,
-        messages: [{ source: "fork-import" }],
-      }),
-    ).toBe(false);
-  });
-
   it("preserves established provider settings when restarting an idle session", () => {
     expect(derive(makeSession("ready"))).toMatchObject({
       status: "starting",

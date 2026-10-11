@@ -87,7 +87,7 @@ const nativeApi = vi.hoisted(() => ({
   available: true,
 }));
 
-const toast = vi.hoisted(() => ({ add: vi.fn() }));
+const toast = vi.hoisted(() => ({ add: vi.fn(), reportIssue: vi.fn() }));
 const voiceAvailability = vi.hoisted(() => ({
   canStartVoiceNotes: true,
   showVoiceNotesControl: true,
@@ -128,7 +128,7 @@ vi.mock("../../nativeApi", () => ({
       : null,
 }));
 
-vi.mock("../ui/toast", () => ({ toastManager: toast }));
+vi.mock("../ui/toast", () => ({ toastManager: toast, reportToastIssue: toast.reportIssue }));
 
 vi.mock("../ChatView.logic", () => ({
   deriveComposerVoiceState: () => ({ ...voiceAvailability }),
@@ -196,6 +196,7 @@ describe("useComposerVoiceController", () => {
     voiceAvailability.canStartVoiceNotes = true;
     voiceAvailability.showVoiceNotesControl = true;
     toast.add.mockReset();
+    toast.reportIssue.mockReset();
     options = {
       activeProject: PROJECT,
       activeThreadId: THREAD_A,
@@ -279,6 +280,7 @@ describe("useComposerVoiceController", () => {
     await result.startComposerVoiceRecording();
 
     expect(toast.add).not.toHaveBeenCalled();
+    expect(toast.reportIssue).not.toHaveBeenCalled();
     expect(nativeApi.prewarmVoice).not.toHaveBeenCalled();
   });
 
@@ -334,6 +336,13 @@ describe("useComposerVoiceController", () => {
 
     await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
+    expect(toast.reportIssue).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        code: "voice.transcribe.failed",
+        reason: "auth",
+      }),
+    );
     expect(options.refreshVoiceStatus).toHaveBeenCalledTimes(1);
     const failureToast = toast.add.mock.calls.at(-1)?.[0];
     expect(failureToast).toMatchObject({

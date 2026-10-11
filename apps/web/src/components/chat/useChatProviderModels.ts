@@ -46,6 +46,9 @@ interface ChatProviderModelsInput {
   composerDraft: ReturnType<typeof useComposerThreadDraft>;
   settings: AppSettings;
   resolvedThreadWorktreePath: string | null;
+  // The picker may leave the thread's provider: picking another one hands the
+  // thread off to it in place when the next message is sent.
+  allowProviderHandoff?: boolean;
 }
 
 export function useChatProviderModels({
@@ -55,6 +58,7 @@ export function useChatProviderModels({
   composerDraft,
   settings,
   resolvedThreadWorktreePath,
+  allowProviderHandoff,
 }: ChatProviderModelsInput) {
   const queryClient = useQueryClient();
   const prompt = composerDraft.prompt;
@@ -81,15 +85,36 @@ export function useChatProviderModels({
   const hasProviderLockingActivity = Boolean(
     activeThread && threadHasProviderLockingActivity(activeThread),
   );
-  const lockedProvider: ProviderKind | null = hasProviderLockingActivity
+  // The provider the thread's conversation runs on.
+  const boundProvider: ProviderKind | null = hasProviderLockingActivity
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
+  const boundProviderInstanceId: ProviderInstanceId | null =
+    boundProvider === null
+      ? null
+      : ((activeThread?.session?.provider === boundProvider
+          ? activeThread.session.providerInstanceId
+          : undefined) ??
+        (activeThread?.modelSelection.provider === boundProvider
+          ? activeThread.modelSelection.instanceId
+          : undefined) ??
+        boundProvider);
+  // A provider explicitly picked over the bound one is a pending handoff.
+  const handoffProvider: ProviderKind | null =
+    allowProviderHandoff === true &&
+    boundProvider !== null &&
+    selectedProviderByThreadId !== null &&
+    selectedProviderByThreadId !== boundProvider
+      ? selectedProviderByThreadId
+      : null;
+  const lockedProvider: ProviderKind | null = allowProviderHandoff === true ? null : boundProvider;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const selectedProvider = useMemo<ProviderKind>(
     () =>
-      lockedProvider ??
+      handoffProvider ??
+      boundProvider ??
       resolveUnsentComposerProvider({
         explicitProvider: selectedProviderByThreadId,
         threadProvider,
@@ -99,8 +124,9 @@ export function useChatProviderModels({
         hiddenProviders: settings.hiddenProviders,
       }),
     [
+      boundProvider,
+      handoffProvider,
       localProviderStatuses,
-      lockedProvider,
       providerStatusesReconciled,
       selectedProviderByThreadId,
       settings.defaultProvider,
@@ -369,7 +395,11 @@ export function useChatProviderModels({
           .filter(
             (instance) =>
               instance.enabled &&
-              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId),
+              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId) &&
+              // A handoff can change the provider, not the bound provider's account.
+              (boundProvider === null ||
+                instance.provider !== boundProvider ||
+                instance.instanceId === boundProviderInstanceId),
           )
           .map((instance) => ({
             value: instance.provider,
@@ -384,6 +414,8 @@ export function useChatProviderModels({
         lockedProvider,
       }),
     [
+      boundProvider,
+      boundProviderInstanceId,
       lockedProvider,
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
@@ -397,6 +429,8 @@ export function useChatProviderModels({
   return {
     hasThreadStarted,
     lockedProvider,
+    boundProvider,
+    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
     providerInstances,

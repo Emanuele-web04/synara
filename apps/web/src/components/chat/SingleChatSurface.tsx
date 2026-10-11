@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
-import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import type { ProjectId, ResolvedKeybindingsConfig, ThreadId, TurnId } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { useNavigate } from "@tanstack/react-router";
@@ -17,6 +17,8 @@ import {
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
+import { closeTerminalSurface } from "../../hooks/useTerminalSurfaceController";
+import { dockTerminalThreadId } from "../../lib/dockTerminalScope";
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -69,6 +71,7 @@ import {
   useSplitViewStore,
 } from "../../splitViewStore";
 import { useStore } from "../../store";
+import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
@@ -89,6 +92,7 @@ import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
 import { SidechatDockPane, useSidechatDockPanePruning } from "./SidechatDockPane";
+import { SubagentsDockPane } from "./SubagentsDockPane";
 import {
   buildRightDockPaneLabelOverrides,
   getRightDockPaneMeta,
@@ -120,9 +124,12 @@ import {
   resolveRoutePanelBootstrap,
   stripEditorViewSearchParams,
 } from "../../routes/-chatThreadRoute.logic";
+import { isShortcutDispatchSuspended, resolveShortcutCommand } from "~/keybindings";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { cn } from "~/lib/utils";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EditorWorkspaceView = lazy(() =>
   import("../EditorWorkspaceView").then((module) => ({
     default: module.EditorWorkspaceView,
@@ -217,6 +224,7 @@ export function SingleChatSurface(props: {
     threadWorkingDirectory:
       threadWorkspaceMetadata.workingDirectory ?? draftThread?.workingDirectory ?? null,
   });
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const dockGitRepositoryQuery = useQuery(gitBranchesQueryOptions(workspaceRoot));
   const hasGitRepository = dockGitRepositoryQuery.data?.isRepo === true;
   const dockDiffTotals = useRepoDiffTotals({
@@ -384,28 +392,32 @@ export function SingleChatSurface(props: {
 
   // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
   // snippet (content) search. Registered with capture so it wins over page-level
-  // defaults (print, browser find) while the chat surface is mounted.
+  // defaults (print, browser find) while the chat surface is mounted. Resolve through
+  // the configured keybindings so Settings and keybindings.json can rebind or unassign
+  // these actions, while the shipped !terminalFocus guard keeps shell input intact.
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  const searchKeybindings = shortcutConfig.data?.keybindings ?? EMPTY_KEYBINDINGS;
   useEffect(() => {
     // Editor view returns before rendering the palette, so leave its shortcuts
     // available to the editor instead of swallowing them invisibly.
     if (editorViewActive) return;
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.repeat || event.altKey) return;
-      const isPrimaryModifier = event.ctrlKey || event.metaKey;
-      if (!isPrimaryModifier) return;
-      const key = event.key.toLowerCase();
-      if (key !== "p" && key !== "f") return;
-      if (key === "f" && !event.shiftKey) return;
-      if (key === "p" && event.shiftKey) return;
+      if (event.repeat || isShortcutDispatchSuspended()) return;
+      const command = resolveShortcutCommand(event, searchKeybindings, {
+        context: { terminalFocus: isTerminalFocused() },
+      });
+      const mode =
+        command === "search.files" ? "files" : command === "search.content" ? "snippets" : null;
+      if (mode === null) return;
       event.preventDefault();
       event.stopPropagation();
-      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteMode(mode);
       setSearchPaletteOpen(true);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [editorViewActive]);
+  }, [editorViewActive, searchKeybindings]);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -829,7 +841,6 @@ export function SingleChatSurface(props: {
   const sourceSidechats = useStore(
     useMemo(() => createSidechatSummariesForSourceSelector(props.threadId), [props.threadId]),
   );
-  const shortcutConfig = useQuery(serverConfigQueryOptions());
   useSidechatShortcut({
     threadId: props.threadId,
     enabled: props.search.view !== "editor",
@@ -930,6 +941,7 @@ export function SingleChatSurface(props: {
         return (
           <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
             <DockTerminalPane
+              paneId={pane.id}
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
@@ -973,6 +985,8 @@ export function SingleChatSurface(props: {
             />
           </Suspense>
         );
+      case "subagents":
+        return <SubagentsDockPane hostThreadId={props.threadId} />;
       case "sidechat":
         return (
           <SidechatDockPane
@@ -1203,6 +1217,24 @@ export function SingleChatSurface(props: {
           {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => {
+            if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "terminal") {
+              void closeTerminalSurface(
+                dockTerminalThreadId(props.threadId),
+                appSettings.confirmTerminalTabClose,
+                paneId,
+              )
+                .then((closed) => {
+                  if (closed) closePane(props.threadId, paneId);
+                })
+                .catch((error: unknown) => {
+                  toastManager.add({
+                    type: "error",
+                    title: "Unable to close terminal",
+                    description: error instanceof Error ? error.message : "Please try again.",
+                  });
+                });
+              return;
+            }
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {
               closePane(props.threadId, paneId);
               return;
@@ -1222,6 +1254,7 @@ export function SingleChatSurface(props: {
           mode={searchPaletteMode}
           onOpenChange={setSearchPaletteOpen}
           cwd={workspaceRoot}
+          homeDir={homeDir}
           onOpenFile={handleOpenWorkspaceSearchFile}
           onOpenDirectory={handleOpenWorkspaceSearchDirectory}
         />

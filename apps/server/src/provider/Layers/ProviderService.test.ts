@@ -26,6 +26,7 @@ import {
   type ServerSettings,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
@@ -218,7 +219,7 @@ const makeProviderServiceLive = (options?: Parameters<typeof makeProviderService
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: ProviderKind;
+  readonly provider: ProviderRuntimeEvent["provider"];
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -307,6 +308,7 @@ function makeFakeCodexAdapter(
   provider: ProviderKind = "codex",
   options?: {
     readonly conversationRollback?: "native" | "restart-session";
+    readonly runtimeEventDelivery?: "fresh-ids-once";
     readonly didResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -405,6 +407,7 @@ function makeFakeCodexAdapter(
         sessions.delete(threadId);
       }),
   );
+  const renewAgentGatewayCredential = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
 
   const listSessions = vi.fn(
     (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
@@ -475,6 +478,9 @@ function makeFakeCodexAdapter(
     startSession,
     ...(provider === "claudeAgent" ? { prepareSessionReplacement } : {}),
     ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
+    ...(options?.runtimeEventDelivery
+      ? { runtimeEventDelivery: options.runtimeEventDelivery }
+      : {}),
     sendTurn,
     steerTurn,
     startReview,
@@ -482,6 +488,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -529,6 +536,7 @@ function makeFakeCodexAdapter(
     respondToRequest,
     respondToUserInput,
     stopSession,
+    renewAgentGatewayCredential,
     listSessions,
     hasSession,
     readThread,
@@ -579,6 +587,7 @@ const waitUntilEffect = <E = never, R = never>(
 function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
   providers?: {
+    readonly freshRuntimeEventDelivery?: boolean;
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
     readonly codexDidResumeSession?: NonNullable<
@@ -594,6 +603,9 @@ function makeProviderServiceLayer(
   },
 ) {
   const codex = makeFakeCodexAdapter("codex", {
+    ...(providers?.freshRuntimeEventDelivery
+      ? { runtimeEventDelivery: "fresh-ids-once" as const }
+      : {}),
     ...(providers?.codexDidResumeSession
       ? { didResumeSession: providers.codexDidResumeSession }
       : {}),
@@ -1638,6 +1650,49 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("starts another provider on a Codex thread only after a continuation reset", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-provider-handoff-reset");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopSession({ threadId });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      // Codex's native continuation is protected: a different provider cannot
+      // silently take over a thread that still holds a Codex resume cursor.
+      const refused = yield* Effect.exit(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.isTrue(Exit.isFailure(refused));
+      assert.include(
+        String(Cause.squash((refused as Exit.Failure<unknown, unknown>).cause)),
+        "native session storage is incompatible",
+      );
+
+      // A same-thread provider handoff requests the reset explicitly first.
+      yield* provider.clearSessionResumeCursor!({ threadId });
+      const handedOff = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(handedOff.provider, "claudeAgent");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1876,6 +1931,32 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("skips a native fork through an earlier turn the provider cannot cut at", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const sourceThreadId = asThreadId("thread-fork-through-turn-source");
+      const targetThreadId = asThreadId("thread-fork-through-turn-target");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+
+      const result = yield* provider.forkThread!({
+        sourceThreadId,
+        threadId: targetThreadId,
+        throughTurnId: TurnId.makeUnsafe("turn-earlier"),
+        runtimeMode: "full-access",
+      });
+
+      // Forking at the latest point would hand the model turns the fork does not show.
+      assert.equal(result, null);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 0);
+    }),
+  );
+
   it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1965,6 +2046,41 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("carries a multi-folder project's extra folders through session recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-additional-directories-recovery");
+      const additionalDirectories = ["/tmp/repos/api", "/tmp/repos/shared"];
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+        additionalDirectories,
+      });
+      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.deepStrictEqual(
+        asRuntimePayloadRecord(persisted?.runtimePayload).additionalDirectories,
+        additionalDirectories,
+      );
+
+      // A recovered runtime must keep the same folder grant it was spawned with.
+      yield* routing.codex.stopSession(threadId);
+      yield* provider.sendTurn({
+        threadId,
+        input: "keep going",
+        attachments: [],
+      });
+
+      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(recoveredStart?.threadId, threadId);
+      assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1972,6 +2088,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const threadId = asThreadId("external-import-copy");
       const forkCallCount = routing.codex.forkThread.mock.calls.length;
       const starts = routing.codex.startSession.mock.calls.length;
+      const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-import-"));
+      const codexHome = path.join(importRoot, "codex-home");
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+      const importEnvironment = { SYNARA_HOME: path.join(importRoot, "synara-runtime") };
       const input = {
         threadId,
         provider: "codex" as const,
@@ -1979,7 +2100,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         sourceCwd: "/repo/original",
         cwd: "/repo/original",
         modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
-        providerOptions: { codex: { homePath: "/custom/codex", binaryPath: "/custom/bin/codex" } },
+        providerOptions: {
+          codex: {
+            homePath: codexHome,
+            binaryPath: "/custom/bin/codex",
+            environment: importEnvironment,
+          },
+        },
         runtimeMode: "full-access" as const,
       };
       routing.codex.forkThread.mockImplementationOnce(() =>
@@ -1991,6 +2118,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const first = yield* provider.importExternalThread!(input);
       const firstBinding = Option.getOrThrow(yield* directory.getBinding(threadId));
       assert.equal(typeof firstBinding.lifecycleGeneration, "string");
+      // The import establishes the account's shared continuation state and
+      // forwards its verified generation to the native fork.
+      const importedGeneration = readCodexSharedContinuationGeneration({
+        env: { ...process.env, ...importEnvironment },
+        homePath: codexHome,
+      });
+      if (!importedGeneration) {
+        assert.fail("Expected the import to establish a shared continuation generation.");
+      }
       assert.deepEqual(routing.codex.forkThread.mock.calls.at(-1)?.[0], {
         threadId,
         sourceThreadId: asThreadId("external-original"),
@@ -2003,6 +2139,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         providerInstanceId: "codex",
         runtimeMode: input.runtimeMode,
         lifecycleGeneration: firstBinding.lifecycleGeneration,
+        expectedCodexContinuationGeneration: importedGeneration,
         requireCompletedSource: true,
       });
       yield* provider.stopRuntimeSession!({ threadId });
@@ -2014,21 +2151,137 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(stopped.status, "stopped");
       assert.deepEqual(stopped.resumeCursor, { threadId: "independent-copy" });
       assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).cwd, input.cwd);
-      assert.deepEqual(
-        asRuntimePayloadRecord(stopped.runtimePayload).providerOptions,
-        input.providerOptions,
-      );
+      // Runtime environments never persist; the binding keeps the redacted copy.
+      assert.deepEqual(asRuntimePayloadRecord(stopped.runtimePayload).providerOptions, {
+        codex: { ...input.providerOptions.codex, environment: {} },
+      });
       // The copy records the launch identity a normal start would, so it can resume.
       assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).providerInstanceId, "codex");
-      assert.equal(
-        typeof asRuntimePayloadRecord(stopped.runtimePayload).continuationIdentity,
-        "string",
+      assert.match(
+        String(asRuntimePayloadRecord(stopped.runtimePayload).continuationIdentity),
+        new RegExp(`^codex:shared-v2:${importedGeneration}:`),
       );
       const mismatch = yield* Effect.result(
         provider.importExternalThread!({ ...input, externalThreadId: "different-source" }),
       );
       assert.equal(mismatch._tag, "Failure");
       yield* provider.stopSession({ threadId });
+      fs.rmSync(importRoot, { recursive: true, force: true });
+    }),
+  );
+
+  it.effect(
+    "establishes the Codex continuation generation on first import and reuses it on retry",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("external-import-codex-generation");
+        const importRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-import-retry-"));
+        const codexHome = path.join(importRoot, "codex-home");
+        fs.mkdirSync(codexHome, { recursive: true });
+        fs.writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+        const importEnvironment = { SYNARA_HOME: path.join(importRoot, "synara-runtime") };
+        const input = {
+          threadId,
+          provider: "codex" as const,
+          externalThreadId: "external-original",
+          sourceCwd: "/repo/original",
+          modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
+          providerOptions: { codex: { homePath: codexHome, environment: importEnvironment } },
+          runtimeMode: "full-access" as const,
+        };
+        // A fresh Codex home has no shared continuation state until the import
+        // prepares it.
+        assert.equal(
+          isCodexSharedContinuationStatePrepared({
+            env: { ...process.env, ...importEnvironment },
+            homePath: codexHome,
+          }),
+          false,
+        );
+        const forkCallCount = routing.codex.forkThread.mock.calls.length;
+        routing.codex.forkThread
+          .mockImplementationOnce((forkInput) =>
+            Effect.succeed({
+              threadId: forkInput.threadId,
+              resumeCursor: { threadId: "independent-copy-first" },
+            }),
+          )
+          .mockImplementationOnce((forkInput) =>
+            Effect.succeed({
+              threadId: forkInput.threadId,
+              resumeCursor: { threadId: "independent-copy-second" },
+            }),
+          );
+
+        yield* provider.importExternalThread!(input);
+        const generation = readCodexSharedContinuationGeneration({
+          env: { ...process.env, ...importEnvironment },
+          homePath: codexHome,
+        });
+        assert.match(generation ?? "", /^[0-9a-f-]{36}$/);
+        assert.equal(
+          routing.codex.forkThread.mock.calls.at(-1)?.[0].expectedCodexContinuationGeneration,
+          generation,
+        );
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.match(
+          String(asRuntimePayloadRecord(binding.runtimePayload).continuationIdentity),
+          new RegExp(`^codex:shared-v2:${generation}:`),
+        );
+
+        // Retrying after the first binding is discarded prepares the same
+        // already-established generation instead of minting a new one.
+        yield* provider.stopRuntimeSession!({ threadId });
+        yield* directory.remove(threadId);
+        yield* provider.importExternalThread!(input);
+        assert.equal(
+          routing.codex.forkThread.mock.calls.at(-1)?.[0].expectedCodexContinuationGeneration,
+          generation,
+        );
+        assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 2);
+
+        yield* provider.stopSession({ threadId });
+        fs.rmSync(importRoot, { recursive: true, force: true });
+      }),
+  );
+
+  it.effect("rejects Codex external imports when the prepared continuation source is damaged", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-damaged-continuation");
+      const fixture = yield* Effect.promise(() => makeSharedCodexContinuationFixture(["imported"]));
+      fs.rmSync(path.join(fixture.homePath, "sessions"), { recursive: true, force: true });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "codex",
+          externalThreadId: "external-original",
+          sourceCwd: "/repo/original",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          providerOptions: {
+            codex: {
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("imported"),
+              accountId: "imported",
+              environment: fixture.environment,
+            },
+          },
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.match(String(result.failure), /missing|damaged|refusing to recreate/);
+      }
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 0);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -2396,6 +2649,139 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
         assert.equal(settledBinding?.status, "stopped");
         assert.equal(staleSettlementPersistedEvents.has("stale-abort-other-turn"), false);
+      }),
+    );
+
+    it.effect("keeps a stale item closure that names the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-item-closure");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = String(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId);
+
+        // An interrupt that rotated the generation still force-closes the
+        // turn's open calls (a subagent launch with its stopped state); those
+        // closures settle the same turn, while one for another turn stays dropped.
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-active-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(activeTurnId),
+          itemId: RuntimeItemId.makeUnsafe("toolu_launch"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: "failed",
+            data: { agentStates: { toolu_launch: { status: "stopped" } } },
+          },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_other"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { itemType: "command_execution", status: "failed" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-item-closure-active-turn"),
+          500,
+          10,
+          "stale item closure for the active turn to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-item-closure-other-turn"), false);
+      }),
+    );
+
+    it.effect("settles a superseded session's subagent child turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-subagent-child");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+
+        // An interrupt that replaced the session leaves a subagent's synthetic
+        // turn open on its child thread; the old generation's settling event for
+        // that child is the only thing that can close it. It must never touch the
+        // parent binding, and non-settling child events stay dropped.
+        const childRefs = {
+          providerThreadId: "toolu_child",
+          providerParentThreadId: String(threadId),
+        };
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-child-delta"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-child-tool-closed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_child_bash"),
+          createdAt: "2026-07-14T14:00:00.500Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { itemType: "command_execution", status: "failed", title: "Command run" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("stale-child-turn-completed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { state: "interrupted" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-child-turn-completed"),
+          500,
+          10,
+          "stale child turn.completed to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-delta"), false);
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-tool-closed"), true);
+        const parentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(parentBinding?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
       }),
     );
 
@@ -3164,14 +3550,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect(
-    "retires A's runtime before admitting B while allowing background tasks to finish",
-    () =>
+  it.effect.each([false, true])(
+    "renews or replaces A before admitting B, after background tasks finish (reuse=%s)",
+    (reuse) =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
         const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId("thread-terminal-gateway-credential-rotation");
         const turnA = asTurnId(`turn-${threadId}`);
+        routing.codex.renewAgentGatewayCredential.mockImplementationOnce(() =>
+          Effect.succeed(reuse),
+        );
+        const renewalsBefore = routing.codex.renewAgentGatewayCredential.mock.calls.length;
 
         yield* provider.startSession(threadId, {
           provider: "codex",
@@ -3243,6 +3633,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB);
         assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB);
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB);
+        assert.equal(routing.codex.renewAgentGatewayCredential.mock.calls.length, renewalsBefore);
 
         routing.codex.emit({
           type: "task.updated",
@@ -3255,10 +3646,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
         });
         yield* Fiber.join(turnB);
 
-        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + 1);
-        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + 1);
+        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBeforeB + (reuse ? 0 : 1));
+        assert.equal(routing.codex.startSession.mock.calls.length, startsBeforeB + (reuse ? 0 : 1));
         assert.equal(routing.codex.sendTurn.mock.calls.length, sendsBeforeB + 1);
         const recoveredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        if (reuse) assert.equal(recoveredBinding?.lifecycleGeneration, lifecycleGeneration);
         assert.equal(
           asRuntimePayloadRecord(recoveredBinding?.runtimePayload)
             .agentGatewayCredentialRotationRequired,
@@ -7526,6 +7918,376 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
       assert.equal(canonicalEvent.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.sequence > 0, true);
+    }),
+  );
+});
+
+const batchFanoutEvents: ProviderRuntimeEvent[] = [];
+let batchFanoutRelease = Effect.void;
+const batchFanout = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.sync(() => {
+        batchFanoutEvents.push(event);
+      }).pipe(
+        Effect.andThen(Effect.suspend(() => batchFanoutRelease)),
+        Effect.map(() => ({ sequence: batchFanoutEvents.length, event })),
+      ),
+  },
+  { freshRuntimeEventDelivery: true },
+);
+batchFanout.layer("ProviderServiceLive durable text batches", (it) => {
+  it.effect(
+    "publishes a shared combined journal row to consumers only after durable acceptance",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-batch-fanout");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const release = yield* Deferred.make<void>();
+        batchFanoutRelease = Deferred.await(release);
+        batchFanoutEvents.length = 0;
+        const canonical: ProviderRuntimeEvent[] = [];
+        const persisted: Array<{ sequence: number; event: ProviderRuntimeEvent }> = [];
+        yield* provider.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              canonical.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* provider.streamPersistedEvents!.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              persisted.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* sleep(20);
+        const turnId = asTurnId("turn-batch-fanout");
+        const first: ProviderRuntimeEvent = {
+          type: "content.delta",
+          eventId: asEventId("batch-fanout-first"),
+          provider: "codex",
+          createdAt: "2026-10-10T00:00:00.000Z",
+          threadId,
+          turnId,
+          itemId: RuntimeItemId.makeUnsafe("batch-fanout-item"),
+          payload: { streamKind: "assistant_text", delta: "A" },
+        };
+        batchFanout.codex.emit(first);
+        batchFanout.codex.emit({
+          ...first,
+          eventId: asEventId("batch-fanout-second"),
+          payload: { streamKind: "assistant_text", delta: "B" },
+        });
+        batchFanout.codex.emit({
+          ...first,
+          type: "turn.completed",
+          eventId: asEventId("batch-fanout-terminal"),
+          payload: { state: "completed" },
+        });
+        yield* waitUntil(() => batchFanoutEvents.length === 1);
+        const acceptedPayload = batchFanoutEvents[0]?.payload;
+        assert.equal(canonical.length, 0);
+        assert.equal(persisted.length, 0);
+        yield* Deferred.succeed(release, undefined);
+        batchFanoutRelease = Effect.void;
+        assert.deepEqual(acceptedPayload, { streamKind: "assistant_text", delta: "AB" });
+        yield* waitUntil(() => persisted.length === 2);
+        assert.deepEqual(
+          canonical,
+          persisted.map((row) => row.event),
+        );
+        assert.deepEqual(
+          persisted.map((row) => row.sequence),
+          [1, 2],
+        );
+      }),
+  );
+});
+
+for (const stop of ["interrupt", "session", "dispose"] as const) {
+  const stopEvents: ProviderRuntimeEvent[] = [];
+  const stopBatch = makeProviderServiceLayer(
+    {
+      persistRuntimeEvent: (event) =>
+        Effect.sync(() => {
+          stopEvents.push(event);
+          return { sequence: stopEvents.length, event };
+        }),
+    },
+    { freshRuntimeEventDelivery: true },
+  );
+  stopBatch.layer(`ProviderServiceLive text flush on ${stop}`, (it) => {
+    it.effect(
+      "accepts admitted text before generation retirement without advancing the batch timer",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`thread-batch-${stop}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+          yield* stopBatch.codex.waitForRuntimeSubscribers();
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const event: ProviderRuntimeEvent = {
+            type: "content.delta",
+            eventId: asEventId(`batch-${stop}-text`),
+            provider: "codex",
+            createdAt: "2026-10-10T00:00:00.000Z",
+            threadId,
+            turnId: sent.turnId,
+            lifecycleGeneration: binding.lifecycleGeneration,
+            payload: { streamKind: "assistant_text", delta: "Preserve this text." },
+          };
+          stopBatch.codex.emit(event);
+          yield* sleep(20);
+          assert.lengthOf(stopEvents, 0);
+          if (stop === "interrupt")
+            yield* provider.interruptTurn({ threadId, turnId: sent.turnId });
+          else if (stop === "session") yield* provider.stopSession({ threadId });
+          else yield* provider.closeRuntimeEvents;
+          assert.equal(
+            stopEvents.find((accepted) => accepted.eventId === event.eventId)?.payload,
+            event.payload,
+          );
+        }),
+    );
+  });
+}
+
+let stopRetryAttempts = 0;
+const stopRetryAccepted: ProviderRuntimeEvent[] = [];
+const stopRetry = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.suspend(() => {
+        if (event.type === "content.delta" && ++stopRetryAttempts === 1)
+          return Effect.fail(new Error("sqlite busy"));
+        stopRetryAccepted.push(event);
+        return Effect.succeed({ sequence: stopRetryAttempts, event });
+      }),
+    runtimeEventRetryBaseDelayMs: 1,
+    runtimeEventRetryMaxDelayMs: 1,
+  },
+  { freshRuntimeEventDelivery: true },
+);
+stopRetry.layer("ProviderServiceLive urgent Stop with text persistence retry", (it) => {
+  it.effect("starts native interruption before waiting for a failed text append", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-text-retry");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+      yield* stopRetry.codex.waitForRuntimeSubscribers();
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      stopRetry.codex.emit({
+        type: "content.delta",
+        eventId: asEventId("urgent-stop-text"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: sent.turnId,
+        lifecycleGeneration: binding.lifecycleGeneration,
+        payload: { streamKind: "assistant_text", delta: "Preserved through Stop." },
+      });
+      yield* sleep(20);
+      const interrupted = yield* provider
+        .interruptTurn({ threadId, turnId: sent.turnId })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => stopRetryAttempts === 1);
+      const nativeStartedBeforeRetry = stopRetry.codex.interruptTurn.mock.calls.length === 1;
+      yield* TestClock.adjust("1 millis");
+      yield* Fiber.join(interrupted);
+      assert.equal(nativeStartedBeforeRetry, true);
+      assert.equal(stopRetryAttempts, 2);
+      assert.deepEqual(
+        stopRetryAccepted
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload),
+        [{ streamKind: "assistant_text", delta: "Preserved through Stop." }],
+      );
+    }),
+  );
+});
+
+for (const stopKind of ["stopSession", "stopRuntimeSession"] as const) {
+  for (const stopFails of [false, true]) {
+    let appendAttempts = 0;
+    let acceptedText = Effect.void;
+    const acceptedEvents: ProviderRuntimeEvent[] = [];
+    const batchStop = makeProviderServiceLayer(
+      {
+        persistRuntimeEvent: (event) =>
+          Effect.suspend(() => {
+            if (event.type === "content.delta" && ++appendAttempts === 1)
+              return Effect.fail(new Error("sqlite busy during session stop"));
+            acceptedEvents.push(event);
+            return (event.type === "content.delta" ? acceptedText : Effect.void).pipe(
+              Effect.map(() => ({ sequence: acceptedEvents.length, event })),
+            );
+          }),
+        runtimeEventRetryBaseDelayMs: 1,
+        runtimeEventRetryMaxDelayMs: 1,
+      },
+      { freshRuntimeEventDelivery: true },
+    );
+    batchStop.layer(`ProviderServiceLive durable ${stopKind} (stopFails=${stopFails})`, (it) => {
+      it.effect(
+        "starts physical session stop before retry and drains under the old generation",
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* ProviderService;
+            const directory = yield* ProviderSessionDirectory;
+            const threadId = asThreadId(`thread-durable-${stopKind}-${stopFails}`);
+            yield* provider.startSession(threadId, {
+              provider: "codex",
+              threadId,
+              runtimeMode: "full-access",
+            });
+            const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+            yield* batchStop.codex.waitForRuntimeSubscribers();
+            const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+            const textDrained = yield* Deferred.make<void>();
+            acceptedText = Deferred.succeed(textDrained, undefined).pipe(Effect.asVoid);
+            let physicalStopStarted = false;
+            const originalStop = batchStop.codex.stopSession.getMockImplementation()!;
+            const stopError = new ProviderAdapterProcessError({
+              provider: "codex",
+              threadId,
+              detail: "session teardown could not prove exit",
+            });
+            batchStop.codex.stopSession.mockImplementation((stoppedThreadId) =>
+              Effect.gen(function* () {
+                physicalStopStarted = true;
+                if (stopFails) return yield* Effect.fail(stopError);
+                // A teardown may await its runtime consumer. Serially awaiting
+                // the adapter before flushing would strand this drain too.
+                yield* Deferred.await(textDrained);
+                yield* originalStop(stoppedThreadId);
+              }),
+            );
+            const first: ProviderRuntimeEvent = {
+              type: "content.delta",
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-first`),
+              provider: "codex",
+              providerInstanceId: binding.providerInstanceId,
+              threadId,
+              turnId: sent.turnId,
+              lifecycleGeneration: binding.lifecycleGeneration,
+              createdAt: "2026-10-10T00:00:00.000Z",
+              payload: { streamKind: "assistant_text", delta: "A" },
+            };
+            batchStop.codex.emit(first);
+            batchStop.codex.emit({
+              ...first,
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-second`),
+              payload: { streamKind: "assistant_text", delta: "B" },
+            });
+            yield* sleep(20);
+            assert.lengthOf(acceptedEvents, 0);
+            const stop = provider[stopKind];
+            if (stop === undefined) assert.fail(`Expected ${stopKind} implementation`);
+            const stopping = yield* stop({ threadId }).pipe(Effect.exit, Effect.forkChild);
+            yield* waitUntil(() => appendAttempts === 1);
+            const physicalStopStartedBeforeRetry = physicalStopStarted;
+            const bindingDuringRetry = Option.getOrThrow(yield* directory.getBinding(threadId));
+            yield* TestClock.adjust("1 millis");
+            const stopExit = yield* Fiber.join(stopping);
+            assert.equal(physicalStopStartedBeforeRetry, true);
+            assert.equal(bindingDuringRetry.lifecycleGeneration, binding.lifecycleGeneration);
+            assert.equal(appendAttempts, 2);
+            assert.deepEqual(acceptedEvents, [
+              { ...first, payload: { streamKind: "assistant_text", delta: "AB" } },
+            ]);
+            const finalBinding = yield* directory.getBinding(threadId);
+            if (stopFails) {
+              assert.equal(Exit.isFailure(stopExit), true);
+              if (Exit.isFailure(stopExit))
+                assert.match(Cause.pretty(stopExit.cause), /could not prove exit/);
+              assert.equal(
+                Option.getOrThrow(finalBinding).lifecycleGeneration,
+                binding.lifecycleGeneration,
+              );
+              assert.equal(Option.getOrThrow(finalBinding).status, binding.status);
+            } else {
+              assert.equal(Exit.isSuccess(stopExit), true);
+              if (stopKind === "stopSession") assert.equal(Option.isNone(finalBinding), true);
+              else {
+                const stoppedBinding = Option.getOrThrow(finalBinding);
+                assert.equal(stoppedBinding.status, "stopped");
+                assert.notEqual(stoppedBinding.lifecycleGeneration, binding.lifecycleGeneration);
+              }
+            }
+          }),
+      );
+    });
+  }
+}
+
+const originalIdEvents: ProviderRuntimeEvent[] = [];
+const originalIdFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => {
+      originalIdEvents.push(event);
+      return { sequence: originalIdEvents.length, event };
+    }),
+});
+originalIdFanout.layer("ProviderServiceLive original delta identities", (it) => {
+  it.effect("keeps every original delta for an adapter without fresh-ids-once capability", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-original-ids");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* originalIdFanout.codex.waitForRuntimeSubscribers();
+      originalIdEvents.length = 0;
+      const first: ProviderRuntimeEvent = {
+        type: "content.delta",
+        eventId: asEventId("original-first"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-original-ids"),
+        payload: { streamKind: "assistant_text", delta: "A" },
+      };
+      originalIdFanout.codex.emit(first);
+      originalIdFanout.codex.emit({
+        ...first,
+        eventId: asEventId("original-second"),
+        payload: { streamKind: "assistant_text", delta: "B" },
+      });
+      yield* waitUntil(() => originalIdEvents.length === 2);
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.eventId),
+        ["original-first", "original-second"],
+      );
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.payload),
+        [
+          { streamKind: "assistant_text", delta: "A" },
+          { streamKind: "assistant_text", delta: "B" },
+        ],
+      );
     }),
   );
 });

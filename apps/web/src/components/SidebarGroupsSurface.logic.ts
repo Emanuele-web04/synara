@@ -5,10 +5,34 @@
 // Exports: resolveGroupCoordinatorRowLabel, resolveGroupsListEmptyState,
 //          resolveGroupChatTargetProjectId, activateThreadWhenHydrated
 
-import type { ProjectId } from "@synara/contracts";
+import type { ProjectAgentSummary, ProjectId, ThreadId } from "@synara/contracts";
 
 import { resolveGroupCoordinatorDisplayName } from "../lib/groupCoordinatorName";
 import type { Project } from "../types";
+
+/** A hub worker can belong to the hub while running in a linked repository. */
+export function isGroupThreadRoute(input: {
+  readonly threadId: ThreadId | null;
+  readonly projectId: ProjectId | null;
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly summariesByProjectId: ReadonlyMap<
+    ProjectId,
+    Pick<ProjectAgentSummary, "memberThreadIds">
+  >;
+}): boolean {
+  if (input.projectId !== null && input.groupProjectIds.has(input.projectId)) {
+    return true;
+  }
+  if (input.threadId === null) {
+    return false;
+  }
+  for (const projectId of input.groupProjectIds) {
+    if (input.summariesByProjectId.get(projectId)?.memberThreadIds?.includes(input.threadId)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function resolveGroupCoordinatorRowLabel(input: {
   readonly configured: boolean;

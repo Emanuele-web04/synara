@@ -451,3 +451,24 @@ describe("setSidechatPaneThreadInState", () => {
     expect(setSidechatPaneThreadInState(empty, { paneId: "p", threadId: null })).toBe(empty);
   });
 });
+
+describe("terminal panes", () => {
+  it("adds and activates a new tab on every open", () => {
+    let state = createDefaultRightDockState();
+    for (const paneId of ["terminal-a", "terminal-b", "terminal-c"]) {
+      state = openPaneInState(state, { paneId, kind: "terminal" });
+      expect(state.activePaneId).toBe(paneId);
+    }
+    expect(state.panes.map((pane) => pane.id)).toEqual(["terminal-a", "terminal-b", "terminal-c"]);
+  });
+
+  it("preserves every terminal tab and the selection when restoring the dock", () => {
+    const state = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "terminal-b",
+      panes: ["terminal-a", "terminal-b", "terminal-c"].map((id) => ({ id, kind: "terminal" })),
+    });
+    expect(state.panes.map((pane) => pane.id)).toEqual(["terminal-a", "terminal-b", "terminal-c"]);
+    expect(state.activePaneId).toBe("terminal-b");
+  });
+});

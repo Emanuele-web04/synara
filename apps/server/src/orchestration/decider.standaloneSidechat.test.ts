@@ -153,7 +153,7 @@ describe("standalone side chat decider", () => {
         runtimeMode: "approval-required",
         createdAt: EXPIRED_AT,
       }),
-    ).rejects.toThrow("expired after 1 hour of inactivity");
+    ).rejects.toThrow("expired after a period of inactivity");
   });
 
   it("records activity on a standalone sidechat", async () => {

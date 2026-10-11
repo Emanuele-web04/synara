@@ -37,6 +37,7 @@ import {
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
 import {
   claimQuitResumeRecordAtStartup,
   resumeQuitInterruptedChats,
@@ -47,6 +48,7 @@ import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeRe
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
 import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
@@ -69,6 +71,7 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
@@ -85,6 +88,7 @@ export interface ServerShape {
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | ThreadSnoozeReactor
     | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
@@ -182,12 +186,17 @@ export const createEffectServer = Effect.fn(function* (
   const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
-  yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
+  // Start the runtime before serving config snapshots. This both performs the
+  // startup sync and attaches the file watcher; calling only the sync helper
+  // leaves live edits invisible until the next server restart.
+  yield* keybindings.start.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
+      Effect.logWarning("failed to start keybindings runtime on startup", {
         path: error.configPath,
         detail: error.detail,
         cause: error.cause,
@@ -263,8 +272,10 @@ export const createEffectServer = Effect.fn(function* (
       automationScheduler,
       automationRunReactor,
       threadDeletionReactor,
+      threadSnoozeReactor,
       providerSessionReaper,
       providerRuntimeReconciler,
+      { start: () => keepAwake.start },
     ],
     subscriptionsScope,
   });

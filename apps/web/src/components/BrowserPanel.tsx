@@ -17,13 +17,13 @@ import {
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
-  CameraIcon,
+  Camera01Icon,
   CircleAlertIcon,
-  EllipsisIcon,
   ExternalLinkIcon,
   GlobeIcon,
   LinkIcon,
   LoaderCircleIcon,
+  MoreHorizontalIcon,
   type LucideIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -90,6 +90,8 @@ import {
 } from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
+import { ButtonGroup, ButtonGroupSeparator } from "./ui/button-group";
+import { IconButton } from "./ui/icon-button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
@@ -646,6 +648,7 @@ export function BrowserPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
   const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
+  const [isBrowserSurfaceOccluded, setIsBrowserSurfaceOccluded] = useState(false);
   const [previewFrame, setPreviewFrame] = useState<{ tabId: string; src: string } | null>(null);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
@@ -1144,6 +1147,7 @@ export function BrowserPanel({
               showBrowserAddressSuggestions || hasNativeBrowserObscuringOverlay(element),
           }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
+      setIsBrowserSurfaceOccluded(usesNativeRuntime && obscuredByOverlay);
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const webview = browserWebviewRef.current;
       const stage = browserWebviewStageRef.current;
@@ -1321,9 +1325,11 @@ export function BrowserPanel({
       !api ||
       !isLiveRuntime ||
       !workspaceReady ||
-      !isFloatingMode ||
+      (!isFloatingMode && !isBrowserSurfaceOccluded) ||
       !usesNativeRuntime ||
-      !activeTabId
+      !activeTabId ||
+      showLocalServersHome ||
+      browserPageError !== null
     )
       return;
     let cancelled = false;
@@ -1351,9 +1357,12 @@ export function BrowserPanel({
     isLiveRuntime,
     workspaceReady,
     isFloatingMode,
+    isBrowserSurfaceOccluded,
     usesNativeRuntime,
     activeTabId,
     threadId,
+    showLocalServersHome,
+    browserPageError,
   ]);
 
   const onSubmitAddress = useCallback(() => {
@@ -1705,12 +1714,11 @@ export function BrowserPanel({
     >
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-        <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-          <Button
-            type="button"
+        <ButtonGroup label="Navigation">
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Go back"
             disabled={!activeTab?.canGoBack}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1725,13 +1733,11 @@ export function BrowserPanel({
             }}
           >
             <ArrowLeftIcon className="size-3.5" />
-            <span className="sr-only">Go back</span>
-          </Button>
-          <Button
-            type="button"
+          </IconButton>
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Go forward"
             disabled={!activeTab?.canGoForward}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1746,13 +1752,12 @@ export function BrowserPanel({
             }}
           >
             <ArrowRightIcon className="size-3.5" />
-            <span className="sr-only">Go forward</span>
-          </Button>
-          <Button
-            type="button"
+          </IconButton>
+          <ButtonGroupSeparator />
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Reload"
             disabled={!activeTab}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1771,9 +1776,21 @@ export function BrowserPanel({
             ) : (
               <RefreshCwIcon className="size-3.5" />
             )}
-            <span className="sr-only">Reload</span>
-          </Button>
-        </div>
+          </IconButton>
+        </ButtonGroup>
+        <ButtonGroup label="Page tools">
+          <BrowserAnnotationButton
+            controller={annotationController}
+            disabled={
+              !isLiveRuntime ||
+              !isElectron ||
+              !workspaceReady ||
+              !activeTab ||
+              showLocalServersHome ||
+              !annotationMethods
+            }
+          />
+        </ButtonGroup>
         <form
           className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
           onSubmit={(event) => {
@@ -1783,6 +1800,7 @@ export function BrowserPanel({
         >
           <Input
             ref={addressInputRef}
+            shape="capsule"
             value={addressValue}
             onChange={(event) => {
               if (!isLiveRuntime) {
@@ -1858,106 +1876,93 @@ export function BrowserPanel({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <BrowserVaultButton
-          destination={
-            activeTab
-              ? {
-                  threadId,
-                  tabId: activeTab.id,
-                  origin: /^https?:\/\//.test(activeTab.url) ? new URL(activeTab.url).origin : null,
-                }
-              : undefined
-          }
-        />
-        <BrowserAnnotationButton
-          controller={annotationController}
-          disabled={
-            !isLiveRuntime ||
-            !isElectron ||
-            !workspaceReady ||
-            !activeTab ||
-            showLocalServersHome ||
-            !annotationMethods
-          }
-        />
-        <Button
-          ref={copyScreenshotButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy screenshot"
-          title="Copy screenshot"
-          onClick={onCopyScreenshotToClipboard}
-        >
-          <CameraIcon className="size-3.5" />
-          <span className="sr-only">Copy screenshot</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy link"
-          title="Copy link"
-          onClick={copyActiveTabLink}
-        >
-          <LinkIcon className="size-3.5" />
-          <span className="sr-only">Copy link</span>
-        </Button>
-        <Menu modal={false} open={browserActionsMenuOpen} onOpenChange={setBrowserActionsMenuOpen}>
-          <MenuTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7"
-                aria-label="Browser actions"
-              />
+      <div className="flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
+        <ButtonGroup label="Page actions">
+          <BrowserVaultButton
+            destination={
+              activeTab
+                ? {
+                    threadId,
+                    tabId: activeTab.id,
+                    origin: /^https?:\/\//.test(activeTab.url)
+                      ? new URL(activeTab.url).origin
+                      : null,
+                  }
+                : undefined
             }
+          />
+          <IconButton
+            ref={copyScreenshotButtonRef}
+            variant="ghost"
+            size="icon-sm"
+            label="Copy screenshot"
+            disabled={!activeTab}
+            title="Copy screenshot"
+            onClick={onCopyScreenshotToClipboard}
           >
-            <EllipsisIcon className="size-3.5" />
-          </MenuTrigger>
-          <ComposerPickerMenuPopup
-            align="end"
-            side="bottom"
-            className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
+            <Camera01Icon className="size-3.5" />
+          </IconButton>
+          <IconButton
+            variant="ghost"
+            size="icon-sm"
+            label="Copy link"
+            disabled={!activeTab}
+            title="Copy link"
+            onClick={copyActiveTabLink}
           >
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
-              <BrowserActionMenuIcon icon={PlusIcon} />
-              <span>New tab</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCaptureScreenshot}
+            <LinkIcon className="size-3.5" />
+          </IconButton>
+        </ButtonGroup>
+        <ButtonGroup label="Browser menu">
+          <Menu
+            modal={false}
+            open={browserActionsMenuOpen}
+            onOpenChange={setBrowserActionsMenuOpen}
+          >
+            <MenuTrigger
+              render={
+                <IconButton variant="ghost" size="icon-sm" label="Browser actions">
+                  <MoreHorizontalIcon className="size-3.5" />
+                </IconButton>
+              }
+            />
+            <ComposerPickerMenuPopup
+              align="end"
+              side="bottom"
+              className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
             >
-              <BrowserActionMenuIcon icon={CameraIcon} />
-              <span>Capture screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={() => {
-                if (!ensureLiveRuntime()) return;
-                if (!api || !activeTab) return;
-                void api.shell.openExternal(activeTab.url);
-              }}
-            >
-              <BrowserActionMenuIcon icon={ExternalLinkIcon} />
-              <span>Open externally</span>
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
-              <BrowserActionMenuIcon icon={XIcon} />
-              <span>Close browser panel</span>
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
+                <BrowserActionMenuIcon icon={PlusIcon} />
+                <span>New tab</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={onCaptureScreenshot}
+              >
+                <BrowserActionMenuIcon icon={Camera01Icon} />
+                <span>Capture screenshot</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={() => {
+                  if (!ensureLiveRuntime()) return;
+                  if (!api || !activeTab) return;
+                  void api.shell.openExternal(activeTab.url);
+                }}
+              >
+                <BrowserActionMenuIcon icon={ExternalLinkIcon} />
+                <span>Open externally</span>
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
+                <BrowserActionMenuIcon icon={XIcon} />
+                <span>Close browser panel</span>
+              </MenuItem>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        </ButtonGroup>
       </div>
     </div>
   );
@@ -2013,7 +2018,11 @@ export function BrowserPanel({
             {isLiveRuntime && browserPageError ? (
               <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
             ) : null}
-            {isFloatingMode && usesNativeRuntime && previewFrame?.tabId === activeTabId ? (
+            {(isFloatingMode || isBrowserSurfaceOccluded) &&
+            usesNativeRuntime &&
+            !showLocalServersHome &&
+            !browserPageError &&
+            previewFrame?.tabId === activeTabId ? (
               <img
                 src={previewFrame.src}
                 alt="Browser preview"

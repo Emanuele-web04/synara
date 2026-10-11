@@ -8,10 +8,12 @@ import {
   createAllThreadsSelector,
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
+  createLastActivityTimestampSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
+  createSubagentSiblingSummariesSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadGitActionsMetadataSelector,
@@ -291,6 +293,47 @@ describe("sidebar thread visibility", () => {
   });
 });
 
+describe("createSubagentSiblingSummariesSelector", () => {
+  it("selects a parent's child threads and keeps the reference while they are unchanged", () => {
+    const parentThreadId = "thread-parent" as ThreadId;
+    const childA = {
+      ...summaryA,
+      id: "subagent:thread-parent:a" as ThreadId,
+      parentThreadId,
+    } as SidebarThreadSummary;
+    const childB = {
+      ...summaryA,
+      id: "subagent:thread-parent:b" as ThreadId,
+      parentThreadId,
+    } as SidebarThreadSummary;
+    const unrelated = { ...summaryA, id: "thread-unrelated" as ThreadId } as SidebarThreadSummary;
+    const select = createSubagentSiblingSummariesSelector(parentThreadId);
+    const state = makeState({
+      threadIds: [childA.id, unrelated.id, childB.id],
+      sidebarThreadSummaryById: {
+        [childA.id]: childA,
+        [unrelated.id]: unrelated,
+        [childB.id]: childB,
+      },
+    });
+    const first = select(state);
+    expect(first.map((thread) => thread.id)).toEqual([childA.id, childB.id]);
+    expect(
+      select(
+        makeState({
+          threadIds: [childA.id, unrelated.id, childB.id],
+          sidebarThreadSummaryById: {
+            [childA.id]: childA,
+            [unrelated.id]: { ...unrelated, title: "Renamed" },
+            [childB.id]: childB,
+          },
+        }),
+      ),
+    ).toBe(first);
+    expect(createSubagentSiblingSummariesSelector(null)(state)).toEqual([]);
+  });
+});
+
 describe("createSidechatSummariesForSourceSelector", () => {
   it("selects only a host's side chats in latest-activity order", () => {
     const sourceThreadId = "thread-source" as ThreadId;
@@ -565,6 +608,32 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createLastActivityTimestampSelector", () => {
+  const stamped = "2026-03-09T11:00:00.000Z";
+
+  it("maps only shells that carry a durable stamp (sparse map, C1)", () => {
+    const selectTimestamps = createLastActivityTimestampSelector();
+    const state = makeState({
+      threadIds: [threadIdA, threadIdB],
+      threadShellById: {
+        // Shell A has a durable stamp; shell B is present but stale/pruned.
+        [threadIdA]: { ...shellA, updatedAt: stamped },
+        [threadIdB]: { ...shellB },
+      },
+    });
+    const result = selectTimestamps(state);
+    expect(Object.keys(result)).toEqual([threadIdA]);
+    expect(result[threadIdA]).toBe(Date.parse(stamped));
+    // Absent shells must not be conflated with an explicit null.
+    expect(threadIdB in result).toBe(false);
+    expect(
+      selectTimestamps(
+        makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: { ...shellA } } }),
+      ),
+    ).toEqual({});
   });
 });
 

@@ -58,6 +58,15 @@ describe("keybindingFromKeyboardEvent", () => {
     ).toBeNull();
   });
 
+  it("records the key under Option on macOS, not the character it types", () => {
+    expect(
+      keybindingFromKeyboardEvent(
+        { key: "ß", code: "KeyS", ctrlKey: false, metaKey: false, shiftKey: false, altKey: true },
+        "MacIntel",
+      ),
+    ).toBe("alt+s");
+  });
+
   it("rejects unsupported named keys that merely begin with f", () => {
     expect(
       keybindingFromKeyboardEvent({

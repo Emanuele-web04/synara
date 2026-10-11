@@ -8,11 +8,13 @@ import {
   ArchiveIcon,
   BookIcon,
   BotIcon,
-  ChatBubbleIcon,
   CircleQuestionIcon,
   ClockIcon,
+  CodeReviewIcon,
   CopyIcon,
   CustomizeIcon,
+  FeedbackIcon,
+  GitBranchIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
@@ -36,7 +38,10 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
-import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
+import {
+  PR_STATE_PRESENTATION_ICONS,
+  resolvePrStatePresentation,
+} from "~/components/pullRequest/pullRequestStatePresentation";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
@@ -46,9 +51,6 @@ import {
   subscribeComposerSends,
 } from "~/lib/composerSendOwnership";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch } from "react-icons/fi";
-import { IoIosGitCompare } from "react-icons/io";
-import { GoRepoForked } from "react-icons/go";
 import {
   useCallback,
   useEffect,
@@ -147,11 +149,11 @@ import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
+import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import { getThreadFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
-  splitShortcutLabel,
   shouldShowThreadJumpHints,
   spaceJumpCommandForIndex,
   spaceJumpIndexFromCommand,
@@ -169,7 +171,11 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { useActivityThreads } from "../hooks/useActivityThreads";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { countNeedsYouActions } from "./inbox/inbox.logic";
-import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
+import {
+  resolveThreadPullRequestFallback,
+  type ThreadPullRequest,
+  useThreadPullRequests,
+} from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   providerModelsQueryOptions,
@@ -190,6 +196,8 @@ import {
   pullRequestQueryKeys,
 } from "../lib/pullRequestReactQuery";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
+import { modelQueryOptionsForProviderInstance } from "../hooks/useProviderModelCatalog";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -262,10 +270,17 @@ import {
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import {
   type ActivityScopeSelection,
+  buildActivityViewModel,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
 } from "./SidebarActivityView.logic";
-import { SidebarActivityView } from "./SidebarActivityView";
+import {
+  ActivityThreadRow,
+  SidebarActivityView,
+  SidebarSnoozedThreadsSection,
+} from "./SidebarActivityView";
+import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
+import { OneTimeCoachmark, TASKS_COACHMARK } from "./OneTimeCoachmark";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { RailAutomationsPanel } from "./RailAutomationsPanel";
@@ -285,6 +300,7 @@ import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
 import {
   activateThreadWhenHydrated,
+  isGroupThreadRoute,
   resolveGroupChatTargetProjectId,
 } from "./SidebarGroupsSurface.logic";
 
@@ -293,6 +309,8 @@ import { RenameDialog } from "./RenameDialog";
 import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
+import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
@@ -303,6 +321,7 @@ import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -317,9 +336,6 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonPresentation,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   isDesktopUpdateInstallInFlight,
@@ -344,7 +360,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { Kbd, KbdGroup } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
@@ -385,6 +401,7 @@ import {
   groupSidebarThreadsByProjectId,
   mergeGroupMemberThreadsIntoProjectBuckets,
   partitionSidebarThreadsByProjectIds,
+  filterSidebarThreadsBySpace,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
   pruneProjectThreadListPagingForCollapsedProjects,
@@ -404,7 +421,6 @@ import {
   resolveThreadProjectLabel,
   resolveThreadRowAriaLabel,
   resolveThreadRowClassName,
-  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
   type ThreadStatusPill,
@@ -426,9 +442,9 @@ import {
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
-import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
+  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
@@ -437,7 +453,7 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
-import { normalizeSettingsSection } from "../settingsNavigation";
+import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -448,6 +464,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
@@ -465,6 +482,7 @@ import {
   useSidebarProjectRunController,
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
+import { useThreadActionShortcuts } from "../hooks/useThreadActionShortcuts";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
@@ -545,7 +563,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
-const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
@@ -710,7 +727,7 @@ function groupPickupMessageText(sourceThread: Pick<Thread, "id" | "title">): str
 }
 
 type ThreadMetaChip = {
-  id: "automation" | "handoff" | "fork" | "worktree";
+  id: "automation" | "handoff" | "fork" | "worktree" | "pr";
   tooltip: string;
   icon: ReactNode;
 };
@@ -759,7 +776,9 @@ function resolveThreadRowMetaChips(input: {
     chips.push({
       id: "handoff",
       tooltip: handoffBadgeLabel,
-      icon: <SidebarGlyph icon={FiGitBranch} variant="meta" className="text-muted-foreground/55" />,
+      icon: (
+        <SidebarGlyph icon={GitBranchIcon} variant="meta" className="text-muted-foreground/55" />
+      ),
     });
   }
 
@@ -769,7 +788,7 @@ function resolveThreadRowMetaChips(input: {
       tooltip: "Forked thread",
       icon: (
         <SidebarGlyph
-          icon={GoRepoForked}
+          icon={GitBranchIcon}
           variant="meta"
           className="text-emerald-600 dark:text-emerald-300/90"
         />
@@ -787,6 +806,23 @@ function resolveThreadRowMetaChips(input: {
   }
 
   return chips;
+}
+
+// The thread's PR state, as a plain meta chip that closes the row (the hover card's PR
+// row is the clickable way to open it).
+function resolveThreadRowPrChip(pr: NonNullable<ThreadPullRequest>): ThreadMetaChip {
+  const presentation = resolvePrStatePresentation(pr);
+  return {
+    id: "pr",
+    tooltip: `#${pr.number} ${presentation.label}: ${pr.title}`,
+    icon: (
+      <SidebarGlyph
+        icon={PR_STATE_PRESENTATION_ICONS[presentation.iconKind]}
+        variant="meta"
+        className={presentation.colorClass}
+      />
+    ),
+  };
 }
 
 function terminalStatusFromThreadState(input: {
@@ -979,7 +1015,7 @@ function SidebarHelpMenu({
               <span>Keybindings</span>
             </MenuItem>
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
-              <SidebarContextMenuIcon icon={ChatBubbleIcon} />
+              <SidebarContextMenuIcon icon={FeedbackIcon} />
               <span>Send feedback</span>
             </MenuItem>
             <MenuItem
@@ -1116,19 +1152,7 @@ function SortableProjectItem({
  * Header Activity toggle: a bell that lights up in the accent tone while the
  * Activity view is on, with an unread dot when completions are waiting.
  */
-const ACTIVITY_ONBOARDING_STORAGE_KEY = "synara:activity-onboarding:v1";
-const ACTIVITY_ONBOARDING_DURATION_MS = 8_000;
-
-function shouldShowActivityOnboarding(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(ACTIVITY_ONBOARDING_STORAGE_KEY) !== "seen";
-  } catch {
-    return true;
-  }
-}
-
-function SidebarActivityBellButton({
+export function SidebarActivityBellButton({
   active,
   showUnreadDot,
   shortcutLabel,
@@ -1139,56 +1163,27 @@ function SidebarActivityBellButton({
   shortcutLabel: string | null;
   onClick: () => void;
 }) {
-  const [onboardingVisible, setOnboardingVisible] = useState(shouldShowActivityOnboarding);
-  const [tooltipOpen, setTooltipOpen] = useState(onboardingVisible);
-
-  useEffect(() => {
-    if (!onboardingVisible) return;
-    try {
-      window.localStorage.setItem(ACTIVITY_ONBOARDING_STORAGE_KEY, "seen");
-    } catch {
-      // Storage can be unavailable in private or restricted browser contexts.
-    }
-    const timeout = window.setTimeout(() => {
-      setOnboardingVisible(false);
-      setTooltipOpen(false);
-    }, ACTIVITY_ONBOARDING_DURATION_MS);
-    return () => window.clearTimeout(timeout);
-  }, [onboardingVisible]);
-
-  const dismissOnboarding = () => {
-    setOnboardingVisible(false);
-    setTooltipOpen(false);
-  };
-
   return (
-    <Tooltip
-      open={tooltipOpen}
-      onOpenChange={(open) => {
-        if (onboardingVisible && !open) return;
-        setTooltipOpen(open);
-      }}
+    <OneTimeCoachmark
+      storageKey="synara:activity-onboarding:v1"
+      title="Activity"
+      description="See running tasks, completed work, and anything that needs your attention."
+      tooltip={`Activity view${shortcutLabel ? ` (${shortcutLabel})` : ""}`}
+      tooltipSide="bottom"
     >
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={active ? "Switch to classic view" : "Switch to activity view"}
-            aria-pressed={active}
-            onClick={() => {
-              dismissOnboarding();
-              onClick();
-            }}
-            className={cn(
-              "relative inline-flex shrink-0 cursor-pointer items-center justify-center transition-colors",
-              sidebarIconButtonSlotClass("header"),
-              SIDEBAR_ROW_FOCUS_CLASS_NAME,
-              active
-                ? "bg-[color-mix(in_srgb,var(--color-text-accent)_15%,transparent)] text-[var(--color-text-accent)]"
-                : "sidebar-icon-button text-muted-foreground/75 hover:text-foreground",
-            )}
-          />
-        }
+      <button
+        type="button"
+        aria-label={active ? "Switch to classic view" : "Switch to activity view"}
+        aria-pressed={active}
+        onClick={onClick}
+        className={cn(
+          "relative inline-flex shrink-0 cursor-pointer items-center justify-center transition-colors",
+          sidebarIconButtonSlotClass("header"),
+          SIDEBAR_ROW_FOCUS_CLASS_NAME,
+          active
+            ? "bg-[color-mix(in_srgb,var(--color-text-accent)_15%,transparent)] text-[var(--color-text-accent)]"
+            : "sidebar-icon-button text-muted-foreground/75 hover:text-foreground",
+        )}
       >
         <BellIcon className={sidebarGlyphClass("leading")} />
         {showUnreadDot ? (
@@ -1197,29 +1192,8 @@ function SidebarActivityBellButton({
             className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-[var(--color-text-accent)] ring-2 ring-[var(--sidebar-background,var(--background))]"
           />
         ) : null}
-      </TooltipTrigger>
-      <TooltipPopup
-        side={onboardingVisible ? "right" : "bottom"}
-        align={onboardingVisible ? "start" : "center"}
-        sideOffset={onboardingVisible ? 8 : 4}
-        className={cn(
-          onboardingVisible &&
-            "max-w-64 border-[var(--color-text-accent)] bg-[var(--color-text-accent)] text-white shadow-lg",
-        )}
-        viewportClassName={cn(onboardingVisible && "px-3 py-2.5")}
-      >
-        {onboardingVisible ? (
-          <div className="text-left">
-            <div className="text-ui leading-snug font-semibold">Activity</div>
-            <div className="mt-0.5 text-ui-sm leading-4 text-white/85">
-              See running tasks, completed work, and anything that needs your attention.
-            </div>
-          </div>
-        ) : (
-          `Activity view${shortcutLabel ? ` (${shortcutLabel})` : ""}`
-        )}
-      </TooltipPopup>
-    </Tooltip>
+      </button>
+    </OneTimeCoachmark>
   );
 }
 
@@ -1411,7 +1385,7 @@ export default function Sidebar() {
         }
       : null;
   }, [automationListQuery.data]);
-  // Tasks is Beta-only: Stable never subscribes to or reads to-dos (the server refuses them).
+  // Subscribe to Tasks unless the connected server has refused it.
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
   useTodoEventSubscription(tasksSurfaceEnabled);
   const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(tasksSurfaceEnabled);
@@ -1461,7 +1435,7 @@ export default function Sidebar() {
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewGroupChat } = useHandleNewGroupChat();
-  const { createThreadHandoff } = useThreadHandoff();
+  const { continueThreadHandoff, createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -1590,13 +1564,24 @@ export default function Sidebar() {
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
-  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  // Shared with the composer project picker, which opens this same dialog.
+  const createProjectDialogOpen = useCreateProjectDialogStore((state) => state.isOpen);
+  const setCreateProjectDialogOpen = useCreateProjectDialogStore((state) => state.setOpen);
+  // The open flag lives in a module store now, so it outlives this sidebar: close the
+  // dialog with it, or a remounted sidebar would reopen a stale modal over everything.
+  useEffect(() => () => setCreateProjectDialogOpen(false), [setCreateProjectDialogOpen]);
   const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [automationCreateOpen, setAutomationCreateOpen] = useState(false);
+  useEffect(() => {
+    // Match the dialog's previous panel-local lifetime when leaving Automations.
+    if (!isOnAutomations) setAutomationCreateOpen(false);
+  }, [isOnAutomations]);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
+  const [snoozeDialogThreadId, setSnoozeDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
@@ -1661,6 +1646,9 @@ export default function Sidebar() {
     () => readSidebarUiState().activityScope,
   );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
+  const [classicSnoozedVisibleThreadIds, setClassicSnoozedVisibleThreadIds] = useState<
+    readonly ThreadId[]
+  >([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
       if (
@@ -1733,14 +1721,15 @@ export default function Sidebar() {
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
-  // Activity view + unread bell (and the Inbox) read the same visibility-filtered list,
-  // so the bell can never point at a row the Activity list is hiding.
+  // The bell and Inbox read current threads. Activity also receives snoozed rows
+  // for its separate section, so badges never point at work the user set aside.
   const {
     sidebarThreads,
     displaySidebarThreads,
     groupProjectIdSet,
     groupThreads: groupSidebarThreads,
     visibleNonGroupThreads: visibleNonGroupSidebarThreads,
+    activityNonGroupThreads: activityNonGroupSidebarThreads,
   } = useActivityThreads({ hideAutomationRunThreads });
   const displaySidebarTreeThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
@@ -1748,8 +1737,13 @@ export default function Sidebar() {
   );
   const { nonGroupThreads: nonGroupSidebarTreeThreads, groupThreads: groupSidebarTreeThreads } =
     useMemo(
-      () => partitionSidebarThreadsByProjectIds(displaySidebarTreeThreads, groupProjectIdSet),
-      [displaySidebarTreeThreads, groupProjectIdSet],
+      () =>
+        partitionSidebarThreadsByProjectIds(
+          displaySidebarTreeThreads,
+          groupProjectIdSet,
+          summariesByProjectId,
+        ),
+      [displaySidebarTreeThreads, groupProjectIdSet, summariesByProjectId],
     );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
@@ -1757,7 +1751,7 @@ export default function Sidebar() {
       hasUnreadActivityOutsideActiveThread(visibleNonGroupSidebarThreads, activeSidebarThreadId),
     [activeSidebarThreadId, visibleNonGroupSidebarThreads],
   );
-  // Inbox is Beta-only: its rail item and page stay hidden on Stable.
+  // Inbox is available in both Stable and Beta.
   const inboxAvailable = INBOX_ON;
   const inboxBadge = useMemo(() => {
     if (!inboxAvailable) return null;
@@ -1805,6 +1799,26 @@ export default function Sidebar() {
       return next;
     });
   }, []);
+  const handleMarkThreadUnread = useCallback(
+    (threadId: ThreadId) => {
+      clearDismissedThreadStatus(threadId);
+      markThreadUnread(threadId);
+    },
+    [clearDismissedThreadStatus, markThreadUnread],
+  );
+  const canSnoozeThread = useCallback(
+    (
+      thread: Pick<
+        SidebarThreadSummary,
+        "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+      >,
+    ) =>
+      !thread.parentThreadId &&
+      !groupProjectIdSet.has(thread.projectId) &&
+      !coordinatorThreadIds.has(thread.id) &&
+      !isSidechatThread(thread),
+    [groupProjectIdSet, coordinatorThreadIds],
+  );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
       resolveThreadStatusPill({
@@ -1861,6 +1875,10 @@ export default function Sidebar() {
         markThreadVisited(threadId, thread.latestTurn?.completedAt ?? undefined);
         return;
       }
+      if (threadStatus.label === "Reminder") {
+        markThreadVisited(threadId, thread.snoozeReminderAt ?? undefined);
+        return;
+      }
       dismissThreadStatus(threadId, threadStatus.dismissalKey);
     },
     [
@@ -1882,11 +1900,30 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const filterThreadsToActiveSpace = useCallback(
+    (threads: readonly SidebarThreadSummary[]) =>
+      filterSidebarThreadsBySpace({
+        threads,
+        projectById,
+        spaceId: activeSpaceId,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+      }),
+    [
+      activeSpaceId,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
     toggleThreadPinned,
     setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
     settledOverrideByThreadId,
     deleteThread,
     confirmAndDeleteThread,
@@ -1899,6 +1936,7 @@ export default function Sidebar() {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId: routeSearch.splitViewId ?? null,
@@ -1908,6 +1946,41 @@ export default function Sidebar() {
     sidebarThreadSummaryById,
     threadsHydrated,
   });
+  useThreadActionShortcuts({
+    enabled: !isOnSettings,
+    keybindings,
+    routeThreadId,
+    activeSplitView,
+    threadById: sidebarThreadSummaryById,
+    terminalStateByThreadId,
+    canSnooze: canSnoozeThread,
+    onArchive: confirmAndArchiveThread,
+    onSnooze: setSnoozeDialogThreadId,
+    onMarkUnread: handleMarkThreadUnread,
+  });
+  const snoozedSidebarThreads = useMemo(
+    () =>
+      buildActivityViewModel({
+        threads: filterSidebarThreadsBySpace({
+          threads: activityNonGroupSidebarThreads,
+          projectById,
+          spaceId: activeSpaceId,
+          paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+        }),
+        pinnedThreadIdSet,
+      }).snoozed,
+    [
+      activeSpaceId,
+      activityNonGroupSidebarThreads,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      pinnedThreadIdSet,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
+  const draftThreadIdSet = useThreadIdsWithPendingDraft();
   const {
     projectRunsByProjectId,
     projectRunServerByProjectId,
@@ -1939,16 +2012,15 @@ export default function Sidebar() {
   const activeRouteProject = activeRouteProjectId
     ? (projectById.get(activeRouteProjectId) ?? null)
     : null;
-  // Same predicate the Groups collectors use — trusting `kind` alone here would let a drifted
-  // group-kind row (root outside the configured Groups root) activate the Groups segment while
-  // every Groups list excludes it, stranding the active thread in neither segment.
+  // Use the list's validated containers and member index: a hub worker's projectId
+  // points at its execution repo, which must not move its chat out of Hubs.
   const isOnGroups =
     isOnGroupsRoute ||
-    isGroupContainerProject(activeRouteProject, {
-      homeDir,
-      chatWorkspaceRoot,
-      studioWorkspaceRoot,
-      groupsWorkspaceRoot,
+    isGroupThreadRoute({
+      threadId: routeThreadId,
+      projectId: activeRouteProjectId,
+      groupProjectIds: groupProjectIdSet,
+      summariesByProjectId,
     });
   useEffect(() => {
     reconcileRailShell({
@@ -1975,16 +2047,11 @@ export default function Sidebar() {
   // pinned lists on every render (hooks can't be conditional, but the inputs can be).
   const activeSpaceNonGroupSidebarTreeThreads = useMemo(
     () =>
-      nonGroupSidebarTreeThreads.filter((thread) => {
-        const project = projectById.get(thread.projectId);
-        return (
-          !isOrdinarySpaceProject(project, {
-            homeDir,
-            chatWorkspaceRoot,
-            studioWorkspaceRoot,
-            groupsWorkspaceRoot,
-          }) || (project.spaceId ?? null) === activeSpaceId
-        );
+      filterSidebarThreadsBySpace({
+        threads: nonGroupSidebarTreeThreads,
+        projectById,
+        spaceId: activeSpaceId,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
       }),
     [
       activeSpaceId,
@@ -2202,6 +2269,7 @@ export default function Sidebar() {
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
+              thread.snoozedUntil == null &&
               !isSidechatThread(thread),
           )
           .map((thread) => ({
@@ -2209,6 +2277,7 @@ export default function Sidebar() {
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
             latestUserMessageAt: thread.latestUserMessageAt,
+            snoozeReminderAt: thread.snoozeReminderAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -2236,13 +2305,17 @@ export default function Sidebar() {
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
           .filter(
-            (thread) => thread.projectId === projectId && (thread.archivedAt ?? null) === null,
+            (thread) =>
+              thread.projectId === projectId &&
+              (thread.archivedAt ?? null) === null &&
+              thread.snoozedUntil == null,
           )
           .map((thread) => ({
             id: thread.id,
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
             latestUserMessageAt: thread.latestUserMessageAt,
+            snoozeReminderAt: thread.snoozeReminderAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -2549,7 +2622,11 @@ export default function Sidebar() {
   const addProjectFromPath = useCallback(
     async (
       rawCwd: string,
-      options: { createIfMissing?: boolean; spaceId?: SpaceId | null } = {},
+      options: {
+        createIfMissing?: boolean;
+        spaceId?: SpaceId | null;
+        additionalFolders?: ReadonlyArray<string>;
+      } = {},
     ) => {
       const cwd = rawCwd.trim();
       if (!cwd) {
@@ -2566,10 +2643,13 @@ export default function Sidebar() {
       // makes the entire Sidebar bail out of compilation — silently, since `panicThreshold`
       // is unset. Nested function bodies are lowered separately and are unaffected, and the
       // catch below still sees every rejection. See Sidebar.compiler.test.ts.
+      const additionalFolders = options.additionalFolders ?? [];
       const runAddProject = async () => {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
+        // A multi-folder project never reopens an existing one: that would drop its extra
+        // folders. The create below reports the conflict instead.
         const existingRecovery = await recoverExistingAddProjectTarget({
-          existingProjectId: existing?.id,
+          existingProjectId: additionalFolders.length > 0 ? undefined : existing?.id,
           workspaceRoot: cwd,
           recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
           recoverByWorkspaceRoot: (workspaceRoot) =>
@@ -2586,6 +2666,7 @@ export default function Sidebar() {
         const creationResult = await createOrRecoverProjectFromPath({
           api,
           workspaceRoot: cwd,
+          ...(additionalFolders.length > 0 ? { additionalFolders } : {}),
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
@@ -2653,7 +2734,7 @@ export default function Sidebar() {
 
   const handleStartAddProject = useCallback(() => {
     setCreateProjectDialogOpen(true);
-  }, []);
+  }, [setCreateProjectDialogOpen]);
 
   const activeSpaceProjects = useMemo(
     () => ordinarySpaceProjects.filter((project) => (project.spaceId ?? null) === activeSpaceId),
@@ -2992,6 +3073,24 @@ export default function Sidebar() {
     [createThreadHandoff],
   );
 
+  const continueHandoffInThread = useCallback(
+    async (thread: Thread, target: ThreadHandoffTarget) => {
+      try {
+        await continueThreadHandoff(thread, target.provider, target.instanceId);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not hand off this thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while handing off the thread.",
+        });
+      }
+    },
+    [continueThreadHandoff],
+  );
+
   const forkThread = useCallback(
     async (thread: Thread, target: ForkThreadTarget) => {
       const api = readNativeApi();
@@ -3191,6 +3290,7 @@ export default function Sidebar() {
           hasPendingUserInput,
         });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
+      const canSnooze = canSnoozeThread(thread);
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
@@ -3200,17 +3300,36 @@ export default function Sidebar() {
             providerStatuses,
           })
         : [];
+      const continueHandoffTargets = handoffTargets.filter((target) =>
+        canContinueThreadHandoff({
+          sourceProvider: thread.modelSelection.provider,
+          targetProvider: target.provider,
+        }),
+      );
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
+      const continueHandoffTargetById = new Map(
+        continueHandoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
+      );
       const handoffItems = contextMenuGroup(
         { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
-        handoffTargets.map((target) => ({
-          id: `handoff:${target.instanceId}`,
-          label: target.label,
-          standaloneLabel: `Handoff to ${target.label}`,
-          icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-        })),
+        [
+          ...continueHandoffTargets.map((target) => ({
+            id: `handoff-here:${target.instanceId}`,
+            label: `${target.label} in this thread`,
+            standaloneLabel: `Handoff to ${target.label} in this thread`,
+            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+          })),
+          ...handoffTargets.map((target, index) => ({
+            id: `handoff:${target.instanceId}`,
+            label:
+              continueHandoffTargets.length > 0 ? `${target.label} in a new thread` : target.label,
+            standaloneLabel: `Handoff to ${target.label}`,
+            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+            ...(index === 0 && continueHandoffTargets.length > 0 ? { separatorBefore: true } : {}),
+          })),
+        ],
       );
       // Same action as `/fork`.
       const canFork = canForkThread({ thread, handoffAvailability });
@@ -3297,6 +3416,40 @@ export default function Sidebar() {
               ]
             : []),
           { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
+          ...(canSnooze
+            ? [
+                ...(threadSummary?.snoozedUntil != null
+                  ? [
+                      {
+                        id: "snooze-cancel",
+                        label: "Return now",
+                        icon: THREAD_CONTEXT_MENU_ICONS.snooze,
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+                ...contextMenuGroup(
+                  {
+                    id: "snooze",
+                    label: threadSummary?.snoozedUntil != null ? "Reschedule" : "Snooze",
+                    icon: THREAD_CONTEXT_MENU_ICONS.snooze,
+                    separatorBefore: threadSummary?.snoozedUntil == null,
+                  },
+                  [
+                    ...SNOOZE_PRESETS.map((preset) => ({
+                      id: preset.id,
+                      label: preset.label,
+                      icon: THREAD_CONTEXT_MENU_ICONS.snooze,
+                    })),
+                    {
+                      id: "snooze-custom",
+                      label: "Pick date & time…",
+                      icon: THREAD_CONTEXT_MENU_ICONS.snooze,
+                    },
+                  ],
+                ),
+              ]
+            : []),
           ...handoffItems,
           ...forkItems,
           ...contextMenuGroup(
@@ -3370,12 +3523,31 @@ export default function Sidebar() {
       }
 
       if (clicked === "mark-unread") {
-        clearDismissedThreadStatus(threadId);
-        markThreadUnread(threadId);
+        handleMarkThreadUnread(threadId);
         return;
       }
       if (clicked === "clear-notification") {
         clearThreadNotification(threadId);
+        return;
+      }
+      if (clicked === "snooze-cancel") {
+        setThreadSnoozedUntil(threadId, null);
+        return;
+      }
+      if (clicked === "snooze-custom") {
+        setSnoozeDialogThreadId(threadId);
+        return;
+      }
+      const snoozePreset = SNOOZE_PRESETS.find((preset) => preset.id === clicked);
+      if (snoozePreset) {
+        snoozeThread(threadId, snoozePreset.duration);
+        return;
+      }
+      if (typeof clicked === "string" && clicked.startsWith("handoff-here:")) {
+        const target = continueHandoffTargetById.get(clicked);
+        if (target) {
+          await continueHandoffInThread(thread, target);
+        }
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
@@ -3413,35 +3585,24 @@ export default function Sidebar() {
           threadId,
         );
 
-        // Reuse the active terminal when one is already open and idle so that
-        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
-        // Only spawn a fresh tab when there is no terminal yet, the active id
-        // is stale (no longer in the layout), or the active terminal is busy
-        // running a subprocess.
-        const candidateBaseTerminalId =
-          currentTerminalState.activeTerminalId ||
-          currentTerminalState.terminalIds[0] ||
-          DEFAULT_THREAD_TERMINAL_ID;
-        const baseTerminalAvailable =
-          currentTerminalState.terminalOpen &&
-          currentTerminalState.terminalIds.includes(candidateBaseTerminalId) &&
-          !currentTerminalState.runningTerminalIds.includes(candidateBaseTerminalId);
-        const shouldCreateNewTerminal = !baseTerminalAvailable;
-        const targetTerminalId = shouldCreateNewTerminal
-          ? `terminal-${randomUUID()}`
-          : candidateBaseTerminalId;
+        const targetTerminalId = currentTerminalState.activeTerminalId;
+        if (currentTerminalState.runningTerminalIds.includes(targetTerminalId)) {
+          toastManager.add({
+            type: "error",
+            title: "Terminal is busy",
+            description: "Stop its command before opening another path.",
+          });
+          return;
+        }
+        const shouldCreateNewTerminal = !currentTerminalState.terminalOpen;
 
         const previousTerminalOpen = currentTerminalState.terminalOpen;
         const previousPresentationMode = currentTerminalState.presentationMode;
         const previousActiveTerminalId = currentTerminalState.activeTerminalId;
 
-        terminalStore.setTerminalPresentationMode(threadId, "drawer");
+        terminalStore.setTerminalPresentationMode(threadId, "workspace");
         terminalStore.setTerminalOpen(threadId, true);
-        if (shouldCreateNewTerminal) {
-          terminalStore.newTerminal(threadId, targetTerminalId);
-        } else {
-          terminalStore.setActiveTerminal(threadId, targetTerminalId);
-        }
+        terminalStore.setActiveTerminal(threadId, targetTerminalId);
 
         const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
         try {
@@ -3463,11 +3624,11 @@ export default function Sidebar() {
             threadId,
             terminalId: targetTerminalId,
             data: cdCommand,
+            onlyIfIdle: true,
           });
         } catch (error) {
-          if (shouldCreateNewTerminal) {
-            terminalStore.closeTerminal(threadId, targetTerminalId);
-          }
+          // Open may already have created a PTY, even if navigation or its
+          // acknowledgement failed. Keep its identity available for reattach.
           terminalStore.setTerminalPresentationMode(threadId, previousPresentationMode);
           terminalStore.setTerminalOpen(threadId, previousTerminalOpen);
           if (previousActiveTerminalId) {
@@ -3511,19 +3672,20 @@ export default function Sidebar() {
     },
     [
       appSettings,
+      canSnoozeThread,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       coordinatorThreadIds,
       copyPathToClipboard,
       copyThreadIdToClipboard,
-      clearDismissedThreadStatus,
       clearThreadNotification,
+      continueHandoffInThread,
       continueThreadAsGroup,
       forkThread,
       groupProjectIdSet,
       handoffThread,
-      markThreadUnread,
       moveThreadToGroup,
+      handleMarkThreadUnread,
       navigate,
       openRenameThreadDialog,
       pinnedThreadIdSet,
@@ -3533,6 +3695,8 @@ export default function Sidebar() {
       resolveThreadStatusForSidebar,
       serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
+      setThreadSnoozedUntil,
+      snoozeThread,
       summaryFor,
       toggleThreadPinned,
     ],
@@ -3567,8 +3731,7 @@ export default function Sidebar() {
 
       if (clicked === "mark-unread") {
         for (const id of ids) {
-          clearDismissedThreadStatus(id);
-          markThreadUnread(id);
+          handleMarkThreadUnread(id);
         }
         clearSelection();
         return;
@@ -3639,9 +3802,8 @@ export default function Sidebar() {
       appSettings.confirmThreadDelete,
       archiveThread,
       clearSelection,
-      clearDismissedThreadStatus,
       deleteThread,
-      markThreadUnread,
+      handleMarkThreadUnread,
       removeFromSelection,
       selectedThreadIds,
     ],
@@ -3842,6 +4004,7 @@ export default function Sidebar() {
           await addProjectFromPath(value.workspaceRoot, {
             createIfMissing: value.createIfMissing,
             spaceId: value.spaceId,
+            additionalFolders: value.additionalFolders,
           });
         }
       };
@@ -4152,7 +4315,7 @@ export default function Sidebar() {
       tasks: {
         icon: TasksIcon,
         label: "Tasks",
-        // Beta's Tasks entry stands for both views: the list and the Kanban board.
+        // The Tasks entry stands for both views: the list and the Kanban board.
         active: isOnTasks || isOnKanban,
         badge: tasksAttentionBadge,
         onClick: () => {
@@ -4160,7 +4323,7 @@ export default function Sidebar() {
         },
       },
       pullRequests: {
-        icon: IoIosGitCompare,
+        icon: CodeReviewIcon,
         label: "Code review",
         active: isOnPullRequests,
         badge: pullRequestsReviewBadge,
@@ -4693,8 +4856,14 @@ export default function Sidebar() {
       }
     }
 
+    for (const threadId of classicSnoozedVisibleThreadIds) addVisibleThreadId(threadId);
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, surfaceProjectSidebarDataById, surfaceProjects]);
+  }, [
+    classicSnoozedVisibleThreadIds,
+    pinnedThreads,
+    surfaceProjectSidebarDataById,
+    surfaceProjects,
+  ]);
   const visibleSidebarThreadIds =
     activityViewEnabled && !isOnGroups ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
@@ -4708,8 +4877,8 @@ export default function Sidebar() {
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
-    () => displaySidebarTreeThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
-    [displaySidebarTreeThreads, visibleSidebarThreadIdSet],
+    () => sidebarThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
+    [sidebarThreads, visibleSidebarThreadIdSet],
   );
   // PR badges only render on visible rows, so keep git/PR query setup off hidden project history.
   const prByThreadId = useThreadPullRequests({
@@ -4755,13 +4924,6 @@ export default function Sidebar() {
   const visibleThreadJumpLabelByThreadId = showThreadJumpHints
     ? threadJumpLabelByThreadId
     : EMPTY_THREAD_JUMP_LABELS;
-  const visibleThreadJumpLabelPartsByThreadId = useMemo(() => {
-    const partsByThreadId = new Map<ThreadId, readonly string[]>();
-    for (const [threadId, label] of visibleThreadJumpLabelByThreadId) {
-      partsByThreadId.set(threadId, splitShortcutLabel(label));
-    }
-    return partsByThreadId;
-  }, [visibleThreadJumpLabelByThreadId]);
 
   useEffect(() => {
     const threadIdsToPrewarm = getSidebarThreadIdsToPrewarm({
@@ -4842,8 +5004,8 @@ export default function Sidebar() {
   function renderThreadRowTrailingCluster(input: {
     isSubagentThread: boolean;
     threadJumpLabel: string | null;
-    threadJumpLabelParts: readonly string[];
     rightMetaChips: ThreadMetaChip[];
+    prChip: ThreadMetaChip | null;
     threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
     timestampToneClassName?: string;
     hoverActions: ReactNode;
@@ -4855,18 +5017,18 @@ export default function Sidebar() {
       slotOccupied: Boolean(input.threadJumpLabel),
     });
     return (
-      <div className="relative flex shrink-0 items-center justify-end gap-[3px]">
+      <div className="relative flex min-w-0 items-center justify-end gap-2 group-hover/thread-row:min-w-12 group-focus-within/thread-row:min-w-12">
         {input.rightMetaChips.length > 0 ? (
-          <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
+          <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
           </div>
         ) : null}
         {input.threadJumpLabel ? (
-          <KbdGroup className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
-            {input.threadJumpLabelParts.map((part) => (
-              <Kbd key={part}>{part}</Kbd>
-            ))}
-          </KbdGroup>
+          <ShortcutKbd
+            shortcutLabel={input.threadJumpLabel}
+            title={input.threadJumpLabel}
+            groupClassName={cn(THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME, "shrink")}
+          />
         ) : null}
         {trailingStatus ? (
           // The relative time now lives in the row hover card, so the trailing
@@ -4881,6 +5043,11 @@ export default function Sidebar() {
           >
             <SidebarStatusTrailingGlyph status={trailingStatus} />
           </span>
+        ) : null}
+        {input.prChip ? (
+          <div className={cn("shrink-0", THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME)}>
+            <SidebarMetaChipStack chips={[input.prChip]} />
+          </div>
         ) : null}
         {input.hoverActions}
       </div>
@@ -4924,6 +5091,45 @@ export default function Sidebar() {
     );
   }
 
+  function renderSnoozedThreadRow(thread: SidebarThreadSummary) {
+    return (
+      <ActivityThreadRow
+        key={thread.id}
+        thread={thread}
+        project={projectById.get(thread.projectId)}
+        isActive={visualActiveSidebarThreadId === thread.id}
+        isSettled={false}
+        isPinned={pinnedThreadIdSet.has(thread.id)}
+        threadJumpLabel={visibleThreadJumpLabelByThreadId.get(thread.id) ?? null}
+        hasPendingDraft={draftThreadIdSet.has(thread.id)}
+        pr={
+          prByThreadId.has(thread.id)
+            ? (prByThreadId.get(thread.id) ?? null)
+            : resolveThreadPullRequestFallback({
+                branch: thread.branch,
+                hasDedicatedWorktree: thread.worktreePath !== null,
+                lastKnownPr: thread.lastKnownPr ?? null,
+              })
+        }
+        status={resolveThreadStatusForSidebar(thread)}
+        onOpen={() => activateThreadFromSidebarIntent(thread.id)}
+        onOpenPullRequest={(event, pr) => openThreadPullRequest(event, thread, pr)}
+        onSetSettled={(settled) => setThreadSettledWithToast(thread.id, settled)}
+        onReturnSnoozed={() => setThreadSnoozedUntil(thread.id, null)}
+        onTogglePinned={() => toggleThreadPinned(thread.id)}
+        onArchive={() => void archiveThreadWithUndo(thread.id)}
+        onRename={openRenameThreadDialog}
+        onRenamePointerUp={handleThreadRenamePointerUp}
+        onContextMenu={(threadId, position) => {
+          void handleThreadContextMenu(threadId, position);
+        }}
+        renderHoverCard={(anchorId) =>
+          renderThreadHoverCardPopup(thread, anchorId, visualActiveSidebarThreadId === thread.id)
+        }
+      />
+    );
+  }
+
   // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
   // once here so pinned and nested rows stay visually and semantically identical.
   function renderThreadHoverCardPopup(
@@ -4951,6 +5157,7 @@ export default function Sidebar() {
         className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "whitespace-normal leading-tight")}
       >
         <ThreadHoverCardContent
+          threadId={thread.id}
           title={thread.title}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
@@ -4961,7 +5168,18 @@ export default function Sidebar() {
           worktreeName={hoverMetadata.worktreeName}
           pullRequest={prByThreadId.get(thread.id) ?? null}
           onOpenPullRequest={openPrLink}
-          model={resolveThreadModelSummary(thread.modelSelection)}
+          model={thread.modelSelection}
+          modelCatalogQueryOptions={modelQueryOptionsForProviderInstance({
+            provider: thread.modelSelection.provider,
+            instanceId: thread.modelSelection.instanceId ?? thread.modelSelection.provider,
+            settings: appSettings,
+            enabled: false,
+            cwd: resolveProviderDiscoveryCwd({
+              activeThreadWorktreePath: thread.worktreePath,
+              activeProjectCwd: hoverProject?.cwd ?? null,
+              serverCwd,
+            }),
+          })}
           status={hoverStatus}
         />
       </TooltipPopup>
@@ -5017,15 +5235,9 @@ export default function Sidebar() {
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
     const pr = prByThreadId.get(thread.id) ?? null;
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
+    const prChip =
+      !isSubagentThread && !thread.forkSourceThreadId && pr ? resolveThreadRowPrChip(pr) : null;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
-    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
-    // occupies the status slot. In that state the right-aligned project label needs a
-    // hair of clearance so it stops kissing the worktree chip — see the margin below.
-    const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
       threadId: thread.id,
@@ -5041,33 +5253,23 @@ export default function Sidebar() {
             />
           }
         >
-          {leadingPr ? (
-            <ThreadPrStatusBadge
-              pr={leadingPr}
-              onOpen={openPrLink}
-              className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
-            />
-          ) : null}
           <div
             role="button"
             tabIndex={0}
             data-thread-item
             aria-label={resolveThreadRowAriaLabel(thread)}
+            aria-description={prChip?.tooltip}
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              // Match the normal thread row: a flex row whose title claims all free
-              // space, with a trailing reserve that grows only for the badges actually
-              // present — instead of a rigid grid that permanently fenced off a
-              // timestamp-era column and squeezed the title/project even when wide.
-              "relative gap-1.5 transition-colors",
-              leadingPr && "pl-8",
-              resolveThreadRowTrailingReserveClass({
-                metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: hasTrailingStatusGlyph,
-              }),
+              // Metadata and shortcut hints occupy their actual width in the flex row.
+              "relative gap-1.5 pr-2 transition-colors",
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-                : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+                : cn(
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    threadStatus?.label === "Reminder" && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
+                  ),
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={() => activateThreadFromSidebarIntent(thread.id)}
@@ -5103,17 +5305,11 @@ export default function Sidebar() {
               }
               suffix={
                 projectLabel ? (
-                  // Right-aligned project context for the flattened pinned list. The title
-                  // (flex-1) pushes it to the content edge, so it shows in full when the row
-                  // has room and only truncates under real pressure, shifting left as the
-                  // trailing reserve grows on hover/status. When a live status glyph occupies
-                  // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-                  // a few px past the reserve — a small margin keeps the folder name from
-                  // touching the worktree chip. It costs no space when the row is idle.
+                  // While shortcut hints show, the project name yields width before the title.
                   <span
                     className={cn(
-                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                      hasTrailingStatusGlyph && "mr-2",
+                      "min-w-0 max-w-[40%] truncate text-right text-ui-meta text-muted-foreground/38",
+                      threadJumpLabel ? "shrink-[2]" : "shrink-0",
                     )}
                   >
                     {projectLabel}
@@ -5121,12 +5317,12 @@ export default function Sidebar() {
                 ) : null
               }
             />
-            <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
                 threadJumpLabel,
-                threadJumpLabelParts,
                 rightMetaChips,
+                prChip,
                 threadStatus,
                 timestampToneClassName: "text-muted-foreground/38",
                 hoverActions: renderThreadHoverActions({
@@ -5185,13 +5381,12 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
+    const prChip =
+      !isSubagentThread && !thread.forkSourceThreadId && pr ? resolveThreadRowPrChip(pr) : null;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,
@@ -5204,13 +5399,6 @@ export default function Sidebar() {
         className="group/thread-row w-full"
         data-thread-item
       >
-        {leadingPr ? (
-          <ThreadPrStatusBadge
-            pr={leadingPr}
-            onOpen={openPrLink}
-            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
-          />
-        ) : null}
         <Tooltip>
           <TooltipTrigger
             {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
@@ -5221,18 +5409,15 @@ export default function Sidebar() {
                 size="sm"
                 isActive={isActive}
                 aria-label={resolveThreadRowAriaLabel(thread)}
+                aria-description={prChip?.tooltip}
                 className={cn(
                   resolveThreadRowClassName({
                     isActive,
                     isSelected,
+                    isSnoozeReminder: threadStatus?.label === "Reminder",
                   }),
-                  leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  isSubagentThread
-                    ? "pr-7.5"
-                    : resolveThreadRowTrailingReserveClass({
-                        metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
-                        hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
-                      }),
+                  topLevel && !isSubagentThread ? "pl-2" : null,
+                  "pr-2",
                 )}
                 draggable
                 onDragStart={(event) => beginThreadDrag(event, thread.id)}
@@ -5300,18 +5485,18 @@ export default function Sidebar() {
                     </Tooltip>
                   </div>
                 ) : projectContextLabel ? (
-                  <span className="ml-auto shrink-0 truncate pl-1 pr-1 text-ui-meta text-muted-foreground/38">
+                  <span className="min-w-0 max-w-[40%] shrink truncate pl-1 pr-1 text-ui-meta text-muted-foreground/38">
                     {projectContextLabel}
                   </span>
                 ) : undefined
               }
             />
-            <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
+            <div className="flex min-w-0 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
                 threadJumpLabel,
-                threadJumpLabelParts,
                 rightMetaChips: showCompactMeta ? rightMetaChips : [],
+                prChip,
                 threadStatus,
                 timestampToneClassName: isSubagentThread
                   ? isHighlighted
@@ -5339,7 +5524,7 @@ export default function Sidebar() {
     return (
       <>
         <SidebarIconButton
-          icon={IoIosGitCompare}
+          icon={CodeReviewIcon}
           label={`Open code review for ${project.name}`}
           tooltip="Code review"
           tooltipSide="top"
@@ -6107,38 +6292,17 @@ export default function Sidebar() {
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
   const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
-  const desktopUpdateTooltip = desktopUpdateState
-    ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
-        installing: installingDesktopUpdate,
-      })
-    : "Update available";
-
   const desktopUpdateButtonDisabled =
     isDesktopUpdateButtonDisabled(desktopUpdateState) || installingDesktopUpdate;
   const desktopUpdateButtonAction = desktopUpdateState
     ? resolveDesktopUpdateButtonAction(desktopUpdateState)
     : "none";
-  const desktopUpdateButtonPresentation = getDesktopUpdateButtonPresentation(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
   const showArm64IntelBuildWarning =
     isElectron && shouldShowArm64IntelBuildWarning(desktopUpdateState);
   const arm64IntelBuildWarningDescription =
     desktopUpdateState && showArm64IntelBuildWarning
       ? getArm64IntelBuildWarningDescription(desktopUpdateState)
       : null;
-  const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
-    ? "cursor-not-allowed opacity-60"
-    : "hover:brightness-110";
-  const desktopUpdateButtonHasSecondaryLabel =
-    desktopUpdateButtonPresentation.secondaryLabel !== null;
-  const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
-  const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
-    isBetaDesktopFlavor ? "bg-[image:var(--beta-gradient)]" : "bg-[var(--info)]",
-    desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
-    desktopUpdateButtonInteractivityClasses,
-  );
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({
@@ -6498,7 +6662,7 @@ export default function Sidebar() {
     !isOnInbox;
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
-    onOpenFeedback: openFeedbackDialog,
+    onOpenFeedback: () => openFeedbackDialog(),
     // The rail customizes from its "…" menu.
     onCustomizeSidebar: null,
   };
@@ -6585,6 +6749,34 @@ export default function Sidebar() {
     ...railAvailability,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
+  const searchPaletteNavigationActions: SidebarSearchAction[] = (
+    ["inbox", "kanban", "studio", "automations"] as const
+  )
+    .filter((id) => isRailItemAvailable(id, railAvailability))
+    .map((id) => {
+      const item = railItemFor(id);
+      return {
+        id: `go-${id}`,
+        label: `Go to ${item.label}`,
+        description: `Open ${item.label}.`,
+        keywords: [item.label, "go", "navigate"],
+        run: item.onSelect,
+        icon: item.glyphs.idle,
+      };
+    });
+  if (projects.length > 0) {
+    searchPaletteNavigationActions.push({
+      id: "new-automation",
+      label: "New automation",
+      description: "Schedule a recurring task.",
+      keywords: ["automation", "create", "new", "schedule"],
+      icon: AddPlusIcon,
+      run: () => {
+        railItemFor("automations").onSelect();
+        setAutomationCreateOpen(true);
+      },
+    });
+  }
   const railShortcutItems: AppRailItem[] = railShortcuts.flatMap((shortcut): AppRailItem[] => {
     if (shortcut.kind === "space") {
       return [
@@ -6774,6 +6966,13 @@ export default function Sidebar() {
           }}
         />
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
+        {showDesktopUpdateButton && desktopUpdateState ? (
+          <DesktopUpdateRailButton
+            state={desktopUpdateState}
+            installing={installingDesktopUpdate}
+            onClick={handleDesktopUpdateButtonClick}
+          />
+        ) : null}
       </>
     ),
     onContextMenu: handleNavContextMenu,
@@ -6873,7 +7072,10 @@ export default function Sidebar() {
                 />
               </SidebarGroup>
             ) : showRailAutomationsPanel ? (
-              <RailAutomationsPanel />
+              <RailAutomationsPanel
+                createOpen={automationCreateOpen}
+                onCreateOpenChange={setAutomationCreateOpen}
+              />
             ) : (
               <>
                 <div
@@ -6926,6 +7128,7 @@ export default function Sidebar() {
                           return (
                             <SidebarPrimaryAction
                               key={id}
+                              {...(id === "tasks" ? { coachmark: TASKS_COACHMARK } : {})}
                               icon={item.icon}
                               {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
                               label={item.label}
@@ -6963,7 +7166,7 @@ export default function Sidebar() {
                   ) : activityViewEnabled ? (
                     <SidebarGroup className="px-1.5 py-1.5">
                       <SidebarActivityView
-                        threads={visibleNonGroupSidebarThreads}
+                        threads={activityNonGroupSidebarThreads}
                         projectById={projectById}
                         activeThreadId={visualActiveSidebarThreadId}
                         pinnedThreadIdSet={pinnedThreadIdSet}
@@ -6975,6 +7178,7 @@ export default function Sidebar() {
                         onOpenThread={activateThreadFromSidebarIntent}
                         onOpenThreadPullRequest={openThreadPullRequest}
                         onSetThreadSettled={setThreadSettledWithToast}
+                        onReturnSnoozedThread={(threadId) => setThreadSnoozedUntil(threadId, null)}
                         onToggleThreadPinned={toggleThreadPinned}
                         onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
                         onMarkThreadRead={markThreadVisited}
@@ -6985,6 +7189,7 @@ export default function Sidebar() {
                         }}
                         onProjectContextMenu={handleProjectContextMenu}
                         prByThreadId={prByThreadId}
+                        threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
                         onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
                         renderThreadHoverCard={(thread, anchorId) =>
                           renderThreadHoverCardPopup(
@@ -7134,6 +7339,20 @@ export default function Sidebar() {
             !activityViewEnabled &&
             !showRailSpacesPanel &&
             !showRailAutomationsPanel &&
+            snoozedSidebarThreads.length > 0 ? (
+              <SidebarGroup className="px-1.5 pt-1 pb-2">
+                <SidebarSnoozedThreadsSection
+                  threads={snoozedSidebarThreads}
+                  renderThreadRow={renderSnoozedThreadRow}
+                  onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
+                />
+              </SidebarGroup>
+            ) : null}
+            {!isOnSettings &&
+            !isOnGroups &&
+            !activityViewEnabled &&
+            !showRailSpacesPanel &&
+            !showRailAutomationsPanel &&
             chatsSectionVisible ? (
               // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
               // animates in step with the keyed surface wrapper above.
@@ -7257,7 +7476,7 @@ export default function Sidebar() {
           </SidebarContent>
 
           <SidebarFooter
-            // Help lives in the rail, so the footer only carries the update pill.
+            // Help and the update button live in the rail; the footer only carries debug tools.
             className="gap-2 border-sidebar-border border-t-0 p-2 pt-0 font-system-ui"
           >
             <SidebarMenu>
@@ -7268,41 +7487,6 @@ export default function Sidebar() {
                       <DebugFeatureFlagsMenu />
                     </Suspense>
                   ) : null}
-                  <div className="flex items-center gap-2">
-                    {showDesktopUpdateButton ? (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <button
-                              type="button"
-                              aria-label={desktopUpdateTooltip}
-                              aria-disabled={desktopUpdateButtonDisabled || undefined}
-                              disabled={desktopUpdateButtonDisabled}
-                              className={desktopUpdateRowButtonClasses}
-                              onClick={handleDesktopUpdateButtonClick}
-                            >
-                              <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
-                                <span className="min-w-0 truncate text-center">
-                                  {desktopUpdateButtonPresentation.label}
-                                </span>
-                                {desktopUpdateButtonPresentation.secondaryLabel ? (
-                                  <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
-                                    {desktopUpdateButtonPresentation.secondaryLabel}
-                                  </span>
-                                ) : null}
-                              </span>
-                              {desktopUpdateDownloadPercent !== null ? (
-                                <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
-                                  {desktopUpdateDownloadPercent}%
-                                </span>
-                              ) : null}
-                            </button>
-                          }
-                        />
-                        <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
-                      </Tooltip>
-                    ) : null}
-                  </div>
                 </div>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -7702,6 +7886,20 @@ export default function Sidebar() {
         </DialogPopup>
       </Dialog>
 
+      <SnoozeUntilDialog
+        open={snoozeDialogThreadId !== null}
+        currentSnoozedUntil={
+          snoozeDialogThreadId
+            ? (sidebarThreadSummaryById[snoozeDialogThreadId]?.snoozedUntil ?? null)
+            : null
+        }
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setSnoozeDialogThreadId(null);
+        }}
+        onSnooze={(deadline) => {
+          if (snoozeDialogThreadId !== null) snoozeThread(snoozeDialogThreadId, deadline);
+        }}
+      />
       <RenameThreadDialog
         open={renameDialogThreadId !== null}
         currentTitle={
@@ -7814,7 +8012,7 @@ export default function Sidebar() {
               setSearchPaletteMode("search");
             }
           }}
-          actions={searchPaletteActions}
+          actions={[...searchPaletteActions, ...searchPaletteNavigationActions]}
           projects={searchPaletteProjects}
           projectById={projectById}
           onCreateChat={() =>
@@ -7825,10 +8023,17 @@ export default function Sidebar() {
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
-          onOpenSettings={() => {
-            void navigate({ to: "/settings" });
+          onOpenSettings={(section, options) => {
+            void navigate({
+              to: "/settings",
+              search: (previous) => ({
+                ...previous,
+                section: section === "general" ? undefined : section,
+                target: options?.target,
+              }),
+            });
           }}
-          onOpenFeedback={openFeedbackDialog}
+          onOpenFeedback={() => openFeedbackDialog()}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
@@ -7876,7 +8081,7 @@ function SidebarSearchPaletteController(props: {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
@@ -7887,7 +8092,10 @@ function SidebarSearchPaletteController(props: {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   // Search keeps automation-run threads as an intent-driven escape hatch, while
   // structurally nested side chats stay out of standalone thread results.
-  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const selectSidebarDisplayThreads = useMemo(
+    () => createSidebarDisplayThreadsSelector({ includeSnoozed: true }),
+    [],
+  );
   const importCandidates = useMemo(
     () => buildThreadImportCandidates(props.providerInstances),
     [props.providerInstances],

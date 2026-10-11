@@ -1,0 +1,37 @@
+---
+title: Synara Beta
+description: Install the separate Beta app, copy Stable data when you choose, and understand how the two apps differ.
+---
+
+Synara Beta is a separate desktop app for trying upcoming features. It installs beside Stable Synara, uses its own data folder and update feed, and receives prerelease updates. A Stable release does not turn your Stable app into Beta.
+
+## Join from Stable
+
+On macOS, open **Settings → General → Synara Beta**. Choose **Install Synara Beta** to download and open the latest available Beta release, or **Copy my data and open** to install it if needed and then bring a snapshot of your Stable data into Beta. The download is checked before installation. If no Beta prerelease has been published yet, try again after it becomes available.
+
+On Windows and Linux, the settings card opens the public download page. Select the Beta installer for your platform when a Beta prerelease is available.
+
+## Keep your work separate
+
+Stable uses `~/.synara`; Beta uses `~/.synara-beta`. Copying Stable data into Beta replaces existing Beta chats, projects, and settings after confirmation. Work made only in Beta can be lost in that copy, while Stable data stays as it was. Quit Beta before requesting another import. If Beta is older than the Stable data format, update Beta and retry.
+
+Use **Open Beta** in Stable settings to reopen an installed Beta without copying data. In Beta, **Switch back to Synara** opens Stable. Changes made only in Beta are not copied back.
+
+## Diagnostics and feature availability
+
+Beta shares crash reports and anonymous usage statistics to help find prerelease failures. Its settings explain what is shared. Stable does not send Beta diagnostics. Avoid putting credentials or private material into bug reports you submit yourself.
+
+Supported provider accounts, models, and permissions depend on their installed runtimes. [Oh My Pi](/docs/providers/omp) is available in both Stable 1.0.0 and Beta.
+
+## Updates
+
+The two apps follow separate update feeds. A Beta update cannot replace Stable, and a Stable update cannot replace Beta. If an update does not appear, check the [public releases](https://github.com/Emanuele-web04/synara/releases) for the newest Beta prerelease and compare its version with the version shown in your app.
+
+Source evidence: Synara release head `BETA.md`, `packages/shared/src/betaFeatures.ts`, `apps/desktop/src/betaChannel.ts`, and the Beta settings controls in `apps/web/src/components/settings/DesktopSettingsPanels.tsx`.
+
+## Features that still require Beta
+
+- [Hubs and Library](/docs/features/hubs): a coordinator, delegated workers, shared memory, and versioned deliverables.
+  Tasks and agent delegation are available in Stable 1.0.1.
+
+Hubs are gated by the server as well as the interface. **Stable 1.0.0** includes Inbox, Auto-fix CI, Oh My Pi, the rail workspace and message trail sound. Beta keeps its independent update feed, data home and diagnostics policy.

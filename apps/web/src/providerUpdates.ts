@@ -106,6 +106,10 @@ function isProviderEnabled(
   if (!serverSettings) {
     return false;
   }
+  const driver = provider.driver ?? provider.provider;
+  if (!isProviderKind(driver) || serverSettings.providers[driver]?.enabled === false) {
+    return false;
+  }
   const instanceId = provider.instanceId ?? provider.provider;
   const instance = serverSettings.providerInstances[instanceId];
   if (instance) {
@@ -116,8 +120,7 @@ function isProviderEnabled(
         : undefined;
     return instance.enabled !== false && configEnabled !== false;
   }
-  const driver = provider.driver ?? provider.provider;
-  return isProviderKind(driver) ? serverSettings.providers[driver]?.enabled !== false : false;
+  return true;
 }
 
 // Central visibility gate used by both global toasts and Settings update rows.

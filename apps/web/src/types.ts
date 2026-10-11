@@ -42,40 +42,12 @@ export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
-export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "default";
-export const MAX_TERMINALS_PER_GROUP = 6;
 export type ThreadTerminalPresentationMode = "drawer" | "workspace";
 export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
 export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ThreadPrimarySurface = "chat" | "terminal";
 export type ProjectScript = ContractProjectScript;
-
-export type ThreadTerminalSplitDirection = "horizontal" | "vertical";
-export type ThreadTerminalSplitPosition = "top" | "right" | "bottom" | "left";
-
-export interface ThreadTerminalLeafNode {
-  type: "terminal";
-  paneId: string;
-  terminalIds: string[];
-  activeTerminalId: string;
-}
-
-export interface ThreadTerminalSplitNode {
-  type: "split";
-  id: string;
-  direction: ThreadTerminalSplitDirection;
-  children: ThreadTerminalLayoutNode[];
-  weights: number[];
-}
-
-export type ThreadTerminalLayoutNode = ThreadTerminalLeafNode | ThreadTerminalSplitNode;
-
-export interface ThreadTerminalGroup {
-  id: string;
-  activeTerminalId: string;
-  layout: ThreadTerminalLayoutNode;
-}
 
 export interface ChatImageAttachment {
   type: "image";
@@ -149,6 +121,8 @@ export interface TurnDiffFileChange {
 
 export interface TurnDiffSummary {
   turnId: TurnId;
+  /** When the provider started the turn (absent on older snapshots). */
+  startedAt?: string | undefined;
   completedAt: string;
   status?: string | undefined;
   files: TurnDiffFileChange[];
@@ -204,6 +178,8 @@ export interface Project {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  /** Extra source folders of a multi-folder project; `cwd` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
 }
 
 export interface Space {
@@ -238,6 +214,7 @@ export interface ThreadWorkspacePatch {
 }
 
 export interface Thread extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -252,6 +229,8 @@ export interface Thread extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
@@ -262,6 +241,8 @@ export interface Thread extends ThreadWorkspaceState {
   goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  /** Pending request; null means consumed/cancelled, undefined means not observed. */
+  pendingTurnStartMessageId?: MessageId | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
@@ -278,6 +259,8 @@ export interface Thread extends ThreadWorkspaceState {
   claudeCacheReview?: PendingClaudeCacheReview | null;
   /** Client projection cursor shared by shell and detail cache-review updates. */
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -290,6 +273,7 @@ export interface Thread extends ThreadWorkspaceState {
 }
 
 export interface ThreadShell extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -301,6 +285,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   // Per-thread workspace annotations carried through the normalized projection so
@@ -327,6 +313,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   handoff?: ThreadHandoff | null;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -340,6 +328,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  pendingTurnStartMessageId?: MessageId | null;
 }
 
 export interface SidebarThreadSummary {
@@ -359,12 +348,16 @@ export interface SidebarThreadSummary {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  /** For a nested subagent, the subagent thread that launched it. */
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -398,6 +391,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  runtimeMode?: RuntimeMode;
   providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;

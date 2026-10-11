@@ -108,6 +108,7 @@ test("Windows install uses the runner-volume cache without changing other platfo
       },
     );
     assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes("arg=--concurrent-scripts=1\n"), platform);
     const expectedCache =
       platform === "Windows" ? "/runner temp/bun-install-cache" : "/existing-cache";
     assert.ok(result.stdout.includes(`cache=${expectedCache}\n`), platform);
@@ -153,45 +154,4 @@ test("measured critical-path distribution stays three-way and skips redundant ap
   const browser = workflow.split("  browser:\n")[1].split("  build:\n")[0];
   assert.ok(browser.includes("./node_modules/.bin/playwright install chromium"));
   assert.ok(!browser.includes("playwright install --with-deps chromium"));
-});
-
-test("three ChatView partitions are complementary and reject quarantined geometry", () => {
-  const config = read("../../apps/web/vitest.browser.ci.config.ts");
-  const stable = read("../../apps/web/vitest.browser.stable.config.ts");
-  const follow = config.match(/const followPattern = "(.+)";/)?.[1];
-  const project = config.match(/const projectPattern = "(.+)";/)?.[1];
-  const quarantine = stable.match(/testNamePattern: \/(.+)\/,/)?.[1];
-  assert.ok(follow);
-  assert.ok(project);
-  assert.ok(quarantine);
-  assert.ok(config.includes("${stablePattern.source}(?=.*${followPattern})"));
-  assert.ok(
-    config.includes("${stablePattern.source}(?!.*${followPattern})(?=.*${projectPattern})"),
-  );
-  assert.ok(
-    config.includes("${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})"),
-  );
-  const partitions = [
-    new RegExp(`${quarantine}(?=.*${follow})`),
-    new RegExp(`${quarantine}(?!.*${follow})(?=.*${project})`),
-    new RegExp(`${quarantine}(?!.*${follow})(?!.*${project})`),
-  ];
-  for (const title of [
-    "restores streaming follow",
-    "keeps scroll anchor stable",
-    "renders tool activity",
-    "creates a project",
-    "new worktree",
-    "approval already answered",
-    "queued composer request",
-    "unknown future stable case",
-  ]) {
-    assert.equal(partitions.filter((pattern) => pattern.test(title)).length, 1, title);
-    const tagged = `[geometry:linux] ${title}`;
-    assert.equal(
-      partitions.some((pattern) => pattern.test(tagged)),
-      false,
-      tagged,
-    );
-  }
 });

@@ -21,7 +21,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
+import { spawnProviderProcess } from "../../platform/effectProcessRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
 import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
@@ -1488,23 +1488,19 @@ const makeAcpSessionRuntime = (
       try: () => buildAcpSpawnProcessEnv(options.spawn),
       catch: (cause) => new AcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
     });
-    const child = yield* spawner
-      .spawn(
-        makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
-          ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          env,
-        }),
-      )
-      .pipe(
-        Effect.provideService(Scope.Scope, runtimeScope),
-        Effect.mapError(
-          (cause) =>
-            new AcpErrors.AcpSpawnError({
-              command: options.spawn.command,
-              cause,
-            }),
-        ),
-      );
+    const child = yield* spawnProviderProcess(spawner, options.spawn.command, options.spawn.args, {
+      ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
+      env,
+    }).pipe(
+      Effect.provideService(Scope.Scope, runtimeScope),
+      Effect.mapError(
+        (cause) =>
+          new AcpErrors.AcpSpawnError({
+            command: options.spawn.command,
+            cause,
+          }),
+      ),
+    );
 
     yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
     // Registered after child teardown so LIFO scope closure releases any first

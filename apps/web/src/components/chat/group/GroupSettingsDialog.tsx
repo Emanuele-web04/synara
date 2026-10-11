@@ -5,9 +5,10 @@
 // Exports: GroupSettingsDialog
 
 import type { ModelSelection, ProjectAgentOverview, ProjectId } from "@synara/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 
-import { CentralIcon } from "~/lib/central-icons";
+import { createCentralIconComponent } from "~/lib/central-icons";
+import { FolderOpenIcon } from "~/lib/icons";
 import { SidebarLeadingIcon } from "~/components/SidebarLeadingIcon";
 import {
   AlertDialog,
@@ -67,11 +68,14 @@ import {
   type GroupSettingsSection,
 } from "./groupSettingsDialog.logic";
 
-const GROUP_SETTINGS_SECTION_ICONS: Record<GroupSettingsSection, string> = {
-  general: "settings-gear-4",
-  memory: "brain",
-  environment: "folder-open-front",
-  plugins: "plugin-1",
+const GROUP_SETTINGS_SECTION_ICONS: Record<
+  GroupSettingsSection,
+  ComponentType<{ className?: string }>
+> = {
+  general: createCentralIconComponent("settings-gear-4"),
+  memory: createCentralIconComponent("brain"),
+  environment: FolderOpenIcon,
+  plugins: createCentralIconComponent("plugin-1"),
 };
 
 export function GroupSettingsDialog(props: {
@@ -364,6 +368,7 @@ export function GroupSettingsDialog(props: {
               <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
                 {GROUP_SETTINGS_SECTIONS.map((id) => {
                   const isActive = id === section;
+                  const SectionIcon = GROUP_SETTINGS_SECTION_ICONS[id];
                   return (
                     <li key={id} className="shrink-0">
                       <button
@@ -379,10 +384,7 @@ export function GroupSettingsDialog(props: {
                         onClick={() => setSection(id)}
                       >
                         <SidebarLeadingIcon size="sm" tone="text-inherit">
-                          <CentralIcon
-                            name={GROUP_SETTINGS_SECTION_ICONS[id]}
-                            className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
-                          />
+                          <SectionIcon className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
                         </SidebarLeadingIcon>
                         <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
                           {GROUP_SETTINGS_SECTION_LABELS[id]}

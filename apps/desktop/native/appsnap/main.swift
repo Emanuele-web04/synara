@@ -117,8 +117,10 @@ do {
         withExtendedLifetime((monitor, commandListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
-    case let .audioLevel(sources):
-        let meter = AudioLevelMeter(emitter: emitter, sources: sources)
+    case .listAudioInputs:
+        emitter.emit(["type": "audio-inputs", "devices": listAudioInputDevices()])
+    case let .audioLevel(sources, inputDeviceUID):
+        let meter = AudioLevelMeter(emitter: emitter, sources: sources, inputDeviceUID: inputDeviceUID)
         let parentProcessMonitor = ParentProcessMonitor()
         parentProcessMonitor.start()
 

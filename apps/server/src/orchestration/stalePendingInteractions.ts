@@ -10,7 +10,8 @@
  * reach, so every code path that learns a callback is gone reports the row the
  * same way: a `provider.*.respond.failed` activity carrying the canonical stale
  * detail. The projection recognises that detail and moves the row to
- * `uncertain`, which drops the pending counts and clears the question card.
+ * terminal `confirmed` with `resolvedAt`, which drops the pending counts and
+ * clears the question card even after the failure activity leaves the window.
  *
  * Callers: {@link module:startupTurnReconciliation} (process boundary) and the
  * runtime-event settlement in `Layers/ProviderRuntimeIngestion.ts`
@@ -35,16 +36,14 @@ export type ThreadActivityAppendCommand = Extract<
 /**
  * True when a durable interaction row still expects an answer.
  *
- * `confirmed` rows were answered. `uncertain` rows were already reported as
- * unanswerable, so re-reporting them would append a duplicate failure activity
- * on every settlement signal. Everything else (`pending`, `retryable`, and a
- * `responding` claim whose response never landed) is still holding a question
- * open.
+ * `confirmed` rows are terminal. Everything else, including legacy `uncertain`
+ * rows whose callback was invalidated without terminal settlement, still needs
+ * to be closed when its runtime is gone.
  */
 export function isUnsettledPendingInteraction(
   row: Pick<ProjectionPendingInteraction, "status">,
 ): boolean {
-  return row.status !== "confirmed" && row.status !== "uncertain";
+  return row.status !== "confirmed";
 }
 
 export function pendingInteractionRequestKind(

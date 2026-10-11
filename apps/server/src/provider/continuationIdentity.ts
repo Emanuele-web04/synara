@@ -10,6 +10,7 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 import {
+  prepareCodexHomeOverlay,
   prepareCodexHomeOverlayFromPreparedContinuationSource,
   readCodexSharedContinuationGeneration,
   type CodexProcessEnvInput,
@@ -131,6 +132,22 @@ export async function prepareProviderContinuationIdentityForExplicitResume(
 ): Promise<string | undefined> {
   if (provider === "codex") {
     await prepareCodexHomeOverlayFromPreparedContinuationSource(codexContinuationInput(options));
+  }
+  return providerContinuationIdentity(provider, options);
+}
+
+/**
+ * Prepares provider-native storage for a first external import. Unlike the
+ * persisted-resume paths, a fresh import may establish the initial shared
+ * source generation; already-prepared sources keep their verified generation
+ * and damaged stores still fail instead of being recreated.
+ */
+export async function prepareProviderContinuationIdentityForImport(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): Promise<string | undefined> {
+  if (provider === "codex") {
+    await prepareCodexHomeOverlay(codexContinuationInput(options));
   }
   return providerContinuationIdentity(provider, options);
 }

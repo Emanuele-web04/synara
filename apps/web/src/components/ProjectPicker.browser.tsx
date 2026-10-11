@@ -13,6 +13,7 @@ import { useStore } from "../store";
 import { initialState } from "../storeState";
 import type { Project, SidebarThreadSummary } from "../types";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-picker-synara");
 const PROJECT_ROOT = "/Users/tester/projects/synara";
@@ -112,6 +113,58 @@ describe("ProjectPicker workspace choices", () => {
     }
   });
 
+  const dotProjectId = ProjectId.makeUnsafe("project-picker-hermes");
+  function addDotProject() {
+    useStore.setState({
+      projects: [
+        project,
+        {
+          ...project,
+          id: dotProjectId,
+          name: ".hermes",
+          remoteName: ".hermes",
+          folderName: ".hermes",
+          cwd: "/Users/tester/.hermes",
+        },
+      ],
+    });
+  }
+
+  it("lists a registered dot-folder project in the chat workspace picker", async () => {
+    addDotProject();
+    const onSelectProject = vi.fn();
+    const onSelectWorkspaceRoot = vi.fn();
+    const screen = await mountPicker({ onSelectProject, onSelectWorkspaceRoot });
+
+    try {
+      await page.getByTestId("workspace-picker-trigger").click();
+      await page.getByRole("option", { name: ".hermes", exact: true }).click();
+      expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(dotProjectId);
+      expect(onSelectWorkspaceRoot).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("lists and selects a registered project whose folder starts with a dot", async () => {
+    addDotProject();
+    const onSelectProject = vi.fn();
+    const screen = await mountPicker({
+      selectionMode: "project",
+      selectedProjectId: dotProjectId,
+      onSelectProject,
+    });
+
+    try {
+      await expect.element(page.getByTestId("project-picker-trigger")).toHaveTextContent(".hermes");
+      await page.getByTestId("project-picker-trigger").click();
+      await page.getByRole("option", { name: ".hermes", exact: true }).click();
+      expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(dotProjectId);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("does not add a project choice when a thread creates another worktree", async () => {
     const screen = await mountPicker();
 
@@ -167,6 +220,47 @@ describe("ProjectPicker workspace choices", () => {
       expect(onSelectProject).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
+    }
+  });
+});
+
+describe("ProjectPicker new projects", () => {
+  function installNativeApi(overrides: { pickFolder?: () => Promise<string | null> }) {
+    const previous = Object.getOwnPropertyDescriptor(window, "nativeApi");
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        dialogs: { pickFolder: overrides.pickFolder ?? (async () => null) },
+      },
+    });
+    return () => {
+      if (previous) Object.defineProperty(window, "nativeApi", previous);
+      else Reflect.deleteProperty(window, "nativeApi");
+    };
+  }
+
+  afterEach(() => {
+    useCreateProjectDialogStore.setState({ isOpen: false });
+  });
+
+  it("opens the shared Create project dialog when there is no folder dialog", async () => {
+    const pickFolder = vi.fn(async () => null);
+    const restore = installNativeApi({ pickFolder });
+    const onCreateProjectFromPath = vi.fn();
+    const screen = await mountPicker({
+      selectionMode: "project",
+      onSelectProject: vi.fn(),
+      onCreateProjectFromPath,
+    });
+    try {
+      await page.getByTestId("project-picker-trigger").click();
+      await page.getByText("New project").click();
+      await vi.waitFor(() => expect(useCreateProjectDialogStore.getState().isOpen).toBe(true));
+      expect(onCreateProjectFromPath).not.toHaveBeenCalled();
+      await expect.element(page.getByPlaceholder("Search projects")).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+      restore();
     }
   });
 });

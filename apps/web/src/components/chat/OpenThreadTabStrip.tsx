@@ -7,9 +7,10 @@
 // Depends on: open-thread tab hooks/store, the shared SurfaceContentTabs, and the sidebar's
 //             thread context menu.
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
-import { useState } from "react";
+import type { ProjectId, ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
+import { useEffect, useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
   useActivateThreadTab,
@@ -18,7 +19,10 @@ import {
   useRecordOpenThreadTab,
 } from "~/hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { resolveShortcutCommand } from "~/keybindings";
 import { TerminalIcon } from "~/lib/icons";
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { showThreadContextMenu } from "~/lib/threadContextMenu";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -33,6 +37,7 @@ import {
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
+import { getNextVisibleSidebarThreadId } from "../Sidebar.logic";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import { toastManager } from "../ui/toast";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
@@ -46,9 +51,10 @@ const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: st
 
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
+  keybindings: ResolvedKeybindingsConfig;
   onRenameActiveThread: () => void;
 }) {
-  const { activeThreadId } = props;
+  const { activeThreadId, keybindings } = props;
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
@@ -70,6 +76,28 @@ export function OpenThreadTabStrip(props: {
     activate: activateThreadTab,
   });
 
+  // Previous/next tab, wrapping at either end like a browser. Steps from the tab painted
+  // as active, so a quick run of presses walks the strip before each thread renders.
+  const onKeyDown = useStableCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat) return;
+    const command = resolveShortcutCommand(event, keybindings, {
+      context: { terminalFocus: isTerminalFocused() },
+    });
+    if (command !== "threadTab.next" && command !== "threadTab.previous") return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextThreadId = getNextVisibleSidebarThreadId({
+      visibleThreadIds: tabs.map((tab) => tab.threadId),
+      activeThreadId: shownThreadId,
+      direction: command === "threadTab.previous" ? "backward" : "forward",
+    });
+    if (nextThreadId && nextThreadId !== shownThreadId) selectTab(nextThreadId);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onKeyDown]);
+
   const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
     cancelTabSelection();
     void enqueueClose(() => {
@@ -83,8 +111,16 @@ export function OpenThreadTabStrip(props: {
         openTab: activateThreadTab,
         replaceLastTab: replaceLastTabWithFreshChat(() => {
           const project = projects.find((candidate) => candidate.id === projectId);
+          // An unsent draft hidden from the strip is still open: go back to it with its
+          // text instead of minting a fresh chat that would discard it.
+          const openDraft = useComposerDraftStore
+            .getState()
+            .getDraftThreadByProjectId(projectId, "chat");
+          const reuseOpenDraft =
+            openDraft !== null &&
+            useOpenThreadTabsStore.getState().threadIds.includes(openDraft.threadId);
           return handleNewThread(projectId, {
-            fresh: true,
+            fresh: !reuseOpenDraft,
             // Home and Hubs use their container workspace; ordinary projects keep
             // their chosen local/worktree default through handleNewThread.
             ...(project && project.kind !== "project"
@@ -143,7 +179,6 @@ export function OpenThreadTabStrip(props: {
       if (row) closeTabsInScope(tab.threadId, row.scope);
     };
     if (
-      !tab.isDraft &&
       showThreadContextMenu(tab.threadId, position, {
         extraItems: closeItems,
         onExtraAction: onCloseAction,
@@ -151,8 +186,7 @@ export function OpenThreadTabStrip(props: {
     ) {
       return;
     }
-    // An unsent draft has no thread actions yet (and a phone's closed sidebar sheet cannot
-    // show them): the menu is just the tab's close rows.
+    // A phone's closed sidebar sheet cannot show thread actions; keep the tab's close rows available.
     const api = readNativeApi();
     if (!api || closeItems.length === 0) return;
     void api.contextMenu.show(closeItems, position).then((itemId) => {
@@ -168,9 +202,6 @@ export function OpenThreadTabStrip(props: {
       onMove={moveThreadTab}
       tabs={tabs.map((tab) => {
         const active = tab.threadId === shownThreadId;
-        // A lone unsent draft has nowhere to go: closing it would land on a new chat
-        // that is the same draft again.
-        const closable = tabs.length > 1 || !tab.isDraft;
         return {
           key: tab.threadId,
           title: tab.title,
@@ -188,7 +219,7 @@ export function OpenThreadTabStrip(props: {
           onSelect: () => {
             if (!active) selectTab(tab.threadId);
           },
-          onClose: closable ? () => closeTab(tab.threadId, tab.projectId) : undefined,
+          onClose: () => closeTab(tab.threadId, tab.projectId),
           onTitleDoubleClick:
             tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined,
           onContextMenu: (position) => openTabContextMenu(tab, position),

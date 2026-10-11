@@ -2,7 +2,7 @@ import {
   DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
   DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
 } from "@synara/contracts";
-import { ipcMain, type IpcMainEvent, type WebContents } from "electron";
+import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 
 import type { BetaDiagnostics } from "./betaDiagnostics";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -14,10 +14,16 @@ export function attachBetaRendererDiagnostics(
 ): void {
   const channels = DESKTOP_IPC_CHANNELS.betaDiagnostics;
   let capturesUnhandledErrors = false;
-  const ownsEvent = (event: IpcMainEvent): boolean =>
+  const ownsEvent = (event: IpcMainEvent | IpcMainInvokeEvent): boolean =>
     event.sender === webContents && event.senderFrame === webContents.mainFrame;
   const onReady = (event: IpcMainEvent): void => {
-    if (ownsEvent(event)) capturesUnhandledErrors = true;
+    if (ownsEvent(event)) {
+      capturesUnhandledErrors = true;
+      diagnostics.recordActivity({ activity: "renderer.ready", phase: "succeeded" });
+    }
+  };
+  const onActivity = (event: IpcMainEvent, payload: unknown): void => {
+    if (ownsEvent(event)) diagnostics.recordActivity(payload);
   };
   const onError = (event: IpcMainEvent, payload: unknown): void => {
     if (!ownsEvent(event) || payload === null || typeof payload !== "object") return;
@@ -37,9 +43,20 @@ export function attachBetaRendererDiagnostics(
   };
   ipcMain.on(channels.rendererReady, onReady);
   ipcMain.on(channels.reportError, onError);
+  ipcMain.on(channels.recordActivity, onActivity);
+  ipcMain.handle(channels.reportIssue, (event, payload: unknown) => {
+    if (!ownsEvent(event)) return null;
+    return diagnostics.trackIssue("renderer", payload);
+  });
+  ipcMain.handle(channels.getReportStatus, (event, id: unknown) =>
+    ownsEvent(event) ? diagnostics.getReportStatus(id) : "unavailable",
+  );
   webContents.on("destroyed", () => {
     ipcMain.removeListener(channels.rendererReady, onReady);
     ipcMain.removeListener(channels.reportError, onError);
+    ipcMain.removeListener(channels.recordActivity, onActivity);
+    ipcMain.removeHandler(channels.reportIssue);
+    ipcMain.removeHandler(channels.getReportStatus);
   });
   webContents.on("did-start-navigation", (details) => {
     if (details.isMainFrame && !details.isSameDocument) capturesUnhandledErrors = false;

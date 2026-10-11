@@ -92,6 +92,13 @@ describe("ChatTranscriptPane", () => {
   it("leaves the message timeline interactive when no agent detail is open", () => {
     expect(renderTranscriptPaneMarkup({})).not.toContain("inert");
   });
+  it("makes the pane inert, not aria-hidden, behind the terminal workspace tab", () => {
+    // aria-hidden over a still-focused descendant is blocked by the browser; inert also
+    // releases that focus.
+    const markup = renderTranscriptPaneMarkup({ terminalWorkspaceTerminalTabActive: true });
+    expect(markup).toMatch(/^<div data-chat-transcript-pane="true" inert=""/);
+    expect(markup).not.toMatch(/^<div[^>]*aria-hidden/);
+  });
   it("renders a stored thread error in flow above the transcript, never as an overlay", () => {
     const markup = renderTranscriptPaneMarkup({
       threadError: "Provider adapter request failed (grok): connect ETIMEDOUT",

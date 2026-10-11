@@ -339,6 +339,176 @@ beforeEach(() => {
 });
 
 describe("useSidebarThreadActions", () => {
+  it("uses elapsed durations and tomorrow at 9am in the user's local calendar", async () => {
+    const now = new Date(2026, 9, 2, 23, 45);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
+    try {
+      const controller = render();
+      controller.snoozeThread(THREAD_ID, 30);
+      controller.snoozeThread(THREAD_ID, 60);
+      controller.snoozeThread(THREAD_ID, 120);
+      controller.snoozeThread(THREAD_ID, "tomorrow");
+      await vi.waitFor(() => expect(harness.dispatchCommand).toHaveBeenCalledTimes(4));
+      expect(harness.dispatchCommand.mock.calls.map(([command]) => command.snoozedUntil)).toEqual([
+        new Date(2026, 9, 3, 0, 15).toISOString(),
+        new Date(2026, 9, 3, 0, 45).toISOString(),
+        new Date(2026, 9, 3, 1, 45).toISOString(),
+        new Date(2026, 9, 3, 9, 0).toISOString(),
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("schedules and cancels snooze through thread metadata without navigating", async () => {
+    const controller = render();
+    controller.setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: "2026-10-02T12:00:00.000Z",
+        }),
+      ),
+    );
+    controller.setThreadSnoozedUntil(THREAD_ID, null);
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: null,
+        }),
+      ),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it("reports snooze failures without hiding the server-confirmed row", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    render().setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(sidebarThreads[0]?.snoozedUntil ?? null).toBeNull();
+  });
+
+  it("leaves the focused chat only after snooze is confirmed and offers undo", async () => {
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    confirm({ sequence: 1 });
+    await vi.waitFor(() =>
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { threadId: FALLBACK_ID },
+        }),
+      ),
+    );
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0] as {
+      data: { archiveUndo: { message: string; onUndo: () => Promise<boolean> } };
+    };
+    expect(undoToast.data.archiveUndo.message).toMatch(/^Snoozed until /);
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, snoozedUntil: null }),
+    );
+  });
+
+  it("does not change focus after a failed snooze or a route change during confirmation", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    controller.snoozeThread(THREAD_ID, 30);
+    render({ routeThreadId: FALLBACK_ID });
+    confirm({ sequence: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(["open-split", "leave-and-return"] as const)(
+    "keeps newer navigation when snooze confirmation follows %s",
+    async (navigation) => {
+      let confirm!: (value: { sequence: number }) => void;
+      harness.dispatchCommand.mockReturnValueOnce(
+        new Promise((resolve) => {
+          confirm = resolve;
+        }),
+      );
+      const controller = render({ routeThreadId: THREAD_ID });
+      controller.snoozeThread(THREAD_ID, 30);
+      if (navigation === "open-split") {
+        render({
+          routeThreadId: THREAD_ID,
+          activeSplitView: { id: "split-snooze" } as never,
+          routeSplitViewId: "split-snooze",
+        });
+      } else {
+        render({ routeThreadId: FALLBACK_ID });
+        render({ routeThreadId: THREAD_ID });
+      }
+      confirm({ sequence: 1 });
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+      expect(harness.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+        }),
+      );
+    },
+  );
+
+  it("returns focus to an ordinary visible chat rather than a dock chat or subagent", async () => {
+    const dockChat = makeThread(ThreadId.makeUnsafe("dock-chat"), {
+      lastVisitedAt: "2026-10-03T12:00:00.000Z",
+    });
+    const child = makeThread(ThreadId.makeUnsafe("visible-subagent"), {
+      parentThreadId: FALLBACK_ID,
+      lastVisitedAt: "2026-10-03T11:00:00.000Z",
+    });
+    const focused = makeThread(THREAD_ID);
+    const fallback = makeThread(FALLBACK_ID);
+    sidebarThreads = [focused, fallback, dockChat, child];
+    render({
+      routeThreadId: THREAD_ID,
+      sidebarTreeThreads: [focused, fallback, child],
+    }).snoozeThread(THREAD_ID, 30);
+    await flushActionResponses();
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+    );
+  });
+
+  it("opens a new chat if all other chats are snoozed", async () => {
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID, { snoozedUntil: "2026-10-03T12:00:00Z" }),
+    ];
+    render({ routeThreadId: THREAD_ID }).snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() => expect(harness.handleNewChat).toHaveBeenCalled());
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
   it("pins optimistically and dispatches thread metadata", async () => {
     let controller = render();
 
@@ -447,6 +617,82 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  it.each([true, false])("offers Done undo (focused chat: %s)", async (focused) => {
+    deferWindowTimers();
+    const routeThreadId = focused ? THREAD_ID : FALLBACK_ID;
+    const controller = render({ routeThreadId });
+
+    controller.setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    expect(undoToast).toEqual(
+      expect.objectContaining({
+        timeout: 0,
+        data: expect.objectContaining({
+          allowCrossThreadVisibility: true,
+          dismissAfterVisibleMs: expect.any(Number),
+          archiveUndo: expect.objectContaining({ onUndo: expect.any(Function) }),
+        }),
+      }),
+    );
+    harness.navigate.mockClear();
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, isSettled: false }),
+    );
+    expect(render({ routeThreadId }).settledOverrideByThreadId.get(THREAD_ID)).toBe(false);
+    if (focused) {
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+      );
+    } else {
+      expect(harness.navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("waits for Done confirmation before offering undo", async () => {
+    deferWindowTimers();
+    let acceptDone!: (response: { sequence: number }) => void;
+    harness.dispatchCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (acceptDone = resolve)),
+    );
+
+    render().setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    expect(harness.toast).not.toHaveBeenCalled();
+
+    acceptDone({ sequence: 1 });
+    await flushActionResponses();
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it("keeps Done undo available for retry when reopening fails", async () => {
+    deferWindowTimers();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    render({ routeThreadId: THREAD_ID }).setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    harness.navigate.mockClear();
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("undo rejected"));
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(false);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.toast).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Unable to undo done" }),
+    );
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+    );
+    errorLog.mockRestore();
+  });
+
   it("keeps the focused chat when marking it done fails", async () => {
     deferWindowTimers();
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -460,6 +706,7 @@ describe("useSidebarThreadActions", () => {
     expect(harness.toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Unable to mark thread as done" }),
     );
+    expect(harness.toast).toHaveBeenCalledOnce();
     errorLog.mockRestore();
   });
 
@@ -475,6 +722,7 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
   });
 
   it("does not navigate for an accepted Done request superseded by Undo", async () => {
@@ -493,6 +741,7 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
   });
 
   it("uses human recency across projects instead of the sidebar working priority", async () => {

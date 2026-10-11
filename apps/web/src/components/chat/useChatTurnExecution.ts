@@ -19,6 +19,7 @@ import { getDefaultModel } from "@synara/shared/model";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
 import { runComposerSendOnce } from "~/lib/composerSendOwnership";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -42,15 +43,18 @@ import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  hasServerReceivedSentMessage,
   resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
   threadSettingsDispatchFields,
+  threadHasProviderLockingActivity,
   turnStartDispatchFields,
   type TurnDispatchSettings,
 } from "../ChatView.logic";
@@ -109,6 +113,7 @@ interface PreparedChatTurn {
 }
 type ChatTurnExecutionInput = Pick<
   ChatTurnSubmissionInput,
+  | "prepareProviderHandoffForSend"
   | "isServerThread"
   | "setStoreThreadWorkspace"
   | "clearLocalDispatchWorktreeSetup"
@@ -153,6 +158,7 @@ type ChatTurnExecutionInput = Pick<
 >;
 
 export function useChatTurnExecution({
+  prepareProviderHandoffForSend,
   isServerThread,
   setStoreThreadWorkspace,
   clearLocalDispatchWorktreeSetup,
@@ -253,6 +259,29 @@ export function useChatTurnExecution({
         preparedTurnDispatchSettings,
         queuedChatTurn,
       );
+      const settledDraftDispatch = await waitForDraftThreadDispatchToSettle(threadIdForSend);
+      if (
+        (settledDraftDispatch?.kind === "error" && settledDraftDispatch.outcomeUnknown) ||
+        (!queuedChatTurn &&
+          settledDraftDispatch?.kind === "dispatched" &&
+          !settledDraftDispatch.deferred)
+      ) {
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        // Submission already armed local UI state and added an optimistic row.
+        // The shared draft dispatch owns the real message; release this attempt.
+        sendInFlightRef.current = false;
+        worktreeSetupResolutionRef.current = null;
+        resetLocalDispatch();
+        if (activeThreadIdRef.current === threadIdForSend) {
+          setOptimisticUserMessages((messages) =>
+            messages.filter((message) => message.id !== messageIdForSend),
+          );
+        }
+        return false;
+      }
       let createdServerThreadForLocalDraft = false;
       let createdWorktreeForSendPath: string | null = null;
       let switchedToLocalCheckout = false;
@@ -365,7 +394,10 @@ export function useChatTurnExecution({
               associatedWorktreeBranch: nextAssociatedWorktreeBranch,
               associatedWorktreeRef: nextAssociatedWorktreeRef,
               lastKnownPr: activeThread.lastKnownPr ?? null,
-              createdAt: activeThread.createdAt,
+              // The draft timestamp records when the composer opened. The durable
+              // thread is created by this first send, so order it at the message's
+              // send time just like the turn itself.
+              createdAt: messageCreatedAt,
             },
             api,
           );
@@ -506,7 +538,7 @@ export function useChatTurnExecution({
             if (setupTerminal) {
               const setupActivityAbortController = new AbortController();
               const setupActivityWait = waitForSetupScriptTerminalActivity({
-                threadId: threadIdForSend,
+                threadId: setupTerminal.threadId,
                 terminalId: setupTerminal.terminalId,
                 signal: setupActivityAbortController.signal,
               });
@@ -525,9 +557,21 @@ export function useChatTurnExecution({
         // script ran (the creation-step race above only guards the first step).
         await consumeWorktreeSetupResolution();
 
+        const needsProviderHandoff =
+          isServerThread &&
+          queuedChatTurn === null &&
+          threadHasProviderLockingActivity(activeThread) &&
+          dispatchSettings.modelSelection.provider !== activeThread.modelSelection.provider;
         if (isServerThread) {
           await persistThreadSettingsForNextTurn({
-            ...threadSettingsDispatchFields(dispatchSettings),
+            // The explicit handoff owns a provider switch. An ordinary metadata
+            // update first would erase its source and make the server reject it.
+            ...(needsProviderHandoff
+              ? {
+                  runtimeMode: dispatchSettings.runtimeMode,
+                  interactionMode: dispatchSettings.interactionMode,
+                }
+              : threadSettingsDispatchFields(dispatchSettings)),
             threadId: threadIdForSend,
             createdAt: messageCreatedAt,
           });
@@ -567,6 +611,30 @@ export function useChatTurnExecution({
         // turn. Once they settle, consume the last possible choice before the
         // card advances to the non-resolvable "Starting session" step.
         await consumeWorktreeSetupResolution();
+        // A provider picked over the thread's own one: hand off in place while
+        // the message already shows. A failure throws into the rollback below,
+        // which returns the message to the composer.
+        if (needsProviderHandoff && prepareProviderHandoffForSend) {
+          await prepareProviderHandoffForSend(activeThread, dispatchSettings.modelSelection);
+          // The optimistic row predates provider startup. Position this send
+          // after its completed handoff, including when the server clock is ahead.
+          const handoffCreatedAt = getThreadFromState(
+            useStore.getState(),
+            threadIdForSend,
+          )?.activities.findLast((activity) => activity.kind === "provider.handoff")?.createdAt;
+          messageCreatedAt = new Date(
+            Math.max(Date.now(), Date.parse(handoffCreatedAt ?? messageCreatedAt) + 1),
+          ).toISOString();
+          if (activeThreadIdRef.current === threadIdForSend) {
+            setOptimisticUserMessages((messages) =>
+              messages.map((message) =>
+                message.id === messageIdForSend
+                  ? { ...message, createdAt: messageCreatedAt }
+                  : message,
+              ),
+            );
+          }
+        }
         // Carry the expected message id so a snapshot rebuilt after an interim
         // reset (thread switch, ack effect) keeps the message-echo ack signal.
         beginLocalDispatch({
@@ -587,7 +655,10 @@ export function useChatTurnExecution({
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
-          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
+          if (
+            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
+            isThreadDetailAwaitingVerification(threadIdForSend)
+          ) {
             throw new Error(
               "Choose how to resume the held message before sending another message.",
             );
@@ -663,6 +734,18 @@ export function useChatTurnExecution({
           );
         }
       })().catch(async (err: unknown) => {
+        // The server already recorded this message, so the turn exists whatever failed
+        // around it. Rolling back would delete the promoted thread and hand the sent
+        // prompt back to the composer, where it survives reloads and gets sent again.
+        if (
+          !turnStartSucceeded &&
+          hasServerReceivedSentMessage(
+            getThreadFromState(useStore.getState(), threadIdForSend),
+            messageIdForSend,
+          )
+        ) {
+          turnStartSucceeded = true;
+        }
         // A user-cancelled worktree setup unwinds through this same rollback,
         // but silently: no error styling on the step row, no thread error.
         const setupCancelled = err instanceof WorktreeSetupCancelledError;
@@ -924,6 +1007,7 @@ export function useChatTurnExecution({
       worktreeSetupResolutionRef,
       scheduleFailedWorktreeSetupDispatchReset,
       resetLocalDispatch,
+      prepareProviderHandoffForSend,
     ],
   );
   return useCallback(

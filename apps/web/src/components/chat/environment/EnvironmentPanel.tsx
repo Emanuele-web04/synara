@@ -27,7 +27,6 @@ import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
 import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
@@ -35,7 +34,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
+import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -63,6 +62,8 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
@@ -120,6 +121,11 @@ export interface EnvironmentPanelProps {
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
   sidechats: readonly EnvironmentSidechatPanelItem[] | null;
+  /**
+   * Every subagent the thread (or, from a subagent thread, its parent) spawned. The panel
+   * shows a compact summary that opens the full list in the right dock. Null hides it.
+   */
+  subagentRoster?: EnvironmentSubagentRoster | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -226,6 +232,7 @@ export function EnvironmentPanel({
   diffOpen,
   threadAutomations,
   sidechats,
+  subagentRoster: subagentRosterProp,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
@@ -256,6 +263,7 @@ export function EnvironmentPanel({
   const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
+  const subagentRoster = subagentRosterProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -314,13 +322,13 @@ export function EnvironmentPanel({
 
       {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
-          icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          icon={<FolderIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="truncate" title={groupFolderPath}>
               {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
-          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
@@ -431,6 +439,16 @@ export function EnvironmentPanel({
         />
       ) : null}
 
+      {settings.showEnvironmentSubagents && subagentRoster && activeThreadId ? (
+        <EnvironmentSubagentsSection
+          roster={subagentRoster}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "subagents" });
+            onClose();
+          }}
+        />
+      ) : null}
+
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
@@ -443,7 +461,7 @@ export function EnvironmentPanel({
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
               onOpenGithubRepository(githubRepository.url);
               onClose();

@@ -3,10 +3,10 @@
 // Layer: Sidebar UI primitive
 
 import { StatusDot } from "~/components/ui/status-chip";
-import { PencilIcon } from "~/lib/icons";
+import { ClockIcon, PencilIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ThreadStatusPill } from "./Sidebar.logic";
-import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
+import { ThreadBackgroundWorkSpinner, ThreadRunningSpinner } from "./ThreadRunningSpinner";
 
 export function SidebarUnreadCompletionGlyph({ className }: { className?: string }) {
   return (
@@ -35,6 +35,23 @@ export function SidebarDraftGlyph({ className }: { className?: string }) {
 export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
   if (status.label === "Completed") {
     return <SidebarUnreadCompletionGlyph />;
+  }
+  if (status.label === "Reminder") {
+    return (
+      <span role="img" aria-label="Snooze reminder" className="inline-flex shrink-0 text-info">
+        <ClockIcon className="size-3" aria-hidden />
+      </span>
+    );
+  }
+  if (status.label === "In Background") {
+    const count = status.backgroundTaskCount ?? 0;
+    const title =
+      count > 0 ? `In background · ${count} ${count === 1 ? "task" : "tasks"}` : "In background";
+    return (
+      <span role="img" aria-label={title} title={title} className="inline-flex shrink-0">
+        <ThreadBackgroundWorkSpinner />
+      </span>
+    );
   }
   if (status.pulse) {
     return (

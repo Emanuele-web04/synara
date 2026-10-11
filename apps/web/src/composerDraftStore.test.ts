@@ -355,7 +355,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
-  it("marks promoted drafts without deleting composer state until finalization", () => {
+  it("retires promoted draft registration without discarding newer composer content", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);
     store.setPrompt(threadId, "keep me while server thread hydrates");
@@ -368,10 +368,26 @@ describe("composerDraftStore project draft thread mapping", () => {
       "keep me while server thread hydrates",
     );
 
-    useComposerDraftStore.getState().finalizePromotedDraftThread(threadId);
+    // The send owner consumes the captured prompt; subsequent edits belong to the server task.
+    store.clearComposerContent(threadId);
+    store.setPrompt(threadId, "newer unsent edit");
+    store.addImage(threadId, makeImage({ id: "newer-image", previewUrl: "blob:newer" }));
+    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("newer-queued-turn"));
+    const currentDraft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+
+    finalizePromotedDraftThreads(new Set([threadId]));
 
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().projectDraftThreadIdByProjectId[projectId],
+    ).toBeUndefined();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBe(currentDraft);
+    expect(revokeSpy).not.toHaveBeenCalledWith("blob:newer");
+    store.finalizePromotedDraftThread(threadId);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBe(currentDraft);
+    store.clearDraftThread(threadId);
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:newer");
   });
 
   it.each([true, false])(
@@ -381,6 +397,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       store.setProjectDraftThreadId(projectId, threadId);
       store.setPrompt(threadId, "already sent");
       store.setEnableComputerControl(threadId, enabled);
+      store.clearComposerContent(threadId);
 
       markPromotedDraftThreads(new Set([threadId]));
       finalizePromotedDraftThreads(new Set([threadId]));

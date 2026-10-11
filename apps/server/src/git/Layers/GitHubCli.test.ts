@@ -256,6 +256,7 @@ layer("GitHubCliLive", (it) => {
           url: "https://github.com/o/r/pull/42",
           baseRefName: "main",
           headRefName: "feature/snapshot",
+          headRefOid: "abc123",
           state: "OPEN",
           statusCheckRollup: [
             {
@@ -314,6 +315,7 @@ layer("GitHubCliLive", (it) => {
       ]);
       assert.strictEqual(result.summary.number, 42);
       assert.strictEqual(result.summary.state, "open");
+      assert.strictEqual(result.headSha, "abc123");
       // Fields gh did not report normalize to safe fallbacks, not fabricated values.
       assert.strictEqual(result.summary.isDraft, false);
       assert.strictEqual(result.summary.mergeability, "unknown");
@@ -322,7 +324,13 @@ layer("GitHubCliLive", (it) => {
       assert.strictEqual(result.summary.changedFiles, null);
       expect(mockedRunProcess).toHaveBeenCalledWith(
         "gh",
-        ["pr", "view", "42", "--json", `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`],
+        [
+          "pr",
+          "view",
+          "42",
+          "--json",
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
+        ],
         expect.objectContaining({ cwd: "/repo" }),
       );
     }),

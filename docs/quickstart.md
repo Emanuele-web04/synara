@@ -56,7 +56,7 @@ Follow the transcript and tool activity while the provider works.
 
 Useful controls:
 
-- `mod+j` opens the terminal drawer.
+- `mod+j` opens the terminal panel.
 - `mod+d` opens the diff view.
 - `mod+shift+b` opens the browser.
 - Approval and user-input requests appear in the task.
@@ -66,6 +66,7 @@ Useful controls:
 In the desktop app, choose **View → Always on Top** to keep Synara above other windows
 while working in another app. Choose it again to return to normal window behavior. This
 option starts off whenever you open a new Synara window and is not saved between launches.
+On Linux, this requires X11; [Electron does not support Always on Top on Wayland](https://www.electronjs.org/docs/latest/api/browser-window#winsetalwaysontopflag-level-relativelevel).
 
 Do not wait passively for a final message if the intermediate work is already incorrect.
 

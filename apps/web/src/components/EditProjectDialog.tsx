@@ -112,7 +112,9 @@ function EditProjectForm({
             {/* Same field as Add project's folder path: the glyph sits in a leading cell,
                 here as the button that opens the picker. */}
             <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
-              <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0 has-[>button]:ms-0">
+              {/* Rounded and clipped like the field: the button's hover / open fill would otherwise
+                square off past the field's corners. */}
+              <InputGroupAddon className="w-10 self-stretch overflow-hidden rounded-s-[inherit] border-e border-foreground/12 ps-0 has-[>button]:ms-0">
                 <PopoverTrigger
                   render={
                     <button

@@ -7,7 +7,7 @@
 
 import "../../index.css";
 
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -85,6 +85,35 @@ describe("SurfaceTabChip selection", () => {
 describe("SurfaceTabStrip", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("leaves vertical drift within a horizontal gesture alone, then accepts a fresh mouse wheel", async () => {
+    await render(
+      <SurfaceTabStrip style={{ width: 240 }} data-testid="strip">
+        <div style={{ width: 1200, height: 40, flexShrink: 0 }}>Tabs</div>
+      </SurfaceTabStrip>,
+    );
+    const strip = page.getByTestId("strip").element() as HTMLElement;
+
+    // Native input exercises the browser's scrolling, rather than implementing it in a mock.
+    await userEvent.wheel(strip, { delta: { x: 120, y: 0 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(120));
+
+    // A trackpad can briefly report no horizontal movement while the fingers stay down.
+    // These samples must not become programmatic scrolls in the opposite direction.
+    for (const deltaY of [-24, 16, -8]) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      strip.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      expect(strip.scrollLeft).toBe(120);
+    }
+
+    await userEvent.wheel(strip, { delta: { x: -60, y: 0 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(60));
+
+    // After the gesture is quiet, an ordinary vertical mouse wheel still scrolls tabs.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await userEvent.wheel(strip, { delta: { x: 0, y: 40 } });
+    await vi.waitFor(() => expect(strip.scrollLeft).toBe(100));
   });
 
   it("scrolls a newly active tab hidden past the strip's edge into view", async () => {

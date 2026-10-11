@@ -9,13 +9,13 @@ import type {
   ServerConfig,
   ServerKeybindingEdit,
 } from "@synara/contracts";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
 import { IconButton } from "~/components/ui/icon-button";
 import { SearchInput } from "~/components/ui/search-input";
-import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
+import { ShortcutKbd } from "~/components/ui/kbd";
 import { toastManager } from "~/components/ui/toast";
 import { showConfirmDialogFallback } from "~/confirmDialogFallback";
 import {
@@ -56,14 +56,19 @@ function useShortcutEditor() {
     if (edits.length === 0) return true;
     try {
       const result = await ensureNativeApi().server.editKeybindings({ edits });
+      // Issues arrive with the config update that follows the write; the edit reply
+      // does not carry them.
       queryClient.setQueryData(serverQueryKeys.config(), (current: ServerConfig | undefined) =>
-        current ? { ...current, keybindings: result.keybindings, issues: result.issues } : current,
+        current ? { ...current, keybindings: result.keybindings } : current,
       );
       return true;
     } catch (error) {
+      // The server refuses edits made from bindings that changed in the meantime; load
+      // the current ones so the list and an open dialog show what is really there.
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
       toastManager.add({
         type: "error",
-        title: "Could not save shortcut",
+        title: "Could not change shortcuts",
         description: error instanceof Error ? error.message : "Try again.",
       });
       return false;
@@ -123,11 +128,13 @@ export function KeyboardShortcutsSettingsPanel() {
   const [query, setQuery] = useState("");
   const [recorderTarget, setRecorderTarget] = useState<ShortcutRecorderTarget | null>(null);
   const [recorderOpen, setRecorderOpen] = useState(false);
+  const recorderSessionRef = useRef(0);
   const [isRemoving, setIsRemoving] = useState(false);
   const filteredRows = filterShortcutEditorRows(rows, query);
 
   const record = (row: ShortcutEditorRow, binding: ShortcutEditorBinding | null) => {
-    setRecorderTarget({ row, binding, source });
+    recorderSessionRef.current += 1;
+    setRecorderTarget({ row, binding, session: recorderSessionRef.current });
     setRecorderOpen(true);
   };
   const remove = async (binding: ShortcutEditorBinding) => {
@@ -141,7 +148,7 @@ export function KeyboardShortcutsSettingsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="relative w-full">
         <SearchInput
           type="search"
@@ -186,6 +193,7 @@ export function KeyboardShortcutsSettingsPanel() {
       <ShortcutRecorderDialog
         open={recorderOpen}
         target={recorderTarget}
+        source={source}
         onOpenChange={setRecorderOpen}
         onApply={applyEdits}
       />
@@ -208,21 +216,26 @@ function ShortcutRow({
     <div
       className={cn(
         SETTINGS_CARD_ROW_CLASS_NAME,
-        "group/shortcut grid grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)] items-center gap-4",
+        // Tighter than a regular settings row: this list runs to dozens of commands. The
+        // density setting still scales it.
+        "group/shortcut flex flex-wrap items-center gap-x-3 gap-y-1.5 py-[calc(var(--app-density-settings-row-padding-y,0.625rem)*0.6)]",
       )}
     >
-      <div className="min-w-0 space-y-0.5">
-        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>{row.label}</div>
-        <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{row.description}</div>
+      <div className="min-w-0 flex-1 basis-48">
+        <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "leading-snug")}>{row.label}</div>
+        <div className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "text-ui-sm leading-snug")}>
+          {row.description}
+        </div>
       </div>
-      <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 max-w-full flex-col gap-0.5">
         {row.bindings.length > 0 ? (
           row.bindings.map((binding, index) => (
-            <div key={binding.id} className="flex min-h-7 items-center gap-1">
-              <ShortcutKbd joined shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
+            <div key={binding.id} className="flex min-h-6 flex-wrap items-center gap-0.5">
+              <ShortcutKbd shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
               <IconButton
                 label={`Change the shortcut ${binding.label} for ${row.label}`}
                 tooltip="Change shortcut"
+                disabled={disabled}
                 onClick={() => onRecord(binding)}
               >
                 <PencilIcon className="size-3" />
@@ -232,6 +245,7 @@ function ShortcutRow({
                   label={`Add another shortcut for ${row.label}`}
                   tooltip="Add another shortcut"
                   className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/shortcut:opacity-100 pointer-coarse:opacity-100"
+                  disabled={disabled}
                   onClick={() => onRecord(null)}
                 >
                   <AddPlusIcon className="size-3" />
@@ -249,11 +263,12 @@ function ShortcutRow({
             </div>
           ))
         ) : (
-          <div className="flex min-h-7 items-center gap-1">
+          <div className="flex min-h-6 flex-wrap items-center gap-0.5">
             <span className="mr-1.5 text-ui text-muted-foreground">Unassigned</span>
             <IconButton
               label={`Set a shortcut for ${row.label}`}
               tooltip="Set shortcut"
+              disabled={disabled}
               onClick={() => onRecord(null)}
             >
               <PencilIcon className="size-3" />

@@ -210,10 +210,10 @@ describe("resolveAllowedLocalPreviewFile", () => {
     }
   });
 
-  it("allows PDFs inside the current workspace", async () => {
+  it("allows PDFs inside dot-prefixed workspace directories", async () => {
     const workspace = makeTempDir("synara-pdf-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
-    const pdfPath = path.join(workspace, "docs", "spec.pdf");
+    const pdfPath = path.join(workspace, "..assets", "spec.pdf");
     mkdirSync(path.dirname(pdfPath), { recursive: true });
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
 

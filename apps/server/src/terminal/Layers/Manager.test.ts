@@ -25,7 +25,10 @@ import {
 } from "./Manager";
 import type { ManagedTerminalProfile } from "../managedTerminalWrappers";
 import type { ProcessTreeKiller } from "../processTreeKiller";
-import type { ProcessChildrenSnapshotObserver } from "../windowsProcessSnapshot";
+import {
+  createWindowsProcessSnapshotObserver,
+  type ProcessChildrenSnapshotObserver,
+} from "../windowsProcessSnapshot";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -1192,6 +1195,135 @@ describe("TerminalManager", () => {
     expect(reopened.history).toBe("before \u001b(Bafter\n");
 
     manager.dispose();
+  });
+
+  it("checks current processes before an idle-only close, even without an activity event", async () => {
+    let busy = false;
+    const { manager, ptyAdapter } = makeManager(5, {
+      subprocessChecker: async () => busy,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      const opened = await manager.open(openInput());
+      busy = true;
+      const input = { threadId: "thread-1", terminalId: "default", onlyIfIdle: true };
+      await expect(manager.close(input)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+      expect((await manager.open(openInput())).pid).toBe(opened.pid);
+
+      busy = false;
+      await manager.close(input);
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it.each(["unavailable", "busy", "failed"])(
+    "preserves a terminal when the process snapshot is %s during an idle-only close",
+    async (state) => {
+      let closing = false;
+      const { manager, ptyAdapter } = makeManager(5, {
+        processSnapshotObserver: {
+          capture: async () => {
+            if (!closing) return new Map();
+            if (state === "failed") throw new Error("snapshot failed");
+            return state === "unavailable"
+              ? null
+              : new Map([[9000, [{ pid: 9100, command: "node build.js" }]]]);
+          },
+          retryDelayMs: () => 60_000,
+          dispose: vi.fn(),
+        },
+      });
+      try {
+        await manager.open(openInput());
+        closing = true;
+        await expect(
+          manager.close({ threadId: "thread-1", terminalId: "default", onlyIfIdle: true }),
+        ).rejects.toThrow();
+        expect(ptyAdapter.processes[0]?.killed).toBe(false);
+        // Explicit user closes retain their existing semantics.
+        await manager.close({ threadId: "thread-1", terminalId: "default" });
+        expect(ptyAdapter.processes[0]?.killed).toBe(true);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
+  it("does not authorize close with a process snapshot started by an earlier poll", async () => {
+    let finishOldSnapshot!: (
+      snapshot: Map<number, Array<{ pid: number; command: string }>>,
+    ) => void;
+    const oldSnapshot = new Promise<Map<number, Array<{ pid: number; command: string }>>>(
+      (resolve) => {
+        finishOldSnapshot = resolve;
+      },
+    );
+    const capture = vi
+      .fn()
+      .mockReturnValueOnce(oldSnapshot)
+      .mockResolvedValue(new Map([[9000, [{ pid: 9100, command: "node.exe build.js" }]]]));
+    const observer = createWindowsProcessSnapshotObserver({
+      createWorker: () => ({ capture, dispose: () => {} }),
+    });
+    const observe = vi.spyOn(observer, "capture");
+    const { manager, ptyAdapter } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      await manager.open(openInput());
+      await waitFor(() => capture.mock.calls.length === 1);
+      const closing = manager.close({
+        threadId: "thread-1",
+        terminalId: "default",
+        onlyIfIdle: true,
+      });
+      const result = expect(closing).rejects.toThrow(/busy/i);
+      await waitFor(() => observe.mock.calls.length >= 2);
+      finishOldSnapshot(new Map());
+      await result;
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+    } finally {
+      finishOldSnapshot(new Map());
+      manager.dispose();
+    }
+  });
+
+  it("rejects navigation writes to busy shells without sending input", async () => {
+    let busy = true;
+    const { manager, ptyAdapter } = makeManager(5, { subprocessChecker: async () => busy });
+    try {
+      await manager.open(openInput());
+      const input = {
+        threadId: "thread-1",
+        terminalId: "default",
+        data: "cd /tmp\r",
+        onlyIfIdle: true,
+      };
+      await expect(manager.write(input)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.writes).toEqual([]);
+      busy = false;
+      await manager.write(input);
+      expect(ptyAdapter.processes[0]?.writes).toEqual(["cd /tmp\r"]);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("rejects idle-only closes without a specific terminal", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    try {
+      await manager.open(openInput());
+      await expect(manager.close({ threadId: "thread-1", onlyIfIdle: true })).rejects.toThrow(
+        /terminalId/,
+      );
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+    } finally {
+      manager.dispose();
+    }
   });
 
   it("deletes history file when close(deleteHistory=true)", async () => {

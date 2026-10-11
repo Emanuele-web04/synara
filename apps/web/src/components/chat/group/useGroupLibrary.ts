@@ -162,25 +162,34 @@ export function useGroupLibrary(input: {
   const loadDirectory = async (relativePath: string | undefined) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
-    if (!api?.projectAgent || !projectId) return;
+    if (!api?.projectAgent || !projectId) return false;
     const dir = relativePath ?? ROOT_DIRECTORY;
     const listArgs = relativePath === undefined ? { projectId } : { projectId, relativePath };
     try {
       const listed = await api.projectAgent.library.list(listArgs);
-      if (projectIdRef.current !== projectId) return;
+      if (projectIdRef.current !== projectId) return false;
       setRoot(listed.root);
       setEntriesByDir((current) => new Map(current).set(dir, listed.entries));
       loadedDirs.current = new Set([...loadedDirs.current, dir]);
+      return true;
     } catch (cause) {
-      if (projectIdRef.current !== projectId) return;
-      setError(libraryErrorMessage(cause, "Failed to list the library."));
+      if (projectIdRef.current === projectId) {
+        setError(libraryErrorMessage(cause, "Failed to list the library."));
+      }
+      return false;
     }
   };
 
-  const reloadLoadedDirectories = async () => {
+  const reloadLoadedDirectories = async (projectId: ProjectId) => {
+    let refreshed = true;
+    // The server serializes listings under the project's root lock. Start each
+    // RPC only after the previous reply so its timeout excludes queued reads.
     for (const dir of loadedDirs.current) {
-      await loadDirectory(dir === ROOT_DIRECTORY ? undefined : dir);
+      if (projectIdRef.current !== projectId) return false;
+      const loaded = await loadDirectory(dir === ROOT_DIRECTORY ? undefined : dir);
+      if (!loaded) refreshed = false;
     }
+    return refreshed;
   };
 
   const refreshStatus = async (projectId: ProjectId) => {
@@ -203,9 +212,11 @@ export function useGroupLibrary(input: {
     try {
       await work(api.projectAgent.library, projectId);
       if (projectIdRef.current === projectId) {
-        await reloadLoadedDirectories();
+        const refreshed = await reloadLoadedDirectories(projectId);
         await refreshStatus(projectId);
-        setError(null);
+        if (projectIdRef.current === projectId) {
+          if (refreshed) setError(null);
+        }
       }
       succeeded = true;
     } catch (cause) {
@@ -222,14 +233,22 @@ export function useGroupLibrary(input: {
       await library.mkdir({ projectId, relativePath });
     });
 
+  const forgetDirectory = (relativePath: string) => {
+    const keep = (dir: string) => dir !== relativePath && !dir.startsWith(`${relativePath}/`);
+    loadedDirs.current = new Set(Array.from(loadedDirs.current).filter(keep));
+    setEntriesByDir((current) => new Map(Array.from(current).filter(([dir]) => keep(dir))));
+  };
+
   const rename = async (from: string, to: string) =>
     runMutation(async (library, projectId) => {
       await library.rename({ projectId, from, to });
+      if (projectIdRef.current === projectId) forgetDirectory(from);
     });
 
   const deleteEntry = async (relativePath: string) =>
     runMutation(async (library, projectId) => {
       await library.delete({ projectId, relativePath });
+      if (projectIdRef.current === projectId) forgetDirectory(relativePath);
     });
 
   const history = async (relativePath?: string) => {
@@ -267,17 +286,19 @@ export function useGroupLibrary(input: {
         credentials: "include",
         body: file,
       });
-      const payload = (await response.json().catch(() => null)) as unknown;
-      if (projectIdRef.current === projectId) {
-        if (!response.ok) {
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as unknown;
+        if (projectIdRef.current === projectId) {
           setError(libraryUploadErrorMessage(payload, response.status));
-        } else {
-          await reloadLoadedDirectories();
-          await refreshStatus(projectId);
-          setError(null);
-          succeeded = true;
         }
       } else {
+        if (projectIdRef.current === projectId) {
+          const refreshed = await reloadLoadedDirectories(projectId);
+          await refreshStatus(projectId);
+          if (projectIdRef.current === projectId) {
+            if (refreshed) setError(null);
+          }
+        }
         succeeded = true;
       }
     } catch (cause) {

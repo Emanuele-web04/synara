@@ -9,10 +9,13 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { AppSettingsSchema, getProviderInstanceOptions } from "../appSettings";
+import type { Thread } from "../types";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
+  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
+  resolveProviderHandoffOutcome,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
@@ -24,6 +27,49 @@ import {
 } from "./browserAnnotations";
 
 describe("threadHandoff", () => {
+  it("reads a same-thread handoff outcome from the activity keyed by its command", () => {
+    const activity = (id: string, payload: Record<string, unknown> = {}) =>
+      ({
+        id: EventId.makeUnsafe(id),
+        tone: "info",
+        kind: "provider.handoff",
+        summary: "Handoff summary",
+        payload,
+        turnId: null,
+        createdAt: "2026-10-03T10:00:00.000Z",
+      }) as Thread["activities"][number];
+
+    expect(resolveProviderHandoffOutcome({ activities: [] }, "cmd-1")).toEqual({
+      status: "pending",
+    });
+    expect(
+      resolveProviderHandoffOutcome({ activities: [activity("provider-handoff:cmd-2")] }, "cmd-1"),
+    ).toEqual({ status: "pending" });
+    expect(
+      resolveProviderHandoffOutcome({ activities: [activity("provider-handoff:cmd-1")] }, "cmd-1"),
+    ).toEqual({ status: "completed" });
+    expect(
+      resolveProviderHandoffOutcome(
+        {
+          activities: [
+            activity("provider-handoff-failed:cmd-1", { detail: "Claude could not start." }),
+          ],
+        },
+        "cmd-1",
+      ),
+    ).toEqual({ status: "failed", detail: "Claude could not start." });
+  });
+
+  it("continues in the same thread only when the provider changes", () => {
+    expect(
+      canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "claudeAgent" }),
+    ).toBe(true);
+    // Another account of the same provider still needs a new thread.
+    expect(canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "codex" })).toBe(
+      false,
+    );
+  });
+
   const readyStatus = (
     provider: ProviderKind,
     overrides: Partial<ServerProviderStatus> = {},

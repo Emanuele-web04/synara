@@ -194,44 +194,29 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Search the current transcript and jump to each matching message.",
   },
   {
+    command: "search.files",
+    label: "Search files",
+    description: "Open the workspace file-name search palette.",
+  },
+  {
+    command: "search.content",
+    label: "Search snippets",
+    description: "Open the workspace content search palette across file snippets.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",
   },
   {
-    command: "terminal.split",
-    label: "Split terminal",
-    description: "Split the focused terminal, adding a new pane beside it.",
-  },
-  {
-    command: "terminal.splitRight",
-    label: "Split terminal right",
-    description: "Split the focused terminal, placing the new pane to the right.",
-  },
-  {
-    command: "terminal.splitLeft",
-    label: "Split terminal left",
-    description: "Split the focused terminal, placing the new pane to the left.",
-  },
-  {
-    command: "terminal.splitDown",
-    label: "Split terminal down",
-    description: "Split the focused terminal, placing the new pane below.",
-  },
-  {
-    command: "terminal.splitUp",
-    label: "Split terminal up",
-    description: "Split the focused terminal, placing the new pane above.",
-  },
-  {
     command: "terminal.new",
-    label: "New terminal tab",
-    description: "Open a new tab in the focused terminal.",
+    label: "Focus terminal",
+    description: "Open or focus the terminal panel for this thread.",
   },
   {
     command: "terminal.close",
-    label: "Close terminal tab",
-    description: "Close the focused terminal tab.",
+    label: "Close terminal",
+    description: "Close the terminal session for this thread.",
   },
   {
     command: "diff.toggle",
@@ -269,6 +254,21 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Copy the active thread's ID to the clipboard.",
   },
   {
+    command: "thread.archive",
+    label: "Archive thread",
+    description: "Archive the active chat, with the same confirmation and undo as the thread menu.",
+  },
+  {
+    command: "thread.snooze",
+    label: "Snooze thread",
+    description: "Open the snooze date and time picker for the active chat.",
+  },
+  {
+    command: "thread.markUnread",
+    label: "Mark thread unread",
+    description: "Mark the active chat unread and restore its dismissed notification.",
+  },
+  {
     command: "chat.visible.previous",
     label: "Previous visible thread",
     description: "Cycle to the previous thread that is currently visible in the sidebar.",
@@ -277,6 +277,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "chat.visible.next",
     label: "Next visible thread",
     description: "Cycle to the next thread that is currently visible in the sidebar.",
+  },
+  {
+    command: "threadTab.previous",
+    label: "Previous tab",
+    description: "Switch to the open thread tab on the left of the active one.",
+  },
+  {
+    command: "threadTab.next",
+    label: "Next tab",
+    description: "Switch to the open thread tab on the right of the active one.",
   },
   {
     command: "editor.openFavorite",
@@ -395,7 +405,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
 
   const covered = new Set(definitions.flatMap((definition) => definition.commands));
   for (const command of STATIC_KEYBINDING_COMMANDS) {
-    if (covered.has(command)) continue;
+    if (covered.has(command) || command.startsWith("terminal.split")) continue;
     definitions.push({
       id: command,
       label: command,

@@ -52,6 +52,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import {
   canAdoptFirstTurnProvider,
@@ -499,6 +500,7 @@ export function projectEvent(
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
             spaceId: payload.spaceId ?? null,
+            additionalFolders: payload.additionalFolders ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -598,6 +600,9 @@ export function projectEvent(
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
+            ...(payload.forkSourceMessageId
+              ? { forkSourceMessageId: payload.forkSourceMessageId }
+              : {}),
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
             sidechatContext: payload.sidechatContext,
             sidechatLastActivityAt: payload.sidechatLastActivityAt,
@@ -608,6 +613,8 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -665,6 +672,8 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
           }),
         })),
@@ -678,6 +687,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              snoozedUntil: null,
+              snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
             }),
           };
@@ -767,6 +778,10 @@ export function projectEvent(
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
+              ...(payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: payload.snoozeReminderAt }
+                : {}),
               ...(payload.parentThreadId !== undefined
                 ? { parentThreadId: payload.parentThreadId }
                 : {}),
@@ -1449,6 +1464,23 @@ export function projectEvent(
         }),
       );
 
+    case "thread.turn-interrupt-requested": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      return Effect.succeed(
+        activity
+          ? {
+              ...nextBase,
+              threads: updateThread(nextBase.threads, thread.id, {
+                activities: upsertThreadActivity(thread.activities, activity),
+                updatedAt: event.occurredAt,
+              }),
+            }
+          : nextBase,
+      );
+    }
+
     case "thread.activity-appended":
       return decodeForEvent(
         ThreadActivityAppendedPayload,
@@ -1462,10 +1494,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = upsertThreadActivity(thread.activities, {
-            ...payload.activity,
-            sequence: payload.activity.sequence ?? event.sequence,
-          });
+          const activities = upsertThreadActivity(
+            thread.activities,
+            payload.activity.sequence !== undefined
+              ? payload.activity
+              : { ...payload.activity, sequence: event.sequence, sequenceSource: "orchestration" },
+          );
 
           return {
             ...nextBase,

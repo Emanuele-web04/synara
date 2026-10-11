@@ -262,6 +262,23 @@ function makeThread(
 }
 
 describe("collectNeedsYouItems", () => {
+  it("suppresses snoozed approvals and unread completions from lists and counts", () => {
+    const snoozedUntil = "2026-09-29T09:00:00.000Z";
+    const threads = [
+      makeThread("approval", { snoozedUntil, hasPendingApprovals: true }),
+      makeThread("unread", { snoozedUntil, lastVisitedAt: "2026-09-30T08:00:00.000Z" }),
+      makeThread("working", { snoozedUntil, hasLiveTailWork: true }),
+    ];
+    expect(collectNeedsYouItems(threads)).toEqual([]);
+    expect(countNeedsYouActions(threads, null)).toBe(0);
+    expect(groupInboxThreads(threads)).toEqual({
+      needsYou: [],
+      working: [],
+      finished: [],
+      failed: [],
+    });
+  });
+
   it("lists waiting threads by urgency and skips seen, archived, and child threads", () => {
     const unseen = { lastVisitedAt: "2026-09-30T08:00:00.000Z" };
     const failedTurn = {

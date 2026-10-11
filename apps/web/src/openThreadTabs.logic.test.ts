@@ -38,7 +38,6 @@ function serverSource(
   return {
     threadId: ThreadId.makeUnsafe(id),
     summary: summary(id, overrides),
-    draft: undefined,
     terminalEntryPoint,
   };
 }
@@ -73,7 +72,7 @@ describe("open thread tab list", () => {
 });
 
 describe("buildOpenThreadTabs", () => {
-  it("labels server threads by title and provider, drafts by placeholder", () => {
+  it("labels saved threads by title and provider", () => {
     const tabs = buildOpenThreadTabs({
       activeThreadId: null,
       sources: [
@@ -86,25 +85,13 @@ describe("buildOpenThreadTabs", () => {
           session: { provider: "cursor" } as SidebarThreadSummary["session"],
         }),
         serverSource("shell", {}, true),
-        {
-          threadId: ThreadId.makeUnsafe("draft"),
-          summary: undefined,
-          draft: { projectId: projectA, entryPoint: "terminal", provider: "grok" },
-          terminalEntryPoint: false,
-        },
       ],
     });
 
     expect(tabs).toEqual([
-      expect.objectContaining({ title: "Refactor rows", provider: "claudeAgent", isDraft: false }),
+      expect.objectContaining({ title: "Refactor rows", provider: "claudeAgent" }),
       expect.objectContaining({ threadId: "handed-off", provider: "cursor" }),
       expect.objectContaining({ threadId: "shell", isTerminal: true }),
-      expect.objectContaining({
-        title: "New terminal",
-        provider: "grok",
-        isTerminal: true,
-        isDraft: true,
-      }),
     ]);
   });
 

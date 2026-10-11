@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AUDIO_LEVEL_SUBSCRIBERS } from "./audioLevel";
+import { getAudioLevelSubscriber } from "./audioLevel";
 
 vi.mock("~/betaFeatures", async () => {
   const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
@@ -30,9 +30,34 @@ describe("audio level subscription admission", () => {
       desktopBridge: { audioLevel: { setSource, onLevel: () => () => undefined } },
     });
 
-    const unsubscribe = AUDIO_LEVEL_SUBSCRIBERS.system(() => undefined);
+    const unsubscribe = getAudioLevelSubscriber("system")(() => undefined);
     unsubscribe();
     vi.runAllTimers();
     expect(setSource.mock.calls).toEqual(supported ? [["system"], [null]] : []);
+  });
+
+  it("passes the chosen microphone to the desktop and keeps one subscriber per choice", () => {
+    const setSource = vi.fn().mockResolvedValue("active");
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.stubGlobal("window", {
+      desktopBridge: { audioLevel: { setSource, onLevel: () => () => undefined } },
+    });
+
+    expect(getAudioLevelSubscriber("both", "BuiltInMicrophoneDevice")).toBe(
+      getAudioLevelSubscriber("both", "BuiltInMicrophoneDevice"),
+    );
+    expect(getAudioLevelSubscriber("system", "BuiltInMicrophoneDevice")).toBe(
+      getAudioLevelSubscriber("system"),
+    );
+
+    const unsubscribe = getAudioLevelSubscriber("both", "BuiltInMicrophoneDevice")(() => undefined);
+    unsubscribe();
+    vi.runAllTimers();
+    expect(setSource.mock.calls).toEqual([["both", "BuiltInMicrophoneDevice"], [null]]);
   });
 });

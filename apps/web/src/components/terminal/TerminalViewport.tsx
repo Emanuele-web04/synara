@@ -25,6 +25,7 @@ import type {
   TerminalRuntimeStatus,
   TerminalRuntimeViewState,
 } from "./terminalRuntimeTypes";
+import { matchesFixedShortcut } from "~/fixedShortcuts";
 import { TerminalSearch } from "../TerminalSearch";
 import { TerminalScrollToBottom } from "../TerminalScrollToBottom";
 
@@ -278,10 +279,9 @@ export default function TerminalViewport({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.key.toLowerCase() === "f" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey
+        matchesFixedShortcut(event, "terminal.search", navigator.platform, {
+          terminalFocus: true,
+        })
       ) {
         event.preventDefault();
         event.stopPropagation();

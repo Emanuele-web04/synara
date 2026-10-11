@@ -9,6 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { FilterPillGroup } from "~/components/FilterPillGroup";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
@@ -25,18 +26,28 @@ import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
 import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
 import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
+import { useKanbanUiStore, type KanbanViewMode } from "../../kanbanUiStore";
+
+const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; label: string }> = [
+  { value: "v2", label: "Attention" },
+  { value: "classic", label: "Classic" },
+];
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const kanbanViewMode = useKanbanUiStore((state) => state.kanbanViewMode);
+  const setKanbanViewMode = useKanbanUiStore((state) => state.setKanbanViewMode);
 
   const projectBoard =
     projectId === null
       ? null
       : (board.projects.find((candidate) => candidate.projectId === projectId) ?? null);
-  const hasActiveCardWork = board.projects.some((project) =>
-    project.inProgress.some((card) => card.activeWorkStartedAt !== null),
+  const hasActiveCardWork = board.projects.some(
+    (project) =>
+      project.inProgress.some((card) => card.activeWorkStartedAt !== null) ||
+      project.awaitingYou.some((card) => card.activeWorkStartedAt !== null),
   );
   const nowMs = useNowMs(hasActiveCardWork);
 
@@ -49,11 +60,19 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     [allProjects],
   );
   const renderedCardThreads = useMemo(() => {
+    const isV2 = kanbanViewMode === "v2";
     const cards = projectBoard
-      ? [...projectBoard.inProgress, ...projectBoard.draft, ...projectBoard.done]
-      : board.projects.flatMap((candidate) => overviewVisibleKanbanCards(candidate).visibleCards);
+      ? [
+          ...projectBoard.inProgress,
+          ...(isV2 ? projectBoard.awaitingYou : []),
+          ...projectBoard.draft,
+          ...projectBoard.done,
+        ]
+      : board.projects.flatMap(
+          (candidate) => overviewVisibleKanbanCards(candidate, isV2).visibleCards,
+        );
     return cards.flatMap((card) => (card.thread ? [card.thread] : []));
-  }, [board.projects, projectBoard]);
+  }, [board.projects, kanbanViewMode, projectBoard]);
   const prByThreadId = useThreadPullRequests({
     threads: renderedCardThreads,
     projectCwdById,
@@ -157,6 +176,12 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
             </span>
             {projectBoard ? null : <TasksViewSwitch current="kanban" />}
+            <FilterPillGroup
+              ariaLabel="Board view"
+              value={kanbanViewMode}
+              options={BOARD_VIEW_OPTIONS}
+              onChange={setKanbanViewMode}
+            />
             <NewTaskButton
               disabled={newTaskProjectOptions.length === 0}
               onClick={handleNewTaskInProjectBoard}
@@ -173,6 +198,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onNewTask={handleNewDraftInProjectBoard}
               prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           ) : (
             <KanbanOverview
@@ -183,6 +209,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               onNewTask={handleNewTask}
               prByThreadId={prByThreadId}
               nowMs={nowMs}
+              viewMode={kanbanViewMode}
             />
           )}
         </div>

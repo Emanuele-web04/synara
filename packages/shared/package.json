@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
+    "./diagnosticIssue": {
+      "types": "./src/diagnosticIssue.ts",
+      "import": "./src/diagnosticIssue.ts"
+    },
     "./betaFeatures": {
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"
@@ -40,6 +48,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./kanban": {
+      "types": "./src/kanban.ts",
+      "import": "./src/kanban.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
@@ -51,6 +63,10 @@
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
+    },
+    "./KeyedSingleFlightCache": {
+      "types": "./src/KeyedSingleFlightCache.ts",
+      "import": "./src/KeyedSingleFlightCache.ts"
     },
     "./errorMessages": {
       "types": "./src/errorMessages.ts",
@@ -131,6 +147,10 @@
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
+    },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
     },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
@@ -227,6 +247,10 @@
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
+    },
+    "./projectFolders": {
+      "types": "./src/projectFolders.ts",
+      "import": "./src/projectFolders.ts"
     },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",
@@ -415,6 +439,10 @@
     "./coordinatorCheckin": {
       "types": "./src/coordinatorCheckin.ts",
       "import": "./src/coordinatorCheckin.ts"
+    },
+    "./keybindingRules": {
+      "types": "./src/keybindingRules.ts",
+      "import": "./src/keybindingRules.ts"
     }
   },
   "scripts": {

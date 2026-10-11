@@ -99,10 +99,6 @@ interface ChatKeyboardShortcutsInput {
     typeof useChatTerminalController
   >["toggleTerminalVisibility"];
   setTerminalOpen: ReturnType<typeof useChatTerminalController>["setTerminalOpen"];
-  splitTerminalRight: ReturnType<typeof useChatTerminalController>["splitTerminalRight"];
-  splitTerminalLeft: ReturnType<typeof useChatTerminalController>["splitTerminalLeft"];
-  splitTerminalDown: ReturnType<typeof useChatTerminalController>["splitTerminalDown"];
-  splitTerminalUp: ReturnType<typeof useChatTerminalController>["splitTerminalUp"];
   closeTerminal: ReturnType<typeof useChatTerminalController>["closeTerminal"];
   createTerminalFromShortcut: ReturnType<
     typeof useChatTerminalController
@@ -161,10 +157,6 @@ export function useChatKeyboardShortcuts({
   cycleEffort,
   toggleTerminalVisibility,
   setTerminalOpen,
-  splitTerminalRight,
-  splitTerminalLeft,
-  splitTerminalDown,
-  splitTerminalUp,
   closeTerminal,
   createTerminalFromShortcut,
   openNewFullWidthTerminal,
@@ -355,46 +347,6 @@ export function useChatKeyboardShortcuts({
         return;
       }
 
-      if (command === "terminal.split" || command === "terminal.splitRight") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalRight();
-        return;
-      }
-
-      if (command === "terminal.splitLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalLeft();
-        return;
-      }
-
-      if (command === "terminal.splitDown") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalDown();
-        return;
-      }
-
-      if (command === "terminal.splitUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalUp();
-        return;
-      }
-
       if (command === "terminal.close") {
         event.preventDefault();
         event.stopPropagation();
@@ -531,10 +483,6 @@ export function useChatKeyboardShortcuts({
     openNewFullWidthTerminal,
     runProjectScript,
     keybindings,
-    splitTerminalDown,
-    splitTerminalLeft,
-    splitTerminalRight,
-    splitTerminalUp,
     terminalWorkspaceChatTabActive,
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,

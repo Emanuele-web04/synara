@@ -13,7 +13,10 @@ vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
   ensureNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
 }));
-vi.mock("../components/ui/toast", () => ({ toastManager: { add: mocks.toast } }));
+vi.mock("../components/ui/toast", () => ({
+  toastManager: { add: mocks.toast },
+  reportToastIssue: vi.fn(),
+}));
 const threadId = ThreadId.makeUnsafe("claude-compact-thread");
 const thread = makeThread({
   id: threadId,
@@ -46,6 +49,17 @@ function callbacks() {
 }
 
 describe("useClaudeContextCompaction", () => {
+  it("holds a cached idle session before sending the native compaction turn", async () => {
+    useStore.setState({ threadDetailSyncById: { [threadId]: "cached" } });
+    const actions = callbacks();
+    const hook = await renderHook(() =>
+      useClaudeContextCompaction({ threadId, disabledReason: null, ...actions }),
+    );
+    expect(await hook.result.current.compact()).toBe(false);
+    expect(mocks.dispatchCommand).not.toHaveBeenCalled();
+    expect(actions.onBegin).not.toHaveBeenCalled();
+    await hook.unmount();
+  });
   it("uses the exact native command without sending draft settings or attachments", async () => {
     useComposerDraftStore.getState().setPrompt(threadId, "Keep this draft for later");
     const actions = callbacks();

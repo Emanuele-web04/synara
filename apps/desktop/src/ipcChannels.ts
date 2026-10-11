@@ -28,6 +28,7 @@ export const DESKTOP_IPC_CHANNELS = {
   customTitleBarSetPreference: "desktop:custom-title-bar-set-preference",
   customTitleBarRelaunch: "desktop:custom-title-bar-relaunch",
   menuAction: "desktop:menu-action",
+  setMenuShortcuts: "desktop:set-menu-shortcuts",
   quitConfirmationRequest: "desktop:quit-confirmation-request",
   quitConfirmationResponse: "desktop:quit-confirmation-response",
   beta: {
@@ -41,6 +42,9 @@ export const DESKTOP_IPC_CHANNELS = {
     enabled: "desktop:beta-diagnostics-enabled",
     rendererReady: "desktop:beta-diagnostics-renderer-ready",
     reportError: "desktop:beta-diagnostics-report-error",
+    recordActivity: "desktop:beta-diagnostics-record-activity",
+    reportIssue: "desktop:beta-diagnostics-report-issue",
+    getReportStatus: "desktop:beta-diagnostics-report-status",
   },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
@@ -57,6 +61,7 @@ export const DESKTOP_IPC_CHANNELS = {
   computerSetCursorStyle: "desktop:computer-set-cursor-style",
   audioLevel: {
     setSource: "desktop:audio-level-set-source",
+    listMicrophones: "desktop:audio-level-list-microphones",
     level: "desktop:audio-level",
   },
   storageMigration: {

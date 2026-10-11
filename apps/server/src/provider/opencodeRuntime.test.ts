@@ -15,7 +15,7 @@ import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
 import { resolveWindowsComSpec } from "@synara/shared/windowsProcess";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
@@ -37,6 +37,22 @@ import {
 } from "./providerBinaryResolution.ts";
 
 const encoder = new TextEncoder();
+let testHome: string;
+beforeEach(() => {
+  testHome = mkdtempSync(join(tmpdir(), "synara-opencode-runtime-"));
+  vi.stubEnv("HOME", testHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(testHome, { recursive: true, force: true });
+});
+
+const legacyProbeResponse = (url: string | URL | Request) =>
+  Promise.resolve(
+    String(url).endsWith("/api/info")
+      ? new Response("<html>OpenCode</html>", { headers: { "content-type": "text/html" } })
+      : Response.json({ all: [], connected: [], default: {} }),
+  );
 
 describe("OpenCode permission policy", () => {
   it("keeps full access non-interactive while enforcing read-only Plan turns", () => {
@@ -158,7 +174,7 @@ function openCodeRuntimePoolTestLayer(state: {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
-      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+      fetchImpl: legacyProbeResponse,
       teardownProcessTree: async ({ rootPid }) => {
         const url = processUrls.get(rootPid);
         if (url) state.killUrls.push(url);
@@ -376,7 +392,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         ).pipe(
           Effect.provide(
             makeOpenCodeRuntimeLive({
-              fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+              fetchImpl: legacyProbeResponse,
               teardownProcessTree: async () => ({
                 escalated: false,
                 signalErrors: [],
@@ -463,6 +479,9 @@ describe("OpenCodeRuntime startup diagnostics", () => {
   });
 
   it("accepts the OpenCode 2.x server startup marker", async () => {
+    vi.stubEnv("OPENCODE_PASSWORD", "inherited-mismatch");
+    const spawnedCommands: Array<ChildProcess.StandardCommand> = [];
+    const urls: string[] = [];
     const server = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -476,7 +495,10 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+            fetchImpl: async (url) => {
+              urls.push(String(url));
+              return Response.json({ version: "2.0.25", pid: 1, urls: [] });
+            },
             teardownProcessTree: async () => ({
               escalated: false,
               signalErrors: [],
@@ -484,6 +506,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
           }).pipe(
             Layer.provide(
               mockOpenCodeServerSpawnerLayer({
+                spawnedCommands,
                 stdout: "server listening on http://127.0.0.1:58123\n",
                 stderr: "",
               }),
@@ -494,9 +517,12 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(urls).toEqual(["http://127.0.0.1:58123/api/info"]);
+    expect(spawnedCommands[0]?.options.env?.OPENCODE_PASSWORD).toBe(server.serverPassword);
+    expect(server.serverPassword).not.toBe("inherited-mismatch");
   });
 
-  it("fails startup when the server does not serve the legacy surface", async () => {
+  it("fails startup when the server does not serve a supported V1 or V2 API", async () => {
     const error = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -530,7 +556,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(OpenCodeRuntimeError.is(error)).toBe(true);
-    expect(error.detail).toContain("does not serve the legacy surface");
+    expect(error.detail).toContain("does not serve a supported V1 or V2 API");
     expect(error.detail).toContain("GET /provider → HTTP 404");
     expect(error.detail).not.toContain("2.x");
   });
@@ -550,9 +576,12 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
-            fetchImpl: () => {
+            fetchImpl: (url) => {
+              if (String(url).endsWith("/api/info")) return legacyProbeResponse(url);
               probeCalls += 1;
-              return Promise.resolve(new Response("{}", { status: probeCalls === 1 ? 500 : 200 }));
+              return probeCalls === 1
+                ? Promise.resolve(new Response("{}", { status: 500 }))
+                : legacyProbeResponse(url);
             },
             teardownProcessTree: async () => ({
               escalated: false,
@@ -608,9 +637,8 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(OpenCodeRuntimeError.is(error)).toBe(true);
-    expect(error.detail).toContain("did not pass the legacy surface probe");
+    expect(error.detail).toContain("rejected the server password");
     expect(error.detail).toContain("HTTP 401");
-    expect(error.detail).toContain("rejected the credentials");
     expect(error.detail).not.toContain("2.x");
   });
 
@@ -728,7 +756,7 @@ describe("OpenCodeRuntime local server pool", () => {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
-      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+      fetchImpl: legacyProbeResponse,
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
         expect(rootPid).toBe(0x7fff_fffe);

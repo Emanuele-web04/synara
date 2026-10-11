@@ -440,7 +440,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
 
       const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url" | "serverPassword">) =>
         Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
             const client = openCodeRuntime.createOpenCodeSdkClient({
               baseUrl: server.url,
               directory: input.cwd,
@@ -459,18 +459,22 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
             };
             const session = await client.session.create(
               sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+              { signal },
             );
             if (!session.data) {
               throw new Error("OpenCode session.create returned no session payload.");
             }
 
-            const result = await client.session.prompt({
-              sessionID: session.data.id,
-              model: parsedModel,
-              ...(agent ? { agent } : {}),
-              ...(variant ? { variant } : {}),
-              parts: [{ type: "text", text: promptText }, ...fileParts],
-            });
+            const result = await client.session.prompt(
+              {
+                sessionID: session.data.id,
+                model: parsedModel,
+                ...(agent ? { agent } : {}),
+                ...(variant ? { variant } : {}),
+                parts: [{ type: "text", text: promptText }, ...fileParts],
+              },
+              { signal },
+            );
             const info = result.data?.info;
             const errorMessage = getOpenCodePromptErrorMessage(info?.error);
             if (errorMessage) {
@@ -557,6 +561,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       }
 
       const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+        writingPreferences: input.writingPreferences,
         branch: input.branch,
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
@@ -592,6 +597,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       }
 
       const { prompt, outputSchemaJson } = buildPrContentPrompt({
+        writingPreferences: input.writingPreferences,
         baseBranch: input.baseBranch,
         headBranch: input.headBranch,
         commitSummary: input.commitSummary,

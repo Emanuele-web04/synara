@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { CentralIcon } from "~/lib/central-icons";
+import { ClockIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { useAutomations } from "./-automations.shared";
@@ -53,7 +54,7 @@ function AutomationsRouteView() {
         </RouteSurfaceHeader>
 
         <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 pb-16 text-center">
-          <CentralIcon name="clock" className="mb-3 size-8 text-muted-foreground" />
+          <ClockIcon className="mb-3 size-8 text-muted-foreground" />
           <p className="text-ui-lg font-medium text-foreground">Automations</p>
           <p className="max-w-xs text-ui leading-snug text-muted-foreground">
             Pick an automation in the panel to see its runs, or schedule a new one.

@@ -8,9 +8,9 @@ import {
   type SpaceJumpKeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
-  UNASSIGNED_KEYBINDING_KEY,
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
+import { isUnassignedKeybindingShortcut } from "@synara/shared/keybindingRules";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -87,6 +87,21 @@ const whenThreadJumpAvailable = whenOr(
 const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
+  {
+    command: "thread.archive",
+    shortcut: commandShortcut("a", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.snooze",
+    shortcut: commandShortcut("s", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
+    command: "thread.markUnread",
+    shortcut: commandShortcut("u", { altKey: true, shiftKey: true }),
+    whenAst: whenModChordAllowed,
+  },
   {
     command: "sidechat.toggle",
     shortcut: commandShortcut("s", { altKey: true }),
@@ -208,6 +223,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "search.files",
+    shortcut: commandShortcut("p"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "search.content",
+    shortcut: commandShortcut("f", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "settings.usage",
     shortcut: commandShortcut("u", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
@@ -223,6 +248,27 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "git.commitAndPush",
     shortcut: commandShortcut("p", { ctrlKey: true, altKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
+  // Open thread tabs, browser-style; see the server defaults for why the chords differ.
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("arrowright", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("arrowleft", { ctrlKey: true }),
+    whenAst: whenIdentifier("isMac"),
+  },
+  {
+    command: "threadTab.next",
+    shortcut: commandShortcut("pagedown", { ctrlKey: true, modKey: false }),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "threadTab.previous",
+    shortcut: commandShortcut("pageup", { ctrlKey: true, modKey: false }),
     whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
   },
   // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
@@ -370,7 +416,7 @@ export function shortcutKeyFromEventCode(code: string | undefined): string | nul
  * it is never a binding itself.
  */
 export function isUnassignedKeybinding(binding: Pick<ResolvedKeybindingRule, "shortcut">): boolean {
-  return binding.shortcut.key === UNASSIGNED_KEYBINDING_KEY;
+  return isUnassignedKeybindingShortcut(binding.shortcut);
 }
 
 let dispatchSuspensions = 0;
@@ -403,8 +449,17 @@ function normalizeEventKey(key: string): string {
   return normalized;
 }
 
+/**
+ * The keys a press can match as. A typed letter or digit is the only one: it is the key
+ * the user's layout prints, and the one the recorder saves. Matching its physical key as
+ * well would fire two bindings at once on layouts that move letters (AZERTY's Q types
+ * "a"). Anything else, such as "ß" from Option+S or "!" from Shift+1, also matches as the
+ * physical key, since that is the key the binding names.
+ */
 function resolveEventKeys(event: ShortcutEventLike): Set<string> {
-  const keys = new Set([normalizeEventKey(event.key)]);
+  const typed = normalizeEventKey(event.key);
+  const keys = new Set([typed]);
+  if (/^[a-z0-9]$/.test(typed)) return keys;
   const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
   if (!aliases) return keys;
 
@@ -430,7 +485,8 @@ function matchesShortcutModifiers(
   );
 }
 
-function matchesShortcut(
+/** Whether a key press is exactly `shortcut`, with the same rules as every binding. */
+export function matchesShortcut(
   event: ShortcutEventLike,
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
@@ -518,7 +574,9 @@ export function findEffectiveKeybindingForCommand(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding || isUnassignedKeybinding(binding)) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
 
     const conflictKey = shortcutConflictKey(binding.shortcut, platform);
@@ -579,7 +637,9 @@ function resolveShortcutCommandFromBindings(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding || isUnassignedKeybinding(binding)) continue;
+    // Retired split bindings must not consume shell shortcuts from older configs.
+    if (!binding || isUnassignedKeybinding(binding) || binding.command.startsWith("terminal.split"))
+      continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
@@ -622,6 +682,8 @@ function formatShortcutKeyLabel(key: string): string {
   if (key === "arrowdown") return "Down";
   if (key === "arrowleft") return "Left";
   if (key === "arrowright") return "Right";
+  if (key === "pageup") return "PgUp";
+  if (key === "pagedown") return "PgDn";
   return key.slice(0, 1).toUpperCase() + key.slice(1);
 }
 
@@ -652,11 +714,18 @@ export function formatShortcutLabel(
 const MODIFIER_SYMBOLS = new Set(["⌘", "⌥", "⌃", "⇧"]);
 
 export function splitShortcutLabel(shortcutLabel: string): string[] {
-  if (shortcutLabel.includes("+")) {
-    return shortcutLabel
+  // macOS labels are symbols with the key last ("⇧⌘K", "⌘+"); the rest are joined with
+  // "+" ("Ctrl+Shift+K"), where a trailing "++" is the plus key itself.
+  if (
+    ![...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char)) &&
+    shortcutLabel.includes("+")
+  ) {
+    const plusKey = shortcutLabel === "+" || shortcutLabel.endsWith("++");
+    const parts = (plusKey ? shortcutLabel.slice(0, -1) : shortcutLabel)
       .split("+")
       .map((part) => part.trim())
       .filter((part) => part.length > 0);
+    return plusKey ? [...parts, "+"] : parts;
   }
 
   if ([...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char))) {

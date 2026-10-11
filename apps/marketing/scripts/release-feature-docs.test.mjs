@@ -15,7 +15,7 @@ function read(relative) {
 test("v0.7.2 feature guides are public navigation entries with complete frontmatter", () => {
   const meta = JSON.parse(read("content/docs/features/meta.json"));
 
-  for (const slug of ["thread-goals", "ios-simulator"]) {
+  for (const slug of ["thread-goals", "ios-simulator", "subagents", "conversation-history"]) {
     assert.ok(meta.pages.includes(slug), `${slug} is missing from feature navigation`);
     const frontmatter = parseFrontmatter(read(`content/docs/features/${slug}.mdx`));
     assert.equal(frontmatter.error, undefined, `${slug} has invalid frontmatter`);
@@ -47,6 +47,19 @@ test("workspace search shortcuts and destination behavior are documented", () =>
   assert.ok(shortcuts.includes("`mod+shift+f`"));
   assert.ok(organize.includes("## Search files and source"));
   assert.ok(organize.includes("right-dock file pane"));
+});
+
+test("new chat actions and side chat shortcut are documented", () => {
+  const shortcuts = read("content/docs/reference/keyboard-shortcuts.mdx");
+
+  for (const shortcut of [
+    "`mod+alt+s`",
+    "`mod+alt+shift+a`",
+    "`mod+alt+shift+s`",
+    "`mod+alt+shift+u`",
+  ]) {
+    assert.ok(shortcuts.includes(shortcut), `keyboard reference is missing ${shortcut}`);
+  }
 });
 
 test("the feature map links to the durable v0.7.2 guides", () => {

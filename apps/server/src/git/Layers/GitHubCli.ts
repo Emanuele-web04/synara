@@ -324,6 +324,7 @@ const RawPullRequestDetailSchema = Schema.Struct({
 const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
   ...RawGitHubPullRequestSchema.fields,
   ...RawPullRequestChecksSchema.fields,
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
@@ -2564,7 +2565,7 @@ const makeGitHubCli = Effect.gen(function* () {
           "view",
           input.reference,
           "--json",
-          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -2579,6 +2580,7 @@ const makeGitHubCli = Effect.gen(function* () {
         Effect.map((decoded) => ({
           summary: normalizePullRequestSummary(decoded),
           checks: normalizePullRequestChecks(decoded),
+          headSha: decoded.headRefOid?.trim() || null,
         })),
       ),
     getPullRequestReviewComments: (input) =>

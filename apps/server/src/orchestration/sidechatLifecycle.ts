@@ -1,7 +1,7 @@
 import type { OrchestrationThread } from "@synara/contracts";
 
 export const SIDECHAT_EXPIRED_EXECUTION_MESSAGE =
-  "This side chat expired after 1 hour of inactivity. Start a new side chat.";
+  "This side chat expired after a period of inactivity. Start a new side chat.";
 
 type SidechatExpiryState = Pick<OrchestrationThread, "sidechatExpiredAt">;
 

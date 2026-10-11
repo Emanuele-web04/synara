@@ -11,7 +11,7 @@ import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
-import { ServerSettingsPatch, ServerSettingsView } from "./settings";
+import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
@@ -312,6 +312,8 @@ export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexReset
 
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
+  // Stable provider-account route. Omitted by legacy local/provider-only snapshots.
+  instanceId: Schema.optional(ProviderInstanceId),
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
@@ -336,7 +338,7 @@ export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProvider
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
 // Batch live-usage fetch for supported providers, powering the Settings → Usage section and
-// provider-scoped usage chips. Unfiltered requests return one entry per supported provider
+// provider-scoped usage chips. Unfiltered requests return one entry per enabled supported instance
 // (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
@@ -584,6 +586,19 @@ export const ServerSettingsUpdatedPayload = Schema.Struct({
 });
 export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
 
+export const ServerKeepAwakeState = Schema.Struct({
+  available: Schema.Boolean,
+  mode: KeepAwakeMode,
+  active: Schema.Boolean,
+  error: Schema.NullOr(Schema.String),
+});
+export type ServerKeepAwakeState = typeof ServerKeepAwakeState.Type;
+
+export const ServerKeepAwakeUpdatedPayload = Schema.Struct({
+  keepAwake: ServerKeepAwakeState,
+});
+export type ServerKeepAwakeUpdatedPayload = typeof ServerKeepAwakeUpdatedPayload.Type;
+
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
@@ -679,3 +694,24 @@ export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
 export const ServerUpdateSettingsResult = ServerSettingsView;
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;
+
+/** Aggregate runtime counters only: safe for the unauthenticated health route. */
+const RuntimeMilliseconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+export const ServerRuntimeStatus = Schema.Struct({
+  available: Schema.Boolean,
+  sampleWindowMs: RuntimeMilliseconds,
+  sampleCount: NonNegativeInt,
+  delayP50Ms: RuntimeMilliseconds,
+  delayP99Ms: RuntimeMilliseconds,
+  delayMaxMs: RuntimeMilliseconds,
+  utilization: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  stallWindowCount: NonNegativeInt,
+  maxStallMs: RuntimeMilliseconds,
+  /** Ambiguous suspend/scheduling gaps excluded from active-stall percentiles. */
+  discardedIdleGapCount: Schema.optional(NonNegativeInt),
+  discardedIdleGapMs: Schema.optional(RuntimeMilliseconds),
+  lastStall: Schema.NullOr(
+    Schema.Struct({ durationMs: RuntimeMilliseconds, ageMs: RuntimeMilliseconds }),
+  ),
+});
+export type ServerRuntimeStatus = typeof ServerRuntimeStatus.Type;
