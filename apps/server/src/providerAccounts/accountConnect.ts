@@ -41,6 +41,7 @@ type ConnectOperation = {
   userCode?: string;
   error?: string;
   loginHandle?: OAuthLoginHandle;
+  cancellationRequested?: boolean;
   // Epoch millis when the operation reached a terminal state; used to evict
   // old entries so the operations map cannot grow without bound.
   finishedAt?: number;
@@ -261,7 +262,10 @@ export function makeAccountConnect(input: AccountConnectInput) {
         Effect.gen(function* () {
           // Cancellation shares this transaction lock. Whichever transition
           // acquires it first determines the durable and reported outcome.
-          if (operation.state !== "pending" && operation.state !== "waiting-for-user") {
+          if (
+            operation.cancellationRequested ||
+            (operation.state !== "pending" && operation.state !== "waiting-for-user")
+          ) {
             return toStatus(operation);
           }
           // Reconnects committed here have already passed the runner's own
@@ -332,7 +336,11 @@ export function makeAccountConnect(input: AccountConnectInput) {
     });
     operation.loginHandle = handle;
     void handle.done.then(async (outcome) => {
-      if (operation.state !== "pending" && operation.state !== "waiting-for-user") return;
+      if (
+        operation.cancellationRequested ||
+        (operation.state !== "pending" && operation.state !== "waiting-for-user")
+      )
+        return;
       if (!outcome.ok) {
         if (outcome.processExitUnproven) {
           failOperation(operation, outcome.error);
@@ -493,22 +501,37 @@ export function makeAccountConnect(input: AccountConnectInput) {
           operation.provider,
           Effect.gen(function* () {
             if (operation.state === "waiting-for-user" || operation.state === "pending") {
-              operation.state = "cancelled";
-              operation.finishedAt = Date.now();
+              // Own finalization immediately, but report cancellation only after
+              // the login tree and staged-directory cleanup have completed.
+              operation.cancellationRequested = true;
               yield* Effect.tryPromise({
                 try: async () => {
                   await operation.loginHandle?.cancel();
                 },
                 catch: () => {
                   operation.state = "failed";
+                  operation.finishedAt = Date.now();
                   operation.error =
                     "Login process exit could not be verified; the staged profile was retained.";
                   return connectError("accountConnect.cancelConnect", operation.error);
                 },
               });
               if (operation.authMethod === "oauth") {
-                yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
+                yield* storage
+                  .cancelPendingDirectory(operation.provider, operation.operationId)
+                  .pipe(
+                    Effect.tapError(() =>
+                      Effect.sync(() =>
+                        failOperation(
+                          operation,
+                          "Login stopped, but staged-profile cleanup failed.",
+                        ),
+                      ),
+                    ),
+                  );
               }
+              operation.state = "cancelled";
+              operation.finishedAt = Date.now();
               delete operation.apiKey;
             }
             return toStatus(operation);

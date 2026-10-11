@@ -203,6 +203,8 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
       resolveDone({
         ok: false,
         error: `'codex login' exited with ${signal !== null ? `signal ${signal}` : `code ${code}`}.`,
+        // Root exit alone cannot prove that a descendant stopped writing staging.
+        processExitUnproven: true,
       });
       return;
     }
@@ -213,6 +215,7 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
         resolveDone({
           ok: false,
           error: "Codex login finished but no credentials were written to the managed profile.",
+          processExitUnproven: true,
         });
       }
       return;

@@ -197,6 +197,7 @@ describe("codexOauthLoginRunner", () => {
     expect(outcome).toEqual({
       ok: false,
       error: "Codex login finished but no credentials were written to the managed profile.",
+      processExitUnproven: true,
     });
   });
 
@@ -208,7 +209,11 @@ describe("codexOauthLoginRunner", () => {
       onVerification: () => undefined,
     });
     const outcome = await handle.done;
-    expect(outcome).toEqual({ ok: false, error: "'codex login' exited with code 3." });
+    expect(outcome).toEqual({
+      ok: false,
+      error: "'codex login' exited with code 3.",
+      processExitUnproven: true,
+    });
   });
 
   it("fails with a helpful error when the codex binary is missing", async () => {

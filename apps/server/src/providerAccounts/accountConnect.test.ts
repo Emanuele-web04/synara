@@ -362,6 +362,9 @@ describe("accountConnect", () => {
     );
     const cancellation = Effect.runPromise(waiting.cancelConnect(operationId));
     await waitFor(() => stopRequested);
+    expect(Effect.runSync(waiting.getConnectStatus(operationId))).toMatchObject({
+      state: "waiting-for-user",
+    });
     expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
     finishStop();
     expect(await cancellation).toMatchObject({ state: "cancelled" });
@@ -386,6 +389,28 @@ describe("accountConnect", () => {
     await expectFailureDetail(unproven.cancelConnect(operationId), /exit could not be verified/);
     expect(Effect.runSync(unproven.getConnectStatus(operationId))).toMatchObject({
       state: "failed",
+    });
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
+  });
+
+  it("does not report cancelled when staged-directory cleanup fails", async () => {
+    const failedCleanup = makeAccountConnect({
+      storage: {
+        ...storage,
+        cancelPendingDirectory: () =>
+          Effect.fail(
+            new ProviderAccountStorageError({ operation: "test", detail: "cleanup rejected" }),
+          ),
+      },
+      oauthLoginRunners: { codex: fakeOauthRunner },
+    });
+    const { operationId } = await Effect.runPromise(
+      failedCleanup.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    await expectFailureDetail(failedCleanup.cancelConnect(operationId), /cleanup rejected/);
+    expect(Effect.runSync(failedCleanup.getConnectStatus(operationId))).toMatchObject({
+      state: "failed",
+      error: "Login stopped, but staged-profile cleanup failed.",
     });
     expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
   });
