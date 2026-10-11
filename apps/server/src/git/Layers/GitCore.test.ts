@@ -107,6 +107,7 @@ function initRepoWithCommit(
   return Effect.gen(function* () {
     const core = yield* GitCore;
     yield* core.initRepo({ cwd });
+    yield* git(cwd, ["config", "core.autocrlf", "false"]);
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
     yield* writeTextFile(path.join(cwd, "README.md"), "# test\n");
@@ -121,6 +122,7 @@ function initRepoWithoutCommit(cwd: string): Effect.Effect<void, GitCommandError
   return Effect.gen(function* () {
     const core = yield* GitCore;
     yield* core.initRepo({ cwd });
+    yield* git(cwd, ["config", "core.autocrlf", "false"]);
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
   });
@@ -595,12 +597,14 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
         yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o755));
         yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "old.sh"]);
         yield* git(tmp, ["commit", "-m", "base"]);
         yield* Effect.promise(() =>
           fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
         );
         yield* git(tmp, ["add", "-u"]);
         yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "renamed.sh"]);
         const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
         expect(patch).toContain("b/renamed.sh");
         expect(patch).toContain("new file mode 100755");
@@ -3947,7 +3951,11 @@ it.layer(TestLayer)("git integration", (it) => {
             "#!/bin/sh\ntouch .git/fsmonitor-started\nwhile :; do sleep 0.05; done\n",
           );
           yield* Effect.promise(() => fs.chmod(hook, 0o755));
-          yield* git(tmp, ["config", "core.fsmonitor", hook]);
+          yield* git(tmp, [
+            "config",
+            "core.fsmonitor",
+            quoteGitShellArgument(hook.replaceAll("\\", "/")),
+          ]);
           const core = yield* GitCore;
           const query = yield* core[method](tmp).pipe(
             Effect.result,
