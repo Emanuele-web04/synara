@@ -567,7 +567,7 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   // Server-backed global default for opt-in automatic title refresh (#1041).
-  // Off unless onboarding explicitly asks; per-project/per-thread overrides win.
+  // Off until the user opts in; per-project/per-thread overrides win.
   titleRefreshMode: ThreadTitleRefreshMode.pipe(withDefaults(() => "off" as const)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
