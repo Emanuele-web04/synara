@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.3",
+    date: "Oct 11",
+    features: [
+      {
+        id: "hubs-navigation",
+        title: "Hubs is easier to find and manage",
+        description:
+          "Hubs now appears in the main rail by default, with coordinator rows aligned with your project sidebar.",
+        details:
+          "Existing settings reveal Hubs once; hiding it again from Customize is respected. Expand worker chats, pin the coordinator or open Hub settings from its row.",
+      },
+      {
+        id: "conversation-recovery",
+        title: "A simpler conversation reload",
+        description:
+          "Native chats restore their full projected conversation from the server, including rollbacks made while you were disconnected.",
+        details:
+          "The recent-history pager and private detail cache introduced in 1.0.2 have been removed. Ordinary refreshes still preserve newer streamed text, while recovery snapshots remove reverted messages. Imported provider history keeps its Load earlier messages control.",
+      },
+      {
+        id: "provider-recovery",
+        title: "Recover without replaying abandoned work",
+        description:
+          "Restart recovery avoids resending child-agent commands when their owning chat is missing or deleted.",
+        details:
+          "Unsent work is blocked, uncertain delivery remains uncertain, and unrelated chats remain usable. Claude compaction reviews with a missing owner stay held. Deleting a chat clears queued work before optional computer cleanup.",
+      },
+      {
+        id: "mac-http",
+        title: "More reliable desktop requests on macOS",
+        description:
+          "Desktop HTTP requests use a maintained runtime dispatcher to avoid the Electron socket crash on macOS.",
+        details:
+          "The desktop keeps the existing fetch API and error behavior while initializing the dispatcher before requests begin.",
+      },
+      {
+        id: "work-labels",
+        title: "Cleaner work labels in the transcript",
+        description:
+          "Working for and Worked for use compact text labels, with a disclosure for finished tools and narration.",
+        details:
+          "The labels follow your chat font size and remove model badges and completion icons. Finished work can still be expanded, and disabling finished-turn folding keeps it visible.",
+      },
+    ],
+  },
+  {
     version: "1.0.2",
     date: "Oct 11",
     features: [
