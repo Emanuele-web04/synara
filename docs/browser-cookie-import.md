@@ -1,5 +1,7 @@
 # Browser cookie import
 
+On first launch, Synara introduces cookie import for all seven macOS browsers. Safari's optional Full Disk Access setup is a separate step; Chromium imports request their own Keychain access when needed.
+
 In Synara's browser, open **Saved logins → Import browser cookies**. Choose a browser and profile, then import **this site**, or explicitly confirm **all sites in this profile**. Imported sessions are shared across Synara browser tabs and agent workflows. This imports cookies, not passwords, bookmarks, extensions, or history.
 
 On macOS, the picker supports Chrome, Safari, Edge, **Helium, Aside, Arc, and Dia**. The new sources use their own profile directories and Keychain items:
@@ -17,6 +19,6 @@ Keychain access happens only after a human starts an import. Denying access fail
 
 If import fails, review the reported permissions or profile availability, or sign in directly. The three custom sources are macOS-only; other platforms continue to use the native reader.
 
-Verification uses disposable SQLite profiles, encrypted synthetic cookies, and injected Keychain responses. It does not establish signed-app Keychain prompts or packaged Windows behavior.
+Verification includes disposable SQLite fixtures, real Helium and Aside cookie databases with actual macOS Keychain reads, and an isolated Electron run of the production import owner and secure session restoration. Live Arc and Dia imports, signed-app permission prompts, and packaged Windows behavior remain unverified.
 
 References: [Helium Keychain branding](https://github.com/imputnet/helium-macos/blob/main/patches/helium/macos/change-keychain-name.patch), [Browser roots and Keychain items](https://github.com/steipete/SweetCookieKit/blob/main/Sources/SweetCookieKit/BrowserCatalog.swift), [Chromium macOS encryption](https://github.com/chromium/chromium/blob/main/components/os_crypt/async/browser/keychain_key_provider.mm). Aside's Keychain branding was checked against its installed application binary without reading user data.
