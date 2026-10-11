@@ -889,7 +889,10 @@ public static class Fixture {
           if (kind === "batch") {
             expect(transport.endsWith("\n")).toBe(true);
             expect(transport.trim().split("\n")).toHaveLength(1);
-            expect(JSON.parse(transport)).toEqual({ event: "user", message: { content: received } });
+            expect(JSON.parse(transport)).toEqual({
+              event: "user",
+              message: { content: received },
+            });
           }
           expect(received).toContain("<synara_host_context>");
           expect(received.endsWith(`\n\n${prompt}`)).toBe(true);
