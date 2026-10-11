@@ -21,12 +21,16 @@
     "typecheck:legacy": "tsc --noEmit",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
-    "postinstall": "fumadocs-mdx"
+    "postinstall": "fumadocs-mdx",
+    "test": "vitest run src --passWithNoTests"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@synara/contracts": "workspace:*",
+    "@synara/shared": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "effect": "catalog:",
     "fumadocs-core": "16.11.5",
     "fumadocs-mdx": "15.2.0",
     "fumadocs-ui": "16.11.5",
@@ -55,6 +59,7 @@
     "playwright-core": "^1.62.1",
     "tailwindcss": "4.2.2",
     "typescript": "catalog:",
+    "vitest": "catalog:",
     "wrangler": "^4.122.0"
   },
   "allowScripts": {

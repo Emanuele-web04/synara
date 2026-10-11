@@ -1,160 +1,56 @@
-import { describe, expect, it } from "vitest";
-import { APP_VERSION } from "./branding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildFeedbackSubmission,
   FEEDBACK_CATEGORIES,
-  formatBugReportDiagnostics,
-  formatFeedbackSummary,
   normalizeHomePaths,
   redactObviousSecrets,
-  type FeedbackDiagnostics,
-  type FeedbackThreadContext,
+  submitFeedback,
 } from "./feedback";
 
-const CONTEXT: FeedbackThreadContext = {
-  provider: "codex",
-  model: "gpt-5.6-sol",
-  projectKind: "project",
-  environmentMode: "worktree",
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  sessionStatus: "running",
-  latestTurnState: "error",
-  messageCount: 12,
-  activityCount: 8,
-  hasPendingApproval: false,
-  hasPendingUserInput: true,
-  hasThreadError: true,
-};
+afterEach(() => vi.unstubAllGlobals());
 
-const DIAGNOSTICS: FeedbackDiagnostics = {
-  ...CONTEXT,
-  appVersion: "0.5.1",
-  submittedAt: "2026-07-15T18:00:00.000Z",
-  userAgent: "Synara test agent",
-  platform: "MacIntel",
-  language: "en-US",
-  viewport: "1440x900",
-};
-
-describe("formatFeedbackSummary", () => {
-  it("falls back to a neutral opening and omits fields the session never set", () => {
-    const summary = formatFeedbackSummary({
-      category: null,
-      diagnostics: {
-        ...DIAGNOSTICS,
-        projectKind: null,
-        environmentMode: null,
-        sessionStatus: null,
-        latestTurnState: null,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        hasThreadError: false,
-      },
-    });
-
-    expect(summary).toContain(
-      "I have some feedback in Synara 0.5.1, using codex with gpt-5.6-sol.",
-    );
-    expect(summary).toContain("Report type: Unspecified");
-    expect(summary).toContain("At submission: nothing pending.");
-    expect(summary).not.toContain("Screenshot:");
-    expect(summary).not.toContain("Project kind:");
-    expect(summary).not.toContain("Session status:");
-  });
-
-  it("describes feedback sent outside an active chat without inventing provider context", () => {
-    const summary = formatFeedbackSummary({
-      category: "other",
-      diagnostics: {
-        ...DIAGNOSTICS,
-        provider: null,
-        model: null,
-        projectKind: null,
-        environmentMode: null,
-        runtimeMode: null,
-        interactionMode: null,
-        sessionStatus: null,
-        latestTurnState: null,
-      },
-    });
-
-    expect(summary).toContain("I have some feedback in Synara 0.5.1 outside an active chat.");
-    expect(summary).not.toContain("Provider:");
-    expect(summary).not.toContain("Model:");
-  });
-});
-
-describe("buildFeedbackSubmission", () => {
-  it("adds useful runtime diagnostics without adding project or conversation content", () => {
-    const submission = buildFeedbackSubmission({
-      category: "bug",
+describe("explicit feedback", () => {
+  it("uses only reporter-written category and details, without reading legacy context", () => {
+    const input = {
+      category: "bug" as const,
       details: "  The composer stopped responding.  ",
-      context: CONTEXT,
-      now: new Date("2026-07-15T18:00:00.000Z"),
-      userAgent: "Synara test agent",
-      platform: "MacIntel",
-      language: "en-US",
-      viewport: { width: 1_440, height: 900 },
-    });
-
-    expect(submission).toMatchObject({
+      get context() {
+        throw new Error("Automatic context must not be read");
+      },
+      get userAgent() {
+        throw new Error("Browser identity must not be read");
+      },
+    };
+    expect(buildFeedbackSubmission(input)).toEqual({
       category: "bug",
       details: "The composer stopped responding.",
-      diagnostics: {
-        provider: "codex",
-        model: "gpt-5.6-sol",
-        submittedAt: "2026-07-15T18:00:00.000Z",
-        userAgent: "Synara test agent",
-        platform: "MacIntel",
-        language: "en-US",
-        viewport: "1440x900",
-      },
     });
-    expect(submission.summary).toBe(
-      [
-        `I ran into a bug in Synara ${APP_VERSION}, using codex with gpt-5.6-sol.`,
-        "",
-        "Report type: Bug",
-        `App version: ${APP_VERSION}`,
-        "Provider: codex",
-        "Model: gpt-5.6-sol",
-        "Project kind: project",
-        "Environment mode: worktree",
-        "Runtime mode: full-access",
-        "Interaction mode: default",
-        "Session status: running",
-        "Latest turn state: error",
-        "Thread size: 12 messages, 8 activities",
-        "At submission: the thread was in an error state, the agent was waiting for input.",
-        "Platform: MacIntel, viewport 1440x900",
-        "Language: en-US",
-        "User agent: Synara test agent",
-        "Submitted at: 2026-07-15T18:00:00.000Z",
-      ].join("\n"),
-    );
-    expect(submission.summary).not.toContain("The composer stopped responding.");
-    expect(submission.details).not.toContain("  ");
-    expect(submission).not.toHaveProperty("screenshot");
-    expect(submission.diagnostics).not.toHaveProperty("projectPath");
-    expect(submission.diagnostics).not.toHaveProperty("threadTitle");
-    expect(submission.diagnostics).not.toHaveProperty("messages");
-    expect(submission.diagnostics).not.toHaveProperty("logs");
+    expect(FEEDBACK_CATEGORIES.map((category) => category.value)).toContain("bug");
   });
 
-  it("sanitizes secrets and home paths from details before submission", () => {
+  it("does not serialize diagnostic fields supplied by a legacy caller", async () => {
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    const fetchImplementation = vi.fn<typeof fetch>(async () => new Response("", { status: 200 }));
+    const submission = {
+      category: "bug" as const,
+      details: "The send button stopped responding.",
+      get diagnostics() {
+        throw new Error("Automatic diagnostics must not be read");
+      },
+    };
+    await submitFeedback(submission, fetchImplementation);
+    expect(JSON.parse(String(fetchImplementation.mock.calls[0]![1]?.body))).toEqual({
+      category: "bug",
+      details: submission.details,
+    });
+  });
+
+  it("sanitizes secrets and home paths from reporter-written details", () => {
     const submission = buildFeedbackSubmission({
       category: "bug",
       details:
         "My token is ghp_0123456789abcdefghijklmnopqrst and I work in /Users/kartik/scratch.",
-      context: CONTEXT,
-      now: new Date("2026-07-15T18:00:00.000Z"),
-      userAgent: "Synara test agent",
-      platform: "MacIntel",
-      language: "en-US",
-      viewport: { width: 1_440, height: 900 },
     });
-
     expect(submission.details).not.toContain("ghp_0123456789abcdefghijklmnopqrst");
     expect(submission.details).toContain("[REDACTED]");
     expect(submission.details).not.toContain("/Users/kartik");
@@ -199,11 +95,6 @@ describe("buildFeedbackSubmission", () => {
     const submission = buildFeedbackSubmission({
       category: "bug",
       details: `here is the leak: ${secret} end`,
-      context: CONTEXT,
-      userAgent: "Synara test agent",
-      platform: "MacIntel",
-      language: "en-US",
-      viewport: { width: 1_440, height: 900 },
     });
 
     expect(submission.details).not.toContain(secret);
@@ -277,52 +168,5 @@ describe("buildFeedbackSubmission", () => {
       "see file://~/project end",
     );
     expect(normalizeHomePaths("see file:///home/bob/x.log end")).toBe("see file://~/x.log end");
-  });
-
-  it("sanitizes untrusted provider and model strings in the summary and diagnostics", () => {
-    const submission = buildFeedbackSubmission({
-      category: "bug",
-      details: "The model picker stopped listing models.",
-      context: {
-        ...CONTEXT,
-        model: "sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX fine-tune from /Users/kartik/leak",
-      },
-      now: new Date("2026-07-15T18:00:00.000Z"),
-      userAgent: "Synara test agent",
-      platform: "MacIntel",
-      language: "en-US",
-      viewport: { width: 1_440, height: 900 },
-    });
-
-    expect(submission.diagnostics.model).toBe("[REDACTED] fine-tune from ~/leak");
-    expect(submission.summary).not.toContain("sk-0123456789ABCDEFGHIJKLMNOPQRSTUVWX");
-    expect(submission.summary).not.toContain("/Users/kartik");
-    expect(submission.summary).toContain("Model: [REDACTED] fine-tune from ~/leak");
-  });
-});
-
-describe("formatBugReportDiagnostics", () => {
-  it("keeps the rows the issue template asks for and drops the raw browser strings", () => {
-    const report = formatBugReportDiagnostics({ category: "bug", diagnostics: DIAGNOSTICS });
-
-    expect(report).toContain("I ran into a bug in Synara 0.5.1, using codex with gpt-5.6-sol.");
-    expect(report).toContain("Report type: Bug");
-    expect(report).toContain("Platform: MacIntel, viewport 1440x900");
-    expect(report).toContain("At submission: the thread was in an error state");
-    expect(report).not.toContain("User agent:");
-    expect(report).not.toContain("Synara test agent");
-    expect(report).not.toContain("Language:");
-    expect(report).not.toContain("Submitted at:");
-  });
-
-  it("omits fields the session never set without changing the allow-list", () => {
-    const report = formatBugReportDiagnostics({
-      category: null,
-      diagnostics: { ...DIAGNOSTICS, provider: null, model: null },
-    });
-
-    expect(report).toContain("I have some feedback in Synara 0.5.1 outside an active chat.");
-    expect(report).not.toContain("Provider:");
-    expect(report).not.toContain("User agent:");
   });
 });

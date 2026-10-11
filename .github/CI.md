@@ -296,3 +296,5 @@ or linking backend, so the 101.42- and 223.63-second samples do not isolate copy
 as their cause. Fresh native Windows checks and installation timing are recorded
 in the PR verification; a same-runner paired comparison is needed to attribute a
 repeatable percentage to cache placement alone.
+
+The core unit lane also runs the marketing feedback endpoint tests. Those tests use mocked delivery and verify that legacy automatic diagnostics are discarded before email serialization; they do not contact Resend. Marketing validation also runs for shared contract/redaction changes.

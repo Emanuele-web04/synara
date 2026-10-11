@@ -99,7 +99,7 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     mocks.projects = [];
     mocks.threadsHydrated = true;
     mocks.handleNewThread.mockResolvedValue("thread-1");
-    useFeedbackDialogStore.setState({ isOpen: false, context: null, initialCategory: null });
+    useFeedbackDialogStore.setState({ isOpen: false, initialCategory: null });
     vi.stubGlobal("window", { innerWidth: 1_440, innerHeight: 900 });
     vi.stubGlobal("navigator", {
       userAgent: "Synara test agent",
@@ -113,7 +113,7 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     mocks.projects = [HOME_CONTAINER, ordinary];
     mocks.focusedChat.activeProject = ordinary;
     mocks.focusedChat.activeProjectId = ordinary.id;
-    useFeedbackDialogStore.getState().openDialog(undefined, "bug");
+    useFeedbackDialogStore.getState().openDialog("bug");
 
     const props = renderDialog();
     const draft = props.onDraftGithubIssue as (details: string) => Promise<void>;
@@ -177,7 +177,7 @@ describe("GlobalFeedbackDialog.onDraftGithubIssue", () => {
     const ordinary = project({ id: "proj-only" as Project["id"] });
     mocks.projects = [ordinary];
     mocks.handleNewThread.mockResolvedValue(null);
-    useFeedbackDialogStore.getState().openDialog(undefined, "bug");
+    useFeedbackDialogStore.getState().openDialog("bug");
 
     const props = renderDialog();
     const draft = props.onDraftGithubIssue as (details: string) => Promise<void>;

@@ -1,5 +1,5 @@
 // FILE: FeedbackDialog.tsx
-// Purpose: Collects categorized Synara feedback with privacy-safe diagnostics.
+// Purpose: Collects explicit, categorized Synara feedback.
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -7,7 +7,6 @@ import {
   FEEDBACK_CATEGORIES,
   submitFeedback,
   type FeedbackCategory,
-  type FeedbackThreadContext,
 } from "../feedback";
 import { Button } from "./ui/button";
 import { Dialog, DialogHeader, DialogPopup, DialogTitle } from "./ui/dialog";
@@ -17,7 +16,6 @@ import { toastManager } from "./ui/toast";
 
 export interface FeedbackDialogProps {
   open: boolean;
-  context: FeedbackThreadContext;
   initialCategory?: FeedbackCategory | null | undefined;
   onOpenChange: (open: boolean) => void;
   onDraftGithubIssue?: ((details: string) => Promise<void>) | undefined;
@@ -25,7 +23,6 @@ export interface FeedbackDialogProps {
 
 export function FeedbackDialog({
   open,
-  context,
   initialCategory,
   onOpenChange,
   onDraftGithubIssue,
@@ -43,7 +40,7 @@ export function FeedbackDialog({
     isBusyRef.current = true;
     setIsSending(true);
     try {
-      await submitFeedback(buildFeedbackSubmission({ category, details, context }));
+      await submitFeedback(buildFeedbackSubmission({ category, details }));
       onOpenChange(false);
       toastManager.add({
         type: "success",

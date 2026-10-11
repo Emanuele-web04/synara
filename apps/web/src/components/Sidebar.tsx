@@ -1581,10 +1581,7 @@ export default function Sidebar() {
     if (!isOnAutomations) setAutomationCreateOpen(false);
   }, [isOnAutomations]);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
-  const openBugReport = useCallback(
-    () => openFeedbackDialog(undefined, "bug"),
-    [openFeedbackDialog],
-  );
+  const openBugReport = useCallback(() => openFeedbackDialog("bug"), [openFeedbackDialog]);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);

@@ -3,14 +3,16 @@
 // Layer: App Router route handler (Node.js runtime)
 // Depends on: Server-only Resend, recipient, and verified sender configuration.
 
-import { consumeFeedbackRateLimit } from "@/lib/feedbackRateLimit";
+import { consumeFeedbackRateLimit } from "../../../lib/feedbackRateLimit";
+import { FeedbackSubmission } from "@synara/contracts";
+import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import { Schema } from "effect";
 
 export const runtime = "nodejs";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const DEFAULT_FROM_EMAIL = "Synara Feedback <feedback@trysynara.com>";
 const MAX_REQUEST_BYTES = 64 * 1024;
-const MAX_DETAILS_LENGTH = 5_000;
 const SEND_TIMEOUT_MS = 15_000;
 
 const CATEGORY_LABELS = {
@@ -22,36 +24,7 @@ const CATEGORY_LABELS = {
   other: "Other",
 } as const;
 
-type FeedbackCategory = keyof typeof CATEGORY_LABELS;
-type DiagnosticValue = string | number | boolean | null;
-
-interface ParsedFeedback {
-  category: FeedbackCategory | null;
-  details: string;
-  diagnostics: Record<string, DiagnosticValue>;
-}
-
-const DIAGNOSTIC_FIELDS = [
-  "appVersion",
-  "submittedAt",
-  "provider",
-  "model",
-  "projectKind",
-  "environmentMode",
-  "runtimeMode",
-  "interactionMode",
-  "sessionStatus",
-  "latestTurnState",
-  "messageCount",
-  "activityCount",
-  "hasPendingApproval",
-  "hasPendingUserInput",
-  "hasThreadError",
-  "userAgent",
-  "platform",
-  "language",
-  "viewport",
-] as const;
+const decodeFeedback = Schema.decodeUnknownSync(FeedbackSubmission);
 
 function corsOrigin(request: Request): string | null {
   const origin = request.headers.get("origin");
@@ -99,54 +72,16 @@ function requestIp(request: Request): string {
   return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseDiagnostics(value: unknown): Record<string, DiagnosticValue> | null {
-  if (!isRecord(value)) return null;
-  const result: Record<string, DiagnosticValue> = {};
-  for (const key of DIAGNOSTIC_FIELDS) {
-    const field = value[key];
-    if (field === null) {
-      result[key] = null;
-      continue;
-    }
-    if (typeof field === "string") {
-      const maximumLength = key === "userAgent" ? 1_024 : 256;
-      result[key] = field.slice(0, maximumLength);
-      continue;
-    }
-    if (typeof field === "boolean") {
-      result[key] = field;
-      continue;
-    }
-    if (typeof field === "number" && Number.isSafeInteger(field) && field >= 0) {
-      result[key] = field;
-      continue;
-    }
+function parseFeedback(value: unknown): FeedbackSubmission | null {
+  try {
+    const submission = decodeFeedback(value);
+    return {
+      category: submission.category,
+      details: redactDiagnosticText(submission.details, { maxLength: 5_000 }),
+    };
+  } catch {
     return null;
   }
-  return result;
-}
-
-function parseFeedback(value: unknown): ParsedFeedback | null {
-  if (!isRecord(value)) return null;
-  const details = typeof value.details === "string" ? value.details.trim() : "";
-  if (details.length === 0 || details.length > MAX_DETAILS_LENGTH) return null;
-
-  const category = value.category;
-  if (category !== null && (typeof category !== "string" || !(category in CATEGORY_LABELS))) {
-    return null;
-  }
-  const diagnostics = parseDiagnostics(value.diagnostics);
-  if (!diagnostics) return null;
-
-  return {
-    category: category as FeedbackCategory | null,
-    details,
-    diagnostics,
-  };
 }
 
 function escapeHtml(value: string): string {
@@ -162,34 +97,14 @@ function escapeHtml(value: string): string {
   });
 }
 
-function diagnosticSummary(feedback: ParsedFeedback): string {
-  const diagnostics = feedback.diagnostics;
-  return `I had this issue in Synara: version(${String(diagnostics.appVersion)}), provider: ${String(diagnostics.provider)}, model: ${String(diagnostics.model)}, runtime mode: ${String(diagnostics.runtimeMode)}, interaction mode: ${String(diagnostics.interactionMode)}, session: ${String(diagnostics.sessionStatus)}, latest turn: ${String(diagnostics.latestTurnState)}.`;
-}
-
-function diagnosticsLines(diagnostics: Record<string, DiagnosticValue>): string[] {
-  return DIAGNOSTIC_FIELDS.map((key) => `${key}: ${String(diagnostics[key])}`);
-}
-
-async function sendEmail(feedback: ParsedFeedback): Promise<string> {
+async function sendEmail(feedback: FeedbackSubmission): Promise<string> {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const toEmail = process.env.SYNARA_FEEDBACK_TO_EMAIL?.trim();
   if (!apiKey || !toEmail) throw new Error("Feedback delivery is not configured.");
 
   const categoryLabel = feedback.category ? CATEGORY_LABELS[feedback.category] : "General";
-  const hiddenSummary = diagnosticSummary(feedback);
-  const lines = diagnosticsLines(feedback.diagnostics);
-  const text = [feedback.details, "", "--- Diagnostic context ---", hiddenSummary, ...lines].join(
-    "\n",
-  );
-  const html = `
-    <h2>${escapeHtml(categoryLabel)} feedback</h2>
-    <p style="white-space:pre-wrap">${escapeHtml(feedback.details)}</p>
-    <hr />
-    <p><strong>Diagnostic context</strong></p>
-    <p>${escapeHtml(hiddenSummary)}</p>
-    <pre>${escapeHtml(lines.join("\n"))}</pre>
-  `;
+  const text = feedback.details;
+  const html = `<h2>${escapeHtml(categoryLabel)} feedback</h2><p style="white-space:pre-wrap">${escapeHtml(feedback.details)}</p>`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
@@ -203,7 +118,7 @@ async function sendEmail(feedback: ParsedFeedback): Promise<string> {
       body: JSON.stringify({
         from: process.env.SYNARA_FEEDBACK_FROM_EMAIL?.trim() || DEFAULT_FROM_EMAIL,
         to: [toEmail],
-        subject: `[Synara Feedback] ${categoryLabel} · v${String(feedback.diagnostics.appVersion)}`,
+        subject: `[Synara Feedback] ${categoryLabel}`,
         text,
         html,
       }),
@@ -281,8 +196,8 @@ export async function POST(request: Request): Promise<Response> {
     await sendEmail(feedback);
     return jsonResponse({ ok: true }, 200, allowedOrigin);
   } catch (error) {
-    console.error("[feedback] delivery failed", error);
     const unavailable = error instanceof Error && error.message.includes("not configured");
+    console.error("[feedback] delivery failed", unavailable ? "unavailable" : "rejected");
     return jsonResponse(
       {
         error: unavailable

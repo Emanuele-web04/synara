@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { formatBugReportDiagnostics, normalizeHomePaths, redactObviousSecrets } from "./feedback";
+import { normalizeHomePaths, redactObviousSecrets } from "./feedback";
 import {
   buildGithubIssueInterviewPrompt,
   BUG_REPORT_CONFIRMATION_QUESTION,
@@ -11,49 +11,18 @@ import {
   SYNARA_UPSTREAM_REPO,
 } from "./feedbackGithubIssue";
 
-const SAMPLE_DIAGNOSTICS = {
-  appVersion: "0.7.3",
-  provider: "codex",
-  model: "gpt-5.6-sol",
-  projectKind: "project",
-  environmentMode: "local",
-  runtimeMode: "agent",
-  interactionMode: "chat",
-  sessionStatus: "connected",
-  latestTurnState: "idle",
-  messageCount: 12,
-  activityCount: 5,
-  hasPendingApproval: false,
-  hasPendingUserInput: false,
-  hasThreadError: false,
-  submittedAt: "2026-08-30T00:00:00.000Z",
-  userAgent: "Mozilla/5.0",
-  platform: "macOS",
-  language: "en-US",
-  viewport: "1920x1080",
-};
-
-const makePrompt = (details: string) =>
-  buildGithubIssueInterviewPrompt({
-    details,
-    diagnosticsSummary: formatBugReportDiagnostics({
-      category: "bug",
-      diagnostics: SAMPLE_DIAGNOSTICS,
-    }),
-  });
+const makePrompt = (details: string) => buildGithubIssueInterviewPrompt({ details });
 
 const section = (prompt: string, tag: string) =>
   prompt.match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`))?.[1];
 
 describe("buildGithubIssueInterviewPrompt", () => {
-  it("embeds sanitized diagnostics and details", () => {
+  it("embeds only the sanitized reporter description", () => {
     const prompt = makePrompt(
       "I hit a bug with my ghp_0123456789abcdefghijklmnopqrst and /Users/kartik/scratch project.",
     );
 
-    expect(section(prompt, "diagnostics")).toContain(
-      "I ran into a bug in Synara 0.7.3, using codex with gpt-5.6-sol.",
-    );
+    expect(section(prompt, "diagnostics")).toBeUndefined();
     expect(section(prompt, "initial-report")).toBe(
       "I hit a bug with my [REDACTED] and ~/scratch project.",
     );

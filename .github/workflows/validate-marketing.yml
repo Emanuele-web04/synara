@@ -8,6 +8,8 @@ on:
   pull_request:
     paths: &marketing_paths
       - "apps/marketing/**"
+      - "packages/contracts/**"
+      - "packages/shared/**"
       - ".github/workflows/validate-marketing.yml"
       # The site installs from the root lockfile, so a dependency bump can
       # break it without touching apps/marketing.
@@ -54,6 +56,9 @@ jobs:
 
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
+
+      - name: Test manual feedback privacy and delivery
+        run: bun run test
 
       - name: Test public-surface contracts
         run: bun run test:docs

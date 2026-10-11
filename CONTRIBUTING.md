@@ -64,8 +64,8 @@ project and opens a separate draft without replacing your existing unsent work.
 Review and send the prompt to begin the interview. The agent instructions require
 a complete issue preview and your explicit confirmation before filing through
 `gh`; unavailable authentication falls back to copy-ready text and a GitHub link.
-The public draft includes selected runtime context and masks recognizable secrets
-and home paths. Review the final body for private information before confirming.
+The public draft contains your description and masks recognizable secrets and
+home paths; it does not automatically attach runtime or browser diagnostics. Review the final body for private information before confirming.
 
 ## Testing
 

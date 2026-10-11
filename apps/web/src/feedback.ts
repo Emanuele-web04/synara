@@ -1,59 +1,19 @@
 // FILE: feedback.ts
-// Purpose: Owns feedback categories, privacy-safe diagnostics, and delivery.
+// Purpose: Owns explicit feedback categories, text sanitization, and delivery.
 // Layer: Web feature logic
 // Depends on: The public trysynara feedback endpoint.
 
-import { APP_VERSION } from "./branding";
+import type { FeedbackCategory, FeedbackSubmission } from "@synara/contracts";
+export type { FeedbackCategory, FeedbackSubmission } from "@synara/contracts";
 
-/**
- * `lead` opens the reported summary in the reporter's voice, so the category is
- * readable as a sentence rather than as an enum value.
- */
 export const FEEDBACK_CATEGORIES = [
-  { value: "bug", label: "Bug", lead: "I ran into a bug" },
-  { value: "session", label: "Session", lead: "I hit a session problem" },
-  { value: "ui", label: "UI", lead: "Something looked wrong" },
-  { value: "performance", label: "Performance", lead: "Synara felt slow" },
-  { value: "idea", label: "Idea", lead: "I have an idea" },
-  { value: "other", label: "Other", lead: "I have some feedback" },
+  { value: "bug", label: "Bug" },
+  { value: "session", label: "Session" },
+  { value: "ui", label: "UI" },
+  { value: "performance", label: "Performance" },
+  { value: "idea", label: "Idea" },
+  { value: "other", label: "Other" },
 ] as const;
-
-export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number]["value"];
-
-const UNCATEGORIZED_LEAD = "I have some feedback";
-
-export interface FeedbackThreadContext {
-  provider: string | null;
-  model: string | null;
-  projectKind: string | null;
-  environmentMode: string | null;
-  runtimeMode: string | null;
-  interactionMode: string | null;
-  sessionStatus: string | null;
-  latestTurnState: string | null;
-  messageCount: number;
-  activityCount: number;
-  hasPendingApproval: boolean;
-  hasPendingUserInput: boolean;
-  hasThreadError: boolean;
-}
-
-export type FeedbackDiagnostics = FeedbackThreadContext & {
-  appVersion: string;
-  submittedAt: string;
-  userAgent: string;
-  platform: string;
-  language: string;
-  viewport: string;
-};
-
-export interface FeedbackSubmission {
-  category: FeedbackCategory | null;
-  details: string;
-  /** Reader-facing rendering of `diagnostics`; the reporter never sees or edits it. */
-  summary: string;
-  diagnostics: FeedbackDiagnostics;
-}
 
 const DEFAULT_FEEDBACK_ENDPOINT = "https://www.trysynara.com/api/feedback";
 const FEEDBACK_REQUEST_TIMEOUT_MS = 20_000;
@@ -124,176 +84,13 @@ export function sanitizeUntrustedText(text: string): string {
   return normalizeHomePaths(redactObviousSecrets(text).text);
 }
 
-function sanitizeOptionalText(value: string | null): string | null {
-  return value === null ? null : sanitizeUntrustedText(value);
-}
-
-/**
- * Sanitizes every string field of the diagnostics payload: provider and model
- * come from free-form thread state and must never leak secrets or home paths.
- */
-function sanitizeDiagnostics(diagnostics: FeedbackDiagnostics): FeedbackDiagnostics {
-  return {
-    ...diagnostics,
-    provider: sanitizeOptionalText(diagnostics.provider),
-    model: sanitizeOptionalText(diagnostics.model),
-    projectKind: sanitizeOptionalText(diagnostics.projectKind),
-    environmentMode: sanitizeOptionalText(diagnostics.environmentMode),
-    runtimeMode: sanitizeOptionalText(diagnostics.runtimeMode),
-    interactionMode: sanitizeOptionalText(diagnostics.interactionMode),
-    sessionStatus: sanitizeOptionalText(diagnostics.sessionStatus),
-    latestTurnState: sanitizeOptionalText(diagnostics.latestTurnState),
-    appVersion: sanitizeUntrustedText(diagnostics.appVersion),
-    submittedAt: sanitizeUntrustedText(diagnostics.submittedAt),
-    userAgent: sanitizeUntrustedText(diagnostics.userAgent),
-    platform: sanitizeUntrustedText(diagnostics.platform),
-    language: sanitizeUntrustedText(diagnostics.language),
-    viewport: sanitizeUntrustedText(diagnostics.viewport),
-  };
-}
-
-function formatStateFlags(diagnostics: FeedbackThreadContext): string {
-  const flags: string[] = [];
-  if (diagnostics.hasThreadError) flags.push("the thread was in an error state");
-  if (diagnostics.hasPendingApproval) flags.push("an approval was pending");
-  if (diagnostics.hasPendingUserInput) flags.push("the agent was waiting for input");
-  return flags.length > 0 ? `${flags.join(", ")}.` : "nothing pending.";
-}
-
-function diagnosticRows(diagnostics: FeedbackDiagnostics): Array<[string, string | null]> {
-  return [
-    ["App version", diagnostics.appVersion],
-    ["Provider", diagnostics.provider],
-    ["Model", diagnostics.model],
-    ["Project kind", diagnostics.projectKind],
-    ["Environment mode", diagnostics.environmentMode],
-    ["Runtime mode", diagnostics.runtimeMode],
-    ["Interaction mode", diagnostics.interactionMode],
-    ["Session status", diagnostics.sessionStatus],
-    ["Latest turn state", diagnostics.latestTurnState],
-    [
-      "Thread size",
-      `${diagnostics.messageCount} messages, ${diagnostics.activityCount} activities`,
-    ],
-    ["At submission", formatStateFlags(diagnostics)],
-    ["Platform", `${diagnostics.platform}, viewport ${diagnostics.viewport}`],
-    ["Language", diagnostics.language],
-    ["User agent", diagnostics.userAgent],
-    ["Submitted at", diagnostics.submittedAt],
-  ];
-}
-
-/**
- * Labels the agent may quote in a public bug report: version, provider and
- * model, project and session state. Raw user-agent, language, and
- * submitted-at strings stay on the first-party feedback path only.
- */
-const BUG_REPORT_DIAGNOSTIC_LABELS: Record<string, true> = {
-  "Report type": true,
-  "App version": true,
-  Provider: true,
-  Model: true,
-  "Project kind": true,
-  "Environment mode": true,
-  "Runtime mode": true,
-  "Interaction mode": true,
-  "Session status": true,
-  "Latest turn state": true,
-  "Thread size": true,
-  "At submission": true,
-  Platform: true,
-};
-
-function renderDiagnosticReport(lead: string, rows: Array<[string, string | null]>): string {
-  const detailLines = rows
-    .filter((row): row is [string, string] => row[1] !== null && row[1] !== "")
-    .map(([label, value]) => `${label}: ${value}`);
-  return [`${lead}.`, "", ...detailLines].join("\n");
-}
-
-function feedbackLeadAndContext(input: {
-  category: FeedbackCategory | null;
-  diagnostics: FeedbackDiagnostics;
-}): string {
-  const { diagnostics } = input;
-  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
-  const lead = category?.lead ?? UNCATEGORIZED_LEAD;
-  const usageContext = diagnostics.provider
-    ? diagnostics.model
-      ? `, using ${diagnostics.provider} with ${diagnostics.model}`
-      : `, using ${diagnostics.provider}`
-    : " outside an active chat";
-  return `${lead} in Synara ${diagnostics.appVersion}${usageContext}`;
-}
-
-/**
- * Renders diagnostics as the report a maintainer reads first, since incoming
- * feedback arrives without any context about what the reporter was doing.
- */
-export function formatFeedbackSummary(input: {
-  category: FeedbackCategory | null;
-  diagnostics: FeedbackDiagnostics;
-}): string {
-  const { diagnostics } = input;
-  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
-  const rows: Array<[string, string | null]> = [
-    ["Report type", category?.label ?? "Unspecified"],
-    ...diagnosticRows(diagnostics),
-  ];
-  return renderDiagnosticReport(feedbackLeadAndContext(input), rows);
-}
-
-/**
- * Renders the allow-listed diagnostics rows for the public-bound bug-report
- * prompt. The full summary carries raw user-agent, language, and
- * submitted-at strings that the issue template never asks for.
- */
-export function formatBugReportDiagnostics(input: {
-  category: FeedbackCategory | null;
-  diagnostics: FeedbackDiagnostics;
-}): string {
-  const { diagnostics } = input;
-  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
-  const rows: Array<[string, string | null]> = [
-    ["Report type", category?.label ?? "Unspecified"],
-    ...diagnosticRows(diagnostics).filter(
-      ([label]) => BUG_REPORT_DIAGNOSTIC_LABELS[label] === true,
-    ),
-  ];
-  return renderDiagnosticReport(feedbackLeadAndContext(input), rows);
-}
-
 export function buildFeedbackSubmission(input: {
   category: FeedbackCategory | null;
   details: string;
-  context: FeedbackThreadContext;
-  now?: Date;
-  userAgent?: string;
-  platform?: string;
-  language?: string;
-  viewport?: { width: number; height: number };
 }): FeedbackSubmission {
-  const viewport = input.viewport ?? { width: window.innerWidth, height: window.innerHeight };
-  const diagnostics = sanitizeDiagnostics({
-    ...input.context,
-    appVersion: APP_VERSION,
-    submittedAt: (input.now ?? new Date()).toISOString(),
-    userAgent: input.userAgent ?? navigator.userAgent,
-    platform: input.platform ?? navigator.platform,
-    language: input.language ?? navigator.language,
-    viewport: `${viewport.width}x${viewport.height}`,
-  });
-
   return {
     category: input.category,
     details: sanitizeUntrustedText(input.details.trim()),
-    summary: sanitizeUntrustedText(
-      formatFeedbackSummary({
-        category: input.category,
-        diagnostics,
-      }),
-    ),
-    diagnostics,
   };
 }
 
@@ -314,7 +111,7 @@ export async function submitFeedback(
         "content-type": "application/json",
         "x-synara-feedback": "1",
       },
-      body: JSON.stringify(submission),
+      body: JSON.stringify({ category: submission.category, details: submission.details }),
       signal: controller.signal,
     });
     if (response.ok) return;
