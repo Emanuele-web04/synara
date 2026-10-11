@@ -1504,7 +1504,6 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "automation-disabled",
         createdAt: "2026-02-23T00:00:05.000Z",
-        turnId: null,
         kind: "automation.disabled",
         summary,
         tone: "error",
