@@ -1,8 +1,4 @@
-// FILE: threadTitleRefreshContext.ts
-// Purpose: Bounded redacted input assembler for automatic title refresh (#1041).
-// Layer: Shared pure utility. Only title + recent user intent + compact summary enter.
-// Never accepts tool output, hidden prompts, attachments, or secrets; patterns that
-// look credential-like are replaced with [redacted]. Output hard-capped.
+import { redactDiagnosticText } from "./diagnosticsRedaction";
 
 export const THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS = 2_000;
 export const THREAD_TITLE_REFRESH_MAX_INTENTS = 5;
@@ -14,67 +10,62 @@ export interface ThreadTitleRefreshContextInput {
 }
 
 function normalize(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return redactDiagnosticText(value.slice(0, THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS), {
+    maxLength: THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS,
+  })
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function redactCredentials(value: string): string {
-  return value
-    .replace(
-      /\b(api[_-]?key|secret|bearer|authorization)\b\s*[:=]\s*\S+/gi,
-      "$1: [redacted]",
-    )
-    .replace(/\b(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b/g, "[redacted]");
+function quote(value: string): string {
+  return JSON.stringify(value)
+    .replaceAll("&", "\\u0026")
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e");
 }
 
-function usableLines(input: ThreadTitleRefreshContextInput): {
-  title: string;
-  intents: string[];
-  summary: string | null;
-} {
-  const title = redactCredentials(normalize(input.currentTitle));
-  const intents = input.recentUserIntents
-    .map((intent) => redactCredentials(normalize(intent)))
-    .filter((intent) => intent.length > 0)
-    .slice(-THREAD_TITLE_REFRESH_MAX_INTENTS);
-  const summaryRaw =
-    input.compactSummary === null || input.compactSummary === undefined
-      ? ""
-      : redactCredentials(normalize(input.compactSummary));
-  return { title, intents, summary: summaryRaw.length > 0 ? summaryRaw : null };
-}
-
-/** Assemble bounded context. Returns null when nothing usable remains. */
+/** Bounded reference text; recognized sensitive patterns use the existing shared redactor. */
 export function buildThreadTitleRefreshContext(
   input: ThreadTitleRefreshContextInput,
-  maxChars: number = THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS,
+  maxChars = THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS,
 ): string | null {
-  const { title, intents, summary } = usableLines(input);
-  if (intents.length === 0 && summary === null) return null;
-
-  const lines: string[] = [];
-  if (title.length > 0) lines.push(`Current title: ${title}`);
-  for (const intent of intents) lines.push(`User intent: ${intent}`);
-  if (summary !== null) lines.push(`Summary: ${summary}`);
-
-  let context = lines.join("\n");
-  if (context.length <= maxChars) return context;
-
-  // Shrink deterministically: drop oldest intents first, then trim summary, then title line.
-  const keptIntents = [...intents];
-  while (keptIntents.length > 1) {
-    keptIntents.shift();
-    const attempt = [
-      ...(title.length > 0 ? [`Current title: ${title}`] : []),
-      ...keptIntents.map((intent) => `User intent: ${intent}`),
-      ...(summary !== null ? [`Summary: ${summary}`] : []),
+  const limit = Number.isFinite(maxChars)
+    ? Math.max(0, Math.min(Math.floor(maxChars), THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS))
+    : THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS;
+  if (limit === 0) return null;
+  let title = normalize(input.currentTitle);
+  const intents = input.recentUserIntents
+    .slice(-THREAD_TITLE_REFRESH_MAX_INTENTS)
+    .map(normalize)
+    .filter((intent) => intent.length > 0);
+  let summary = normalize(input.compactSummary ?? "");
+  if (intents.length === 0 && !summary) return null;
+  const render = () =>
+    [
+      ...(title ? [`Current title: ${quote(title)}`] : []),
+      ...intents.map((intent) => `User intent: ${quote(intent)}`),
+      ...(summary ? [`Summary: ${quote(summary)}`] : []),
     ].join("\n");
-    if (attempt.length <= maxChars) return attempt;
+  let context = render();
+  while (context.length > limit && intents.length > 1) {
+    intents.shift();
+    context = render();
   }
-  let tail = [
-    ...(title.length > 0 ? [`Current title: ${title}`] : []),
-    ...keptIntents.map((intent) => `User intent: ${intent}`),
-    ...(summary !== null ? [`Summary: ${summary}`] : []),
-  ].join("\n");
-  if (tail.length > maxChars) tail = tail.slice(-maxChars);
-  return tail;
+  if (context.length > limit && summary && intents.length > 0) {
+    summary = "";
+    context = render();
+  }
+  if (context.length > limit && title) {
+    title = "";
+    context = render();
+  }
+  while (context.length > limit && (intents.length > 0 || summary)) {
+    const excess = Math.max(1, context.length - limit);
+    if (intents.length > 0) {
+      intents[0] = intents[0]!.slice(0, Math.max(0, intents[0]!.length - excess));
+      if (!intents[0]) intents.shift();
+    } else summary = summary.slice(0, Math.max(0, summary.length - excess));
+    context = render();
+  }
+  return context || null;
 }

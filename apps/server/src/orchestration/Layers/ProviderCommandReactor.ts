@@ -9278,15 +9278,15 @@ const make = Effect.gen(function* () {
         .map((message) => message.text)
         .slice(-5);
       // Bounded redacted input (#1041): current title plus recent user intent.
-      // Falls back to the existing conversation-context builder when no usable
-      // intent remains; tool output and attachments never enter the prompt.
+      // Explicit requests retain their existing fallback. Automatic refresh never
+      // expands into assistant or tool content when bounded intent is absent.
       const refreshContext = buildThreadTitleRefreshContext({
         currentTitle: expectedTitle,
         recentUserIntents: userIntents,
         compactSummary: null,
       });
       const context =
-        refreshContext ?? buildThreadTitleConversationContext(thread.messages);
+        refreshContext ?? (triggeredBy === "explicit" ? buildThreadTitleConversationContext(thread.messages) : null);
       if (!context) {
         return { status: "no-context", title: null };
       }
