@@ -472,11 +472,9 @@ export default function BranchToolbar({
     !usesFixedLocalWorkspace && !envLocked && effectiveEnvMode === "worktree",
   );
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
-
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
     threads,
-    codexHomePath: settings.codexHomePath || null,
     fetchOpenUsageData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);

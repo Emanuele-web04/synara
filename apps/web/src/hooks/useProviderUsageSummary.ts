@@ -1,6 +1,6 @@
 // FILE: useProviderUsageSummary.ts
-// Purpose: Merge usage signals from thread activities, server-side local archives,
-// and provider-specific snapshots into one UI-friendly summary.
+// Purpose: Merge account usage signals from provider snapshots, runtime thread
+// limits, and optional OpenUsage data into one UI-friendly summary.
 
 import type {
   OrchestrationThread,
@@ -18,7 +18,6 @@ import {
 } from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import {
-  isProviderUsageSnapshotNonOk,
   normalizeServerProviderUsageLines,
   normalizeServerProviderUsageRateLimit,
 } from "~/lib/providerUsageSnapshot";
@@ -49,7 +48,13 @@ export function resolveProviderUsageSummary(input: {
   localUsageSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   openUsageSnapshot?: unknown;
 }): ProviderUsageSummaryData {
-  const blocksFallback = isProviderUsageSnapshotNonOk(input.authoritativeLiveSnapshot);
+  // Explicit live failures are authoritative; only fall back when no live snapshot exists.
+  // "Unsupported" is an honest capability result, not a failed fetch. Keep
+  // runtime/local activity and thread-reported limits visible for providers
+  // that do not expose a safe account endpoint yet.
+  const blocksFallback =
+    input.authoritativeLiveSnapshot?.status === "needs-auth" ||
+    input.authoritativeLiveSnapshot?.status === "error";
   if (blocksFallback) {
     return {
       learnMoreHref: deriveProviderUsageLearnMoreHref(input.provider),
@@ -105,7 +110,6 @@ export function useProviderUsageSummary(input: {
   instanceId?: ProviderInstanceId | undefined;
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
-  codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
@@ -132,7 +136,6 @@ export function useProviderUsageSummary(input: {
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider,
-      homePath: provider === "codex" ? input.codexHomePath || null : null,
       enabled: shouldFetchLocalProviderUsage,
     }),
   );

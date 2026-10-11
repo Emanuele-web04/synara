@@ -6,7 +6,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
@@ -17,6 +17,8 @@ import {
   ProfileStatsQuery,
   ProfileStatsQueryLive,
 } from "./profileStats";
+
+afterEach(() => vi.restoreAllMocks());
 
 const testLayer = ProfileStatsQueryLive.pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
@@ -1356,6 +1358,17 @@ describe("ProfileStatsQuery", () => {
               '2026-06-13T12:11:00.000Z'
             ),
             (
+              'activity-hybrid-codex-completed',
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'info',
+              'turn.completed',
+              'Turn completed',
+              '{"modelUsage":{"gpt-5-codex":{"totalTokens":2500}}}',
+              6,
+              '2026-06-13T12:05:00.000Z'
+            ),
+            (
               'activity-hybrid-claude-1',
               'thread-hybrid',
               'turn-hybrid-claude',
@@ -1390,23 +1403,25 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
+        // Completed first-turn usage (2500) replaces its 2000 context counter;
+        // the following cumulative 2500 counter still contributes its 500 delta.
         const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
 
-        expect(tokenStats.lifetimeTotalTokens).toBe(4200);
+        expect(tokenStats.lifetimeTotalTokens).toBe(4700);
         expect(tokenStats.models).toEqual([
           {
             provider: "codex",
             instanceId: "codex",
             model: "gpt-5-codex",
-            tokens: 2500,
-            percent: 59.5,
+            tokens: 3000,
+            percent: 63.8,
           },
           {
             provider: "claudeAgent",
             instanceId: "claudeAgent",
             model: "claude-haiku-4-5",
             tokens: 1700,
-            percent: 40.5,
+            percent: 36.2,
           },
         ]);
       }),
@@ -2131,6 +2146,156 @@ describe("ProfileStatsQuery", () => {
 
         expect(stats.activity.totalPromptsSent).toBe(3);
         expect(stats.activity.longestStreakDays).toBe(3);
+      }),
+    );
+  });
+
+  it("delta-calculates cumulative turn costs and counts a day thread once", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-06-16T12:00:00Z"));
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-provider-usage-cost', 'project-profile', 'Provider usage cost',
+            '{"provider":"opencode","model":"openai/gpt-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'activity-provider-usage-turn-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":1.25,"modelUsage":{"openai/gpt-5":{"totalTokens":75}}}', 1,
+              '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":3.75,"modelUsage":{"anthropic/claude-sonnet-4-6":{"totalTokens":125}}}', 2,
+              '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-1', 'thread-provider-usage-cost', 'turn-provider-usage-1',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"opencode"}', 3,
+              '2026-06-15T09:06:00.000Z'
+            ),
+            (
+              'activity-provider-usage-tokens-2', 'thread-provider-usage-cost', 'turn-provider-usage-2',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":220,"provider":"opencode"}', 4,
+              '2026-06-15T09:16:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-3', 'thread-provider-usage-cost', 'turn-provider-usage-3',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 5,
+              '2026-06-15T09:25:00.000Z'
+            ),
+            (
+              'activity-provider-usage-turn-4', 'thread-provider-usage-cost', 'turn-provider-usage-4',
+              'info', 'turn.completed', 'Turn completed',
+              '{"cumulativeCostUsd":5.00}', 6,
+              '2026-06-15T09:35:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        const usage = tokenStats.providerUsage?.find((entry) => entry.provider === "opencode");
+
+        expect(usage).toMatchObject({
+          tokens: 200,
+          tokensReported: true,
+          tokenCoverage: "partial",
+          turnCount: 4,
+          threadCount: 1,
+          costUsd: 5,
+          costCoverage: "partial",
+        });
+        expect(usage?.history).toEqual([
+          {
+            day: "2026-06-15",
+            tokens: 200,
+            turnCount: 4,
+            threadCount: 1,
+            costUsd: 5,
+          },
+        ]);
+        expect(usage?.models).toEqual([
+          expect.objectContaining({
+            model: "anthropic/claude-sonnet-4-6",
+            tokens: 125,
+            upstreamProviderId: "anthropic",
+          }),
+          expect.objectContaining({
+            model: "openai/gpt-5",
+            tokens: 75,
+            upstreamProviderId: "openai",
+          }),
+        ]);
+        yield* sql`UPDATE projection_thread_activities SET payload_json =
+          json_remove(payload_json, '$.totalCostUsd', '$.cumulativeCostUsd')
+          WHERE thread_id = 'thread-provider-usage-cost'`;
+        const noCostStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(
+          noCostStats.providerUsage?.find((entry) => entry.provider === "opencode"),
+        ).toMatchObject({
+          costUsd: null,
+          costCoverage: "not-reported",
+          turnCount: 4,
+        });
+      }),
+    );
+  });
+
+  it("keeps cumulative cost baselines separate across native sessions", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES (
+            'thread-session-cost', 'project-profile', 'Session cost',
+            '{"provider":"cursor","model":"auto"}', 'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', NULL
+          )
+        `;
+        const samples = [
+          { providerThreadId: "session-a", cumulativeCostUsd: 2 },
+          { providerThreadId: "session-b", cumulativeCostUsd: 5 },
+          { providerThreadId: "session-a", cumulativeCostUsd: 3 },
+        ];
+        for (const [index, sample] of samples.entries()) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+            ) VALUES (
+              ${`session-cost-${index}`}, 'thread-session-cost', ${`session-turn-${index}`},
+              'info', 'turn.completed', 'Turn completed', ${JSON.stringify(sample)}, ${index + 1},
+              ${`2026-06-15T09:0${index}:00.000Z`}
+            )
+          `;
+        }
+        const stats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(stats.providerUsage?.find((entry) => entry.provider === "cursor")).toMatchObject({
+          costUsd: 8,
+          costCoverage: "complete",
+          turnCount: 3,
+        });
       }),
     );
   });

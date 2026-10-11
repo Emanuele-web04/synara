@@ -24,11 +24,10 @@ import {
   isManagedCheckpointRefForThread,
   resolveProjectCwdForKind,
 } from "./checkpointing/Utils";
-import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
+import { aggregateProfileSkillUsageRows, tokenDeltaCtes } from "./profileStats";
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { isProviderIntentEventType } from "./orchestration/providerIntentClassification";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
-import { claudeTokenActivityCtes } from "./claudeTokenStats";
 
 interface PurgeThreadRow {
   readonly projectId: string | null;
@@ -66,6 +65,11 @@ interface TokenActivityRow {
   readonly usageSessionId?: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
+  // Turn the context-window row belongs to; used to keep a modelUsage turn's
+  // counter in the LAG baseline while contributing zero (see §6.7 mirror).
+  // Optional so legacy callers constructing rows without turn attribution
+  // keep compiling.
+  readonly turnId?: string | null;
 }
 
 interface SkillMessageRow {
@@ -362,6 +366,7 @@ export function aggregateThreadTokenRows(
     readonly instanceId?: string | null;
     readonly model: string | null;
   },
+  modelUsageTurnIds: ReadonlySet<string> = new Set(),
 ): ThreadTokenSnapshotRow[] {
   // Claude's verified turn results are snapshotted separately. Remove its old
   // context rows before maintaining any delta state, otherwise a large Claude
@@ -392,15 +397,21 @@ export function aggregateThreadTokenRows(
     const counterProvider = counterProviderOf(row);
     const counterKey = tokenCounterKey(counterProvider, row.usageSessionId ?? null);
     const previousCumulativeTotal = previousCumulativeTotals.get(counterKey);
+    const { provider: counterKind } = resolveTokenProviderModel(row, fallbackSelection);
     const delta =
-      previousCumulativeTotal === undefined || total < previousCumulativeTotal
+      counterKind === "opencode" || counterKind === "kilo"
         ? total
-        : Math.max(0, total - previousCumulativeTotal);
+        : previousCumulativeTotal === undefined || total < previousCumulativeTotal
+          ? total
+          : Math.max(0, total - previousCumulativeTotal);
     previousCumulativeTotals.set(counterKey, total);
     if (
       delta <= 0 ||
       row.createdAt === null ||
-      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user") ||
+      // A modelUsage turn's context-window row keeps the LAG baseline chain
+      // intact but contributes zero: its tokens come from the modelUsage join.
+      (row.turnId != null && modelUsageTurnIds.has(row.turnId))
     ) {
       continue;
     }
@@ -444,7 +455,8 @@ export function aggregateThreadTokenRows(
     if (
       delta <= 0 ||
       row.createdAt === null ||
-      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user") ||
+      (row.turnId != null && modelUsageTurnIds.has(row.turnId))
     ) {
       continue;
     }
@@ -702,66 +714,6 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${threadId}
           AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
       `;
-      // Same counters and per-turn attribution as the live
-      // profileStats.queryTokenActivity: both token counters come back raw so
-      // aggregateThreadTokenRows can split cumulative and used-only fallback
-      // series, and the turn join pins each delta to the selected model.
-      const tokenActivityRows = yield* sql<TokenActivityRow>`
-        WITH turn_model AS (
-          ${turnModelSelectionCte(sql, { threadId })}
-        )
-        SELECT
-          CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
-            AS totalProcessedTokens,
-          CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
-          COALESCE(
-            tm.provider,
-            CASE
-              WHEN tm.instanceId = s.provider_instance_id THEN s.provider_name
-              ELSE tm.instanceId
-            END,
-            json_extract(a.payload_json, '$.provider')
-          ) AS provider,
-          COALESCE(
-            tm.instanceId,
-            s.provider_instance_id,
-            tm.provider,
-            json_extract(a.payload_json, '$.provider')
-          ) AS instanceId,
-          COALESCE(json_extract(a.payload_json, '$.provider'), tm.provider) AS counterProvider,
-          CASE
-            WHEN json_extract(a.payload_json, '$.provider') = 'codex'
-              AND INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') > 0
-            THEN SUBSTR(json_extract(a.payload_json, '$.usageSessionId'), 1,
-              INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
-            ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
-          END AS usageSessionId,
-          tm.model AS model,
-          pm.dispatch_origin AS dispatchOrigin,
-          a.created_at AS createdAt
-        FROM projection_thread_activities a
-        LEFT JOIN turn_model tm
-          ON tm.thread_id = a.thread_id
-         AND tm.turn_id = a.turn_id
-        LEFT JOIN projection_thread_sessions s ON s.thread_id = a.thread_id
-        LEFT JOIN projection_turns pt
-          ON pt.thread_id = a.thread_id
-         AND pt.turn_id = a.turn_id
-        LEFT JOIN projection_thread_messages pm
-          ON pm.thread_id = pt.thread_id
-         AND pm.message_id = pt.pending_message_id
-        WHERE a.thread_id = ${threadId}
-          AND a.kind = 'context-window.updated'
-          AND COALESCE(
-            json_extract(a.payload_json, '$.totalProcessedTokens'),
-            json_extract(a.payload_json, '$.usedTokens')
-          ) IS NOT NULL
-        ORDER BY
-          CASE WHEN a.sequence IS NULL THEN 0 ELSE 1 END ASC,
-          a.sequence ASC,
-          a.created_at ASC,
-          a.activity_id ASC
-      `;
       const skillMessageRows = yield* sql<SkillMessageRow>`
         SELECT
           message_id AS messageId,
@@ -777,31 +729,14 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       `;
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
-      const threadSelection = parseModelSelectionJson(thread.modelSelectionJson);
-      const tokenRows = aggregateThreadTokenRows(tokenActivityRows, {
-        provider: threadSelection?.provider ?? null,
-        instanceId: threadSelection?.instanceId ?? threadSelection?.provider ?? null,
-        model: threadSelection?.model ?? null,
-      });
-      // Preserve the same verified Claude rows as the live profile before the
-      // retained runtime fallback is purged along with this thread.
-      const claudeTokenRows = yield* sql<ThreadTokenSnapshotRow>`
-        WITH turn_model AS (${turnModelSelectionCte(sql, { threadId })}),
-          ${claudeTokenActivityCtes(sql, { threadId })}
-        SELECT
-          c.created_at AS createdAt,
-          'claudeAgent' AS provider,
-          COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent') AS instanceId,
-          c.model AS model,
-          c.tokens AS tokens
-        FROM claude_token_rows c
-        LEFT JOIN turn_model tm
-          ON tm.thread_id = c.thread_id
-         AND tm.turn_id = c.turn_id
-        LEFT JOIN projection_thread_sessions s ON s.thread_id = c.thread_id
-        WHERE c.dispatch_origin IS NULL OR c.dispatch_origin = 'user'
+      // Reuse the exact live accounting pipeline so deletion cannot change totals,
+      // account attribution, model switches, deduplication, or Claude verification.
+      const tokenRows = yield* sql<ThreadTokenSnapshotRow>`
+        WITH ${tokenDeltaCtes(sql, { threadId })}
+        SELECT created_at AS createdAt, provider, instanceId, model, tokens
+        FROM token_delta_rows
+        WHERE (dispatch_origin IS NULL OR dispatch_origin = 'user') AND tokens > 0
       `;
-      tokenRows.push(...claudeTokenRows);
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
       const hasStatsContribution = hasProfileStatsContribution({
         promptRows: skillMessageRows,

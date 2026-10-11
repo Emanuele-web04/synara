@@ -622,11 +622,16 @@ export function makeCursorAdapter(
         };
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.completed",
+          ...(cursorNativeSessionRefs(ctx) ? { providerRefs: cursorNativeSessionRefs(ctx) } : {}),
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
           turnId,
-          payload: { state: "completed", stopReason: null, ...completedCost },
+          payload: {
+            state: "completed",
+            stopReason: null,
+            ...completedCost,
+          },
         });
         yield* Effect.ignore(ctx.acp.cancel);
         if (activePromptFiber) {
@@ -664,6 +669,7 @@ export function makeCursorAdapter(
         });
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.completed",
+          ...(cursorNativeSessionRefs(ctx) ? { providerRefs: cursorNativeSessionRefs(ctx) } : {}),
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
@@ -1467,6 +1473,9 @@ export function makeCursorAdapter(
                 };
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
+                  ...(cursorNativeSessionRefs(ctx)
+                    ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                    : {}),
                   ...(yield* makeEventStamp()),
                   provider: PROVIDER,
                   threadId: input.threadId,
@@ -1521,6 +1530,9 @@ export function makeCursorAdapter(
                 }
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
+                  ...(cursorNativeSessionRefs(ctx)
+                    ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                    : {}),
                   ...(yield* makeEventStamp()),
                   provider: PROVIDER,
                   threadId: input.threadId,
@@ -1553,6 +1565,9 @@ export function makeCursorAdapter(
               };
               yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                 type: "turn.completed",
+                ...(cursorNativeSessionRefs(ctx)
+                  ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                  : {}),
                 ...(yield* makeEventStamp()),
                 provider: PROVIDER,
                 threadId: input.threadId,

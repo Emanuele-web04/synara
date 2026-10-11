@@ -1357,7 +1357,10 @@ export function projectProviderRuntimeActivities(
           summary,
           payload: toActivityPayload({
             state,
-            ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
+            provider: event.provider,
+            ...(event.providerRefs?.providerThreadId
+              ? { providerThreadId: event.providerRefs.providerThreadId }
+              : {}),
             ...(event.payload.tokenAccountingVersion === 1
               ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
               : {}),

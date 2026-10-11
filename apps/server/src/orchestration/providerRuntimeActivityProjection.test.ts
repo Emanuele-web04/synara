@@ -55,6 +55,24 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
+it("preserves native session identity when projecting cumulative turn costs", () => {
+  const activity = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "turn.completed",
+      eventId: "cursor-cost",
+      provider: "cursor",
+      providerRefs: { providerThreadId: "cursor-session-b" },
+      turnId: TURN_ID,
+      payload: { state: "completed", cumulativeCostUsd: 5 },
+    }),
+  )[0]!;
+  expect(activity.payload).toMatchObject({
+    provider: "cursor",
+    providerThreadId: "cursor-session-b",
+    cumulativeCostUsd: 5,
+  });
+});
+
 it("persists terminal error identity and announced retry state in chat activities", () => {
   const error = projectProviderRuntimeActivities(
     runtimeEvent({
