@@ -19,6 +19,7 @@ import {
   type ComposerThreadDraftState,
   type DraftThreadState,
   resolvePreferredComposerModelSelection,
+  reclaimUnreachableDetachedDraftThreads,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import {
@@ -50,6 +51,7 @@ import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
+import { collectSplitViewThreadIds } from "../splitViewStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
@@ -69,6 +71,9 @@ export interface NewThreadNavigationOptions {
 // existing selections.
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
+  // Callers that mint threads (e.g. the feedback draft action) must not offer
+  // the action before hydration: handleNewThread returns null until then.
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const { settings, serverSettings } = useAppSettings();
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
@@ -332,7 +337,9 @@ export function useHandleNewThread() {
           resolvedStoredDraftThread = getDraftThread(bootstrapPlan.threadId);
         }
         applyProviderOverride(bootstrapPlan.threadId);
-        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        if (!options?.preserveProjectDraft) {
+          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        }
         restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
         activateThreadEntryPoint(bootstrapPlan.threadId);
         if (focusedThreadId === bootstrapPlan.threadId) {
@@ -382,7 +389,9 @@ export function useHandleNewThread() {
           resolvedActiveDraftThread = getDraftThread(bootstrapPlan.threadId);
         }
         applyProviderOverride(bootstrapPlan.threadId);
-        setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        if (!options?.preserveProjectDraft) {
+          setProjectDraftThreadId(projectId, bootstrapPlan.threadId, { entryPoint });
+        }
         restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
         activateThreadEntryPoint(bootstrapPlan.threadId);
         if (entryPoint === "terminal") {
@@ -393,6 +402,15 @@ export function useHandleNewThread() {
         }
         return bootstrapPlan.threadId;
       })();
+    }
+
+    if (options?.preserveProjectDraft) {
+      // Reclaim only empty side-action drafts; unsent reports remain available
+      // through their original route.
+      const displayedThreadIds = collectSplitViewThreadIds();
+      if (routeThreadId) displayedThreadIds.add(routeThreadId);
+      if (focusedThreadId) displayedThreadIds.add(focusedThreadId);
+      reclaimUnreachableDetachedDraftThreads(displayedThreadIds);
     }
 
     return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
@@ -412,11 +430,16 @@ export function useHandleNewThread() {
         entryPoint,
       });
       const committed = await stageDraftNavigation({
+        draftThreadId: threadId,
         signal,
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
-          registerDraftThread(threadId, { projectId, ...draftSeed });
+          registerDraftThread(threadId, {
+            projectId,
+            ...draftSeed,
+            ...(options?.preserveProjectDraft ? { isReclaimableDraft: true } : {}),
+          });
           activateThreadEntryPoint(threadId);
           // Seed the draft from the sticky (last-used) selection so a new chat
           // reopens with the model and options used most recently.
@@ -446,7 +469,13 @@ export function useHandleNewThread() {
         // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
         // Verify the committed route before deleting the previous project draft.
         isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
-        finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
+        finalize: () => {
+          // preserveProjectDraft callers keep the user's existing project draft:
+          // claiming the slot here would evict and delete its unsent text.
+          if (!options?.preserveProjectDraft) {
+            setProjectDraftThreadId(projectId, threadId, draftSeed);
+          }
+        },
         rollback: () => {
           clearDraftThread(threadId);
           clearTerminalState(threadId);
@@ -476,5 +505,6 @@ export function useHandleNewThread() {
     handleNewThread,
     projects,
     routeThreadId,
+    threadsHydrated,
   };
 }

@@ -3,6 +3,10 @@
 //          after their destination route actually commits.
 // Layer: Web navigation orchestration
 
+import type { ThreadId } from "@synara/contracts";
+
+const inFlightDraftThreadIds = new Set<ThreadId>();
+
 /**
  * Repeated clicks and shortcuts within this window join the attempt already in flight. A
  * navigation that has not settled by then is treated as lost, so a later "New thread" starts
@@ -21,6 +25,11 @@ const inFlightDraftNavigationBySlot = new Map<
 
 export function draftNavigationSlotKey(projectId: string, entryPoint: string): string {
   return `${projectId}\u0000${entryPoint}`;
+}
+
+/** Returns the set of draft thread ids currently between `stage` and `finalize`/`rollback`. */
+export function getInFlightDraftThreadIds(): ReadonlySet<ThreadId> {
+  return inFlightDraftThreadIds;
 }
 
 /** Coalesces repeated clicks/shortcuts that target the same project + entry-point slot. */
@@ -52,6 +61,7 @@ export function runDraftNavigationOnce<T>(
  * rolls the staged draft back without treating the user's newer navigation as an error.
  */
 export async function stageDraftNavigation(input: {
+  readonly draftThreadId?: ThreadId;
   readonly signal?: AbortSignal | undefined;
   readonly stage: () => void;
   readonly navigate: () => Promise<void>;
@@ -59,6 +69,11 @@ export async function stageDraftNavigation(input: {
   readonly finalize: () => void;
   readonly rollback: () => void;
 }): Promise<boolean> {
+  const { draftThreadId } = input;
+  if (draftThreadId) {
+    inFlightDraftThreadIds.add(draftThreadId);
+  }
+
   let rolledBack = false;
   const rollbackOnce = () => {
     if (rolledBack) {
@@ -84,5 +99,7 @@ export async function stageDraftNavigation(input: {
   } catch (error) {
     rollbackOnce();
     throw error;
+  } finally {
+    if (draftThreadId) inFlightDraftThreadIds.delete(draftThreadId);
   }
 }

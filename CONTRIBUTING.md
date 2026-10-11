@@ -56,6 +56,17 @@ If you are thinking about a non-trivial change, open an issue first.
 
 That gives you a chance to check whether the direction fits before spending time on a larger patch.
 
+## Reporting bugs from the app
+
+Choose **Report a bug** in the sidebar or command palette, enter a description,
+and choose **Draft a GitHub issue with your agent**. This action needs an ordinary
+project and opens a separate draft without replacing your existing unsent work.
+Review and send the prompt to begin the interview. The agent instructions require
+a complete issue preview and your explicit confirmation before filing through
+`gh`; unavailable authentication falls back to copy-ready text and a GitHub link.
+The public draft contains your description and masks recognizable secrets and
+home paths; it does not automatically attach runtime or browser diagnostics. Review the final body for private information before confirming.
+
 ## Testing
 
 Run the full workspace test suite from the repository root with:

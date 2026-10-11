@@ -21,7 +21,7 @@ export const metadata = pageMetadata({
   path: "/privacy",
 });
 
-const LAST_UPDATED = "July 15, 2026";
+const LAST_UPDATED = "October 11, 2026";
 
 const RECEIVED_IF_OPTED_IN = [
   "An event name (e.g. “app launched”, “provider connected”)",
@@ -73,19 +73,18 @@ export default function PrivacyPage() {
         <p className="mt-5 text-[14px] leading-[1.7] text-[var(--text-secondary)] sm:text-[15px]">
           Synara is a desktop app that runs on your machine and connects straight to the providers
           you already use. There&apos;s no Synara account, no Synara server holding your work, and
-          your code or prompts are not sent to us during normal use. The only exception is feedback
-          you explicitly write and submit through the Feedback Synara dialog, together with the
-          limited diagnostics described below. This page spells out exactly what that means — in
-          plain language, no &quot;just read the source&quot; required (though you can, it&apos;s
-          open source).
+          your code or prompts are not sent to us during normal use. Feedback you explicitly write
+          and submit, and the separate technical diagnostics in Synara Beta, are described below.
+          This page spells out exactly what that means — in plain language, no &quot;just read the
+          source&quot; required (though you can, it&apos;s open source).
         </p>
 
         <Section title="Where your data lives">
           <p>
             Your chats, projects, settings, and history are stored in a local database (SQLite) on
             your own device. Synara runs a small server process <em>locally</em> on your machine to
-            power the app — it is not a hosted cloud service, and your data never leaves your
-            computer just by using Synara.
+            power the app. Your workspace stays on your device; provider requests, feedback you
+            submit, and Beta diagnostics follow the boundaries below.
           </p>
         </Section>
 
@@ -139,14 +138,24 @@ export default function PrivacyPage() {
         <Section title="Feedback you choose to send">
           <p>
             The in-app <strong>Feedback Synara</strong> dialog sends only when you press Submit. It
-            includes the text you wrote, app version, operating system, provider and model, runtime
-            modes, and session/turn status so we can understand the conditions around a problem.
+            includes only the category you select and the text you write. It does not automatically
+            attach thread details, app version, operating system, provider, model, or browser
+            diagnostics.
           </p>
           <p>
-            Automated diagnostics do not include chat messages, prompts, project paths, repository
-            contents, session logs, or screenshots. Reports are delivered through our website and
-            email provider to the Synara maintainer for support and product improvement, rather than
-            being added to an analytics profile.
+            Reports are delivered through our website and email provider to the Synara maintainer
+            for support and product improvement. Recognizable credentials are redacted before
+            delivery; review what you write for private information. An agent-drafted GitHub issue
+            requires you to review and confirm the complete public report before filing.
+          </p>
+        </Section>
+
+        <Section title="Synara Beta diagnostics">
+          <p>
+            Synara Beta runs a separate diagnostics client for crash and reliability reports. Stable
+            Synara does not run that client, and sending manual feedback does not enable it. The{" "}
+            <Link href="/docs/features/synara-beta">Beta guide</Link> explains the separate app and
+            its diagnostics policy.
           </p>
         </Section>
 

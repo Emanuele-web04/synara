@@ -1,8 +1,10 @@
+import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   DRAFT_NAVIGATION_COALESCE_WINDOW_MS,
   draftNavigationSlotKey,
+  getInFlightDraftThreadIds,
   runDraftNavigationOnce,
   stageDraftNavigation,
 } from "./stagedDraftNavigation";
@@ -86,6 +88,98 @@ describe("stagedDraftNavigation", () => {
 
     await expect(runDraftNavigationOnce(slotKey, secondRun)).resolves.toBe("second");
     expect(secondRun).toHaveBeenCalledOnce();
+  });
+
+  it("tracks the draft thread id from stage through finalize", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-track-finalize");
+    const finalize = vi.fn();
+    let resolveNavigate!: () => void;
+    const navigatePromise = new Promise<void>((resolve) => {
+      resolveNavigate = resolve;
+    });
+
+    const stagePromise = stageDraftNavigation({
+      draftThreadId: threadId,
+      stage: () => undefined,
+      navigate: () => navigatePromise,
+      isDestinationActive: () => true,
+      finalize,
+      rollback: () => undefined,
+    });
+
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(true);
+    resolveNavigate();
+    await stagePromise;
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(false);
+  });
+
+  it("removes the draft thread id on rollback", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-track-rollback");
+    const rollback = vi.fn();
+
+    const stagePromise = stageDraftNavigation({
+      draftThreadId: threadId,
+      stage: () => undefined,
+      navigate: async () => undefined,
+      isDestinationActive: () => false,
+      finalize: () => undefined,
+      rollback,
+    });
+
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(true);
+    await stagePromise;
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(getInFlightDraftThreadIds().has(threadId)).toBe(false);
+  });
+  it.each(["before staging", "during navigation"] as const)(
+    "releases a cancelled draft %s without finalizing it",
+    async (cancelAt) => {
+      const draftThreadId = ThreadId.makeUnsafe(`cancelled-${cancelAt}`);
+      const controller = new AbortController();
+      const stage = vi.fn();
+      const finalize = vi.fn();
+      const rollback = vi.fn();
+      if (cancelAt === "before staging") controller.abort();
+
+      const committed = await stageDraftNavigation({
+        draftThreadId,
+        signal: controller.signal,
+        stage,
+        navigate: async () => {
+          expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(true);
+          controller.abort();
+        },
+        isDestinationActive: () => true,
+        finalize,
+        rollback,
+      });
+
+      expect(committed).toBe(false);
+      expect(stage).toHaveBeenCalledTimes(cancelAt === "before staging" ? 0 : 1);
+      expect(finalize).not.toHaveBeenCalled();
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(false);
+    },
+  );
+
+  it("releases draft tracking even when rollback itself throws", async () => {
+    const draftThreadId = ThreadId.makeUnsafe("rollback-throws");
+    const rollback = vi.fn(() => {
+      throw new Error("rollback failed");
+    });
+    await expect(
+      stageDraftNavigation({
+        draftThreadId,
+        stage: () => undefined,
+        navigate: async () => undefined,
+        isDestinationActive: () => false,
+        finalize: () => undefined,
+        rollback,
+      }),
+    ).rejects.toThrow("rollback failed");
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(false);
   });
 
   it("does not let a navigation that never settles block later attempts", async () => {

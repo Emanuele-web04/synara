@@ -18,6 +18,7 @@ const CANONICAL_HOST = "www.trysynara.com";
 const VERCEL_ALIAS_HOST = ["dp", "code", "-website.vercel.app"].join("");
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@synara/contracts", "@synara/shared"],
   images: {
     remotePatterns: [
       // Sponsor avatars on /sponsor. GitHub serves every user avatar from this

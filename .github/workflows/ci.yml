@@ -134,7 +134,7 @@ jobs:
       matrix:
         include:
           - pkg: core
-            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop"
+            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop --filter=@synara/marketing"
             test-args: ""
           - pkg: web
             filters: "--filter=@synara/web"

@@ -1,70 +1,39 @@
 import { beforeEach, describe, expect, it } from "vitest";
-
-import type { FeedbackThreadContext } from "./feedback";
+import type { FeedbackCategory } from "./feedback";
 import { useFeedbackDialogStore } from "./feedbackDialogStore";
 
-const THREAD_CONTEXT: FeedbackThreadContext = {
-  provider: "codex",
-  model: "gpt-5.6-sol",
-  projectKind: "project",
-  environmentMode: "worktree",
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  sessionStatus: "running",
-  latestTurnState: "error",
-  messageCount: 12,
-  activityCount: 8,
-  hasPendingApproval: false,
-  hasPendingUserInput: true,
-  hasThreadError: true,
-};
-
 describe("feedbackDialogStore", () => {
-  beforeEach(() => {
-    useFeedbackDialogStore.setState({ isOpen: false, context: null });
-  });
+  beforeEach(() => useFeedbackDialogStore.setState({ isOpen: false, initialCategory: null }));
 
-  it("opens with the thread context a caller supplies", () => {
-    useFeedbackDialogStore.getState().openDialog(THREAD_CONTEXT);
-
+  it("opens an explicit category without retaining thread context", () => {
+    useFeedbackDialogStore.getState().openDialog("bug");
     const state = useFeedbackDialogStore.getState();
     expect(state.isOpen).toBe(true);
-    expect(state.context).toEqual(THREAD_CONTEXT);
+    expect(state.initialCategory).toBe("bug");
+    expect(state).not.toHaveProperty("context");
   });
 
-  it("stores no context when the caller supplies none", () => {
-    useFeedbackDialogStore.getState().openDialog();
-
-    const state = useFeedbackDialogStore.getState();
-    expect(state.isOpen).toBe(true);
-    expect(state.context).toBeNull();
-  });
-
-  it("drops a click event passed as the context instead of storing it", () => {
-    // Sidebar menu rows wire the raw action into `onClick`, so React hands it a
-    // MouseEvent-shaped value at runtime regardless of the declared type. Its
-    // `view` self-reference is what made the submission body unserializable.
+  it("ignores a click event instead of retaining it as report data", () => {
     const view: Record<string, unknown> = {};
     view.window = view;
-    const clickEventLike = {
-      type: "click",
-      nativeEvent: {},
-      view,
-    } as unknown as FeedbackThreadContext;
-
-    useFeedbackDialogStore.getState().openDialog(clickEventLike);
-
-    const state = useFeedbackDialogStore.getState();
-    expect(state.isOpen).toBe(true);
-    expect(state.context).toBeNull();
+    useFeedbackDialogStore
+      .getState()
+      .openDialog({ type: "click", view } as unknown as FeedbackCategory);
+    expect(useFeedbackDialogStore.getState().initialCategory).toBeNull();
+    expect(useFeedbackDialogStore.getState()).not.toHaveProperty("context");
   });
 
-  it("clears the stored context when the dialog closes", () => {
-    useFeedbackDialogStore.getState().openDialog(THREAD_CONTEXT);
+  it("clears the initial category on close and reopens with no inferred category", () => {
+    useFeedbackDialogStore.getState().openDialog("bug");
     useFeedbackDialogStore.getState().setOpen(false);
-
-    const state = useFeedbackDialogStore.getState();
-    expect(state.isOpen).toBe(false);
-    expect(state.context).toBeNull();
+    expect(useFeedbackDialogStore.getState()).toMatchObject({
+      isOpen: false,
+      initialCategory: null,
+    });
+    useFeedbackDialogStore.getState().openDialog();
+    expect(useFeedbackDialogStore.getState()).toMatchObject({
+      isOpen: true,
+      initialCategory: null,
+    });
   });
 });

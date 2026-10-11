@@ -235,6 +235,8 @@ export interface DraftThreadState {
   // `thread.meta.update` when the first send promotes the draft.
   goal?: string;
   isTemporary?: boolean;
+  // An explicitly transient detached draft may be reclaimed only while empty.
+  isReclaimableDraft?: boolean;
   promotedTo?: ThreadId;
 }
 
@@ -252,6 +254,7 @@ export interface DraftThreadMutationOptions {
   interactionMode?: ProviderInteractionMode;
   entryPoint?: ThreadPrimarySurface;
   isTemporary?: boolean;
+  isReclaimableDraft?: boolean;
   // Empty string clears the staged goal; undefined leaves it unchanged.
   goal?: string;
 }
@@ -302,6 +305,7 @@ export interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       entryPoint?: ThreadPrimarySurface;
       isTemporary?: boolean;
+      isReclaimableDraft?: boolean;
     },
   ) => void;
   setDraftThreadContext: (
@@ -500,6 +504,12 @@ export function buildDraftThreadState(input: {
       : options?.isTemporary === false
         ? false
         : existingThread?.isTemporary === true;
+  const nextIsReclaimableDraft =
+    options?.isReclaimableDraft === true
+      ? true
+      : options?.isReclaimableDraft === false
+        ? false
+        : existingThread?.isReclaimableDraft === true;
   const nextPromotedTo = existingThread?.promotedTo;
   const nextGoal =
     options?.goal === undefined ? existingThread?.goal : options.goal.trim() || undefined;
@@ -530,6 +540,7 @@ export function buildDraftThreadState(input: {
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     ...(nextGoal ? { goal: nextGoal } : {}),
     ...(nextIsTemporary ? { isTemporary: true } : {}),
+    ...(nextIsReclaimableDraft ? { isReclaimableDraft: true } : {}),
     ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
   };
 }
@@ -555,6 +566,7 @@ export function draftThreadStatesEqual(
     left.envMode === right.envMode &&
     (left.goal ?? "") === (right.goal ?? "") &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
+    (left.isReclaimableDraft === true) === (right.isReclaimableDraft === true) &&
     left.promotedTo === right.promotedTo
   );
 }

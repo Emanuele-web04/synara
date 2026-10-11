@@ -1,148 +1,96 @@
 // FILE: feedback.ts
-// Purpose: Owns feedback categories, privacy-safe diagnostics, and delivery.
+// Purpose: Owns explicit feedback categories, text sanitization, and delivery.
 // Layer: Web feature logic
 // Depends on: The public trysynara feedback endpoint.
 
-import { APP_VERSION } from "./branding";
+import type { FeedbackCategory, FeedbackSubmission } from "@synara/contracts";
+export type { FeedbackCategory, FeedbackSubmission } from "@synara/contracts";
 
-/**
- * `lead` opens the reported summary in the reporter's voice, so the category is
- * readable as a sentence rather than as an enum value.
- */
 export const FEEDBACK_CATEGORIES = [
-  { value: "bug", label: "Bug", lead: "I ran into a bug" },
-  { value: "session", label: "Session", lead: "I hit a session problem" },
-  { value: "ui", label: "UI", lead: "Something looked wrong" },
-  { value: "performance", label: "Performance", lead: "Synara felt slow" },
-  { value: "idea", label: "Idea", lead: "I have an idea" },
-  { value: "other", label: "Other", lead: "I have some feedback" },
+  { value: "bug", label: "Bug" },
+  { value: "session", label: "Session" },
+  { value: "ui", label: "UI" },
+  { value: "performance", label: "Performance" },
+  { value: "idea", label: "Idea" },
+  { value: "other", label: "Other" },
 ] as const;
-
-export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number]["value"];
-
-const UNCATEGORIZED_LEAD = "I have some feedback";
-
-export interface FeedbackThreadContext {
-  provider: string | null;
-  model: string | null;
-  projectKind: string | null;
-  environmentMode: string | null;
-  runtimeMode: string | null;
-  interactionMode: string | null;
-  sessionStatus: string | null;
-  latestTurnState: string | null;
-  messageCount: number;
-  activityCount: number;
-  hasPendingApproval: boolean;
-  hasPendingUserInput: boolean;
-  hasThreadError: boolean;
-}
-
-export type FeedbackDiagnostics = FeedbackThreadContext & {
-  appVersion: string;
-  submittedAt: string;
-  userAgent: string;
-  platform: string;
-  language: string;
-  viewport: string;
-};
-
-export interface FeedbackSubmission {
-  category: FeedbackCategory | null;
-  details: string;
-  /** Reader-facing rendering of `diagnostics`; the reporter never sees or edits it. */
-  summary: string;
-  diagnostics: FeedbackDiagnostics;
-}
 
 const DEFAULT_FEEDBACK_ENDPOINT = "https://www.trysynara.com/api/feedback";
 const FEEDBACK_REQUEST_TIMEOUT_MS = 20_000;
 
-function formatStateFlags(diagnostics: FeedbackThreadContext): string {
-  const flags: string[] = [];
-  if (diagnostics.hasThreadError) flags.push("the thread was in an error state");
-  if (diagnostics.hasPendingApproval) flags.push("an approval was pending");
-  if (diagnostics.hasPendingUserInput) flags.push("the agent was waiting for input");
-  return flags.length > 0 ? `${flags.join(", ")}.` : "nothing pending.";
+const SECRET_PATTERNS = [
+  /ghp_[A-Za-z0-9]{20,}/gu,
+  /github_pat_[A-Za-z0-9_]{20,}/gu,
+  /gho_[A-Za-z0-9]{20,}/gu,
+  /ghu_[A-Za-z0-9]{20,}/gu,
+  /ghs_[A-Za-z0-9]{20,}/gu,
+  /ghr_[A-Za-z0-9]{20,}/gu,
+  /(?<![A-Za-z0-9])sk-proj-[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/gu,
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{20,}/gu,
+  /(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/gu,
+  /(?<![A-Za-z0-9])A(?:KIA|SIA|BIA|CCA)[0-9A-Z]{16}/gu,
+  /xox[a-z]-[A-Za-z0-9-]{10,}/gu,
+  /(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{15,}/gu,
+  /(?<![A-Za-z0-9])npm_[A-Za-z0-9]{20,}/gu,
+  /(?<![A-Za-z0-9])ya29\.[A-Za-z0-9_-]{20,}/gu,
+  /AIza[A-Za-z0-9_-]{35}/gu,
+  /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+={0,2}(?![A-Za-z0-9_=-])/gu,
+  /(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}(?![A-Za-z0-9_=-])/giu,
+  /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|OPENSSH\s+|EC\s+|DSA\s+|PGP\s+)?PRIVATE\s+KEY-----/gu,
+  // Credentials embedded in a URL: keep the scheme and host, drop user:pass.
+  /(?<=:\/\/)[^/\s:@]+:[^@\s/]+(?=@)/gu,
+  // Generic key=value secrets: .env lines and pasted config. The credential word
+  // must be a whole key segment: standalone (`password=`), underscore-delimited
+  // inside a longer name (`AWS_SECRET_ACCESS_KEY=`, `MY_API_TOKEN=`), plural
+  // (`secrets=`, `client_secrets=`), or numeric-suffixed (`TOKEN1=`,
+  // `API_KEY2=`). Words that merely start with a credential stem
+  // (`passwordless=`, `tokenizer=`, `myPassword=`) are not credentials and
+  // must survive unredacted. Quoted JSON keys and values with spaces or
+  // escaped quotes are consumed together so no credential suffix remains.
+  /(?<![A-Za-z0-9_])["']?(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api[_-]?key|apikey|token)s?[0-9]*(?:_[A-Za-z0-9]+)*["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`;,)}&]+)/giu,
+] as const;
+
+// Usernames may contain dots and other punctuation (john.doe), so the segment
+// after the home prefix stops only at path separators and whitespace. The
+// lookbehind also accepts a colon for PATH-style and error-style prefixes
+// (PATH=/Users/kartik/bin, Error:/Users/kartik/proj) and a slash so file URLs
+// get the same redaction (file:///Users/alice/x). `/root` is the home
+// directory itself, not a parent of usernames, so it has no user segment:
+// `/root/proj` maps to `~/proj`, never `~/` after eating a directory.
+const HOME_PATH_PATTERN =
+  /(?<=^|[\s'"`=(:/])(\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root|C:\\Users\\[^/\\\s]+|C:\/Users\/[^/\s]+)(?=[\\/]|[\s.,;:!?()"'`]|$)/giu;
+
+/** Masks high-confidence secrets with `[REDACTED]` and returns the count. */
+export function redactObviousSecrets(text: string): { text: string; redactedCount: number } {
+  let redactedCount = 0;
+  let redacted = text;
+  for (const pattern of SECRET_PATTERNS) {
+    redacted = redacted.replace(pattern, (_match) => {
+      redactedCount += 1;
+      return "[REDACTED]";
+    });
+  }
+  return { text: redacted, redactedCount };
 }
 
-/**
- * Renders diagnostics as the report a maintainer reads first, since incoming
- * feedback arrives without any context about what the reporter was doing.
- */
-export function formatFeedbackSummary(input: {
-  category: FeedbackCategory | null;
-  diagnostics: FeedbackDiagnostics;
-}): string {
-  const { diagnostics } = input;
-  const category = FEEDBACK_CATEGORIES.find((option) => option.value === input.category);
-  const lead = category?.lead ?? UNCATEGORIZED_LEAD;
-  const usageContext = diagnostics.provider
-    ? diagnostics.model
-      ? `, using ${diagnostics.provider} with ${diagnostics.model}`
-      : `, using ${diagnostics.provider}`
-    : " outside an active chat";
+/** Replaces macOS, Linux, `/root`, and Windows home directory prefixes with `~`. */
+export function normalizeHomePaths(text: string): string {
+  return text.replace(HOME_PATH_PATTERN, "~");
+}
 
-  const rows: Array<[string, string | null]> = [
-    ["Report type", category?.label ?? "Unspecified"],
-    ["App version", diagnostics.appVersion],
-    ["Provider", diagnostics.provider],
-    ["Model", diagnostics.model],
-    ["Project kind", diagnostics.projectKind],
-    ["Environment mode", diagnostics.environmentMode],
-    ["Runtime mode", diagnostics.runtimeMode],
-    ["Interaction mode", diagnostics.interactionMode],
-    ["Session status", diagnostics.sessionStatus],
-    ["Latest turn state", diagnostics.latestTurnState],
-    [
-      "Thread size",
-      `${diagnostics.messageCount} messages, ${diagnostics.activityCount} activities`,
-    ],
-    ["At submission", formatStateFlags(diagnostics)],
-    ["Platform", `${diagnostics.platform}, viewport ${diagnostics.viewport}`],
-    ["Language", diagnostics.language],
-    ["User agent", diagnostics.userAgent],
-    ["Submitted at", diagnostics.submittedAt],
-  ];
-
-  const detailLines = rows
-    .filter((row): row is [string, string] => row[1] !== null && row[1] !== "")
-    .map(([label, value]) => `${label}: ${value}`);
-
-  return [`${lead} in Synara ${diagnostics.appVersion}${usageContext}.`, "", ...detailLines].join(
-    "\n",
-  );
+/** Sanitizes user-supplied feedback text before it leaves the app. */
+export function sanitizeUntrustedText(text: string): string {
+  return normalizeHomePaths(redactObviousSecrets(text).text);
 }
 
 export function buildFeedbackSubmission(input: {
   category: FeedbackCategory | null;
   details: string;
-  context: FeedbackThreadContext;
-  now?: Date;
-  userAgent?: string;
-  platform?: string;
-  language?: string;
-  viewport?: { width: number; height: number };
 }): FeedbackSubmission {
-  const viewport = input.viewport ?? { width: window.innerWidth, height: window.innerHeight };
-  const diagnostics: FeedbackDiagnostics = {
-    ...input.context,
-    appVersion: APP_VERSION,
-    submittedAt: (input.now ?? new Date()).toISOString(),
-    userAgent: input.userAgent ?? navigator.userAgent,
-    platform: input.platform ?? navigator.platform,
-    language: input.language ?? navigator.language,
-    viewport: `${viewport.width}x${viewport.height}`,
-  };
-
   return {
     category: input.category,
-    details: input.details.trim(),
-    summary: formatFeedbackSummary({
-      category: input.category,
-      diagnostics,
-    }),
-    diagnostics,
+    details: sanitizeUntrustedText(input.details.trim()),
   };
 }
 
@@ -163,7 +111,7 @@ export async function submitFeedback(
         "content-type": "application/json",
         "x-synara-feedback": "1",
       },
-      body: JSON.stringify(submission),
+      body: JSON.stringify({ category: submission.category, details: submission.details }),
       signal: controller.signal,
     });
     if (response.ok) return;

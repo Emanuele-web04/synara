@@ -15,11 +15,15 @@ import {
   refreshEmptyRouteRestoreSnapshot,
   waitForEmptyRouteRestoreFallbackDelay,
 } from "../chatRouteRecovery";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  reclaimUnreachableDetachedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { readNativeApi } from "../nativeApi";
+import { useReadRouteThreadId } from "../hooks/useOpenThreadTabs";
 import { isSplitRoute } from "../splitViewRoute";
-import { selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { collectSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createThreadExistsSelector, createThreadProjectIdSelector } from "../storeSelectors";
 import { ChatPaneKeepAliveProvider } from "../components/chat/ChatPaneKeepAlive";
@@ -62,6 +66,7 @@ function ChatThreadRouteContent() {
     draftProjectId: draftThreadState?.projectId ?? null,
   });
   const navigate = useNavigate();
+  const readRouteThreadId = useReadRouteThreadId();
   const [missingThreadRecoveryState, setMissingThreadRecoveryState] =
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
@@ -97,6 +102,24 @@ function ChatThreadRouteContent() {
     }
     return undefined;
   }, [missingThreadRecoveryState, routeThreadExists]);
+
+  useEffect(() => {
+    return () => {
+      // Detached drafts (preserveProjectDraft flows such as bug-report
+      // drafting) never claim a project slot, so once their route unmounts
+      // nothing links back to them. The check is deferred so strict-mode
+      // remounts and staged navigations cannot reclaim a still-displayed
+      // draft — by the time it runs, the location has settled.
+      window.setTimeout(() => {
+        const displayedThreadIds = collectSplitViewThreadIds();
+        // Router matches also cover Electron's hash history, where the browser
+        // pathname names the app document rather than the displayed chat.
+        const routedThreadId = readRouteThreadId();
+        if (routedThreadId) displayedThreadIds.add(routedThreadId);
+        reclaimUnreachableDetachedDraftThreads(displayedThreadIds);
+      }, 0);
+    };
+  }, [readRouteThreadId, threadId]);
 
   useEffect(() => {
     if (!threadsHydrated || !splitViewsHydrated) {

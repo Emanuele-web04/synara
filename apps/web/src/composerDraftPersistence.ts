@@ -378,6 +378,7 @@ const PersistedDraftThreadState = Schema.Struct({
   envMode: DraftThreadEnvModeSchema,
   goal: Schema.optionalKey(Schema.String),
   isTemporary: Schema.optionalKey(Schema.Boolean),
+  isReclaimableDraft: Schema.optionalKey(Schema.Boolean),
   promotedTo: Schema.optionalKey(ThreadId),
 });
 
@@ -893,6 +894,8 @@ function normalizePersistedDraftThreads(
           ? candidateDraftThread.goal
           : undefined;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
+      const isReclaimableDraft =
+        candidateDraftThread.isReclaimableDraft === true ? true : undefined;
       const promotedTo =
         typeof candidateDraftThread.promotedTo === "string" &&
         candidateDraftThread.promotedTo.length > 0
@@ -921,6 +924,7 @@ function normalizePersistedDraftThreads(
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(goal ? { goal } : {}),
         ...(isTemporary ? { isTemporary: true } : {}),
+        ...(isReclaimableDraft ? { isReclaimableDraft: true } : {}),
         ...(promotedTo ? { promotedTo } : {}),
       };
     }

@@ -4,7 +4,7 @@ Synara Beta ships always-on diagnostics so the team can see crashes and release
 health on real machines instead of waiting for bug reports. This document is the
 authoritative description of what leaves your computer.
 
-**Stable builds collect nothing.** The diagnostics module is only constructed
+**Stable builds collect nothing.** Explicit feedback in either app contains only the reporter-selected category and typed description. The first-party endpoint discards legacy automatic context before delivery and uses the shared text redactor on the description; GitHub interview drafts also contain no inferred thread or browser diagnostics. This manual feedback path does not enable the separate Beta diagnostics client. The diagnostics module is only constructed
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
 source is bundled into the shared desktop code, but in a stable build it is
