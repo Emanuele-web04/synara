@@ -49,6 +49,7 @@ describe("codexOauthLoginRunner", () => {
   afterEach(() => {
     process.env.PATH = originalPath;
     vi.useRealTimers();
+    vi.restoreAllMocks();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -231,22 +232,102 @@ describe("codexOauthLoginRunner", () => {
     });
     // Give the child a moment to spawn before killing it.
     await new Promise((resolve) => setTimeout(resolve, 100));
-    handle.cancel();
+    await handle.cancel();
     const outcome = await handle.done;
     expect(outcome).toEqual({ ok: false, error: "Codex login was cancelled." });
   });
 
-  it("times out after the login deadline and kills the child", async () => {
-    installFakeCodex("sleep 60");
-    vi.useFakeTimers({ toFake: ["setTimeout"] });
+  const installStubbornLogin = (withDescendant = false) => {
+    const fixture = join(dir, "stubborn-login.cjs");
+    writeFileSync(
+      fixture,
+      `
+      const fs = require("node:fs");
+      process.on("SIGTERM", () => {});
+      ${
+        withDescendant
+          ? `
+      const child = require("node:child_process").spawn(process.execPath, ["-e",
+        'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.env.CODEX_HOME + "/descendant.pid", String(process.pid)); setInterval(() => {}, 1000);'
+      ], { stdio: "ignore" });
+      `
+          : ""
+      }
+      fs.writeFileSync(process.env.CODEX_HOME + "/ready.pid", String(process.pid));
+      setInterval(() => {}, 1000);
+    `,
+    );
+    installFakeCodex(
+      `exec '${process.execPath.replaceAll("'", "'\\''")}' '${fixture.replaceAll("'", "'\\''")}'`,
+    );
+  };
+
+  const waitForLoginPid = async () => {
+    await vi.waitFor(() => {
+      expect(() => readFileSync(join(profileHome, "ready.pid"), "utf8")).not.toThrow();
+    });
+    return Number(readFileSync(join(profileHome, "ready.pid"), "utf8"));
+  };
+
+  it("awaits forced exit when the owned login ignores graceful cancellation", async () => {
+    installStubbornLogin();
     const handle = codexOauthLoginRunner({
       provider: "codex",
       profileHome,
       onVerification: () => undefined,
     });
-    vi.advanceTimersByTime(OAUTH_LOGIN_TIMEOUT_MS);
-    const outcome = await handle.done;
-    expect(outcome).toEqual({ ok: false, error: "Codex login timed out after 10 minutes." });
+    const pid = await waitForLoginPid();
+    await handle.cancel();
+    expect(() => process.kill(pid, 0)).toThrow();
+    expect(await handle.done).toEqual({ ok: false, error: "Codex login was cancelled." });
+  });
+
+  it("retires an owned descendant before cancellation completes", async () => {
+    installStubbornLogin(true);
+    const handle = codexOauthLoginRunner({
+      provider: "codex",
+      profileHome,
+      onVerification: () => undefined,
+    });
+    try {
+      const pid = await waitForLoginPid();
+      await vi.waitFor(() =>
+        expect(() => readFileSync(join(profileHome, "descendant.pid"), "utf8")).not.toThrow(),
+      );
+      const descendantPid = Number(readFileSync(join(profileHome, "descendant.pid"), "utf8"));
+      await handle.cancel();
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(() => process.kill(descendantPid, 0)).toThrow();
+      expect(await handle.done).toEqual({ ok: false, error: "Codex login was cancelled." });
+    } finally {
+      await handle.cancel();
+    }
+  });
+
+  it("times out after the login deadline and verifies forced child exit", async () => {
+    installStubbornLogin();
+    let deadline: (() => void) | undefined;
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === OAUTH_LOGIN_TIMEOUT_MS)
+        deadline = () => {
+          if (typeof callback === "function") callback(...args);
+        };
+      return realSetTimeout(callback, delay, ...args);
+    });
+    const handle = codexOauthLoginRunner({
+      provider: "codex",
+      profileHome,
+      onVerification: () => undefined,
+    });
+    const pid = await waitForLoginPid();
+    expect(deadline).toBeDefined();
+    deadline!();
+    expect(await handle.done).toEqual({
+      ok: false,
+      error: "Codex login timed out after 10 minutes.",
+    });
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 
   it("pins CODEX_HOME to the profile home and strips conflicting variables", async () => {

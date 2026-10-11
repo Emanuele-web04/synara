@@ -2,7 +2,7 @@ import { CODEX_CONFLICTING_ENV_VARS } from "@synara/shared/providerAccounts/code
 import { spawnProcess } from "@synara/shared/processRuntime";
 import type { ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import { signalOwnedChildProcess } from "../platform/processTreeController";
+import { teardownChildProcessTree } from "../platform/supervisedProcessTeardown";
 import {
   buildProviderChildEnvironment,
   withoutProviderCredentialEnvironment,
@@ -23,7 +23,7 @@ export interface OAuthVerificationInfo {
 
 export type OAuthLoginOutcome =
   | { readonly ok: true; readonly identityHint?: string }
-  | { readonly ok: false; readonly error: string };
+  | { readonly ok: false; readonly error: string; readonly processExitUnproven?: true };
 
 export interface OAuthLoginRequest {
   readonly provider: SupportedAccountProvider;
@@ -34,7 +34,8 @@ export interface OAuthLoginRequest {
 
 export interface OAuthLoginHandle {
   readonly done: Promise<OAuthLoginOutcome>;
-  cancel(): void;
+  /** Resolves only after the owned login process tree has exited; rejects when exit is unproven. */
+  cancel(): void | Promise<void>;
 }
 
 export type OAuthLoginRunner = (request: OAuthLoginRequest) => OAuthLoginHandle;
@@ -155,58 +156,75 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
   inspectOutputStream(child.stdout);
   inspectOutputStream(child.stderr);
 
+  let resolveDone!: (outcome: OAuthLoginOutcome) => void;
   const done = new Promise<OAuthLoginOutcome>((resolve) => {
-    const timeout = setTimeout(() => {
-      cancelled = true;
-      signalOwnedChildProcess(child, "SIGTERM");
-      resolve({ ok: false, error: "Codex login timed out after 10 minutes." });
-    }, OAUTH_LOGIN_TIMEOUT_MS);
-    timeout.unref();
-
-    child.on("error", (cause) => {
-      clearTimeout(timeout);
-      resolve({
-        ok: false,
-        error: `Could not start 'codex login': ${cause.message}. Is the Codex CLI installed?`,
-      });
-    });
-    child.on("exit", async (code, signal) => {
-      clearTimeout(timeout);
-      if (cancelled) {
-        resolve({ ok: false, error: "Codex login was cancelled." });
-        return;
-      }
-      if (code !== 0) {
-        resolve({
+    resolveDone = resolve;
+  });
+  let stopPromise: Promise<void> | undefined;
+  const stop = (error: string): Promise<void> => {
+    if (stopPromise !== undefined) return stopPromise;
+    cancelled = true;
+    clearTimeout(timeout);
+    stopPromise = teardownChildProcessTree(child)
+      .then((result) => {
+        if (result.capturedBeforeRootExit === false) {
+          throw new Error("The login root exited before its descendants could be captured.");
+        }
+        resolveDone({ ok: false, error });
+      })
+      .catch((cause: unknown) => {
+        resolveDone({
           ok: false,
-          error: `'codex login' exited with ${signal !== null ? `signal ${signal}` : `code ${code}`}.`,
+          error: `${error} Process exit could not be verified; the staged profile was retained.`,
+          processExitUnproven: true,
         });
-        return;
-      }
-      try {
-        await fs.access(path.join(request.profileHome, "auth.json"));
-      } catch {
-        resolve({
+        throw cause;
+      });
+    return stopPromise;
+  };
+  const timeout = setTimeout(() => {
+    void stop("Codex login timed out after 10 minutes.").catch(() => undefined);
+  }, OAUTH_LOGIN_TIMEOUT_MS);
+  timeout.unref();
+
+  child.on("error", (cause) => {
+    clearTimeout(timeout);
+    if (cancelled) return;
+    resolveDone({
+      ok: false,
+      error: `Could not start 'codex login': ${cause.message}. Is the Codex CLI installed?`,
+    });
+  });
+  child.on("exit", async (code, signal) => {
+    clearTimeout(timeout);
+    // The stop promise owns completion, including descendant exit proof.
+    if (cancelled) return;
+    if (code !== 0) {
+      resolveDone({
+        ok: false,
+        error: `'codex login' exited with ${signal !== null ? `signal ${signal}` : `code ${code}`}.`,
+      });
+      return;
+    }
+    try {
+      await fs.access(path.join(request.profileHome, "auth.json"));
+    } catch {
+      if (!cancelled) {
+        resolveDone({
           ok: false,
           error: "Codex login finished but no credentials were written to the managed profile.",
         });
-        return;
       }
-      const identityHint = await readCodexIdentityHint(request.profileHome);
-      if (cancelled) {
-        resolve({ ok: false, error: "Codex login was cancelled." });
-        return;
-      }
-      resolve({ ok: true, ...(identityHint !== undefined ? { identityHint } : {}) });
-    });
+      return;
+    }
+    const identityHint = await readCodexIdentityHint(request.profileHome);
+    if (cancelled) return;
+    resolveDone({ ok: true, ...(identityHint !== undefined ? { identityHint } : {}) });
   });
 
   return {
     done,
-    cancel() {
-      cancelled = true;
-      signalOwnedChildProcess(child, "SIGTERM");
-    },
+    cancel: () => stop("Codex login was cancelled."),
   };
 };
 

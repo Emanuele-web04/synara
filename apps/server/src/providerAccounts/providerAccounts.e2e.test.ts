@@ -1,7 +1,6 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,10 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeAccountConnect, type AccountConnectShape } from "./accountConnect";
 import { makeAccountResolver } from "./accountResolver";
 import { makeAccountStorage, type AccountStorageShape } from "./accountStorage";
-import { makeCliIntegration } from "./cliIntegration";
 import type { OAuthLoginOutcome, OAuthLoginRunner } from "./oauthLogin";
-
-const LAUNCHER_ENTRY = resolve(import.meta.dirname, "../../../account-launcher/src/launcher.ts");
 
 const waitFor = async (predicate: () => boolean, timeoutMs = 5_000) => {
   const start = Date.now();
@@ -159,58 +155,6 @@ describe("provider accounts end to end", () => {
     expect(launchTwo.environment.OPENAI_API_KEY).toBe("sk-acct-2");
   });
 
-  it("spawns the fake provider binary through the real shim with the managed environment", async () => {
-    await Effect.runPromise(
-      connect.beginConnect({ kind: "agent-api-key", provider: "codex", apiKey: "sk-shim-1" }),
-    );
-
-    const cliIntegration = makeCliIntegration({ root, launcherEntry: LAUNCHER_ENTRY });
-    await Effect.runPromise(cliIntegration.install);
-
-    const fakeBinDir = join(root, "fake-bin");
-    mkdirSync(fakeBinDir);
-    writeFileSync(
-      join(fakeBinDir, "codex"),
-      [
-        "#!/bin/sh",
-        'echo "CODEX_HOME=$CODEX_HOME"',
-        'echo "OPENAI_API_KEY=$OPENAI_API_KEY"',
-        'echo "SYNARA_LAUNCHER_SHIM=${SYNARA_LAUNCHER_SHIM:-unset}"',
-        'echo "OPENAI_BASE_URL=${OPENAI_BASE_URL:-unset}"',
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    // The shim runs `bun <launcher entry>`, so bun's directory must stay on PATH.
-    const bunPath = spawnSync("which", ["bun"], { encoding: "utf8" }).stdout.trim();
-    expect(bunPath.length).toBeGreaterThan(0);
-    const childPath = [
-      cliIntegration.shimDir,
-      fakeBinDir,
-      dirname(bunPath),
-      "/usr/bin",
-      "/bin",
-    ].join(delimiter);
-
-    const result = spawnSync(join(cliIntegration.shimDir, "codex"), [], {
-      encoding: "utf8",
-      env: {
-        PATH: childPath,
-        SYNARA_ACCOUNT_HOME: root,
-        OPENAI_API_KEY: "native-key",
-        OPENAI_BASE_URL: "https://native.example.com",
-      },
-      timeout: 30_000,
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      `CODEX_HOME=${join(root, "accounts", "codex", "1", "agent", "generations", "1")}`,
-    );
-    expect(result.stdout).toContain("OPENAI_API_KEY=sk-shim-1");
-    expect(result.stdout).toContain("SYNARA_LAUNCHER_SHIM=unset");
-    expect(result.stdout).toContain("OPENAI_BASE_URL=unset");
-  });
-
   it("recovers a mid-OAuth connect as terminal after a service restart", async () => {
     const { operationId } = await Effect.runPromise(
       connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
@@ -229,8 +173,8 @@ describe("provider accounts end to end", () => {
     expect(status.error).toMatch(/interrupted by a server restart/);
     await expect(
       Effect.runPromise(restartedStorage.listPendingOperations("codex")),
-    ).resolves.toEqual([]);
-    expect(existsSync(join(root, "pending", "codex"))).toBe(false);
+    ).resolves.toEqual([operationId]);
+    expect(existsSync(join(root, "pending", "codex", operationId))).toBe(true);
     await expect(Effect.runPromise(restartedStorage.listOrdinals("codex"))).resolves.toEqual([]);
   });
 

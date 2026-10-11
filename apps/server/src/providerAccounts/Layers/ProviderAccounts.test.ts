@@ -96,6 +96,6 @@ describe("ProviderAccounts live service", () => {
     const status = await Effect.runPromise(restarted.getConnectStatus({ operationId }));
     expect(status.state).toBe("failed");
     expect(status.error).toMatch(/interrupted by a server restart/);
-    expect(existsSync(pendingDir)).toBe(false);
+    expect(existsSync(pendingDir)).toBe(true);
   });
 });

@@ -334,12 +334,16 @@ export function makeAccountConnect(input: AccountConnectInput) {
     void handle.done.then(async (outcome) => {
       if (operation.state !== "pending" && operation.state !== "waiting-for-user") return;
       if (!outcome.ok) {
-        failOperation(operation, outcome.error);
+        if (outcome.processExitUnproven) {
+          failOperation(operation, outcome.error);
+          return;
+        }
         await Effect.runPromise(
           storage
             .cancelPendingDirectory(operation.provider, operation.operationId)
             .pipe(Effect.ignore),
         );
+        failOperation(operation, outcome.error);
         return;
       }
       await Effect.runPromise(
@@ -460,7 +464,17 @@ export function makeAccountConnect(input: AccountConnectInput) {
           exit._tag === "Success"
             ? Effect.void
             : Effect.gen(function* () {
-                operation.loginHandle?.cancel();
+                failOperation(operation, "The OAuth connection could not start.");
+                yield* Effect.tryPromise({
+                  try: async () => {
+                    await operation.loginHandle?.cancel();
+                  },
+                  catch: () =>
+                    connectError(
+                      "accountConnect.beginConnect",
+                      "Login process exit could not be verified; the staged profile was retained.",
+                    ),
+                });
                 operations.delete(operation.operationId);
                 yield* storage.cancelPendingDirectory(provider, operation.operationId);
               }).pipe(Effect.ignore),
@@ -481,7 +495,17 @@ export function makeAccountConnect(input: AccountConnectInput) {
             if (operation.state === "waiting-for-user" || operation.state === "pending") {
               operation.state = "cancelled";
               operation.finishedAt = Date.now();
-              operation.loginHandle?.cancel();
+              yield* Effect.tryPromise({
+                try: async () => {
+                  await operation.loginHandle?.cancel();
+                },
+                catch: () => {
+                  operation.state = "failed";
+                  operation.error =
+                    "Login process exit could not be verified; the staged profile was retained.";
+                  return connectError("accountConnect.cancelConnect", operation.error);
+                },
+              });
               if (operation.authMethod === "oauth") {
                 yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
               }
@@ -576,8 +600,9 @@ export function makeAccountConnect(input: AccountConnectInput) {
 
   // Startup recovery: pending directories left behind by a previous process
   // are interrupted OAuth connects. Register each as a failed operation so
-  // status queries return a truthful terminal state, then remove the
-  // directory. The account root is machine-global, so a pending directory
+  // status queries return a truthful terminal state. OAuth staging is retained
+  // because server ownership metadata cannot prove child-process exit. The
+  // account root is machine-global, so a pending directory
   // whose owner process is still alive (or which is younger than the login
   // timeout) belongs to a live sibling instance and must be left alone.
   const recoverInterruptedOperations = Effect.gen(function* () {
@@ -649,7 +674,12 @@ export function makeAccountConnect(input: AccountConnectInput) {
           finishedAt: Date.now(),
           error: "The connect operation was interrupted by a server restart. Start a new connect.",
         });
-        yield* storage.cancelPendingDirectory(provider, operationId).pipe(Effect.ignore);
+        // The recorded PID owns the server, not the login child. A server
+        // restart or an expired deadline cannot prove that its descendants
+        // exited, so retain OAuth staging rather than deleting a live home.
+        if (authMethod !== "oauth") {
+          yield* storage.cancelPendingDirectory(provider, operationId).pipe(Effect.ignore);
+        }
       }
       // Remove the provider's pending directory once nothing is left in it;
       // a directory that still holds live sibling operations is kept.

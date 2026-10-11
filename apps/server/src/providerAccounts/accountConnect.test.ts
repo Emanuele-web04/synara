@@ -339,6 +339,66 @@ describe("accountConnect", () => {
     await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
   });
 
+  it("keeps the staged home until asynchronous cancellation proves exit", async () => {
+    let finishStop!: () => void;
+    let stopRequested = false;
+    const stopped = new Promise<void>((resolve) => {
+      finishStop = resolve;
+    });
+    const waiting = makeAccountConnect({
+      storage,
+      oauthLoginRunners: {
+        codex: (request) => ({
+          ...fakeOauthRunner(request),
+          cancel: () => {
+            stopRequested = true;
+            return stopped;
+          },
+        }),
+      },
+    });
+    const { operationId } = await Effect.runPromise(
+      waiting.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    const cancellation = Effect.runPromise(waiting.cancelConnect(operationId));
+    await waitFor(() => stopRequested);
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
+    finishStop();
+    expect(await cancellation).toMatchObject({ state: "cancelled" });
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([]);
+  });
+
+  it("retains staged credentials and reports failure when process exit is unproven", async () => {
+    const unproven = makeAccountConnect({
+      storage,
+      oauthLoginRunners: {
+        codex: (request) => ({
+          ...fakeOauthRunner(request),
+          cancel: async () => {
+            throw new Error("unproven process exit");
+          },
+        }),
+      },
+    });
+    const { operationId } = await Effect.runPromise(
+      unproven.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    await expectFailureDetail(unproven.cancelConnect(operationId), /exit could not be verified/);
+    expect(Effect.runSync(unproven.getConnectStatus(operationId))).toMatchObject({
+      state: "failed",
+    });
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
+  });
+
+  it("does not reclaim a timed-out home without process-exit proof", async () => {
+    const { operationId } = await Effect.runPromise(
+      connect.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    resolveLogin!({ ok: false, error: "Exit unproven", processExitUnproven: true });
+    await waitFor(() => Effect.runSync(connect.getConnectStatus(operationId)).state === "failed");
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([operationId]);
+  });
+
   it("refuses to activate accounts without a connected agent binding", async () => {
     await Effect.runPromise(
       connect.beginConnect({ kind: "agent-api-key", provider: "cursor", apiKey: "key_a" }),
@@ -494,7 +554,9 @@ describe("accountConnect", () => {
     expect(status.state).toBe("failed");
     expect(status.error).toMatch(/interrupted by a server restart/);
     expect(status.provider).toBe("codex");
-    await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+    await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([
+      operationId,
+    ]);
     await expect(Effect.runPromise(storage.listOrdinals("codex"))).resolves.toEqual([]);
   });
 
@@ -584,7 +646,9 @@ describe("accountConnect", () => {
       expect(status.state).toBe("failed");
       expect(status.error).toMatch(/interrupted by a server restart/);
       expect(readFileSync(liveAuthPath(), "utf8")).toBe("old-credentials");
-      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([]);
+      await expect(Effect.runPromise(storage.listPendingOperations("codex"))).resolves.toEqual([
+        operationId,
+      ]);
     });
 
     it("repairs a reconnect swap that died mid-commit on the next startup", async () => {

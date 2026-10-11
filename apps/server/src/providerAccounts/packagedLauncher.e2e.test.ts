@@ -56,6 +56,8 @@ const installFakeCodex = (root: string) => {
       'echo "CODEX_HOME=${CODEX_HOME:-unset}"',
       'echo "OPENAI_API_KEY=${OPENAI_API_KEY:-unset}"',
       'echo "ARGS=$*"',
+      'echo "SYNARA_LAUNCHER_SHIM=${SYNARA_LAUNCHER_SHIM:-unset}"',
+      'echo "OPENAI_BASE_URL=${OPENAI_BASE_URL:-unset}"',
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -130,6 +132,8 @@ describe("packaged launcher artifact", () => {
         PATH: [shimDir, fakeBinDir, binDirOf("node"), "/usr/bin", "/bin"].join(delimiter),
         // The installed shim must pin its own root despite a foreign shell environment.
         SYNARA_ACCOUNT_HOME: join(stageRoot, "other-channel-accounts"),
+        OPENAI_API_KEY: "native-key",
+        OPENAI_BASE_URL: "https://native.example.com",
       },
       timeout: 30_000,
     });
@@ -137,5 +141,7 @@ describe("packaged launcher artifact", () => {
     expect(result.stdout).toContain(`CODEX_HOME=${accountAgentHome(accountRoot, "codex", 1)}`);
     expect(result.stdout).toContain("OPENAI_API_KEY=sk-packaged-1");
     expect(result.stdout).toContain("ARGS=exec --flag");
+    expect(result.stdout).toContain("SYNARA_LAUNCHER_SHIM=unset");
+    expect(result.stdout).toContain("OPENAI_BASE_URL=unset");
   });
 });

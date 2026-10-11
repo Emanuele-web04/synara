@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { Effect } from "effect";
+import { build } from "tsdown";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeAccountConnect } from "./accountConnect";
@@ -11,9 +12,12 @@ import { makeAccountStorage } from "./accountStorage";
 
 const WORKER_ENTRY = resolve(import.meta.dirname, "e2eWorkers/oauthConnectWorker.ts");
 
-const startOauthWorker = (root: string) =>
+const startOauthWorker = (root: string, onSpawn: (child: ChildProcess) => void) =>
   new Promise<{ child: ChildProcess; operationId: string }>((resolveStart, rejectStart) => {
-    const child = spawn("bun", [WORKER_ENTRY, root], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [join(root, "worker", "oauthConnectWorker.mjs"), root], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    onSpawn(child);
     let stdout = "";
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
@@ -44,20 +48,32 @@ describe("provider accounts restart recovery end to end", () => {
   let root: string;
   let worker: ChildProcess | null = null;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "synara-accounts-restart-e2e-"));
+    await build({
+      config: false,
+      entry: [WORKER_ENTRY],
+      outDir: join(root, "worker"),
+      format: ["esm"],
+      noExternal: (id) => !id.startsWith("node:"),
+      inlineOnly: false,
+      logLevel: "silent",
+    });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (worker !== null && worker.exitCode === null && worker.signalCode === null) {
       worker.kill("SIGKILL");
+      await waitForExit(worker);
     }
     worker = null;
     rmSync(root, { recursive: true, force: true });
   });
 
   it("recovers a mid-OAuth connect as terminal after the service process is killed", async () => {
-    const started = await startOauthWorker(root);
+    const started = await startOauthWorker(root, (child) => {
+      worker = child;
+    });
     worker = started.child;
     const { operationId } = started;
 
@@ -80,11 +96,12 @@ describe("provider accounts restart recovery end to end", () => {
     expect(status.surface).toBe("agent");
     expect(status.error).toMatch(/interrupted by a server restart/);
 
-    // The pending directory is cleaned and no ordinal or account leaked.
+    // The failed operation cannot commit. Its private staging remains because
+    // the server PID alone cannot prove that a provider child has exited.
     await expect(
       Effect.runPromise(restartedStorage.listPendingOperations("codex")),
-    ).resolves.toEqual([]);
-    expect(existsSync(join(root, "pending", "codex"))).toBe(false);
+    ).resolves.toEqual([operationId]);
+    expect(existsSync(join(root, "pending", "codex", operationId))).toBe(true);
     await expect(Effect.runPromise(restartedStorage.listOrdinals("codex"))).resolves.toEqual([]);
     await expect(Effect.runPromise(restartedStorage.readActiveOrdinal("codex"))).resolves.toBe(
       null,
