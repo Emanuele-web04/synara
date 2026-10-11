@@ -16,13 +16,18 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it, onTestFinished, vi } from "vitest";
 
 import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
-function createLauncherFixture(t, { iconComposer = false } = {}) {
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+function createLauncherFixture(t, { iconComposer = false, buildLauncher = buildMacLauncher } = {}) {
   const root = mkdtempSync(join(tmpdir(), "synara-electron-signing-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const desktopDirectory = join(root, "apps", "desktop");
   const iconComposerPath = join(root, "assets", "prod", "Synara.icon");
   const source = join(root, "vendor", "Electron.app");
@@ -76,7 +81,7 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
     metadataPath,
     iconComposerPath,
     commands,
-    build: () => buildMacLauncher(electronBinaryPath, { desktopDirectory, runCommand }),
+    build: () => buildLauncher(electronBinaryPath, { desktopDirectory, runCommand }),
     failSigning: (argument, result) => {
       codeSignFailure = argument ? { argument, result } : undefined;
     },
@@ -90,6 +95,51 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
 }
 
 describe("macOS Electron launcher signature", () => {
+  for (const flavor of ["beta", "development", "canary", "production"]) {
+    it(`compiles the ${flavor === "beta" ? "Beta" : "Stable"} catalog for ${flavor === "production" ? "a production request (development fallback)" : flavor} source launchers`, async (t) => {
+      vi.stubEnv("SYNARA_DESKTOP_FLAVOR", flavor);
+      vi.resetModules();
+      const { buildMacLauncher: buildLauncher } = await import("./electron-launcher.mjs");
+      const fixture = createLauncherFixture(t, { iconComposer: true, buildLauncher });
+      const betaIconComposerPath = join(
+        dirname(dirname(fixture.iconComposerPath)),
+        "beta",
+        "Synara.icon",
+      );
+      mkdirSync(betaIconComposerPath, { recursive: true });
+      writeFileSync(join(betaIconComposerPath, "icon.json"), "{}");
+
+      fixture.build();
+
+      const expectedPath = flavor === "beta" ? betaIconComposerPath : fixture.iconComposerPath;
+      const compilation = fixture.commands.find(({ command }) => command === "xcrun");
+      assert.equal(compilation?.arguments_[1], expectedPath);
+      assert.equal(
+        JSON.parse(readFileSync(fixture.metadataPath, "utf8")).iconComposerPath,
+        expectedPath,
+      );
+      fixture.commands.length = 0;
+      fixture.build();
+      assert.deepEqual(fixture.commands, []);
+    });
+  }
+
+  it("rebuilds cached launchers that do not record the selected icon catalog", (t) => {
+    const fixture = createLauncherFixture(t, { iconComposer: true });
+    fixture.build();
+    const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+    delete metadata.iconComposerPath;
+    writeFileSync(fixture.metadataPath, JSON.stringify(metadata));
+    fixture.commands.length = 0;
+
+    fixture.build();
+
+    assert.equal(
+      fixture.commands.some(({ command }) => command === "xcrun"),
+      true,
+    );
+  });
+
   it("signs the generated bundle after all mutations and verifies before caching it", (t) => {
     const fixture = createLauncherFixture(t);
     mkdirSync(dirname(fixture.metadataPath), { recursive: true });
@@ -187,7 +237,7 @@ describe("macOS Electron launcher signature", () => {
   });
 
   it("still signs and caches the flat icon when actool is unavailable", (t) => {
-    const warn = t.mock.method(console, "warn", () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fixture = createLauncherFixture(t, { iconComposer: true });
     fixture.failIconCompilation({ status: 1, stderr: "actool is unavailable" });
 
@@ -256,7 +306,7 @@ describe("macOS Electron launcher signature", () => {
       writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, appVersion: "0.0.1" }));
       fixture.commands.length = 0;
       fixture.displayCdhashes(...cdhashes);
-      t.mock.method(console, "warn", () => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
 
       fixture.build();
       const resets = fixture.commands.filter(({ command }) => command === "/usr/bin/tccutil");
@@ -420,10 +470,10 @@ describe("macOS source bundle reopen", () => {
   });
 });
 
-describe("macOS Electron launcher copy", { skip: process.platform !== "darwin" }, () => {
-  it("keeps framework symlink targets relative after relocation", (t) => {
+describe.skipIf(process.platform !== "darwin")("macOS Electron launcher copy", () => {
+  it("keeps framework symlink targets relative after relocation", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-electron-launcher-"));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
     const source = join(root, "source", "Electron.app");
     const target = join(root, "runtime", "Synara (Dev).app");
     const framework = join(source, "Contents", "Frameworks", "Electron Framework.framework");
