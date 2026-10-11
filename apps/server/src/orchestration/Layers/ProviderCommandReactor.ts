@@ -64,6 +64,7 @@ import {
 } from "effect";
 import {
   buildPromptThreadTitleFallback,
+  buildThreadTitleConversationContext,
   isGenericChatThreadTitle,
   isUsableGeneratedThreadTitle,
 } from "@synara/shared/chatThreads";
