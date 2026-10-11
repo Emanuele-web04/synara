@@ -38,6 +38,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -388,6 +389,7 @@ function makeHarnessLayer(
     readonly dispatchDelayMs?: number;
     readonly interruptedOperations?: ReadonlyArray<AgentGatewayOperationRecord>;
     readonly providerStatuses?: ReadonlyArray<ServerProviderStatus>;
+    readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
     readonly existingBranches?: ReadonlyArray<string>;
     readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly verifiedOwnershipTokens?: ReadonlyArray<string>;
@@ -871,6 +873,11 @@ function makeHarnessLayer(
     backfillSummaries: () => Effect.fail(new Error("not configured")),
   } as unknown as (typeof ProjectAgentService)["Service"]);
 
+  // To-do tool behavior is covered in todoTools.test.ts; the gateway only needs the service.
+  const todoLayer = Layer.succeed(TodoService, {
+    list: () => Effect.succeed({ todos: [] }),
+  } as unknown as (typeof TodoService)["Service"]);
+
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
@@ -1338,12 +1345,12 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
-    Layer.provide(projectAgentLayer),
+    Layer.provide(Layer.mergeAll(projectAgentLayer, todoLayer)),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
-    Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(ServerSettingsService.layerTest(options.serverSettings ?? {})),
     Layer.provide(operationLayer),
     Layer.provide(projectionTurnsLayer),
     Layer.provide(diagnosticsLayer),
@@ -2249,6 +2256,9 @@ describe("AgentGateway", () => {
         "synara_set_kanban_goal",
         "synara_delete_kanban_card",
         "synara_move_kanban_card",
+        "synara_create_todo",
+        "synara_list_todos",
+        "synara_update_todo",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
@@ -2519,6 +2529,53 @@ describe("AgentGateway", () => {
 
       const serialized = JSON.stringify(payload);
       assert.isBelow(serialized.indexOf('"targetConstruction"'), serialized.indexOf('"providers"'));
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("advertises configured provider instances in capabilities", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work Codex",
+            enabled: true,
+            config: {},
+          },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: {},
+      });
+      const payload = toolResultJson(response.result);
+      const providers = payload.providers as Array<{
+        provider: string;
+        instances?: Array<{
+          instanceId: string;
+          displayName: string;
+          isDefault: boolean;
+          enabled: boolean;
+        }>;
+      }>;
+      assert.deepEqual(providers.find((provider) => provider.provider === "codex")?.instances, [
+        {
+          instanceId: "codex",
+          displayName: "Codex",
+          isDefault: true,
+          enabled: true,
+        },
+        {
+          instanceId: "codex_work",
+          displayName: "Work Codex",
+          isDefault: false,
+          enabled: true,
+        },
+      ]);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

@@ -1240,7 +1240,7 @@ function toolTitle(toolName: string, args: unknown): string {
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {

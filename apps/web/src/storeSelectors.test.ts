@@ -13,6 +13,7 @@ import {
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
+  createSubagentSiblingSummariesSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadGitActionsMetadataSelector,
@@ -289,6 +290,47 @@ describe("sidebar thread visibility", () => {
       threadIdB,
       threadIdC,
     ]);
+  });
+});
+
+describe("createSubagentSiblingSummariesSelector", () => {
+  it("selects a parent's child threads and keeps the reference while they are unchanged", () => {
+    const parentThreadId = "thread-parent" as ThreadId;
+    const childA = {
+      ...summaryA,
+      id: "subagent:thread-parent:a" as ThreadId,
+      parentThreadId,
+    } as SidebarThreadSummary;
+    const childB = {
+      ...summaryA,
+      id: "subagent:thread-parent:b" as ThreadId,
+      parentThreadId,
+    } as SidebarThreadSummary;
+    const unrelated = { ...summaryA, id: "thread-unrelated" as ThreadId } as SidebarThreadSummary;
+    const select = createSubagentSiblingSummariesSelector(parentThreadId);
+    const state = makeState({
+      threadIds: [childA.id, unrelated.id, childB.id],
+      sidebarThreadSummaryById: {
+        [childA.id]: childA,
+        [unrelated.id]: unrelated,
+        [childB.id]: childB,
+      },
+    });
+    const first = select(state);
+    expect(first.map((thread) => thread.id)).toEqual([childA.id, childB.id]);
+    expect(
+      select(
+        makeState({
+          threadIds: [childA.id, unrelated.id, childB.id],
+          sidebarThreadSummaryById: {
+            [childA.id]: childA,
+            [unrelated.id]: { ...unrelated, title: "Renamed" },
+            [childB.id]: childB,
+          },
+        }),
+      ),
+    ).toBe(first);
+    expect(createSubagentSiblingSummariesSelector(null)(state)).toEqual([]);
   });
 });
 
