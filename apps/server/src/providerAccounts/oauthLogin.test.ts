@@ -276,10 +276,14 @@ describe("codexOauthLoginRunner", () => {
       profileHome,
       onVerification: () => undefined,
     });
-    const pid = await waitForLoginPid();
-    await handle.cancel();
-    expect(() => process.kill(pid, 0)).toThrow();
-    expect(await handle.done).toEqual({ ok: false, error: "Codex login was cancelled." });
+    try {
+      const pid = await waitForLoginPid();
+      await handle.cancel();
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(await handle.done).toEqual({ ok: false, error: "Codex login was cancelled." });
+    } finally {
+      await handle.cancel();
+    }
   });
 
   it("retires an owned descendant before cancellation completes", async () => {
@@ -320,14 +324,18 @@ describe("codexOauthLoginRunner", () => {
       profileHome,
       onVerification: () => undefined,
     });
-    const pid = await waitForLoginPid();
-    expect(deadline).toBeDefined();
-    deadline!();
-    expect(await handle.done).toEqual({
-      ok: false,
-      error: "Codex login timed out after 10 minutes.",
-    });
-    expect(() => process.kill(pid, 0)).toThrow();
+    try {
+      const pid = await waitForLoginPid();
+      expect(deadline).toBeDefined();
+      deadline!();
+      expect(await handle.done).toEqual({
+        ok: false,
+        error: "Codex login timed out after 10 minutes.",
+      });
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      await handle.cancel();
+    }
   });
 
   it("pins CODEX_HOME to the profile home and strips conflicting variables", async () => {
