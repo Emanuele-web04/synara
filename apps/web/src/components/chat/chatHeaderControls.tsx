@@ -11,15 +11,29 @@
 //      the chrome here keeps the row visually coherent and lets new controls opt in
 //      with one import instead of re-deriving the magic classes.
 
-import { forwardRef, type ComponentProps, type ReactNode } from "react";
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
+import {
+  forwardRef,
+  type ComponentProps,
+  type CSSProperties,
+  type MouseEvent,
+  type RefObject,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+} from "react";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { type LucideIcon } from "~/lib/icons";
+import { scrollTabIntoView } from "~/lib/tabStrip";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { Toggle } from "../ui/toggle";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * Fixed height of the top chrome bar shared by the chat header, the diff panel
@@ -36,7 +50,7 @@ import { Button } from "../ui/button";
  * TYPE is derived from the shared number, so the build fails if the two ever drift.
  */
 export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_HEIGHT_PX}px]` =
-  "h-[46px]";
+  "h-[44px]";
 
 /**
  * Standard horizontal inset for a chat-surface top bar (chat / workspace / settings
@@ -82,8 +96,9 @@ export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
 export const CHAT_HEADER_ICON_STRENGTH_CLASS_NAME =
   "text-[var(--color-text-foreground)] [&_svg]:!opacity-100";
 
-/** Fixed control height + radius for every header toolbar control. */
-export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg";
+/** Fixed control height + radius for every header toolbar control; `squircle` turns the
+ *  radius into continuous corners where supported and keeps it as the fallback. */
+export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg squircle";
 
 /** Idle text tone for flat header/dock controls (toggles, tabs, chrome icon buttons). */
 export const CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME =
@@ -107,7 +122,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
  */
 export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  "gap-1.5 border-0 px-1.5 text-ui-sm font-normal transition-colors",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
@@ -142,6 +157,32 @@ export function SurfaceChipIcon({
   return <Icon aria-hidden className={cn(CHAT_SURFACE_CHIP_ICON_CLASS_NAME, className)} />;
 }
 
+/**
+ * Route vertical mouse-wheel input sideways for a horizontal tab strip while preserving
+ * native horizontal trackpad gestures and browser zoom. A short gap starts a fresh gesture;
+ * this keeps a zero-deltaX trackpad sample from fighting the browser's native scrolling.
+ */
+export function useHorizontalWheelScroll(stripRef: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) {
+      return;
+    }
+    let lastWheelAt = -Infinity;
+    let nativeHorizontalGesture = false;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      if (event.timeStamp - lastWheelAt > 250) nativeHorizontalGesture = false;
+      lastWheelAt = event.timeStamp;
+      if (event.deltaX !== 0) nativeHorizontalGesture = true;
+      if (nativeHorizontalGesture || event.deltaY === 0) return;
+      strip.scrollLeft += event.deltaY;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: true });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, [stripRef]);
+}
+
 /** Header diff toggle — shared chip skin + Toggle's pressed text treatment. */
 export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
@@ -171,22 +212,43 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
 
+/** Trailing close button for content tabs: a 24px target overlaid on the chip's end with
+ *  its own hover disc, so it reads as separate from the (already filled) chip behind it. */
+const SURFACE_TAB_TRAILING_CLOSE_CLASS_NAME =
+  "absolute top-1/2 right-1 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-[var(--color-text-foreground-secondary)] outline-none transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--color-text-foreground)] focus-visible:ring-1 focus-visible:ring-ring/60";
+
+/** Keyboard focus ring for a chip's select button (the chip itself carries no focus). */
+const SURFACE_TAB_SELECT_FOCUS_CLASS_NAME =
+  "outline-none focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-inset";
+
+/** Marks the selected chip so {@link SurfaceTabStrip} can keep it scrolled into view. */
+const SURFACE_TAB_ACTIVE_SELECTOR = "[data-surface-tab-active]";
+
 /**
  * Shared flat tab chip for every chat surface that renders a row of closable tabs —
- * the right-dock tab strip and both terminal tab bars (pane-local tabs + workspace
- * group tabs). At rest the chip shows {@link icon}; hovering or focusing within the
- * chip fades that glyph out and reveals a circular close affordance, but only when
- * an {@link onClose} handler is supplied (tabs that can't be closed render a static
- * icon slot instead).
+ * the right-dock tab strip, the open-thread strip in the chat header, the editor rail,
+ * and both terminal tab bars (pane-local tabs + workspace group tabs).
  *
- * The icon→close-X reveal is driven entirely by the `group/dock-tab` named group
- * the chip declares here, so the hover wiring lives in exactly one place. Call
- * sites that hand-rolled the chip previously drifted to a mismatched group name
- * (`group/tab`), which silently broke the reveal — funneling them through this
- * component makes that class of bug unrepresentable.
+ * Two close treatments share the chip skin:
+ * - `closePlacement="icon"` (default, compact tool tabs): hovering or focusing within
+ *   the chip fades {@link icon} out and reveals a circular close affordance in its slot.
+ * - `closePlacement="trailing"` (content tabs whose identity lives in the icon, such as
+ *   a thread's provider): the icon stays put and a trailing X sits over the chip's end,
+ *   always on the active chip and on hover/focus elsewhere. The label only gives up room
+ *   for it while it shows, and fades out instead of ending in an ellipsis. The whole chip
+ *   is the select target, so a wide tab is clickable edge to edge.
+ * Either way the close control only renders when an {@link onClose} handler is supplied,
+ * and a middle click closes the tab like a browser tab.
+ *
+ * The hover wiring is driven entirely by the `group/dock-tab` named group the chip
+ * declares here, so it lives in exactly one place. Call sites that hand-rolled the chip
+ * previously drifted to a mismatched group name (`group/tab`), which silently broke the
+ * reveal — funneling them through this component makes that class of bug unrepresentable.
  *
  * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
  * tab count badge); `labelClassName` lets a call site cap the label width.
+ *
+ * `sortable` makes the chip a drag-to-reorder item of a dnd-kit sortable strip.
  */
 export function SurfaceTabChip({
   icon,
@@ -198,8 +260,13 @@ export function SurfaceTabChip({
   className,
   labelClassName,
   closeLabel,
+  closePlacement,
+  selectionAria,
   onSelect,
   onClose,
+  onLabelDoubleClick,
+  onContextMenu,
+  sortable,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -210,28 +277,113 @@ export function SurfaceTabChip({
   className?: string | undefined;
   labelClassName?: string | undefined;
   closeLabel?: string | undefined;
+  closePlacement?: "icon" | "trailing" | undefined;
+  // Tool toggles announce selection as pressed; navigation tabs (one per route) as the
+  // current page.
+  selectionAria?: "pressed" | "current" | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
+  onLabelDoubleClick?: (() => void) | undefined;
+  /** Opens the tab's own menu at the pointer, in place of the default context menu. */
+  onContextMenu?: ((position: { x: number; y: number }) => void) | undefined;
+  // Pointer activators only: dnd-kit's `attributes` would put a second role and tab stop
+  // on a chip whose buttons already carry them, and advertise a keyboard drag.
+  sortable?:
+    | {
+        setNodeRef: (node: HTMLElement | null) => void;
+        style: CSSProperties;
+        listeners: DraggableSyntheticListeners;
+      }
+    | undefined;
 }) {
+  const trailingClose = closePlacement === "trailing";
+  const handleClose = (event: MouseEvent) => {
+    event.stopPropagation();
+    onClose?.();
+  };
+  // `relative` lets a call site overlay a second glyph on the slot (the reorder grip).
+  const glyph = (
+    <span className="relative flex size-4 shrink-0 items-center justify-center">{icon}</span>
+  );
+  const labelClassNames = cn(
+    "flex min-w-0 items-center gap-1.5 text-left",
+    // Content tabs carry a title rather than a tool name, so they get a roomier chip.
+    trailingClose &&
+      cn(
+        "flex-1 gap-2 self-stretch rounded-[inherit] pl-2.5",
+        // Room for the overlaid X only while it shows.
+        !onClose
+          ? "pr-2.5"
+          : active
+            ? "pr-8"
+            : "pr-2.5 group-focus-within/dock-tab:pr-8 group-hover/dock-tab:pr-8",
+      ),
+    labelClassName,
+  );
+  const labelContent = (
+    <>
+      {trailingClose ? glyph : null}
+      {leading}
+      <span className={trailingClose ? "min-w-0 flex-1 truncate-fade truncate-fade-4" : "truncate"}>
+        {label}
+      </span>
+      {trailing}
+    </>
+  );
+
   return (
     <div
+      ref={sortable?.setNodeRef}
+      style={sortable?.style}
+      {...sortable?.listeners}
+      data-surface-tab=""
+      data-surface-tab-active={active ? "" : undefined}
       className={cn(
-        "group/dock-tab",
-        DOCK_TAB_CHIP_CLASS_NAME,
+        // `relative` anchors the strip's between-tab divider (see SurfaceTabStrip).
+        "group/dock-tab relative [-webkit-app-region:no-drag]",
+        trailingClose
+          ? cn(
+              CHAT_SURFACE_CHIP_CLASS_NAME,
+              "relative flex !h-8 min-w-0 items-center rounded-md px-0 squircle",
+            )
+          : DOCK_TAB_CHIP_CLASS_NAME,
         active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
         className,
       )}
+      onMouseDown={
+        onClose
+          ? (event) => {
+              // Suppress middle-button autoscroll/paste before auxclick closes the tab.
+              if (event.button === 1) event.preventDefault();
+            }
+          : undefined
+      }
+      onAuxClick={
+        onClose
+          ? (event) => {
+              if (event.button !== 1) return;
+              event.preventDefault();
+              handleClose(event);
+            }
+          : undefined
+      }
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              event.preventDefault();
+              onContextMenu({ x: event.clientX, y: event.clientY });
+            }
+          : undefined
+      }
     >
-      {onClose ? (
+      {trailingClose ? null : onClose ? (
         <button
           type="button"
           className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
           aria-label={closeLabel}
           title={closeLabel}
-          onClick={(event) => {
-            event.stopPropagation();
-            onClose();
-          }}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
+          onClick={handleClose}
         >
           <span
             className={cn("flex items-center justify-center", DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME)}
@@ -241,42 +393,126 @@ export function SurfaceTabChip({
           <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
         </button>
       ) : (
-        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+        glyph
       )}
       {onSelect ? (
         <button
           type="button"
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+          className={cn(labelClassNames, SURFACE_TAB_SELECT_FOCUS_CLASS_NAME)}
           title={title}
-          aria-pressed={active}
+          {...(selectionAria === "current"
+            ? { "aria-current": active ? ("page" as const) : undefined }
+            : { "aria-pressed": active })}
           onClick={(event) => {
             event.stopPropagation();
             onSelect();
           }}
+          onDoubleClick={onLabelDoubleClick}
         >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
+          {labelContent}
         </button>
       ) : (
         // Non-selectable chips (a lone tab that cannot switch to anything) render the
         // label as static text so keyboard/AT users don't land on a button that does
         // nothing.
-        <span
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-          title={title}
-        >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
+        <span className={labelClassNames} title={title}>
+          {labelContent}
         </span>
       )}
+      {trailingClose && onClose ? (
+        <button
+          type="button"
+          className={cn(
+            SURFACE_TAB_TRAILING_CLOSE_CLASS_NAME,
+            // Hidden but still hit-testable for a mouse: it always hovers (revealing it)
+            // before clicking, and after a close slides the next tab under the cursor the
+            // browser can lag a frame in re-evaluating :hover — a rapid second click must
+            // still close that tab rather than fall through and select it. A touch has no
+            // hover, so a tap on the hidden X selects the tab instead.
+            active
+              ? "opacity-100"
+              : "opacity-0 group-focus-within/dock-tab:opacity-100 group-hover/dock-tab:opacity-100 pointer-coarse:pointer-events-none",
+          )}
+          aria-label={closeLabel}
+          title={closeLabel}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
+          onClick={handleClose}
+        >
+          <CentralIcon name="cross-small" className="size-4 shrink-0" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Horizontal scroller shared by every row of {@link SurfaceTabChip}s. It hides the
+ * scrollbar, softly fades whichever edge still has tabs hidden behind it (`scroll-fade-x`
+ * is scroll-driven, so a strip whose tabs fit shows no fade at all), keeps the active
+ * chip in view when the selection changes or the strip is resized, and lets a vertical
+ * mouse wheel scroll it sideways. Pass the active tab's id as {@link activeKey};
+ * {@link dividers} draws the top-bar hairline between adjacent tabs.
+ */
+export function SurfaceTabStrip({
+  activeKey,
+  dividers,
+  className,
+  children,
+  ...props
+}: ComponentProps<"div"> & {
+  activeKey?: string | null | undefined;
+  dividers?: boolean | undefined;
+}) {
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  // A tab selected past the visible edge (opened elsewhere, or appended at the end) must
+  // come into view or the switch looks like it did nothing. Resizes (the window or the
+  // right dock narrowing the strip) and tabs opening or closing around it re-run it, since
+  // both move the active tab without changing the selection.
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || activeKey === null || activeKey === undefined) {
+      return;
+    }
+    const revealActiveTab = () => {
+      const activeTab = strip.querySelector<HTMLElement>(SURFACE_TAB_ACTIVE_SELECTOR);
+      if (activeTab) {
+        scrollTabIntoView(strip, activeTab);
+      }
+    };
+    // No reveal in this commit: reading tab geometry here would force a synchronous layout
+    // of everything the switch just changed (a whole chat, for the thread tabs). A fresh
+    // observer always reports its target once, after the layout of the frame that paints
+    // the selection, so the first reveal rides that.
+    const resizeObserver = new ResizeObserver(revealActiveTab);
+    resizeObserver.observe(strip);
+    const mutationObserver = new MutationObserver(revealActiveTab);
+    mutationObserver.observe(strip, { childList: true });
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [activeKey]);
+
+  useHorizontalWheelScroll(stripRef);
+
+  return (
+    <div
+      ref={stripRef}
+      {...props}
+      className={cn(
+        "flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain [scrollbar-width:none] scroll-fade-x [--scroll-fade-size:1.5rem] [&::-webkit-scrollbar]:hidden",
+        dividers && "surface-tab-dividers",
+        className,
+      )}
+    >
+      {children}
     </div>
   );
 }
 
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
-  "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0";
+  "!size-7 shrink-0 rounded-lg squircle [&_svg,&_[data-slot=central-icon]]:mx-0";
 
 /**
  * Square chrome icon-button footprint shared by every right-dock header — the tab
@@ -320,16 +556,40 @@ export function ChatHeaderSplitDivider() {
   return <div aria-hidden="true" className="w-px self-stretch bg-border" />;
 }
 
-export type DiffRenderMode = "stacked" | "split";
+/** Short hairline between groups of header controls (actions | panel toggles): the same
+ *  top-bar mark as the rail header divider and the divider between tabs. */
+export function ChatHeaderGroupDivider() {
+  return (
+    <div
+      aria-hidden="true"
+      className="h-(--app-chrome-divider-height) w-px shrink-0 bg-(--app-chrome-divider-color)"
+    />
+  );
+}
 
-/** Visual treatment shared across the header row. */
-export type ChatHeaderControlTone = "plain" | "outline";
+export type { DiffRenderMode } from "../../diffRenderMode";
+
+/** Visual treatment shared across the header row. `surface` is the quiet icon-only
+ *  look of the panel toggles (muted glyph at rest, filled on hover), for icon buttons
+ *  that sit in the same cluster. */
+export type ChatHeaderControlTone = "plain" | "outline" | "surface";
 
 /** Maps a header tone onto the shared Button variant taxonomy. */
 export function chatHeaderControlVariant(
   tone: ChatHeaderControlTone,
 ): NonNullable<ComponentProps<typeof Button>["variant"]> {
   return tone === "outline" ? "chrome-outline" : "chrome";
+}
+
+/** Glyph strength for a tone: surface buttons dim their glyph exactly like
+ *  {@link SurfaceChipIcon} so they match the Toggle chips beside them. */
+function chatHeaderIconStrengthClassName(tone: ChatHeaderControlTone): string {
+  return tone === "surface"
+    ? cn(
+        CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
+        "[&_[data-slot=central-icon]]:!opacity-70 [&_svg]:!size-4 [&_svg]:!opacity-70 [&_[data-slot=central-icon]]:!size-4",
+      )
+    : CHAT_HEADER_ICON_STRENGTH_CLASS_NAME;
 }
 
 type ChatHeaderButtonBaseProps = Omit<ComponentProps<typeof Button>, "variant" | "size"> & {
@@ -384,7 +644,7 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
         variant={chatHeaderControlVariant(tone)}
         className={cn(
           CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          chatHeaderIconStrengthClassName(tone),
           className,
         )}
       >
@@ -393,3 +653,56 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
     );
   },
 );
+
+/** State for the right-side surface panel toggles (Group panel, Library panel). */
+export interface SurfacePanelToggleState {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** Amber needs-you dot: at least one member thread is waiting on the user. */
+  readonly attention?: boolean;
+}
+
+const SURFACE_PANEL_TOGGLE_CLASS_NAME = cn(
+  CHAT_HEADER_TOGGLE_CLASS_NAME,
+  "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+);
+
+/** Header chip that opens/closes a right-side surface panel — the shared form of
+ *  what used to be identical ProjectToggle/LibraryToggle implementations. */
+export function SurfacePanelToggle({
+  state,
+  icon,
+  ariaLabel,
+  tooltip,
+}: {
+  state: SurfacePanelToggleState;
+  icon: LucideIcon;
+  ariaLabel: string;
+  tooltip: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={SURFACE_PANEL_TOGGLE_CLASS_NAME}
+            pressed={state.open}
+            onPressedChange={state.onOpenChange}
+            aria-label={state.attention ? `${ariaLabel}, needs attention` : ariaLabel}
+            variant="default"
+            size="xs"
+          >
+            <SurfaceChipIcon icon={icon} className="size-4" />
+            {state.attention ? (
+              <span
+                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                aria-hidden
+              />
+            ) : null}
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}

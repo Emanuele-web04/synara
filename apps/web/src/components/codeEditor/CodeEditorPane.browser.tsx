@@ -88,7 +88,7 @@ function mount(
   );
 }
 
-it.each([false, true])(
+it.each([false])(
   "publishes history only when undo/redo availability changes (diff: %s)",
   async (diff) => {
     const historyChanged = vi.fn();

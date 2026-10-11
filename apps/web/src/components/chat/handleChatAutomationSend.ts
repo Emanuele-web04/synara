@@ -14,6 +14,7 @@ import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatTranscriptScroll } from "./useChatTranscriptScroll";
 import { toastManager } from "../ui/toast";
 import { makeAutomationSetupBubble } from "./automationSetupBubble";
+import { resolveAuxiliaryTextGenerationSelection } from "../../lib/textGenerationCapabilities";
 interface ChatAutomationSendInput {
   threadId: ThreadId;
   pendingAutomationConversation: ReturnType<
@@ -99,6 +100,10 @@ export async function handleChatAutomationSend({
   const automationRequest = await resolveComposerAutomationRequest({
     message: messageForAutomation,
     cwd: threadWorkspaceCwd ?? activeProject.cwd,
+    textGenerationModelSelection: resolveAuxiliaryTextGenerationSelection({
+      provider: selectedModelSelectionForSend.provider,
+      modelSelection: selectedModelSelectionForSend,
+    }),
     generateIntent: (request) => api.server.generateAutomationIntent(request),
   });
   // Drop a stale resolve: bail if the user switched threads, or cancelled/changed the

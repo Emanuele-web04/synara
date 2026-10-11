@@ -27,7 +27,12 @@ import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "./ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+
+const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshotQueryBase.pipe(
+  Layer.provide(ServerSettingsService.layerTest()),
+);
 
 const at = "2026-09-10T12:00:00.000Z";
 const threadId = ThreadId.makeUnsafe("chunk-thread");
@@ -427,5 +432,42 @@ it("preserves cached text on completion when the projection message row is missi
     await assertReaders(system, "Hello world");
   } finally {
     await system.runtime.dispose();
+  }
+});
+
+it("settles a late delta for a finalized message instead of reopening it, across restart", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "synara-late-delta-"));
+  let system = await openSystem(dir);
+  const engineMessage = async () =>
+    (await system.run(system.engine.getReadModel())).threads
+      .find((thread) => thread.id === threadId)
+      ?.messages.find((message) => message.id === messageId);
+  try {
+    await system.seed();
+    await system.delta("late-first", "Final answer.", 101);
+    await system.complete();
+
+    await system.delta("late-tail-one", " Tail one.");
+    expect((await assertReaders(system, "Final answer. Tail one.")).isStreaming).toBe(false);
+    expect(await engineMessage()).toMatchObject({
+      text: "Final answer. Tail one.",
+      streaming: false,
+    });
+
+    // After a restart the command model no longer holds the message.
+    await system.runtime.dispose();
+    system = await openSystem(dir);
+    await system.delta("late-tail-two", " Tail two.");
+    const settled = await assertReaders(system, "Final answer. Tail one. Tail two.");
+    expect(settled.isStreaming).toBe(false);
+    expect(
+      Option.getOrThrow(await system.run(system.snapshot.getThreadDetailById(threadId))).messages[0]
+        ?.streaming,
+    ).toBe(false);
+    expect(await engineMessage()).toMatchObject({ streaming: false });
+    expect(await system.run(system.sql`SELECT * FROM message_text_chunks`)).toEqual([]);
+  } finally {
+    await system.runtime.dispose();
+    await rm(dir, { recursive: true, force: true });
   }
 });

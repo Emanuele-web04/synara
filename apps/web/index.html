@@ -38,9 +38,13 @@
       body {
         margin: 0;
         padding: 0;
-        background: transparent;
         /* Prevent a white flash before the app's own styles load. */
         color-scheme: light dark;
+      }
+      /* Only `html`: an unlayered `body` background here would override the layered
+         `body` rule in index.css that paints the whole-window glass coat. */
+      html {
+        background: transparent;
       }
       #root {
         min-height: 100vh;

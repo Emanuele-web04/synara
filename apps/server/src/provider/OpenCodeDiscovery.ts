@@ -11,6 +11,10 @@ import type {
 import type { Agent, OpencodeClient } from "@opencode-ai/sdk/v2";
 
 import { type OpenCodeCliModelDescriptor, type OpenCodeRuntimeError } from "./opencodeRuntime.ts";
+import {
+  parseOpenCodeReasoningOptions,
+  type OpenCodeReasoningDescriptor,
+} from "./openCodeReasoningOptions.ts";
 import { positiveInteger } from "./tokenUsage.ts";
 
 export interface OpenCodeModelInventory {
@@ -36,6 +40,10 @@ export interface OpenCodeModelInventory {
             readonly output?: number;
           };
           readonly variants?: Record<string, Record<string, unknown>>;
+          // Newer models.dev payloads expose the source metadata directly;
+          // older OpenCode servers normalize it into `variants`.
+          readonly reasoning_options?: unknown;
+          readonly reasoningOptions?: unknown;
         }
       >;
     }>;
@@ -277,33 +285,46 @@ function inferOpenCodeDefaultReasoningEffort(
 function resolveOpenCodeModelReasoningSupport(
   model: OpenCodeInventoryProvider["models"][string] | undefined,
 ) {
+  const empty = {
+    descriptors: [] as Array<OpenCodeReasoningDescriptor>,
+    defaultReasoningEffort: undefined as string | undefined,
+  };
   if (!model) {
-    return {
-      descriptors: [] as Array<{
-        readonly value: string;
-        readonly label?: string;
-        readonly description?: string;
-      }>,
-      defaultReasoningEffort: undefined as string | undefined,
-    };
+    return empty;
   }
 
-  const descriptors = Object.entries(model.variants ?? {}).flatMap(([variantKey, variant]) => {
-    const value = readOpenCodeInventoryVariantValue(variantKey, variant);
-    if (!value) {
-      return [];
-    }
+  const rawReasoningOptions =
+    model.reasoning_options !== undefined
+      ? model.reasoning_options
+      : model.reasoningOptions !== undefined
+        ? model.reasoningOptions
+        : model.options?.reasoning_options !== undefined
+          ? model.options.reasoning_options
+          : model.options?.reasoningOptions;
+  const variantDescriptors = Object.entries(model.variants ?? {}).flatMap(
+    ([variantKey, variant]) => {
+      const value = readOpenCodeInventoryVariantValue(variantKey, variant);
+      if (!value) {
+        return [];
+      }
 
-    const label = trimNonEmptyString(variant.label);
-    const description = trimNonEmptyString(variant.description);
-    return [
-      {
-        value,
-        ...(label ? { label } : {}),
-        ...(description ? { description } : {}),
-      },
-    ];
-  });
+      const label = trimNonEmptyString(variant.label);
+      const description = trimNonEmptyString(variant.description);
+      return [
+        {
+          value,
+          ...(label ? { label } : {}),
+          ...(description ? { description } : {}),
+        },
+      ];
+    },
+  );
+  // The server's variants include provider transport limits and user overrides.
+  // An empty record can mean every variant was disabled by the user.
+  const descriptors =
+    model.variants !== undefined
+      ? variantDescriptors
+      : parseOpenCodeReasoningOptions(rawReasoningOptions);
   if (descriptors.length > 0) {
     return normalizeOpenCodeReasoningDescriptors({
       descriptors,
@@ -314,14 +335,7 @@ function resolveOpenCodeModelReasoningSupport(
     });
   }
 
-  return {
-    descriptors: [] as Array<{
-      readonly value: string;
-      readonly label?: string;
-      readonly description?: string;
-    }>,
-    defaultReasoningEffort: undefined as string | undefined,
-  };
+  return empty;
 }
 
 function numberToContextWindowValue(value: unknown): string | null {

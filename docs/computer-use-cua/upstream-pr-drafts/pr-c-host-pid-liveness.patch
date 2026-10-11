@@ -1,0 +1,85 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 67e123bc7..cc6e6a19e 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -734,6 +734,40 @@ async fn wait_for_parent_stdin_eof() {
+     }
+ }
+ 
++/// Second embedded liveness channel, independent of the stdin pipe: the host
++/// records its pid in `CUA_DRIVER_EMBEDDED_HOST_PID`, so `kill(pid, 0)`
++/// answers "is the host gone" directly. Stdin EOF is the fast path, but a
++/// leaked duplicate of the lifetime fd can hold the channel open past host
++/// death — the pid check cannot be defeated that way. Resolves only when the
++/// host is gone; pends forever when no host pid was recorded (non-embedded
++/// daemons keep their own lifetime rules).
++async fn wait_for_embedded_host_death() {
++    #[cfg(unix)]
++    {
++        let host_pid = std::env::var("CUA_DRIVER_EMBEDDED_HOST_PID")
++            .ok()
++            .and_then(|raw| raw.parse::<libc::pid_t>().ok())
++            .filter(|pid| *pid > 0);
++        let Some(pid) = host_pid else {
++            return std::future::pending::<()>().await;
++        };
++        loop {
++            // kill(pid, 0): 0 = alive, EPERM = alive-but-foreign, ESRCH = gone.
++            let alive = unsafe {
++                libc::kill(pid, 0) == 0
++                    || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
++            };
++            if !alive {
++                eprintln!("Cua Driver embedded host pid {pid} is gone; shutting down.");
++                return;
++            }
++            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
++        }
++    }
++    #[cfg(not(unix))]
++    std::future::pending::<()>().await;
++}
++
+ #[cfg(unix)]
+ fn authenticate_unix_peer(stream: &tokio::net::UnixStream) -> anyhow::Result<()> {
+     let credentials = stream
+@@ -1005,11 +1039,16 @@ pub async fn run_serve(
+         std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+     let mut connection_tasks = tokio::task::JoinSet::new();
+     let parent_liveness = async {
+-        if cua_driver_core::parent_liveness_stdin_enabled() {
+-            wait_for_parent_stdin_eof().await;
+-        } else {
++        if !cua_driver_core::parent_liveness_stdin_enabled()
++            && std::env::var_os("CUA_DRIVER_EMBEDDED_HOST_PID").is_none()
++        {
+             std::future::pending::<()>().await;
+         }
++        tokio::select! {
++            _ = wait_for_parent_stdin_eof(),
++                if cua_driver_core::parent_liveness_stdin_enabled() => {}
++            _ = wait_for_embedded_host_death() => {}
++        }
+     };
+     tokio::pin!(parent_liveness);
+ 
+@@ -1729,11 +1768,16 @@ pub async fn run_serve(
+     let trusted_resume_registry: TrustedResumeRegistry =
+         std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+     let parent_liveness = async {
+-        if cua_driver_core::parent_liveness_stdin_enabled() {
+-            wait_for_parent_stdin_eof().await;
+-        } else {
++        if !cua_driver_core::parent_liveness_stdin_enabled()
++            && std::env::var_os("CUA_DRIVER_EMBEDDED_HOST_PID").is_none()
++        {
+             std::future::pending::<()>().await;
+         }
++        tokio::select! {
++            _ = wait_for_parent_stdin_eof(),
++                if cua_driver_core::parent_liveness_stdin_enabled() => {}
++            _ = wait_for_embedded_host_death() => {}
++        }
+     };
+     tokio::pin!(parent_liveness);
+ 

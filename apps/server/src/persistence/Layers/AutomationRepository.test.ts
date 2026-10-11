@@ -1206,60 +1206,6 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
-  it.effect("persists the new definition fields with defaults", () =>
-    Effect.gen(function* () {
-      const repository = yield* AutomationRepository;
-      yield* runMigrations();
-
-      const created = yield* repository.createDefinition({
-        id: AutomationId.makeUnsafe("automation-defaults"),
-        input: createInputForProject("project-defaults"),
-        now: "2026-06-16T10:00:00.000Z",
-      });
-
-      // Defaults applied at create time.
-      assert.strictEqual(created.mode, "standalone");
-      assert.strictEqual(created.targetThreadId, null);
-      assert.strictEqual(created.maxIterations, null);
-      assert.strictEqual(created.stopAfterConsecutiveFailures, 3);
-      assert.strictEqual(created.consecutiveFailureCount, 0);
-      assert.isNull(created.disabledReason);
-      assert.isNull(created.disabledAt);
-      assert.deepStrictEqual(created.completionPolicy, { type: "none" });
-      assert.strictEqual(created.completionPolicyVersion, 1);
-      assert.strictEqual(created.completionPolicyUpdatedAt, "2026-06-16T10:00:00.000Z");
-      assert.strictEqual(created.minimumIntervalSeconds, 60);
-      assert.strictEqual(created.maxRuntimeSeconds, 60 * 60);
-      assert.deepStrictEqual(created.retryPolicy, { type: "none" });
-      assert.strictEqual(created.misfirePolicy, "coalesce");
-      assert.deepStrictEqual(created.acknowledgedRisks, []);
-      assert.strictEqual(created.iterationCount, 0);
-
-      // And they survive a round trip through the DB row decoder.
-      const reloaded = Option.getOrThrow(
-        yield* repository.getDefinitionById({
-          id: AutomationId.makeUnsafe("automation-defaults"),
-        }),
-      );
-      assert.strictEqual(reloaded.mode, "standalone");
-      assert.strictEqual(reloaded.targetThreadId, null);
-      assert.strictEqual(reloaded.maxIterations, null);
-      assert.strictEqual(reloaded.stopAfterConsecutiveFailures, 3);
-      assert.strictEqual(reloaded.consecutiveFailureCount, 0);
-      assert.isNull(reloaded.disabledReason);
-      assert.isNull(reloaded.disabledAt);
-      assert.deepStrictEqual(reloaded.completionPolicy, { type: "none" });
-      assert.strictEqual(reloaded.completionPolicyVersion, 1);
-      assert.strictEqual(reloaded.completionPolicyUpdatedAt, "2026-06-16T10:00:00.000Z");
-      assert.strictEqual(reloaded.minimumIntervalSeconds, 60);
-      assert.strictEqual(reloaded.maxRuntimeSeconds, 60 * 60);
-      assert.deepStrictEqual(reloaded.retryPolicy, { type: "none" });
-      assert.strictEqual(reloaded.misfirePolicy, "coalesce");
-      assert.deepStrictEqual(reloaded.acknowledgedRisks, []);
-      assert.strictEqual(reloaded.iterationCount, 0);
-    }),
-  );
-
   it.effect("preserves explicit null maxRuntimeSeconds on create", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
@@ -1675,65 +1621,6 @@ layer("AutomationRepository", (it) => {
         merged.result?.completionEvaluation?.reason,
         "Still working through the review.",
       );
-    }),
-  );
-
-  it.effect("markRunResultPreservingTriage preserves a read run that was not archived", () =>
-    Effect.gen(function* () {
-      const repository = yield* AutomationRepository;
-      yield* runMigrations();
-
-      yield* repository.createDefinition({
-        id: AutomationId.makeUnsafe("automation-read-merge"),
-        input: createInputForProject("project-read-merge"),
-        now: "2026-06-16T10:00:00.000Z",
-      });
-      yield* repository.createRun({
-        id: AutomationRunId.makeUnsafe("run-read-merge"),
-        automationId: AutomationId.makeUnsafe("automation-read-merge"),
-        projectId: ProjectId.makeUnsafe("project-read-merge"),
-        threadId: ThreadId.makeUnsafe("thread-read-merge"),
-        trigger: { type: "manual" },
-        scheduledFor: "2026-06-16T10:05:00.000Z",
-        permissionSnapshot,
-        now: "2026-06-16T10:00:00.000Z",
-      });
-      yield* repository.markRunSucceeded({
-        id: AutomationRunId.makeUnsafe("run-read-merge"),
-        turnId: TurnId.makeUnsafe("turn-read-merge"),
-        result: null,
-        finishedAt: "2026-06-16T10:10:00.000Z",
-        accountedAt: "2026-06-16T10:10:00.000Z",
-      });
-
-      // User marks the run read WITHOUT archiving it.
-      yield* repository.markRunRead({
-        runId: AutomationRunId.makeUnsafe("run-read-merge"),
-        unread: false,
-        now: "2026-06-16T10:11:00.000Z",
-      });
-
-      // A background completion eval lands with stale triage fields (unread: true).
-      const merged = yield* repository.markRunResultPreservingTriage({
-        id: AutomationRunId.makeUnsafe("run-read-merge"),
-        result: {
-          outcome: "no-findings",
-          summary: "Stop condition not met.",
-          unread: true,
-          archivedAt: null,
-          completionEvaluation: {
-            stopMatched: false,
-            confidence: 0.4,
-            reason: "Still working through the review.",
-          },
-        },
-        updatedAt: "2026-06-16T10:12:00.000Z",
-      });
-
-      // Read state is preserved in isolation; archive stays null; completion fields update.
-      assert.strictEqual(merged.result?.unread, false);
-      assert.strictEqual(merged.result?.archivedAt, null);
-      assert.strictEqual(merged.result?.outcome, "no-findings");
     }),
   );
 

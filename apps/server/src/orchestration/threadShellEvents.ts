@@ -10,6 +10,7 @@ const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
 ]);
 
 export const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.claude-cache-set",
   "thread.created",
   "thread.meta-updated",
   "thread.pinned-message-added",

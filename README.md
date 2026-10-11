@@ -16,7 +16,11 @@
   </p>
 </div>
 
-<details>
+<p align="center">
+  <img src="./assets/prod/readme-workspace-light.png" width="1200" alt="Synara workspace with an agent conversation and pull request review side by side">
+</p>
+
+<details open>
   <summary><strong>Table of contents</strong></summary>
 
 | Workspace layer      | Responsibility                                                |
@@ -116,6 +120,8 @@ Configure the shell to match the way you work with light and dark themes, typogr
 Download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or visit [trysynara.com](https://www.trysynara.com/).
 
 Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
+
+Workspace Git features require [Git 2.29 or newer](https://github.com/git/git/blob/v2.29.0/Documentation/RelNotes/2.29.0.txt). Background refreshes preserve the FETCH_HEAD used by explicit fetch workflows. Ahead/behind counts use local refs and can update on the next status poll, up to 60 seconds after a successful background refresh; status reads do not wait for the remote.
 
 ### Provider setup
 

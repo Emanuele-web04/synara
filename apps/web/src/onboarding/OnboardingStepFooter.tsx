@@ -9,8 +9,7 @@ import { cn } from "~/lib/utils";
 import { ONBOARDING_INSET_CLASS_NAME } from "./layout";
 import { ONBOARDING_STEPS, type OnboardingStep } from "./logic";
 
-const FOOTER_BUTTON_CLASS_NAME =
-  "px-4 text-[length:var(--app-font-size-ui-lg,13px)] sm:text-[length:var(--app-font-size-ui-lg,13px)]";
+const FOOTER_BUTTON_CLASS_NAME = "px-4 text-ui-lg sm:text-ui-lg";
 
 export function OnboardingStepFooter(props: {
   step: OnboardingStep;
@@ -61,7 +60,7 @@ export function OnboardingStepFooter(props: {
           <button
             type="button"
             disabled={props.navigationLocked}
-            className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60 motion-reduce:transition-none"
+            className="text-ui text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60 motion-reduce:transition-none"
             onClick={props.onSkip}
           >
             Skip setup

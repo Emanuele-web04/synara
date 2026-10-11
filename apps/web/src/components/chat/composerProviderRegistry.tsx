@@ -18,6 +18,7 @@ import {
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCursorModelOptions,
+  normalizeOmpModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveDevinModelVariant,
@@ -80,7 +81,11 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "claudeAgent": {
       const providerOptions = modelOptions?.claudeAgent;
       rawEffort = trimOrNull(providerOptions?.effort);
-      normalizedOptions = normalizeClaudeModelOptions(model, providerOptions);
+      normalizedOptions = normalizeClaudeModelOptions(
+        model,
+        providerOptions,
+        runtimeModel?.isConfiguredCustomModel === true ? [model] : [],
+      );
       break;
     }
     case "cursor": {
@@ -190,6 +195,12 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
           : {}),
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      break;
+    }
+    case "omp": {
+      const providerOptions = modelOptions?.omp;
+      rawEffort = trimOrNull(providerOptions?.thinkingLevel);
+      normalizedOptions = normalizeOmpModelOptions(providerOptions);
       break;
     }
   }

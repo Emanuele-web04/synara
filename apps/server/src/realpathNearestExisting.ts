@@ -5,7 +5,7 @@
 // Exports: realpathNearestExisting
 //
 // Used by:
-//  - config.ts, to canonicalize homeDir/chatWorkspaceRoot/studioWorkspaceRoot so
+//  - config.ts, to canonicalize homeDir/chatWorkspaceRoot/studioWorkspaceRoot/groupsWorkspaceRoot so
 //    the roots the server reports match what project rows store (see
 //    wsRpc.ts's canonicalizeProjectWorkspaceRoot, which canonicalizes project
 //    workspace roots the same way once they exist on disk).

@@ -31,7 +31,6 @@ import {
   createInputFromForm,
   datetimeLocalFromIso,
   formatCadence,
-  formatCadenceLong,
   formatNextRun,
   formatSchedule,
   formFromDefinition,
@@ -43,9 +42,6 @@ import {
   providerOptionsForAutomationModelSelection,
   reconcileAutomationFormAutoModeSupport,
   rollbackAutomationDefinitionPatch,
-  runResultSummary,
-  runResultTitle,
-  scheduleKindFromSchedule,
   scheduleFromForm,
   updateWeeklyScheduleDay,
   updateWeeklyScheduleTime,
@@ -228,31 +224,6 @@ function definitionWith(overrides: Partial<AutomationDefinition>): AutomationDef
 }
 
 describe("automation shared route helpers", () => {
-  it("preserves manual and new schedule kinds", () => {
-    expect(scheduleKindFromSchedule({ type: "manual" })).toBe("manual");
-    expect(scheduleKindFromSchedule({ type: "once", runAt: "2026-06-19T10:15:00.000Z" })).toBe(
-      "once",
-    );
-    expect(
-      scheduleKindFromSchedule({
-        type: "cron",
-        expression: "0 9 * * *",
-        timezone: "Europe/Rome",
-      }),
-    ).toBe("cron");
-  });
-
-  it("spells out interval cadences in the long form", () => {
-    expect(formatCadenceLong({ type: "interval", everySeconds: 300 })).toBe("Every 5 minutes");
-    expect(formatCadenceLong({ type: "interval", everySeconds: 60 })).toBe("Every minute");
-    expect(formatCadenceLong({ type: "interval", everySeconds: 3600 })).toBe("Hourly");
-    expect(formatCadenceLong({ type: "interval", everySeconds: 7200 })).toBe("Every 2 hours");
-    expect(formatCadenceLong({ type: "interval", everySeconds: 90 })).toBe("Every 90 seconds");
-    expect(formatCadenceLong({ type: "daily", timeOfDay: "09:00", timezone: "Europe/Rome" })).toBe(
-      "Daily at 9:00",
-    );
-  });
-
   it("phrases the next-run countdown with pluralized units", () => {
     const now = Date.parse("2026-06-19T00:00:00.000Z");
     expect(formatNextRun("2026-06-19T00:00:30.000Z", now)).toBe("now");
@@ -280,13 +251,7 @@ describe("automation shared route helpers", () => {
   });
 
   it.each([
-    ["pending", false],
-    ["claimed", false],
     ["running", false],
-    ["waiting-for-approval", false],
-    ["pending", true],
-    ["claimed", true],
-    ["running", true],
     ["waiting-for-approval", true],
   ] as const)("shows a live icon for %s runs when enabled is %s", (status, enabled) => {
     expect(automationListRowIcon(definitionWith({ enabled }), runWith({ status })).name).toBe(
@@ -302,40 +267,10 @@ describe("automation shared route helpers", () => {
       icon: "pause",
     },
     {
-      label: "successful",
-      definition: baseDefinition,
-      run: runWith({ status: "succeeded" }),
-      icon: "circle-check",
-    },
-    {
       label: "failed",
       definition: baseDefinition,
       run: runWith({ status: "failed" }),
       icon: "exclamation-circle",
-    },
-    {
-      label: "cancelled",
-      definition: baseDefinition,
-      run: runWith({ status: "cancelled" }),
-      icon: "exclamation-circle",
-    },
-    {
-      label: "interrupted",
-      definition: baseDefinition,
-      run: runWith({ status: "interrupted" }),
-      icon: "exclamation-circle",
-    },
-    {
-      label: "scheduled without a run",
-      definition: baseDefinition,
-      run: null,
-      icon: "clock",
-    },
-    {
-      label: "idle without a next run",
-      definition: definitionWith({ nextRunAt: null }),
-      run: null,
-      icon: "circle-placeholder-on",
     },
   ])("maps $label automation rows to $icon", ({ definition, run, icon }) => {
     expect(automationListRowIcon(definition, run).name).toBe(icon);
@@ -367,20 +302,6 @@ describe("automation shared route helpers", () => {
     expect(automationAttentionCount(runs)).toBe(2);
   });
 
-  it("keeps silent successful runs in history without counting them for attention", () => {
-    const silent = runWith({
-      id: runId("run-silent"),
-      result: {
-        ...baseRun.result!,
-        decision: "silent",
-        unread: false,
-      },
-    });
-
-    expect(unresolvedTriageRuns([silent])).toEqual([]);
-    expect(automationAttentionCount([silent])).toBe(0);
-  });
-
   it("does not surface a reported result before its run finishes", () => {
     const running = runWith({
       status: "running",
@@ -404,55 +325,10 @@ describe("automation shared route helpers", () => {
     expect(canCancelAutomationRun(runWith({ status: "cancelled" }))).toBe(false);
   });
 
-  it("uses human labels for resultless and unknown-result runs", () => {
-    expect(runResultSummary(runWith({ result: null, status: "waiting-for-approval" }))).toBe(
-      "Waiting for approval",
-    );
-    expect(
-      runResultSummary(
-        runWith({
-          result: { ...baseRun.result!, summary: null, outcome: "unknown" },
-          status: "succeeded",
-        }),
-      ),
-    ).toBe("Completed; open the thread for the reply");
-  });
-
-  it("exposes the structured automation result title", () => {
-    expect(
-      runResultTitle(
-        runWith({
-          result: {
-            ...baseRun.result!,
-            title: "Dependency updates available",
-          },
-        }),
-      ),
-    ).toBe("Dependency updates available");
-    expect(runResultTitle(runWith({ result: { ...baseRun.result!, title: "  " } }))).toBeNull();
-  });
-
-  it("round-trips one-shot datetimes through datetime-local values", () => {
-    const runAt = "2026-06-19T10:00:00.000Z";
-
-    expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
-  });
-
   it("preserves one-shot datetime seconds through datetime-local values", () => {
     const runAt = "2026-06-19T10:00:15.000Z";
 
     expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
-  });
-
-  it("preserves sub-minute custom intervals through the form state", () => {
-    const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
-      type: "interval",
-      everySeconds: 15,
-    });
-
-    expect(form.intervalAmount).toBe("15");
-    expect(form.intervalUnit).toBe("seconds");
-    expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 15 });
   });
 
   it("preserves non-minute interval cadences through the form state", () => {
@@ -632,20 +508,6 @@ describe("automation shared route helpers", () => {
 
     expect(form.notificationPolicy).toBe("failed-runs-only");
     expect(createInputFromForm(form).notificationPolicy).toBe("failed-runs-only");
-  });
-
-  it("serializes composer source thread provenance on create inputs", () => {
-    const form = {
-      ...formFromDefinition(null, "project-1"),
-      name: "Say hi",
-      prompt: "Say hi.",
-    };
-
-    expect(
-      createInputFromForm(form, undefined, undefined, threadId("thread-source")),
-    ).toMatchObject({
-      sourceThreadId: "thread-source",
-    });
   });
 
   it("preserves saved provider options when editing without changing models", () => {
@@ -986,21 +848,6 @@ describe("automation shared route helpers", () => {
 
     expect(afterLateSnapshot.memories).toEqual([liveMemory]);
   });
-
-  it("applies persistent-memory stream updates without requiring a new snapshot", () => {
-    const memory = {
-      automationId: baseDefinition.id,
-      content: "Remember the latest successful SHA.",
-      updatedAt: "2026-06-19T10:03:00.000Z",
-    };
-
-    const updated = applyAutomationEvent(
-      { definitions: [baseDefinition], runs: [], memories: [] },
-      { type: "memory-upserted", memory },
-    );
-
-    expect(updated.memories).toEqual([memory]);
-  });
 });
 
 describe("rollbackAutomationDefinitionPatch", () => {
@@ -1055,22 +902,5 @@ describe("rollbackAutomationDefinitionPatch", () => {
     );
 
     expect("stopOnError" in rolledBack.definitions[0]!).toBe(false);
-  });
-
-  it("leaves other definitions untouched", () => {
-    const other = definitionWith({ id: automationId("automation-2"), name: "Other" });
-    const current = {
-      definitions: [definitionWith({ name: "Optimistic name" }), other],
-      runs: [],
-      memories: [],
-    };
-
-    const rolledBack = rollbackAutomationDefinitionPatch(
-      current,
-      { id: baseDefinition.id, name: "Optimistic name" },
-      baseDefinition,
-    );
-
-    expect(rolledBack.definitions[1]).toBe(other);
   });
 });

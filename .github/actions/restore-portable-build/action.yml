@@ -1,0 +1,21 @@
+name: Restore verified portable build
+description: Import JavaScript outputs from this exact workflow candidate
+inputs:
+  source-commit:
+    required: true
+    description: Exact checked-out candidate
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: portable-build
+        path: ${{ runner.temp }}/portable-build
+    - name: Verify and import portable output
+      shell: bash
+      env:
+        SOURCE_COMMIT: ${{ inputs.source-commit }}
+      run: |
+        set -euo pipefail
+        node scripts/import-portable-build.ts "$RUNNER_TEMP/portable-build" "$SOURCE_COMMIT"
+        echo "SYNARA_PORTABLE_BUILD_MANIFEST=$RUNNER_TEMP/portable-build/manifest.json" >> "$GITHUB_ENV"

@@ -4,19 +4,28 @@
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  MODEL_OPTIONS_BY_PROVIDER,
   type ProviderKind,
   type ProviderModelDescriptor,
+  type NativeApi,
 } from "@synara/contracts";
 import { useState } from "react";
+import { QueryClient } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_MODEL_CAPABILITIES, getClaudeModelOptionCapabilities } from "@synara/shared/model";
 
 import type { ProviderModelCatalog } from "./useProviderModelCatalog";
 import { useProviderModelCatalog } from "./useProviderModelCatalog";
+import * as nativeApi from "../nativeApi";
+import { providerModelsQueryOptions } from "../lib/providerDiscoveryReactQuery";
+import { getRuntimeAwareModelCapabilities } from "../components/chat/runtimeModelCapabilities";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
+  useQueries: vi.fn(),
   useQuery: vi.fn(),
+  useQueryClient: vi.fn(),
   useEffect: vi.fn(),
 }));
 
@@ -27,7 +36,12 @@ vi.mock("react", async (importOriginal) => {
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useQuery: mocks.useQuery };
+  return {
+    ...actual,
+    useQueries: mocks.useQueries,
+    useQuery: mocks.useQuery,
+    useQueryClient: mocks.useQueryClient,
+  };
 });
 
 vi.mock("../appSettings", async (importOriginal) => {
@@ -52,18 +66,25 @@ interface QueryResultLike {
   readonly isFetching: boolean;
   readonly isLoading: boolean;
   readonly isPlaceholderData: boolean;
+  readonly isError: boolean;
 }
 
 const EMPTY_QUERY: QueryResultLike = {
   isFetching: false,
   isLoading: false,
   isPlaceholderData: false,
+  isError: false,
 };
 const modelQueries = new Map<ProviderKind, QueryResultLike>();
+const instanceModelQueries = new Map<string, QueryResultLike>();
 const agentQueries = new Map<ProviderKind, QueryResultLike>();
+let lastInstanceQueryResults: QueryResultLike[] = [];
+let lastCombinedInstanceQueryResults: unknown;
 const MODEL_HINTS = { cursor: "composer-2" } as const;
 const SETTINGS = {
   antigravityBinaryPath: "",
+  codexAccounts: [],
+  codexHomePath: "",
   cursorApiEndpoint: "",
   cursorBinaryPath: "",
   customAntigravityModels: [],
@@ -80,6 +101,8 @@ const SETTINGS = {
   openCodeBinaryPath: "",
   piAgentDir: "",
   piBinaryPath: "",
+  providerInstances: {},
+  selectedCodexAccountId: "",
 };
 
 function readCatalogRenders(
@@ -119,9 +142,13 @@ function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
 }
 
 beforeEach(() => {
+  mocks.useQueryClient.mockReturnValue(new QueryClient());
   mocks.useEffect.mockClear();
   modelQueries.clear();
+  instanceModelQueries.clear();
   agentQueries.clear();
+  lastInstanceQueryResults = [];
+  lastCombinedInstanceQueryResults = undefined;
   mocks.useAppSettings
     .mockReset()
     .mockReturnValue({ settings: SETTINGS, serverSettings: DEFAULT_SERVER_SETTINGS });
@@ -135,9 +162,266 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected provider catalog query: ${String(resource)}`);
   });
+  mocks.useQueries
+    .mockReset()
+    .mockImplementation(
+      ({
+        queries,
+        combine,
+      }: {
+        readonly queries: ReadonlyArray<QueryOptionsLike>;
+        readonly combine?: (results: ReadonlyArray<QueryResultLike>) => unknown;
+      }) => {
+        const next = queries.map((query) => {
+          const instanceId = query.queryKey[3];
+          return query.enabled === false || typeof instanceId !== "string"
+            ? EMPTY_QUERY
+            : (instanceModelQueries.get(instanceId) ?? EMPTY_QUERY);
+        });
+        const changed =
+          next.length !== lastInstanceQueryResults.length ||
+          next.some((result, index) => result !== lastInstanceQueryResults[index]);
+        if (changed) {
+          lastInstanceQueryResults = next;
+        }
+        if (!combine) {
+          return lastInstanceQueryResults;
+        }
+        // Like the real hook: the combined value keeps its identity while the results do.
+        if (changed || lastCombinedInstanceQueryResults === undefined) {
+          lastCombinedInstanceQueryResults = combine(lastInstanceQueryResults);
+        }
+        return lastCombinedInstanceQueryResults;
+      },
+    );
 });
 
 describe("useProviderModelCatalog", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shares account catalog refreshes across projects and updates the observed query", async () => {
+    const listModels = vi.fn().mockResolvedValue({
+      models: [{ slug: "gpt-6.1-sol", name: "GPT-6.1 Sol" }],
+      source: "codex-app-server",
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listModels },
+    } as unknown as NativeApi);
+    const [first] = readCatalogRenders({
+      selectedProvider: "codex",
+      cwd: "/one",
+      discoveryEnabled: false,
+    });
+    const [second] = readCatalogRenders({
+      selectedProvider: "codex",
+      cwd: "/two",
+      discoveryEnabled: false,
+    });
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
+    // Ordinary discovery can cache a stale server snapshot moments before a tab opens.
+    queryClient.setQueryData(options.queryKey, {
+      models: [{ slug: "old-model", name: "Old model" }],
+      source: "codex-app-server",
+      cached: true,
+    });
+    await first!.refreshModels("codex", "codex", "if-stale");
+    await second!.refreshModels("codex", "codex", "if-stale");
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(listModels).toHaveBeenLastCalledWith({
+      provider: "codex",
+      instanceId: "codex",
+      refresh: "if-stale",
+    });
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({
+      models: [{ slug: "gpt-6.1-sol" }],
+    });
+    listModels.mockResolvedValueOnce({ models: [], source: "codex-app-server" });
+    await second!.refreshModels("codex", "codex", "now");
+    expect(listModels).toHaveBeenLastCalledWith({
+      provider: "codex",
+      instanceId: "codex",
+      refresh: "now",
+    });
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({ models: [] });
+    queryClient.clear();
+  });
+
+  it("does not lose refresh intent behind an in-flight stale prefetch", async () => {
+    let finish!: (value: unknown) => void;
+    const promise = new Promise<unknown>((resolve) => {
+      finish = resolve;
+    });
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(promise)
+      .mockResolvedValue({
+        models: [{ slug: "new-model", name: "New model" }],
+        source: "codex-app-server",
+      });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listModels },
+    } as unknown as NativeApi);
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
+    const prefetch = queryClient.fetchQuery(options);
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: false });
+    const refreshed = catalog!.refreshModels("codex", "codex", "now");
+    finish({
+      models: [{ slug: "old-model", name: "Old model" }],
+      source: "codex-app-server",
+      cached: true,
+    });
+    await Promise.all([prefetch, refreshed]);
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({
+      models: [{ slug: "new-model" }],
+    });
+    queryClient.clear();
+  });
+
+  it.each([false, true])(
+    "keeps an account refresh ahead of background catalogs after a prefetch (fails: %s)",
+    async (prefetchFails) => {
+      let finishActive!: () => void;
+      const catalog = { models: [{ slug: "same-model", name: "Same model" }], source: "runtime" };
+      const listModels = vi.fn().mockImplementation(({ provider, refresh }) => {
+        if (provider === "opencode") {
+          return new Promise((resolve) => {
+            finishActive = () => resolve(catalog);
+          });
+        }
+        if (provider === "codex" && !refresh && prefetchFails) {
+          return Promise.reject(new Error("prefetch failed"));
+        }
+        return Promise.resolve(catalog);
+      });
+      vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+        provider: { listModels },
+      } as unknown as NativeApi);
+      const client = mocks.useQueryClient() as QueryClient;
+      const active = client.fetchQuery(providerModelsQueryOptions({ provider: "opencode" }));
+      await vi.waitFor(() => expect(finishActive).toBeDefined());
+      const background = client.fetchQuery(providerModelsQueryOptions({ provider: "pi" }));
+      const prefetch = client
+        .fetchQuery({
+          ...providerModelsQueryOptions({ provider: "codex", instanceId: "codex_work" }),
+          retry: false,
+        })
+        .catch(() => undefined);
+      const [catalogHook] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: false,
+      });
+      const refreshed = catalogHook!.refreshModels("codex", "codex_work", "now");
+      const outcome = refreshed.then(
+        () => "completed",
+        () => "failed",
+      );
+      finishActive();
+      await Promise.all([active, background, prefetch]);
+      expect(await outcome).toBe("completed");
+      expect(listModels.mock.calls.map(([input]) => input)).toEqual([
+        { provider: "opencode" },
+        { provider: "codex", instanceId: "codex_work" },
+        { provider: "codex", instanceId: "codex_work", refresh: "now" },
+        { provider: "pi" },
+      ]);
+      client.clear();
+    },
+  );
+
+  it("reports a degraded provider response as a failed refresh", async () => {
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: {
+        listModels: vi.fn().mockResolvedValue({
+          models: [{ slug: "fallback", name: "Fallback" }],
+          source: "runtime.static",
+          error: "Provider unavailable",
+        }),
+      },
+    } as unknown as NativeApi);
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: false });
+    await expect(catalog!.refreshModels("codex", "codex", "now")).rejects.toThrow(
+      "Provider unavailable",
+    );
+    (mocks.useQueryClient() as QueryClient).clear();
+  });
+
+  it.each([{ models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }] }, { models: [] }])(
+    "uses the Codex catalog without restoring retired built-ins: %j",
+    ({ models }) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: { ...SETTINGS, customCodexModels: ["private-model"] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      modelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
+      instanceModelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
+
+      const [catalog] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: true,
+        modelHintByProvider: { codex: "gpt-5.4" },
+      });
+
+      expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+      expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+    },
+  );
+
+  it.each([
+    { ...EMPTY_QUERY, error: new Error("Codex unavailable") },
+    {
+      ...EMPTY_QUERY,
+      isLoading: true,
+      isPlaceholderData: true,
+      data: { models: [], source: "empty", cached: false },
+    },
+  ])("keeps the Codex fallback until discovery succeeds: %j", (query) => {
+    modelQueries.set("codex", query);
+    instanceModelQueries.set("codex", query);
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+    expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+  });
+
+  it("keeps the last Codex catalog when a background refresh fails", () => {
+    modelQueries.set("codex", {
+      ...EMPTY_QUERY,
+      data: {
+        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+        source: "codex-app-server",
+        cached: true,
+      },
+      error: new Error("Codex unavailable"),
+    });
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+      "gpt-5.6-sol",
+    ]);
+  });
+
   it("keeps the foreground effect dependency stable across unrelated renders", () => {
     readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
     const [first, second] = mocks.useEffect.mock.calls;
@@ -173,6 +457,225 @@ describe("useProviderModelCatalog", () => {
     expect(second?.loadingModelProviders).toBe(first?.loadingModelProviders);
     expect(second?.runtimeModelsByProvider).toBe(first?.runtimeModelsByProvider);
     expect(second?.selectedRuntimeAgents).toBe(first?.selectedRuntimeAgents);
+  });
+
+  it("keeps runtime and custom model catalogs separate for same-provider instances", () => {
+    const customInstanceId = "cursor-work";
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        providerInstances: {
+          [customInstanceId]: {
+            driver: "cursor",
+            displayName: "Cursor Work",
+            config: {
+              binaryPath: "/opt/cursor-work",
+              customModels: ["work-custom"],
+            },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    instanceModelQueries.set(customInstanceId, {
+      data: {
+        models: [{ slug: "composer-work", name: "Composer Work" }],
+        source: "cursor.cli",
+        cached: false,
+      },
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "cursor",
+      selectedProviderInstanceId: customInstanceId,
+      discoveryEnabled: false,
+    }).at(-1);
+
+    expect(
+      catalog?.modelOptionsByProviderInstance[customInstanceId]?.map((model) => model.slug),
+    ).toEqual(["composer-work", "work-custom"]);
+    expect(
+      catalog?.modelOptionsByProviderInstance.cursor?.some(
+        (model) => model.slug === "composer-work" || model.slug === "work-custom",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps an undiscovered sibling's custom controls separate from a warm default", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            displayName: "Work",
+            config: { customModels: ["work-only"] },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const warmDefault = {
+      ...EMPTY_QUERY,
+      data: {
+        models: [{ slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", supportsAutoMode: true }],
+        source: "claude-cli",
+      },
+    };
+    modelQueries.set("claudeAgent", warmDefault);
+    instanceModelQueries.set("claudeAgent", warmDefault);
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: true,
+    }).at(-1)!;
+
+    expect(catalog.runtimeModelsByProvider.claudeAgent[0]?.supportsAutoMode).toBe(true);
+    // The saved custom entry gets optional controls, never the sibling's
+    // discovered model or its Auto permission-mode capability.
+    const workModels = catalog.runtimeModelsByProviderInstance.claude_work!;
+    expect(workModels.map((model) => model.slug)).toEqual(["work-only"]);
+    expect(workModels[0]?.isConfiguredCustomModel).toBe(true);
+    expect(workModels[0]?.supportsAutoMode).toBeUndefined();
+    expect(
+      catalog.modelOptionsByProviderInstance.claude_work?.map((option) => option.slug),
+    ).toContain("work-only");
+  });
+
+  it("exposes only the selected Claude instance's configured aliases before discovery", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        customClaudeModels: ["personal-only"],
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            displayName: "Work",
+            config: {
+              customModels: [
+                "work-only",
+                " EnterpriseAlias ",
+                "EnterpriseAlias",
+                "claude-opus-4-1",
+              ],
+            },
+          },
+          claude_empty: {
+            driver: "claudeAgent",
+            displayName: "Empty",
+            config: { customModels: [] },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      selectedProviderInstanceId: "claude_work",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "work-only" },
+    }).at(-1)!;
+    expect(catalog.runtimeModelsByProvider.claudeAgent.map((model) => model.slug)).toEqual([
+      "work-only",
+      "EnterpriseAlias",
+    ]);
+    expect(catalog.runtimeModelsByProviderInstance.claudeAgent?.map((model) => model.slug)).toEqual(
+      ["personal-only"],
+    );
+    expect(catalog.runtimeModelsByProviderInstance.claude_empty).toEqual([]);
+    expect(catalog.selectedRuntimeModel).toMatchObject({
+      slug: "work-only",
+      isConfiguredCustomModel: true,
+    });
+    expect(
+      catalog.runtimeModelsByProvider.claudeAgent.every(
+        (model) => model.supportsAutoMode === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not convert an unknown selected hint into configured Claude controls", () => {
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "unknown-hint" },
+    }).at(-1)!;
+    expect(
+      catalog.modelOptionsByProvider.claudeAgent.some((model) => model.slug === "unknown-hint"),
+    ).toBe(true);
+    expect(catalog.selectedRuntimeModel).toBeUndefined();
+    expect(catalog.runtimeModelsByProvider.claudeAgent).toEqual([]);
+  });
+
+  it("retracts stale synthetic discovery metadata immediately after configuration is removed", () => {
+    const slug = "enterprise-model";
+    const cached: ProviderModelDescriptor = {
+      slug,
+      name: "Enterprise",
+      isConfiguredCustomModel: true,
+      optionDescriptors: getClaudeModelOptionCapabilities(slug, [slug]).optionDescriptors,
+    };
+    const staleDiscovery = { ...EMPTY_QUERY, data: { models: [cached], source: "claude-cli" } };
+    modelQueries.set("claudeAgent", staleDiscovery);
+    instanceModelQueries.set("claudeAgent", staleDiscovery);
+    mocks.useAppSettings
+      .mockReturnValueOnce({
+        settings: { ...SETTINGS, customClaudeModels: [slug] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      })
+      .mockReturnValueOnce({
+        settings: { ...SETTINGS, customClaudeModels: [] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+    const [configured, removed] = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: slug },
+    });
+    expect(configured!.selectedRuntimeModel?.isConfiguredCustomModel).toBe(true);
+    expect(removed!.selectedRuntimeModel?.isConfiguredCustomModel).toBeUndefined();
+    expect(removed!.selectedRuntimeModel?.optionDescriptors).toBeUndefined();
+    expect(
+      removed!.runtimeModelsByProviderInstance.claudeAgent?.[0]?.isConfiguredCustomModel,
+    ).toBeUndefined();
+    expect(
+      getRuntimeAwareModelCapabilities({
+        provider: "claudeAgent",
+        model: slug,
+        runtimeModel: removed!.selectedRuntimeModel,
+      }),
+    ).toEqual(EMPTY_MODEL_CAPABILITIES);
+    // Derivation must not mutate React Query's shared cached response.
+    expect(cached.isConfiguredCustomModel).toBe(true);
+    expect(cached.optionDescriptors).toHaveLength(2);
+  });
+
+  it("keeps resolved SDK-known model metadata ahead of a custom alias fallback", () => {
+    const known: ProviderModelDescriptor = {
+      slug: "enterprise-model",
+      name: "Enterprise",
+      resolvedModel: "claude-opus-6",
+      supportsAutoMode: true,
+    };
+    modelQueries.set("claudeAgent", {
+      ...EMPTY_QUERY,
+      data: { models: [known], source: "claude-cli" },
+    });
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, customClaudeModels: [known.slug] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "claude-opus-6" },
+    }).at(-1)!;
+    expect(catalog.runtimeModelsByProvider.claudeAgent).toEqual([known]);
+    expect(catalog.selectedRuntimeModel).toBe(known);
+    expect(catalog.selectedRuntimeModel?.isConfiguredCustomModel).toBeUndefined();
   });
 
   it("discovers core agents only when selected unless eager-core is requested", () => {
@@ -296,6 +799,236 @@ describe("useProviderModelCatalog", () => {
     expect(readModelQueryEnabled("droid")).toBe(false);
   });
 
+  it("reports OMP as loading during its initial model discovery", () => {
+    // OMP has no static model fallback and (unlike other providers) opts out of
+    // placeholderData, so its first `omp models` fetch reports a genuine
+    // `isLoading` pending state. The catalog must flag OMP as loading in that
+    // window so the picker renders the "Loading models" skeleton — not a false
+    // "No matches" — during the ~3s discovery.
+    modelQueries.set("omp", {
+      isFetching: true,
+      isLoading: true,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(true);
+  });
+
+  it("clears OMP loading once discovery resolves with models", () => {
+    modelQueries.set("omp", {
+      data: {
+        models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+        source: "omp-cli",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  it("retains real OMP models and thinking metadata but ignores legacy discovery roles", () => {
+    // An older server or cached payload may carry roles; only real models
+    // participate in either the provider or account-specific picker catalog.
+    const discovery = {
+      models: [
+        {
+          slug: "anthropic/claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+        },
+      ],
+      roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
+      source: "omp-cli",
+      cached: false,
+    };
+    modelQueries.set("omp", {
+      data: discovery,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+    instanceModelQueries.set("omp", { ...EMPTY_QUERY, data: discovery });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+    expect(
+      catalog?.modelOptionsByProvider.omp.some((model) => model.slug.startsWith("role:")),
+    ).toBe(false);
+    expect(catalog?.modelOptionsByProviderInstance.omp?.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+    expect(catalog?.runtimeModelsByProvider.omp).toEqual(discovery.models);
+    expect(catalog?.runtimeModelsByProviderInstance.omp).toEqual(discovery.models);
+  });
+
+  it.each(["omp", "omp_work"])(
+    "does not resurrect a stale role: hint as a custom model for %s",
+    (instanceId) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: {
+          ...SETTINGS,
+          providerInstances: {
+            omp_work: {
+              driver: "omp",
+              displayName: "Work",
+              config: { customModels: ["work/custom", "role:smol"] },
+            },
+          },
+          customOmpModels: ["personal/custom", "role:smol"],
+        },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      const discovery = {
+        ...EMPTY_QUERY,
+        data: { models: [{ slug: "upstream/model", name: "Model" }], source: "omp-cli" },
+      };
+      modelQueries.set("omp", discovery);
+      instanceModelQueries.set(instanceId, discovery);
+
+      const catalog = readCatalogRenders({
+        selectedProvider: "omp",
+        selectedProviderInstanceId: instanceId,
+        modelHintByProvider: { omp: " role:smol " },
+        discoveryEnabled: true,
+      }).at(-1)!;
+
+      expect(catalog.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+        "upstream/model",
+        "personal/custom",
+      ]);
+      expect(
+        catalog.modelOptionsByProviderInstance[instanceId]?.map((model) => model.slug),
+      ).toEqual(["upstream/model", instanceId === "omp" ? "personal/custom" : "work/custom"]);
+    },
+  );
+
+  it("does not change OMP query ownership when only the project changes", () => {
+    readCatalogRenders(
+      { selectedProvider: "omp", discoveryEnabled: true, cwd: "/first" },
+      { selectedProvider: "omp", discoveryEnabled: true, cwd: "/second" },
+    );
+    const [first, second] = mocks.useEffect.mock.calls;
+    expect(first?.[1][0]).toBe(second?.[1][0]);
+  });
+
+  it("retains an exact discovery-proven OMP model whose opaque id starts with role:", () => {
+    const discovery = {
+      ...EMPTY_QUERY,
+      data: { models: [{ slug: "role:real-model", name: "Real Model" }], source: "omp-cli" },
+    };
+    modelQueries.set("omp", discovery);
+    instanceModelQueries.set("omp", discovery);
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      modelHintByProvider: { omp: "role:real-model" },
+      discoveryEnabled: true,
+    }).at(-1)!;
+    expect(catalog.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+      "role:real-model",
+    ]);
+    expect(catalog.modelOptionsByProviderInstance.omp?.map((model) => model.slug)).toEqual([
+      "role:real-model",
+    ]);
+  });
+
+  it("clears OMP loading and options on terminal discovery failure", () => {
+    // OMP has no static model fallback. A terminal discovery failure (retries
+    // exhausted) must NOT park the picker on the skeleton (the documented
+    // isInitialModelDiscoveryPending contract: "a failed provider must not park
+    // the model control on a skeleton") NOR collapse to the hint-only static
+    // list (previously-selected model as the sole OMP entry). Instead loading
+    // clears and the options are emptied so the picker surfaces a load-failure
+    // message.
+    modelQueries.set("omp", {
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp).toEqual([]);
+  });
+
+  it("keeps user-configured OMP custom models on terminal discovery failure", () => {
+    // The picker renders the discovery error line above whatever options
+    // remain, so a failed `omp models` must not hide the user's own
+    // configured models — only the hint placeholder is dropped.
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, customOmpModels: ["acme/my-omp-model"] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    modelQueries.set("omp", {
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: true,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual(["acme/my-omp-model"]);
+  });
+
+  it("clears OMP loading on a settled non-catalog result", () => {
+    // A settled {source:"disabled"} answer is not an error and not a real
+    // catalog — it must still end pending or the picker parks on the skeleton
+    // forever (the query never refetches once settled).
+    modelQueries.set("omp", {
+      data: {
+        models: [],
+        source: "disabled",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.loadingModelProviders.omp).toBe(false);
+    expect(catalog?.modelOptionsByProvider.omp).toEqual([]);
+  });
+
   it("merges a settled runtime catalog with custom models without reporting loading", () => {
     modelQueries.set("cursor", {
       data: {
@@ -306,6 +1039,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: true,
       isLoading: false,
       isPlaceholderData: true,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({
@@ -336,6 +1070,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({
@@ -352,6 +1087,7 @@ describe("useProviderModelCatalog", () => {
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
+      isError: false,
     });
 
     const catalog = readCatalogRenders({

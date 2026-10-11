@@ -139,6 +139,52 @@ describe("Claude token arithmetic", () => {
 });
 
 describe("Claude context selection", () => {
+  it("does not infer model capacity from an opaque proxy ID with a context-like suffix", () => {
+    expect(
+      resolveClaudeApiModelIdContextWindowMaxTokens("my-proxy/custom-opus[1m]"),
+    ).toBeUndefined();
+    expect(
+      resolveClaudeApiModelIdContextWindowMaxTokens("claude-enterprise-west[1M]"),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [undefined, undefined],
+    ["auto", undefined],
+    ["200k", 200_000],
+    ["1m", 1_000_000],
+    ["2m", undefined],
+  ] as const)("keeps configured custom selection %s explicit at %s", (selected, expected) => {
+    expect(
+      resolveSelectedClaudeAutoCompactWindow("my-proxy/custom-opus", selected, [
+        "my-proxy/custom-opus",
+      ]),
+    ).toBe(expected);
+    expect(
+      resolveSelectedClaudeAutoCompactWindow("my-proxy/custom-opus", selected, []),
+    ).toBeUndefined();
+  });
+
+  it("resolves configured proxy budgets without guessing model capacity", () => {
+    expect(
+      resolveSelectedClaudeAutoCompactWindow("my-proxy/custom-opus", "1m", [
+        "my-proxy/custom-opus",
+      ]),
+    ).toBe(1_000_000);
+    expect(
+      resolveSelectedClaudeAutoCompactWindow("my-proxy/custom-opus", undefined, [
+        "my-proxy/custom-opus",
+      ]),
+    ).toBeUndefined();
+    expect(resolveClaudeApiModelIdContextWindowMaxTokens("my-proxy/custom-opus")).toBeUndefined();
+    expect(
+      resolveEffectiveClaudeContextWindow({
+        reportedContextWindow: 200_000,
+        lastKnownContextWindow: undefined,
+      }),
+    ).toBe(200_000);
+  });
+
   it.each([
     [undefined, undefined, undefined, undefined],
     [undefined, 200_000, 1_000_000, 200_000],
@@ -152,21 +198,11 @@ describe("Claude context selection", () => {
   );
 
   it.each([
-    ["claude-opus-4-6", undefined, undefined],
     ["claude-opus-4-6", "200k", 200_000],
     ["claude-opus-4-6", "1m", 1_000_000],
-    ["claude-fable-5-1", undefined, undefined],
-    ["claude-fable-5-1", "1m", 1_000_000],
-    ["claude-fable-5-1", "200k", 200_000],
     ["claude-fable-5-1[1m]", undefined, undefined],
     ["claude-fable-5-1[1m]", "200k", 200_000],
     ["claude-opus-4-5", "1m", undefined],
-    ["claude-opus-4-6", "2m", undefined],
-    // #367: custom/proxy Claude slugs inherit the flagship auto-compact ladder.
-    // Unset stays native (undefined); explicit overrides still resolve.
-    ["claude/custom-opus", undefined, undefined],
-    ["claude/custom-opus", "200k", 200_000],
-    ["my-proxy/custom-opus", "1m", 1_000_000],
   ] as const)("resolves model=%s selection=%s to %s", (model, selected, expected) => {
     expect(resolveSelectedClaudeAutoCompactWindow(model, selected)).toBe(expected);
   });

@@ -1,8 +1,10 @@
 import {
+  CLAUDE_CODE_EFFORT_OPTIONS,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  OMP_THINKING_LEVEL_OPTIONS,
   type AntigravityModelOptions,
   type ClaudeApiEffort,
   type ClaudeModelOptions,
@@ -20,6 +22,8 @@ import {
   type ProviderOptionSelection,
   type PiModelOptions,
   type PiThinkingLevel,
+  type OmpModelOptions,
+  type OmpThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
 } from "@synara/contracts";
@@ -35,6 +39,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   pi: new Set<ModelSlug>(),
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
+  omp: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -42,6 +47,7 @@ export interface SelectableModelOption {
   name: string;
 }
 
+const CLAUDE_CODE_EFFORT_SET: ReadonlySet<string> = new Set(CLAUDE_CODE_EFFORT_OPTIONS);
 const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "off",
   "minimal",
@@ -51,6 +57,7 @@ const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "xhigh",
   "max",
 ]);
+const OMP_THINKING_LEVEL_SET = new Set<OmpThinkingLevel>(OMP_THINKING_LEVEL_OPTIONS);
 export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
   supportsFastMode: false,
@@ -58,12 +65,17 @@ export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   promptInjectedEffortLevels: [],
   contextWindowOptions: [],
 };
+
+function isClaudeCodeEffort(value: string): value is ClaudeCodeEffort {
+  return CLAUDE_CODE_EFFORT_SET.has(value);
+}
+
 export function getModelOptions(provider: ProviderKind = "codex") {
   return MODEL_OPTIONS_BY_PROVIDER[provider];
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi";
+  return provider !== "pi" && provider !== "omp";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -476,7 +488,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "opencode") {
     return "variant";
   }
-  if (provider === "pi") {
+  if (provider === "pi" || provider === "omp") {
     return "thinkingLevel";
   }
   return "reasoningEffort";
@@ -594,16 +606,154 @@ export function getModelCapabilities(
     return grokCapabilitiesForFamily(resolveGrokEffortFamily(slug));
   }
   if (provider === "claudeAgent" && slug) {
-    // Custom / proxy Claude Code model slugs are not in the static catalog but
-    // still accept Claude Code effort (+ auto-compact) options in the CLI (#367).
-    // Inherit the flagship ladder so the traits picker stays available.
-    return (
-      MODEL_CAPABILITIES_INDEX.claudeAgent["claude-opus-4-8"] ??
-      MODEL_CAPABILITIES_INDEX.claudeAgent["claude-opus-4-7"] ??
-      EMPTY_MODEL_CAPABILITIES
-    );
+    const newestKnown = resolveNewestKnownClaudeFamilyModel(slug);
+    if (newestKnown) {
+      return MODEL_CAPABILITIES_INDEX.claudeAgent[newestKnown] ?? EMPTY_MODEL_CAPABILITIES;
+    }
   }
   return EMPTY_MODEL_CAPABILITIES;
+}
+
+// Explicitly configured proxy IDs expose Claude Code controls, not inferred
+// model capabilities. No effort is pinned until the user chooses one: a proxy
+// may have a different native default than a catalogued Claude model.
+const CLAUDE_CUSTOM_MODEL_OPTIONS: ModelCapabilities = {
+  ...EMPTY_MODEL_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low", controlSource: "api-effort" },
+    { value: "medium", label: "Medium", controlSource: "api-effort" },
+    { value: "high", label: "High", controlSource: "api-effort" },
+    { value: "xhigh", label: "Extra High", controlSource: "api-effort" },
+    { value: "max", label: "Max", controlSource: "api-effort" },
+    { value: "ultrathink", label: "Ultrathink", controlSource: "prompt-prefix" },
+    {
+      value: "ultracode",
+      label: "Ultracode",
+      controlSource: "provider-setting",
+      apiEffortValue: "xhigh",
+      description: "xhigh + workflows",
+    },
+  ],
+  promptInjectedEffortLevels: ["ultrathink"],
+  autoCompactWindowOptions: [
+    { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+    { value: "200k", label: "200k" },
+    { value: "1m", label: "1M" },
+  ],
+};
+const CLAUDE_CUSTOM_MODEL_OPTION_CAPABILITIES: ModelCapabilities = {
+  ...CLAUDE_CUSTOM_MODEL_OPTIONS,
+  optionDescriptors: legacyCapabilityDescriptors("claudeAgent", CLAUDE_CUSTOM_MODEL_OPTIONS).map(
+    (descriptor) =>
+      descriptor.id === "effort" && descriptor.type === "select"
+        ? {
+            ...descriptor,
+            currentValue: "auto",
+            options: [
+              { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+              ...descriptor.options,
+            ],
+          }
+        : descriptor,
+  ),
+};
+
+// These are recognizable native/legacy model names, not opaque gateway IDs.
+// Catalogued and newer family releases are resolved before this exclusion.
+const CLAUDE_NATIVE_VERSIONED_MODEL_PATTERN =
+  /^claude-(?:(?:opus|sonnet|haiku|fable)-\d{1,2}(?:[-.]\d{1,2})?|\d{1,2}(?:[-.]\d{1,2})?(?:-(?:opus|sonnet|haiku|fable))?|instant-\d{1,2}(?:[-.]\d{1,2})?)(?:-\d{8}|-latest)?$/iu;
+
+export function isConfiguredCustomClaudeModel(
+  model: string | null | undefined,
+  configuredCustomModels: readonly string[] = [],
+): boolean {
+  const slug = normalizeModelSlug(model, "claudeAgent");
+  if (
+    !slug ||
+    getModelCapabilities("claudeAgent", slug) !== EMPTY_MODEL_CAPABILITIES ||
+    CLAUDE_NATIVE_VERSIONED_MODEL_PATTERN.test(stripClaudeContextWindowSuffix(slug))
+  ) {
+    return false;
+  }
+  return configuredCustomModels.some(
+    (candidate) => normalizeModelSlug(candidate, "claudeAgent") === slug,
+  );
+}
+
+/** Only use for explicit CLI options; token/capacity estimates use getModelCapabilities. */
+export function getClaudeModelOptionCapabilities(
+  model: string | null | undefined,
+  configuredCustomModels: readonly string[] = [],
+): ModelCapabilities {
+  const known = getModelCapabilities("claudeAgent", model);
+  return known !== EMPTY_MODEL_CAPABILITIES
+    ? known
+    : isConfiguredCustomClaudeModel(model, configuredCustomModels)
+      ? CLAUDE_CUSTOM_MODEL_OPTION_CAPABILITIES
+      : EMPTY_MODEL_CAPABILITIES;
+}
+
+// Claude Code ships new models before Synara's catalog lists them. Catalog
+// entries always win; only an id that is newer than every catalog model of its
+// family borrows that family's newest capabilities. Older or unrecognized ids
+// keep the empty fallback so custom and legacy selections do not gain options.
+const CLAUDE_FAMILY_MODEL_PATTERN =
+  /^claude-(fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/u;
+
+type ClaudeFamilyModelVersion = {
+  readonly family: string;
+  readonly major: number;
+  readonly minor: number;
+};
+
+function parseClaudeFamilyModelVersion(slug: string): ClaudeFamilyModelVersion | null {
+  const match = CLAUDE_FAMILY_MODEL_PATTERN.exec(slug.trim().toLowerCase());
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+  return { family: match[1], major: Number(match[2]), minor: Number(match[3] ?? 0) };
+}
+
+function compareClaudeFamilyModelVersions(
+  left: ClaudeFamilyModelVersion,
+  right: ClaudeFamilyModelVersion,
+): number {
+  return left.major - right.major || left.minor - right.minor;
+}
+
+const NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY = (() => {
+  const newest = new Map<string, { slug: ModelSlug; version: ClaudeFamilyModelVersion }>();
+  for (const model of MODEL_OPTIONS_BY_PROVIDER.claudeAgent) {
+    const version = parseClaudeFamilyModelVersion(model.slug);
+    const current = version ? newest.get(version.family) : undefined;
+    if (version && (!current || compareClaudeFamilyModelVersions(version, current.version) > 0)) {
+      newest.set(version.family, { slug: model.slug, version });
+    }
+  }
+  return newest;
+})();
+
+/**
+ * Returns the newest catalog model of `slug`'s Claude family when `slug` is a
+ * newer release the catalog does not list yet (e.g. `claude-opus-6` → the
+ * newest catalog Opus). Catalog, older, and unrecognized ids return `null`.
+ */
+export function resolveNewestKnownClaudeFamilyModel(
+  model: string | null | undefined,
+): ModelSlug | null {
+  const normalized = normalizeModelSlug(model, "claudeAgent");
+  if (!normalized) {
+    return null;
+  }
+  const slug = stripClaudeContextWindowSuffix(normalized) as ModelSlug;
+  if (MODEL_SLUG_SET_BY_PROVIDER.claudeAgent.has(slug)) {
+    return null;
+  }
+  const version = parseClaudeFamilyModelVersion(slug);
+  const newest = version ? NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY.get(version.family) : undefined;
+  return version && newest && compareClaudeFamilyModelVersions(version, newest.version) > 0
+    ? newest.slug
+    : null;
 }
 
 export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
@@ -713,7 +863,25 @@ export function resolveSelectableModel(
   }
 
   const resolved = options.find((option) => option.slug === normalized);
-  return resolved ? resolved.slug : null;
+  if (resolved) {
+    return resolved.slug;
+  }
+
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`, while saved selections and custom entries
+  // can hold the bare model id. Resolve a bare slug to a uniquely matching
+  // scoped option; ambiguity across upstream providers resolves to nothing.
+  if (
+    (provider === "omp" || provider === "pi" || provider === "opencode") &&
+    !normalized.includes("/")
+  ) {
+    const scoped = options.filter((option) => option.slug.endsWith(`/${normalized}`));
+    if (scoped.length === 1) {
+      return scoped[0]!.slug;
+    }
+  }
+
+  return null;
 }
 
 export function resolveModelSlug(
@@ -725,7 +893,7 @@ export function resolveModelSlug(
     provider === "claudeAgent" && normalizedModel
       ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
       : normalizedModel;
-  if (provider === "devin" || provider === "pi") {
+  if (provider === "devin" || provider === "pi" || provider === "omp") {
     return normalized;
   }
   if (!normalized) {
@@ -758,8 +926,9 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
+  configuredCustomModels: readonly string[] = [],
 ): ClaudeModelOptions | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
+  const caps = getClaudeModelOptionCapabilities(model, configuredCustomModels);
   const defaultReasoningEffort = getDefaultEffort(caps);
   const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
@@ -768,7 +937,7 @@ export function normalizeClaudeModelOptions(
   const isPromptInjected = caps.promptInjectedEffortLevels.includes(resolvedEffort ?? "");
   const effort =
     resolvedEffort &&
-    !isPromptInjected &&
+    (!isPromptInjected || isConfiguredCustomClaudeModel(model, configuredCustomModels)) &&
     hasEffortLevel(caps, resolvedEffort) &&
     resolvedEffort !== defaultReasoningEffort
       ? resolvedEffort
@@ -791,11 +960,18 @@ export function normalizeClaudeModelOptions(
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
-export function resolveApiModelId(modelSelection: ModelSelection): string {
+export function resolveApiModelId(
+  modelSelection: ModelSelection,
+  configuredCustomModels: readonly string[] = [],
+): string {
   if (
     modelSelection.provider === "claudeAgent" &&
-    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
-    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    !isConfiguredCustomClaudeModel(modelSelection.model, configuredCustomModels) &&
+    normalizeClaudeModelOptions(
+      modelSelection.model,
+      modelSelection.options,
+      configuredCustomModels,
+    )?.autoCompactWindow === "1m" &&
     getClaudeContextWindowSuffix(modelSelection.model) === null
   ) {
     return `${modelSelection.model}[1m]`;
@@ -819,34 +995,39 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
 }
 
-// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only `max` effort is fixed at subprocess spawn (the query `effort` option;
-// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
-// plus fastMode/ultracode are Settings keys applied live via the SDK's
-// flag-settings control, and model/context window switch via `setModel`.
-function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
-  const caps = getModelCapabilities("claudeAgent", selection.model);
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
+function claudeSpawnProfile(
+  selection: Extract<ModelSelection, { provider: "claudeAgent" }>,
+  configuredCustomModels: readonly string[] = [],
+) {
+  const caps = getClaudeModelOptionCapabilities(selection.model, configuredCustomModels);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
-  const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+  const effort =
+    requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
+      ? requestedEffort
+      : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(
+      selection.model,
+      selection.options,
+      configuredCustomModels,
+    )?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
-/**
- * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`, which replays the whole
- * conversation as uncached input tokens, so it must only happen for options
- * fixed at spawn — currently only `max` effort, which has no live Settings
- * equivalent. Model changes use `setModel`; other effort levels, fast mode,
- * ultracode, the auto-compact budget, and the thinking toggle all use the
- * SDK's live flag-settings control.
- */
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
+  context: {
+    readonly previousCustomModels?: readonly string[];
+    readonly nextCustomModels?: readonly string[];
+  } = {},
 ): boolean {
   if (next.provider !== "claudeAgent") {
     return false;
@@ -862,9 +1043,11 @@ export function claudeSelectionRequiresRestart(
   // Normalize against each model before deciding a model-only switch is live:
   // a persisted `max` request may become spawn-fixed (or stop being so) as the
   // selected model's capabilities change.
-  const prev = claudeSpawnProfile(previous);
-  const desired = claudeSpawnProfile(next);
-  return prev.maxEffort !== desired.maxEffort;
+  const prev = claudeSpawnProfile(previous, context.previousCustomModels);
+  const desired = claudeSpawnProfile(next, context.nextCustomModels);
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
 }
 
 export function normalizeCursorModelOptions(
@@ -940,6 +1123,14 @@ export function normalizePiModelOptions(
   const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
   return thinkingLevel && PI_THINKING_LEVEL_SET.has(thinkingLevel as PiThinkingLevel)
     ? { thinkingLevel: thinkingLevel as PiThinkingLevel }
+    : undefined;
+}
+export function normalizeOmpModelOptions(
+  modelOptions: OmpModelOptions | null | undefined,
+): OmpModelOptions | undefined {
+  const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
+  return thinkingLevel && OMP_THINKING_LEVEL_SET.has(thinkingLevel as OmpThinkingLevel)
+    ? { thinkingLevel: thinkingLevel as OmpThinkingLevel }
     : undefined;
 }
 

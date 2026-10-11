@@ -10,12 +10,15 @@ import type {
   ProviderModelDescriptor,
 } from "@synara/contracts";
 import {
+  getClaudeContextWindowSuffix,
+  getClaudeModelOptionCapabilities,
   getDefaultEffort,
   getModelCapabilities,
   normalizeModelSlug,
   trimOrNull,
 } from "@synara/shared/model";
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
+import { normalizeClaudeModelOptionSlug } from "../../providerModelOptions";
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
@@ -58,7 +61,7 @@ export function resolveRuntimeModelDescriptor(input: {
     return undefined;
   }
 
-  return runtimeModels.find((candidate) => {
+  const exactMatch = runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
     const normalizedResolvedModel =
       normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
@@ -71,6 +74,16 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
+  if (exactMatch || provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
+    return exactMatch;
+  }
+
+  // The Claude picker hides context qualifiers and may replace an alias with
+  // a newer resolved id. Use the same projection to recover its metadata,
+  // while preserving exact matches and explicitly qualified selections above.
+  return runtimeModels.find(
+    (candidate) => normalizeClaudeModelOptionSlug(candidate) === normalizedModel,
+  );
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
@@ -79,7 +92,13 @@ export function getRuntimeAwareModelCapabilities(input: {
   model: string | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
 }): ModelCapabilities {
-  const staticCapabilities = getModelCapabilities(input.provider, input.model);
+  const staticCapabilities =
+    input.provider === "claudeAgent"
+      ? getClaudeModelOptionCapabilities(
+          input.model,
+          input.runtimeModel?.isConfiguredCustomModel === true && input.model ? [input.model] : [],
+        )
+      : getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
     (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
@@ -106,7 +125,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "droid" &&
       input.provider !== "opencode" &&
       input.provider !== "pi" &&
-      input.provider !== "devin") ||
+      input.provider !== "devin" &&
+      input.provider !== "omp") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

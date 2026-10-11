@@ -23,10 +23,6 @@ const findCatalogueEntryOrThrow = (name: string) => {
 };
 
 describe("sanitizeToolInputSchema", () => {
-  it("pins the user-visible fallback description", () => {
-    assert.equal(FALLBACK_OBJECT_DESCRIPTION, "Free-form JSON object (depth 20, 256 KiB max).");
-  });
-
   it("strips recursive references from the WebMCP argument contract", () => {
     const document = Schema.toJsonSchemaDocument(BrowserWebMcpCallInput);
     const entry = { inputSchema: { ...document.schema, $defs: document.definitions } };

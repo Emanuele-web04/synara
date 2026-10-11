@@ -1,10 +1,8 @@
 import { type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useState } from "react";
 
-import { resolveTerminalNewAction } from "../../lib/terminalNewAction";
 import { selectThreadTerminalState, useTerminalStateStore } from "../../terminalStateStore";
-import { collectTerminalIdsFromLayout } from "../../terminalPaneLayout";
-import { MAX_TERMINALS_PER_GROUP, type Thread } from "../../types";
+import { type Thread } from "../../types";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
@@ -12,7 +10,7 @@ import {
 } from "../../lib/terminalCloseConfirmation";
 import { readNativeApi } from "../../nativeApi";
 import { shouldAutoDeleteTerminalThreadOnLastClose } from "../ChatView.logic";
-import { randomTerminalId } from "../terminal/terminalIds";
+import { toastManager } from "../ui/toast";
 import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
 
 type AutoDeleteCandidateThread = Pick<
@@ -57,38 +55,18 @@ export function useChatTerminalController({
   );
   const closeWorkspaceChatInStore = useTerminalStateStore((state) => state.closeWorkspaceChat);
   const setWorkspaceTabInStore = useTerminalStateStore((state) => state.setTerminalWorkspaceTab);
-  const setTerminalHeightInStore = useTerminalStateStore((state) => state.setTerminalHeight);
   const setTerminalMetadataInStore = useTerminalStateStore((state) => state.setTerminalMetadata);
   const setTerminalActivityInStore = useTerminalStateStore((state) => state.setTerminalActivity);
-  const splitTerminalLeftInStore = useTerminalStateStore((state) => state.splitTerminalLeft);
-  const splitTerminalRightInStore = useTerminalStateStore((state) => state.splitTerminalRight);
-  const splitTerminalDownInStore = useTerminalStateStore((state) => state.splitTerminalDown);
-  const splitTerminalUpInStore = useTerminalStateStore((state) => state.splitTerminalUp);
-  const newTerminalInStore = useTerminalStateStore((state) => state.newTerminal);
-  const newTerminalTabInStore = useTerminalStateStore((state) => state.newTerminalTab);
   const openFullWidthTerminalInStore = useTerminalStateStore(
     (state) => state.openNewFullWidthTerminal,
   );
   const setActiveTerminalInStore = useTerminalStateStore((state) => state.setActiveTerminal);
   const closeTerminalInStore = useTerminalStateStore((state) => state.closeTerminal);
-  const closeTerminalGroupInStore = useTerminalStateStore((state) => state.closeTerminalGroup);
-  const resizeTerminalSplitInStore = useTerminalStateStore((state) => state.resizeTerminalSplit);
   const [focusRequestId, setFocusRequestId] = useState(0);
   const requestTerminalFocus = useCallback(() => {
     setFocusRequestId((value) => value + 1);
   }, []);
 
-  const activeTerminalGroup =
-    terminalState.terminalGroups.find(
-      (group) => group.id === terminalState.activeTerminalGroupId,
-    ) ??
-    terminalState.terminalGroups.find((group) =>
-      collectTerminalIdsFromLayout(group.layout).includes(terminalState.activeTerminalId),
-    ) ??
-    null;
-  const hasReachedSplitLimit =
-    (activeTerminalGroup ? collectTerminalIdsFromLayout(activeTerminalGroup.layout).length : 0) >=
-    MAX_TERMINALS_PER_GROUP;
   const terminalWorkspaceOpen =
     terminalState.presentationMode === "workspace" && terminalState.terminalOpen;
   const terminalWorkspaceTerminalTabActive =
@@ -124,105 +102,27 @@ export function useChatTerminalController({
     },
     [activeThreadId, setWorkspaceTabInStore],
   );
-  const setTerminalHeight = useCallback(
-    (height: number) => {
-      if (activeThreadId) setTerminalHeightInStore(activeThreadId, height);
-    },
-    [activeThreadId, setTerminalHeightInStore],
-  );
   const toggleTerminalVisibility = useCallback(() => {
     if (!activeThreadId) return;
-    if (!terminalState.terminalOpen) setTerminalPresentationMode("drawer");
+    if (!terminalState.terminalOpen) setTerminalPresentationMode("workspace");
     setTerminalOpen(!terminalState.terminalOpen);
   }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
-  const expandTerminalWorkspace = useCallback(() => {
+  const createTerminalFromShortcut = useCallback(() => {
     if (!activeThreadId) return;
     setTerminalPresentationMode("workspace");
-    setTerminalWorkspaceLayout("both");
+    setTerminalOpen(true);
     setTerminalWorkspaceTab("terminal");
+    requestTerminalFocus();
   }, [
     activeThreadId,
     setTerminalPresentationMode,
-    setTerminalWorkspaceLayout,
-    setTerminalWorkspaceTab,
-  ]);
-  const collapseTerminalWorkspace = useCallback(() => {
-    if (activeThreadId) setTerminalPresentationMode("drawer");
-  }, [activeThreadId, setTerminalPresentationMode]);
-
-  const splitTerminal = useCallback(
-    (direction: "left" | "right" | "down" | "up") => {
-      if (!activeThreadId || hasReachedSplitLimit) return;
-      const terminalId = randomTerminalId();
-      const splitInStore = {
-        left: splitTerminalLeftInStore,
-        right: splitTerminalRightInStore,
-        down: splitTerminalDownInStore,
-        up: splitTerminalUpInStore,
-      }[direction];
-      splitInStore(activeThreadId, terminalId);
-      requestTerminalFocus();
-    },
-    [
-      activeThreadId,
-      hasReachedSplitLimit,
-      requestTerminalFocus,
-      splitTerminalDownInStore,
-      splitTerminalLeftInStore,
-      splitTerminalRightInStore,
-      splitTerminalUpInStore,
-    ],
-  );
-  const splitTerminalLeft = useCallback(() => splitTerminal("left"), [splitTerminal]);
-  const splitTerminalRight = useCallback(() => splitTerminal("right"), [splitTerminal]);
-  const splitTerminalDown = useCallback(() => splitTerminal("down"), [splitTerminal]);
-  const splitTerminalUp = useCallback(() => splitTerminal("up"), [splitTerminal]);
-  const createNewTerminal = useCallback(() => {
-    if (!activeThreadId) return;
-    newTerminalInStore(activeThreadId, randomTerminalId());
-    requestTerminalFocus();
-  }, [activeThreadId, newTerminalInStore, requestTerminalFocus]);
-  const createNewTerminalTab = useCallback(
-    (targetTerminalId: string) => {
-      if (!activeThreadId) return;
-      newTerminalTabInStore(activeThreadId, targetTerminalId, randomTerminalId());
-      requestTerminalFocus();
-    },
-    [activeThreadId, newTerminalTabInStore, requestTerminalFocus],
-  );
-  const createTerminalFromShortcut = useCallback(() => {
-    const action = resolveTerminalNewAction({
-      terminalOpen: terminalState.terminalOpen,
-      activeTerminalId: terminalState.activeTerminalId,
-      activeTerminalGroupId: terminalState.activeTerminalGroupId,
-      terminalGroups: terminalState.terminalGroups,
-    });
-    if (action.kind === "new-group") {
-      if (!terminalState.terminalOpen) setTerminalOpen(true);
-      createNewTerminal();
-      return;
-    }
-    createNewTerminalTab(action.targetTerminalId);
-  }, [
-    createNewTerminal,
-    createNewTerminalTab,
     setTerminalOpen,
-    terminalState.activeTerminalGroupId,
-    terminalState.activeTerminalId,
-    terminalState.terminalGroups,
-    terminalState.terminalOpen,
+    setTerminalWorkspaceTab,
+    requestTerminalFocus,
   ]);
-  const moveTerminalToNewGroup = useCallback(
-    (terminalId: string) => {
-      if (!activeThreadId) return;
-      newTerminalInStore(activeThreadId, terminalId);
-      requestTerminalFocus();
-    },
-    [activeThreadId, newTerminalInStore, requestTerminalFocus],
-  );
   const openNewFullWidthTerminal = useCallback(() => {
     if (!activeThreadId || !activeProjectPresent) return;
-    openFullWidthTerminalInStore(activeThreadId, randomTerminalId());
+    openFullWidthTerminalInStore(activeThreadId);
     requestTerminalFocus();
   }, [activeProjectPresent, activeThreadId, openFullWidthTerminalInStore, requestTerminalFocus]);
 
@@ -269,12 +169,21 @@ export function useChatTerminalController({
         willDeleteThread: shouldDeletePlaceholderThread,
       });
       if (!confirmed) return;
-      disposeAndCloseTerminalSession({
-        api,
-        threadId: activeThreadId,
-        terminalId,
-        clearHistoryBeforeClose: isFinalTerminal,
-      });
+      try {
+        await disposeAndCloseTerminalSession({
+          api,
+          threadId: activeThreadId,
+          terminalId,
+          requireStructuredClose: true,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close terminal",
+          description: error instanceof Error ? error.message : "Please try again.",
+        });
+        return;
+      }
       closeTerminalInStore(activeThreadId, terminalId);
       requestTerminalFocus();
       if (shouldDeletePlaceholderThread) {
@@ -317,7 +226,7 @@ export function useChatTerminalController({
     if (!activeThreadId || !terminalWorkspaceOpen) return;
     if (terminalState.workspaceLayout === "both" && terminalState.workspaceActiveTab === "chat") {
       if (terminalState.entryPoint === "chat") {
-        collapseTerminalWorkspace();
+        setTerminalOpen(false);
       } else {
         closeWorkspaceChatInStore(activeThreadId);
       }
@@ -328,7 +237,7 @@ export function useChatTerminalController({
     activeThreadId,
     closeTerminal,
     closeWorkspaceChatInStore,
-    collapseTerminalWorkspace,
+    setTerminalOpen,
     terminalState.activeTerminalId,
     terminalState.entryPoint,
     terminalState.workspaceActiveTab,
@@ -340,7 +249,6 @@ export function useChatTerminalController({
     terminalState,
     terminalFocusRequestId: focusRequestId,
     requestTerminalFocus,
-    hasReachedSplitLimit,
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,
     terminalWorkspaceChatTabActive,
@@ -348,26 +256,13 @@ export function useChatTerminalController({
     setTerminalPresentationMode,
     setTerminalWorkspaceLayout,
     setTerminalWorkspaceTab,
-    setTerminalHeight,
     setTerminalMetadataInStore,
     setTerminalActivityInStore,
     openChatThreadPageInStore,
     openTerminalThreadPageInStore,
-    newTerminalInStore,
     setActiveTerminalInStore,
-    closeTerminalGroupInStore,
-    resizeTerminalSplitInStore,
     toggleTerminalVisibility,
-    expandTerminalWorkspace,
-    collapseTerminalWorkspace,
-    splitTerminalLeft,
-    splitTerminalRight,
-    splitTerminalDown,
-    splitTerminalUp,
-    createNewTerminal,
-    createNewTerminalTab,
     createTerminalFromShortcut,
-    moveTerminalToNewGroup,
     openNewFullWidthTerminal,
     activateTerminal,
     closeTerminal,
