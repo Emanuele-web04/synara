@@ -8,7 +8,7 @@ A selection uses provider and instanceId `external`, plus an immutable `profileI
 
 Revisions are content-addressed, but membership is recorded separately for each profile. Reverting to shared content preserves earlier memberships. A profile cannot launch an unrelated revision using its own credentials. The migration can prove only the current revision of an older experimental profile; ambiguous historical parent links are not treated as ownership.
 
-Quarantined and retired profiles cannot start. Credential release requires explicit owner authorization in `trust.allowCredentialAccess`. Brand, organization, workflow, and provenance labels cannot grant it. Editing a revision clears the grant unless the owner explicitly supplies it again. Unexpected trust-check errors fail closed. Provenance labels are owner-managed metadata, not cryptographic vendor attestation. This is a local process integration, not an operating-system sandbox: an executable still has the permissions of the Synara server user.
+Quarantined and retired profiles cannot start. Quarantine reports a failure when session bindings cannot be read, while still attempting to stop identified live external sessions. Credential release requires explicit owner authorization in `trust.allowCredentialAccess`. Brand, organization, workflow, and provenance labels cannot grant it. Editing a revision clears the grant unless the owner explicitly supplies it again. Unexpected trust-check errors fail closed. Provenance labels are owner-managed metadata, not cryptographic vendor attestation. This is a local process integration, not an operating-system sandbox: an executable still has the permissions of the Synara server user.
 
 External processes inherit only basic OS launch variables and explicitly referenced credentials, rather than every ambient server API key. Native event logging uses the shared secret redactor. Revisions, resumable cursors, and turn attribution do not contain expanded secrets.
 
@@ -24,7 +24,7 @@ External processes inherit only basic OS launch variables and explicitly referen
 
 ## Persistence and compatibility
 
-New migrations follow the current released lineage. Historical turns remain unattributed when their actual profile cannot be established; the current thread selection is not evidence of which agent produced an old turn. New turn-start events capture pinned attribution.
+New additive migrations 135–139 follow the current released lineage, including workspace initialization and fork source message migrations 133–134. Historical turns remain unattributed when their actual profile cannot be established; the current thread selection is not evidence of which agent produced an old turn. New turn-start events capture pinned attribution.
 
 Drafts, sticky selections, and queued turns preserve external profile and revision identity across serialization. A built-in provider preference, trait edit, or generic catalog lookup cannot reconstruct or replace that identity.
 
@@ -35,3 +35,7 @@ Capability evidence is scoped to both profile and revision. Re-certification re-
 Tests cover a real local ACP fixture subprocess, streamed item lifecycle, profile mismatch rejection, overlapping-turn rejection, cancellation, profile membership/revert history, draft/queue round-trips, CLI framing limits and UTF-8 failures, migrations, discovery and conformance fixtures. These are synthetic agents. Live third-party agent credentials and a signed macOS build have not been exercised.
 
 Discovery's in-process memo expires after one minute, including missing binaries and registry outages; the registry client still owns its 24-hour network cache. CLI tests also run real synthetic subprocesses: explicit failures and premature EOF stay failed, foreign turn IDs cannot settle or add content to another turn, and a process-exit-completed basic session cannot be reused. The contracts RPC group uses explicit type references so packaged declaration emission does not exceed TypeScript's inferred-type serialization limit.
+
+Discovery version and ACP probes use the same restricted OS environment as external sessions; they receive no ambient server credentials. Version output is limited to 1 MiB per stream. Windows paths with spaces are preserved as literal executable paths through the shared process boundary. CLI stderr is discarded so diagnostic output cannot block protocol stdout, and stdin transport failures settle the active turn.
+
+External profiles participate in the common runtime reconciliation path, so a missing or failed runtime cannot leave their projected turn running indefinitely. Migration slots 135–139 also overlap the independent Mind PR #1148: whichever PR merges second must merge current main and renumber only its unreleased migrations, then validate the combined lineage. Do not reserve a gap because the migrator advances by the highest applied ID.

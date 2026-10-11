@@ -360,3 +360,67 @@ for (const [name, script] of [
     assert.instanceOf(error, CliErrors.CliProtocolError);
   });
 }
+
+describe("CLI transport failure ownership", () => {
+  it("cannot block readiness by filling stderr", async () => {
+    const layer = CliStructuredRuntime.layer({
+      spawn: {
+        command: process.execPath,
+        args: [
+          "-e",
+          `
+        process.stderr.write('x'.repeat(2 * 1024 * 1024), () => {
+          process.stdout.write(JSON.stringify({ type: 'session.hello', protocolVersion: 1 }) + '\\n');
+        });
+        setInterval(() => {}, 1000);
+      `,
+        ],
+      },
+      structured: true,
+      startupTimeoutMs: 2_000,
+    });
+    await Effect.runPromise(
+      runWithFixture(layer, (runtime) =>
+        Effect.gen(function* () {
+          assert.equal((yield* runtime.start()).tier, "structured");
+        }),
+      ),
+    );
+  });
+
+  it("ends the event stream when the child closes stdin while staying alive", async () => {
+    const layer = CliStructuredRuntime.layer({
+      spawn: {
+        command: process.execPath,
+        args: [
+          "-e",
+          `
+        require('node:fs').closeSync(0);
+        process.stdout.write(JSON.stringify({ type: 'session.hello', protocolVersion: 1 }) + '\\n');
+        setInterval(() => {}, 1000);
+      `,
+        ],
+      },
+      structured: true,
+      startupTimeoutMs: 2_000,
+    });
+    const events = await Effect.runPromise(
+      runWithFixture(layer, (runtime) =>
+        Effect.gen(function* () {
+          yield* runtime.start();
+          yield* runtime.sendCommand({
+            type: "cli.command.turn.start",
+            turnId: "closed-input",
+            prompt: "hello",
+          });
+          return yield* Stream.runCollect(runtime.getEvents());
+        }),
+      ).pipe(Effect.timeout(5_000)),
+    );
+    assert.isTrue(
+      events.some(
+        (event) => event._tag === "protocol-error" && event.error.detail.includes("stdin"),
+      ),
+    );
+  });
+});

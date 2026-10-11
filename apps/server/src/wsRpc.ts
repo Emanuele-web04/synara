@@ -2395,31 +2395,37 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverResolveConnectionPlan]: (input) =>
           ownerExternalAgentRpc(
-            discovery.listCandidates().pipe(
-              Effect.flatMap((result) => {
-                const candidate = result.candidates.find(
-                  (c) => c.candidateId === input.candidateId,
-                );
-                if (candidate === undefined) {
-                  return Effect.fail(
-                    new WsRpcError({
-                      message: `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
-                      code: "CONNECTION_CANDIDATE_NOT_FOUND",
-                    }),
+            discovery
+              .listCandidates({
+                ...(input.candidateId.startsWith("custom:")
+                  ? { customCommands: [input.candidateId.slice("custom:".length)] }
+                  : {}),
+              })
+              .pipe(
+                Effect.flatMap((result) => {
+                  const candidate = result.candidates.find(
+                    (c) => c.candidateId === input.candidateId,
                   );
-                }
-                // `buildConnectionPlan` throws ConnectionPlanPolicyViolation for
-                // candidates that cannot launch (registry-only, missing binary,
-                // unsafe target). Mapping it here — rather than letting
-                // `Effect.sync` swallow the throw as a defect — keeps the
-                // structured non-install reason visible as a typed policy code
-                // instead of a generic RPC failure (C6a).
-                return resolveConnectionPlanForCandidate({
-                  candidate,
-                  ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-                });
-              }),
-            ),
+                  if (candidate === undefined) {
+                    return Effect.fail(
+                      new WsRpcError({
+                        message: `Connection candidate '${input.candidateId}' was not found in the current discovery snapshot.`,
+                        code: "CONNECTION_CANDIDATE_NOT_FOUND",
+                      }),
+                    );
+                  }
+                  // `buildConnectionPlan` throws ConnectionPlanPolicyViolation for
+                  // candidates that cannot launch (registry-only, missing binary,
+                  // unsafe target). Mapping it here — rather than letting
+                  // `Effect.sync` swallow the throw as a defect — keeps the
+                  // structured non-install reason visible as a typed policy code
+                  // instead of a generic RPC failure (C6a).
+                  return resolveConnectionPlanForCandidate({
+                    candidate,
+                    ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+                  });
+                }),
+              ),
             "Failed to resolve connection plan",
           ),
         [WS_METHODS.serverQuarantineExternalAgentProfile]: (input) =>

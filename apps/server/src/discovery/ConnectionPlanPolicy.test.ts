@@ -30,6 +30,20 @@ describe("ConnectionPlanPolicy — safe plan gate (AC #6)", () => {
     expect(plan.provenance.source).toBe("recipe");
   });
 
+  it("preserves literal Windows and macOS executable paths containing spaces", () => {
+    for (const resolvedPath of [
+      String.raw`C:\Program Files (x86)\Agent\agent.cmd`,
+      "/Applications/Agent App/bin/agent",
+    ]) {
+      const plan = buildConnectionPlan({
+        candidate: baseCandidate({ resolvedPath }),
+        planId: "plan:spaces",
+        resolvedAt: "2026-10-11T00:00:00.000Z",
+      });
+      expect(plan.launch).toMatchObject({ kind: "command", command: resolvedPath });
+    }
+  });
+
   it("rejects a launch command that is not an absolute path", () => {
     expect(() =>
       buildConnectionPlan({

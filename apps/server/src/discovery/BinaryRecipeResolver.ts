@@ -16,15 +16,15 @@ import type {
   ConnectionCandidate,
 } from "@synara/contracts";
 import { RECIPE_DISCOVERY_SOURCE } from "@synara/contracts";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   executableCandidates,
   isExecutableFile,
   type ExecutableLookupOptions,
 } from "../executableLookup.ts";
-import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import { externalAgentEnvironment } from "../provider/externalProtocolSafety.ts";
+import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 import type { CommandResult } from "../provider/providerCliOutput.ts";
 import { probeProviderCliVersion } from "../provider/providerCliVersionProbe.ts";
 
@@ -62,29 +62,25 @@ export class BinaryRecipeResolver extends ServiceMap.Service<
 const runProbeCommand = (command: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const prepared = prepareWindowsSafeProcess(command, args, { env });
     const child = yield* spawner.spawn(
-      ChildProcess.make(prepared.command, prepared.args, {
-        shell: prepared.shell,
-        ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-        env,
-        stdin: "ignore",
-      }),
+      makeEffectProcessCommand(command, args, { env, stdin: "ignore" }),
     );
+    const readOutput = <E>(stream: Stream.Stream<Uint8Array, E>) =>
+      stream.pipe(
+        Stream.runFoldEffect(
+          () => ({ chunks: [] as Uint8Array[], bytes: 0 }),
+          (state, chunk) => {
+            const bytes = state.bytes + chunk.byteLength;
+            if (bytes > 1_048_576)
+              return Effect.fail(new Error("Version probe output exceeded 1 MiB."));
+            state.chunks.push(chunk);
+            return Effect.succeed({ chunks: state.chunks, bytes });
+          },
+        ),
+        Effect.map(({ chunks, bytes }) => Buffer.concat(chunks, bytes).toString("utf8")),
+      );
     const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        Stream.runFold(
-          child.stdout,
-          () => "",
-          (acc, chunk) => acc + new TextDecoder().decode(chunk),
-        ),
-        Stream.runFold(
-          child.stderr,
-          () => "",
-          (acc, chunk) => acc + new TextDecoder().decode(chunk),
-        ),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
+      [readOutput(child.stdout), readOutput(child.stderr), child.exitCode.pipe(Effect.map(Number))],
       { concurrency: "unbounded" },
     );
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
@@ -199,13 +195,9 @@ export const makeBinaryRecipeResolver = (options: BinaryRecipeResolverOptions = 
 
         for (const candidate of hits) {
           const commandToProbe = candidate.path;
-          // Use the provider child environment builder so the probe process
-          // carries a sane PATH (needed for `cmd`-style shims that re-exec)
-          // without Synara control-plane credentials leaking into it.
-          const probeEnv = buildProviderChildEnvironment({
-            provider: "acp",
-            baseEnv: { ...process.env, PATH: envPathFor(candidate) },
-          });
+          // Discovery executes untrusted local binaries without releasing
+          // ambient credentials or application authority.
+          const probeEnv = externalAgentEnvironment({ PATH: envPathFor(candidate) });
           const probeOutcome = yield* probeProviderCliVersion(
             recipe.probeArgs && recipe.probeArgs.length > 0
               ? runProbeCommand(commandToProbe, recipe.probeArgs, probeEnv)

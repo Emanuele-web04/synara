@@ -1,3 +1,4 @@
+import { externalAgentEnvironment } from "../provider/externalProtocolSafety.ts";
 // FILE: AcpConformanceVerifiers.ts
 // Purpose: ACP-specific conformance verifier bindings registered into the
 // CapabilityVerifierRegistry. Each verifier keys on (capabilityId + ACP
@@ -209,10 +210,8 @@ export function runScopedAcpProbe(input: {
         spawn: {
           command: process.execPath,
           args: [input.fixturePath],
-          env: {
-            ...input.env,
-            VITEST: "true",
-          },
+          env: externalAgentEnvironment({ ...input.env, VITEST: "true" }),
+          inheritEnvironment: false,
         },
         cwd: workspace,
         ...(input.resumeSessionId !== undefined ? { resumeSessionId: input.resumeSessionId } : {}),

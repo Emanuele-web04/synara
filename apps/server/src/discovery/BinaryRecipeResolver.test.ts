@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   BinaryRecipeResolver,
@@ -68,6 +68,51 @@ describe("BinaryRecipeResolver — deterministic binary discovery", () => {
       expect(cline.resolvedPath).toBe(path.join(dir, "cline"));
       expect(cline.versionProbe?.state).toBe("success");
       expect(cline.versionProbe?.version).toBe("3.0.55");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not release ambient credentials to a version probe", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "synara-recipe-env-"));
+    vi.stubEnv("OPENAI_API_KEY", "ambient-test-secret");
+    vi.stubEnv("UNLISTED_DATABASE_PASSWORD", "ambient-test-secret");
+    try {
+      const binary = path.join(dir, "cline");
+      writeFileSync(
+        binary,
+        `#!/usr/bin/env sh
+if [ -n "$OPENAI_API_KEY$UNLISTED_DATABASE_PASSWORD" ]; then exit 7; fi
+printf 'cline 3.0.55\\n'
+`,
+        "utf8",
+      );
+      chmodSync(binary, 0o755);
+      const candidates = await Effect.runPromise(
+        resolveRecipe(clineRecipe(), { lookup: { env: { ...process.env, PATH: dir } } }),
+      );
+      expect(candidates[0]?.versionProbe).toMatchObject({ state: "success", version: "3.0.55" });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds stdout from an overflowing version probe", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "synara-recipe-output-"));
+    try {
+      const binary = path.join(dir, "cline");
+      writeFileSync(
+        binary,
+        `#!${process.execPath}\nprocess.stdout.write('x'.repeat(2 * 1024 * 1024));\n`,
+        "utf8",
+      );
+      chmodSync(binary, 0o755);
+      const candidates = await Effect.runPromise(
+        resolveRecipe(clineRecipe(), { lookup: { env: { ...process.env, PATH: dir } } }),
+      );
+      expect(candidates[0]?.versionProbe?.state).toBe("failure");
+      expect(candidates[0]?.versionProbe?.detail).toContain("exceeded 1 MiB");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,6 @@
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   CommandId,
   OrchestrationCommand,
   ProjectId,
@@ -123,6 +125,35 @@ describe("planProviderRuntimeReconciliation", () => {
         threadId: THREAD_ID,
         projectedTurnId: OLD_TURN_ID,
         runtimeTurnId: null,
+      }),
+    ]);
+  });
+
+  it("settles an external profile turn whose runtime has disappeared", () => {
+    const externalThread = threadShell({
+      modelSelection: {
+        provider: "external",
+        instanceId: "external",
+        model: "default",
+        profileId: AgentProfileId.makeUnsafe("agentprofile_reconcile"),
+        revisionId: AgentProfileRevisionId.makeUnsafe("rev_reconcile"),
+      },
+      session: { ...threadShell().session!, providerName: "external" },
+    });
+    expect(
+      planProviderRuntimeReconciliation({
+        threads: [externalThread],
+        bindings: [binding(OLD_TURN_ID, "external")],
+        liveSessions: [],
+        pumpHealth: [],
+        nowMs: NOW,
+        staleAfterMs: 10_000,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        provider: "external",
+        projectedTurnId: OLD_TURN_ID,
       }),
     ]);
   });

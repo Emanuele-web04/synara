@@ -220,6 +220,7 @@ const makeCliStructuredRuntime = (
         makeEffectProcessCommand(options.spawn.command, options.spawn.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
+          stderr: "ignore",
         }),
       )
       .pipe(
@@ -448,10 +449,35 @@ const makeCliStructuredRuntime = (
     );
 
     const outgoing = yield* Queue.bounded<Uint8Array>(256);
-    yield* Stream.fromQueue(outgoing).pipe(Stream.run(child.stdin), Effect.forkIn(runtimeScope));
+    let stdinFailure: CliErrors.CliTransportError | undefined;
+    yield* Scope.addFinalizer(runtimeScope, Queue.shutdown(outgoing));
+    yield* Stream.fromQueue(outgoing).pipe(
+      Stream.run(child.stdin),
+      Effect.catch((cause) => {
+        stdinFailure = new CliErrors.CliTransportError({
+          detail: "CLI stdin transport failed",
+          cause,
+        });
+        const error = new CliErrors.CliProtocolError({
+          detail: stdinFailure.detail,
+          line: "",
+          cause,
+        });
+        return offerEvent({ _tag: "protocol-error", error }).pipe(
+          Effect.andThen(failStart(stdinFailure)),
+          Effect.andThen(endEventQueue()),
+          Effect.andThen(Queue.shutdown(outgoing)),
+        );
+      }),
+      Effect.forkIn(runtimeScope),
+    );
 
     const writeLine = (line: string): Effect.Effect<void, CliErrors.CliErrorTyped> =>
-      Queue.offer(outgoing, new TextEncoder().encode(`${line}\n`)).pipe(
+      Effect.suspend(() =>
+        stdinFailure
+          ? Effect.fail(stdinFailure)
+          : Queue.offer(outgoing, new TextEncoder().encode(`${line}\n`)),
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new CliErrors.CliTransportError({

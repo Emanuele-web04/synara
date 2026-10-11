@@ -55,10 +55,12 @@ export function assertSafeLaunchTarget(input: {
       reason: `Launch command must be an absolute path, got: ${input.command}`,
     });
   }
-  if (looksLikeShellConstruction(input.command)) {
+  // Commands are literal paths. Spaces, Windows separators, and parentheses
+  // are valid path characters; the shared process boundary owns argv quoting.
+  if (/["'$`|&;<>\n\r\0]/u.test(input.command)) {
     throw new ConnectionPlanPolicyViolation({
       code: "policyRefused",
-      reason: `Launch command must not contain shell operators or whitespace: ${input.command}`,
+      reason: `Launch command must not contain shell operators: ${input.command}`,
     });
   }
   for (const arg of input.args) {

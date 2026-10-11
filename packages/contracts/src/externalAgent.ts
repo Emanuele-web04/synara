@@ -200,7 +200,7 @@ export type AgentProfileRevision = typeof AgentProfileRevision.Type;
 // intentional breaking literal change for old clients: the status is an
 // internal RPC layer value and the only consumer in front of it is the
 // archive-only web client, so the removal is safe. Server-side legacy rows are
-// normalized to `retired` by migration 099.
+// normalized to `retired` by the external-agent lifecycle migration.
 export const AgentProfileStatus = Schema.Literals(["active", "quarantined", "retired"]);
 export type AgentProfileStatus = typeof AgentProfileStatus.Type;
 

@@ -27,10 +27,7 @@ import type {
 import { Data, Effect, Layer, Option, ServiceMap } from "effect";
 
 import { CapabilityEvidenceService } from "../capabilityEvidence/Services/CapabilityEvidenceService.ts";
-import {
-  ProviderSessionDirectory,
-  type ProviderRuntimeBinding,
-} from "../provider/Services/ProviderSessionDirectory.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { AgentProfileRepository } from "./AgentProfileRepository.ts";
 import {
@@ -219,11 +216,12 @@ const makeProfileLifecycleService = Effect.gen(function* () {
       // second catches sessions that never got a native cursor (e.g. failed
       // starts), which still must not keep running after quarantine.
       const sessions = yield* providerService.listSessions();
-      const bindings = yield* sessionDirectory
-        .listBindings()
-        .pipe(Effect.catch(() => Effect.succeed([] as ProviderRuntimeBinding[])));
+      const bindingsResult = yield* sessionDirectory.listBindings().pipe(Effect.result);
+      const bindings = bindingsResult._tag === "Success" ? bindingsResult.success : [];
+      const bindingErrors = bindingsResult._tag === "Failure" ? [bindingsResult.failure] : [];
       const boundByCursor = new Set(
         sessions.flatMap((session) => {
+          if (session.provider !== "external") return [];
           const payload = session.resumeCursor as
             | { readonly profileId?: string }
             | null
@@ -235,6 +233,7 @@ const makeProfileLifecycleService = Effect.gen(function* () {
       );
       const boundByModelSelection = new Set(
         bindings.flatMap((binding) => {
+          if (binding.provider !== "external") return [];
           const payload = binding.runtimePayload as
             | { readonly modelSelection?: { provider?: string; profileId?: string } }
             | null
@@ -264,19 +263,20 @@ const makeProfileLifecycleService = Effect.gen(function* () {
       // safety miss (its runtime may still run after quarantine). Log the
       // failure after attempting every stop, leaving the persisted profile
       // quarantined even when cleanup cannot be proven successful.
-      if (stopFailures.length > 0) {
+      if (stopFailures.length > 0 || bindingErrors.length > 0) {
         yield* Effect.logError("Failed to stop sessions bound to an external agent profile").pipe(
           Effect.annotateLogs({
             profileId,
-            failures: stopFailures.map(
-              (failure) => `${failure.threadId}: ${String(failure.cause)}`,
-            ),
+            failures: [
+              ...bindingErrors.map(() => "External session bindings could not be read."),
+              ...stopFailures.map((failure) => `${failure.threadId}: ${String(failure.cause)}`),
+            ],
           }),
         );
         return yield* Effect.fail(
           new AggregateError(
-            stopFailures.map((failure) => failure.cause),
-            `Failed to stop ${stopFailures.length} sessions bound to external agent profile "${profileId}".`,
+            [...bindingErrors, ...stopFailures.map((failure) => failure.cause)],
+            `Could not verify cleanup of all sessions bound to external agent profile "${profileId}".`,
           ),
         );
       }

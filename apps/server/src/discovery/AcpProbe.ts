@@ -21,6 +21,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Data, Effect, Scope } from "effect";
 
 import { AcpSessionRuntime, isAcpStartupTimeoutError } from "../provider/acp/AcpSessionRuntime.ts";
+import { externalAgentEnvironment } from "../provider/externalProtocolSafety.ts";
 import { executableIdentity } from "../executableLookup.ts";
 
 export class AcpProbeError extends Data.TaggedError("AcpProbeError")<{
@@ -100,7 +101,8 @@ export const runAcpInitializeProbe = (input: {
       spawn: {
         command,
         args,
-        ...(options.spawnEnv !== undefined ? { env: options.spawnEnv } : {}),
+        env: externalAgentEnvironment({}, options.spawnEnv ?? process.env),
+        inheritEnvironment: false,
       },
       cwd,
       clientInfo: { name: "synara-discovery-probe", version: "1.0.0" },

@@ -96,7 +96,7 @@ export function assertSessionAllowed(input: {
   if (hasCredentialRefs(revision) && !isAgentProfileRevisionTrusted(revision)) {
     throw new ProfileSessionRefused({
       code: "profile-untrusted",
-      message: `External agent profile "${profile.name}" is not trusted for credential release; attach a trusted workflow or verified vendor claim first.`,
+      message: `External agent profile "${profile.name}" is not trusted for credential release; authorize credential access explicitly in the owner-managed profile first.`,
     });
   }
 }

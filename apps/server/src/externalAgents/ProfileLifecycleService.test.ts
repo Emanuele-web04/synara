@@ -112,14 +112,14 @@ interface TestContext {
   /** Thread ids whose stopSession mock should fail. */
   readonly failStopThreads: Set<string>;
   readonly sessions: { value: ReadonlyArray<ProviderSession> };
-  readonly bindings: { value: ReadonlyArray<ProviderRuntimeBinding> };
+  readonly bindings: { value: ReadonlyArray<ProviderRuntimeBinding>; fail?: boolean };
 }
 
 const makeTestContext = (): TestContext => {
   const stoppedThreads: string[] = [];
   const failStopThreads = new Set<string>();
   const sessions: { value: ReadonlyArray<ProviderSession> } = { value: [] };
-  const bindings: { value: ReadonlyArray<ProviderRuntimeBinding> } = { value: [] };
+  const bindings: { value: ReadonlyArray<ProviderRuntimeBinding>; fail?: boolean } = { value: [] };
   const providerService: ProviderServiceShape = {
     startSession: () => Effect.never as never,
     sendTurn: () => Effect.never as never,
@@ -152,7 +152,10 @@ const makeTestContext = (): TestContext => {
     getBinding: () => Effect.succeed(Option.none<ProviderRuntimeBinding>()),
     remove: () => Effect.void,
     listThreadIds: () => Effect.succeed([]),
-    listBindings: () => Effect.succeed(bindings.value),
+    listBindings: () =>
+      bindings.fail
+        ? (Effect.fail(new Error("bindings unavailable")) as never)
+        : Effect.succeed(bindings.value),
   };
 
   return { providerService, directory, stoppedThreads, failStopThreads, sessions, bindings };
@@ -283,7 +286,7 @@ layer("ProfileLifecycleService", (it) => {
 
       const session = {
         threadId,
-        provider: "claudeAgent" as const,
+        provider: "external" as const,
         status: "running" as const,
         runtimeMode: "full-access" as const,
         resumeCursor: { profileId: created.profile.profileId } as unknown,
@@ -294,8 +297,8 @@ layer("ProfileLifecycleService", (it) => {
       testContext.bindings.value = [
         {
           threadId,
-          provider: "claudeAgent" as const,
-          providerInstanceId: "claudeAgent",
+          provider: "external" as const,
+          providerInstanceId: "external",
           runtimePayload: {
             modelSelection: {
               provider: "external",
@@ -350,7 +353,7 @@ layer("ProfileLifecycleService", (it) => {
           testContext.failStopThreads.add(secondFailThreadId);
           const session = {
             threadId: failThreadId,
-            provider: "claudeAgent" as const,
+            provider: "external" as const,
             status: "running" as const,
             runtimeMode: "full-access" as const,
             resumeCursor: { profileId: created.profile.profileId } as unknown,
@@ -389,6 +392,47 @@ layer("ProfileLifecycleService", (it) => {
           assert.strictEqual(launchFailure.code, "profile-quarantined");
         }
       }),
+  );
+
+  it.effect("keeps quarantine and attempts live cleanup when bindings cannot be read", () =>
+    Effect.gen(function* () {
+      const lifecycle = yield* ProfileLifecycleService;
+      const service = yield* AgentProfileService;
+      const created = yield* service.createProfile(
+        createProfileInput({ name: "Directory failure", displayName: "Directory failure" }),
+      );
+      const threadId = ThreadId.makeUnsafe("live-directory-failure");
+      const builtInThreadId = ThreadId.makeUnsafe("builtin-profile-metadata");
+      const session = {
+        threadId,
+        provider: "external",
+        status: "running" as const,
+        runtimeMode: "full-access" as const,
+        externalAgentProfileId: created.profile.profileId,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      testContext.sessions.value = [
+        session,
+        { ...session, threadId: builtInThreadId, provider: "codex" },
+      ];
+      testContext.bindings.fail = true;
+      const failure = yield* lifecycle.quarantineProfile(created.profile.profileId).pipe(
+        Effect.flip,
+        Effect.ensuring(
+          Effect.sync(() => {
+            testContext.bindings.fail = false;
+          }),
+        ),
+      );
+      assert.strictEqual(failure.code, "quarantine-stop-failed");
+      assert.include(testContext.stoppedThreads, threadId);
+      assert.notInclude(testContext.stoppedThreads, builtInThreadId);
+      assert.strictEqual(
+        (yield* service.getProfile(created.profile.profileId)).profile.status,
+        "quarantined",
+      );
+    }),
   );
 
   it.effect("unknown evidence cannot lift quarantine or inherit another revision's verdict", () =>

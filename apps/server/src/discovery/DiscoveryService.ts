@@ -31,6 +31,7 @@ import {
   type InvalidCustomCandidate,
 } from "@synara/contracts";
 import { ServerConfig } from "../config.ts";
+import { assertSafeLaunchTarget } from "./ConnectionPlanPolicy.ts";
 import { isExecutableFile } from "../executableLookup.ts";
 
 import {
@@ -92,7 +93,6 @@ export class DiscoveryService extends ServiceMap.Service<DiscoveryService, Disco
  * command is caught at the input edge, before it ever becomes a candidate.
  */
 const ABSOLUTE_PATH_PATTERN = /^(?:\/|[A-Za-z]:[\\/])/u;
-const CUSTOM_COMMAND_SHELL_METACHARACTERS = /[\s"'$`\\|&;<>()[\]{}*?~!#\n\r]/u;
 
 type CustomCommandRejectionReason = InvalidCustomCandidate["reason"];
 
@@ -104,7 +104,11 @@ type CustomCommandRejectionReason = InvalidCustomCandidate["reason"];
  */
 const validateCustomCommand = (command: string): CustomCommandRejectionReason | undefined => {
   if (!ABSOLUTE_PATH_PATTERN.test(command)) return "not-absolute";
-  if (CUSTOM_COMMAND_SHELL_METACHARACTERS.test(command)) return "shell-metacharacters";
+  try {
+    assertSafeLaunchTarget({ command, args: [] });
+  } catch {
+    return "shell-metacharacters";
+  }
   if (!isExecutableFile(command)) return "not-executable";
   return undefined;
 };

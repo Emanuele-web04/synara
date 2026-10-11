@@ -31,9 +31,9 @@ const recipeCandidate = (overrides: Partial<ConnectionCandidate> = {}): Connecti
   }) as ConnectionCandidate;
 
 /** Create a temp directory with a real executable file (and return its path). */
-function makeExecutableFixture(): { readonly dir: string; readonly path: string } {
+function makeExecutableFixture(name = "agent"): { readonly dir: string; readonly path: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "synara-discovery-fixture-"));
-  const filePath = path.join(dir, "agent");
+  const filePath = path.join(dir, name);
   writeFileSync(filePath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
   chmodSync(filePath, 0o755);
   return { dir, path: filePath };
@@ -134,6 +134,24 @@ describe("DiscoveryService — deterministic candidate orchestration", () => {
         resolvedPath: fixture.path,
         provenance: { source: "custom" },
       });
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains an installed custom executable whose path contains spaces", async () => {
+    const fixture = makeExecutableFixture("agent with spaces");
+    try {
+      const result = await Effect.runPromise(
+        runDiscovery(discoveryLayer({}), { customCommands: [fixture.path] }),
+      );
+      expect(result.invalidCustomCandidates).toEqual([]);
+      expect(result.candidates).toContainEqual(
+        expect.objectContaining({
+          candidateId: `custom:${fixture.path}`,
+          resolvedPath: fixture.path,
+        }),
+      );
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }

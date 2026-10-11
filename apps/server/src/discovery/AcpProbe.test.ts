@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Effect } from "effect";
 
@@ -30,6 +30,32 @@ describe("AcpProbe — bounded ACP initialize probe", () => {
       // The fixture advertises `loadSession: true` by default.
       expect(outcome.capabilities.loadSession).toBe(true);
       expect(outcome.identityFingerprint).toBeTruthy();
+    }
+  });
+
+  it("does not inherit server credentials during ACP discovery", async () => {
+    const dir = mkdtempSync(path.join(process.cwd(), ".acp-probe-env-"));
+    vi.stubEnv("OPENAI_API_KEY", "ambient-test-secret");
+    vi.stubEnv("UNLISTED_DATABASE_PASSWORD", "ambient-test-secret");
+    try {
+      const guardedAgent = path.join(dir, "agent.mjs");
+      writeFileSync(
+        guardedAgent,
+        `
+        if (process.env.OPENAI_API_KEY || process.env.UNLISTED_DATABASE_PASSWORD) process.exit(7);
+        await import(${JSON.stringify(pathToFileURL(mockAgentPath).href)});
+      `,
+      );
+      const outcome = await Effect.runPromise(
+        runAcpInitializeProbe({ command: process.execPath, args: [guardedAgent] }).pipe(
+          Effect.scoped,
+          Effect.provide(NodeServices.layer),
+        ),
+      );
+      expect(outcome.state).toBe("ok");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
