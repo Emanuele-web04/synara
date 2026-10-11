@@ -41,6 +41,12 @@ with bounded concurrency. A command receipt confirms durable acceptance; provide
 continues in the background. After restart, Synara resumes from the settled event prefix and
 the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
 provider calls. A task waiting on a slow provider operation does not hold another task's lane.
+Recovery also isolates persisted child commands whose owning task is missing or deleted. It
+does not create a replacement provider session or resend those commands. Undispatched work is
+blocked, ambiguous delivery results keep their uncertainty, and a surviving child is marked
+with an error while unrelated tasks remain usable. Persisted Claude compaction reviews with an
+unavailable owner remain held for reconciliation; startup skips their provider recovery instead
+of failing or resending the held message.
 
 Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
 contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
