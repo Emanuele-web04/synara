@@ -9,6 +9,12 @@ The composer is more than a text box. The more precise the context you attach, t
 
 Drag files or images into the composer, paste them, or use mentions. Attachments render as chips and cards, previews are worktree-aware, and paths with spaces or parentheses survive intact. Browsing your prompt history keeps a draft's attachments instead of stripping them.
 
+## Attach GitHub issues and pull requests
+
+Open the composer **+** panel and choose **Issue or pull request** to search the current project's GitHub repository. Attach up to five items; each chip links to its issue or pull request, and the agent receives its title, state, URL, and a short body excerpt.
+
+The picker requires a server that supports GitHub work-item attachments and an installed, authenticated GitHub CLI. If a search returns only some results, the picker shows a warning and **Retry**. Attachments stay with saved drafts and queued messages, and sending a draft from Tasks or Kanban includes them too.
+
 ## Mention folders
 
 A folder mention opens a real local directory picker, so you can drill into nearby files without typing paths by hand.

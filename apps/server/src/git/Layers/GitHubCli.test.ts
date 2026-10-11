@@ -2470,6 +2470,55 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("admits each work item search process through the shared read limit", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const occupied = yield* Deferred.make<void>();
+      const releaseHolders = yield* Deferred.make<void>();
+      const processStarted = yield* Deferred.make<void>();
+      const releaseProcesses = yield* Deferred.make<void>();
+      let holdersStarted = 0;
+      const holders = yield* Effect.forEach(Array.from({ length: GITHUB_READ_SLOTS - 1 }), () =>
+        gh
+          .withRead(
+            Effect.gen(function* () {
+              holdersStarted += 1;
+              if (holdersStarted === GITHUB_READ_SLOTS - 1) {
+                yield* Deferred.succeed(occupied, undefined);
+              }
+              yield* Deferred.await(releaseHolders);
+            }),
+          )
+          .pipe(Effect.forkChild),
+      );
+      yield* Deferred.await(occupied);
+      let running = 0;
+      let peak = 0;
+      mockedRunProcess.mockImplementation(async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await Effect.runPromise(Deferred.succeed(processStarted, undefined));
+        await Effect.runPromise(Deferred.await(releaseProcesses));
+        running -= 1;
+        return processResult("[]");
+      });
+      const search = yield* gh
+        .searchWorkItems({ cwd: "/repo", repository: "owner/repo", query: "", limit: 20 })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(processStarted);
+      yield* Effect.yieldNow;
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+
+      yield* Deferred.succeed(releaseProcesses, undefined);
+      const result = yield* Fiber.join(search);
+      yield* Deferred.succeed(releaseHolders, undefined);
+      yield* Effect.forEach(holders, Fiber.join);
+      expect(result).toEqual({ available: true, errorHint: null, items: [] });
+      expect(mockedRunProcess).toHaveBeenCalledTimes(2);
+      expect(peak).toBe(1);
+    }),
+  );
+
   it.effect("merges kinds by recency, caps excerpts, and drops malformed rows", () =>
     Effect.gen(function* () {
       const longBody = "x".repeat(600);

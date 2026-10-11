@@ -17,7 +17,6 @@ import {
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
   type PullRequestStack,
-  type PullRequestStackSummary,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import {
@@ -2243,6 +2242,7 @@ const makeGitHubCli = Effect.gen(function* () {
       // degraded path instead of holding the dialog for the full default 30s.
       timeoutMs: WORK_ITEM_SEARCH_TIMEOUT_MS,
     }).pipe(
+      readGate.withRead,
       Effect.map((result) => parseWorkItemList(result.stdout, kind)),
       Effect.catch((error) => {
         if (

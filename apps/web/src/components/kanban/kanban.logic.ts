@@ -66,7 +66,7 @@ type KanbanComposerDraftSource = Pick<
   | "activeProvider"
   | "modelSelectionByProvider"
 > &
-  Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>;
+  Partial<Pick<ComposerThreadDraftState, "browserAnnotations" | "workItems">>;
 
 /** Shared projection so the board build and the drop-time dispatch re-check agree. */
 export function buildKanbanComposerDraftSnapshot(

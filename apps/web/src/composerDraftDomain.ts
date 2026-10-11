@@ -1007,7 +1007,7 @@ export function composerDraftHasAttachments(
     | "assistantSelections"
     | "fileComments"
   > &
-    Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>,
+    Partial<Pick<ComposerThreadDraftState, "browserAnnotations" | "workItems">>,
 ): boolean {
   return (
     draft.images.length > 0 ||
@@ -1016,6 +1016,7 @@ export function composerDraftHasAttachments(
     draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
     draft.assistantSelections.length > 0 ||
     (draft.browserAnnotations?.length ?? 0) > 0 ||
+    (draft.workItems?.length ?? 0) > 0 ||
     draft.fileComments.length > 0
   );
 }

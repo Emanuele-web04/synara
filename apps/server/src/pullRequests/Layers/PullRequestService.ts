@@ -123,13 +123,12 @@ export const makePullRequestService = (
       const cacheKey = `${input.cwd}\u0000${input.repository.trim().toLowerCase()}\u0000${query}\u0000${limit}`;
       return workItemSearchCache.get(
         cacheKey,
-        dependencies.inbox.withGitHubRead(
-          dependencies.github.searchWorkItems({
-            ...input,
-            query,
-            limit,
-          }),
-        ),
+        // The CLI admits the issue and PR subprocesses separately through the shared read gate.
+        dependencies.github.searchWorkItems({
+          ...input,
+          query,
+          limit,
+        }),
       );
     };
 
