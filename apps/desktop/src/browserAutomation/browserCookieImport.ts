@@ -5,6 +5,7 @@ import {
   NetworkPolicy,
 } from "betterwright";
 import type { BrowserCookieImportInput, BrowserCookieImportResult } from "@synara/contracts";
+import { execProcessFile } from "@synara/shared/processRuntime";
 import type { DesktopBrowserManager } from "../browserManager";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 
@@ -64,9 +65,8 @@ export class BrowserCookieImport {
       await assertTarget();
       await this.waitForAgents();
       await assertTarget();
-      // This signal only gates adapter connect(): upstream syncCookies takes
-      // no signal, so mid-sync cancellation works by revoking the transport
-      // (stop() below), not through this controller.
+      // Revoke transport and cancel host-owned Keychain acquisition together.
+      // Upstream syncCookies itself has no AbortSignal.
       const interrupt = new AbortController();
       const hostTarget = synaraHostTarget(runtime.webContents, {
         cookieImport: true,
@@ -101,6 +101,52 @@ export class BrowserCookieImport {
         interrupt.signal.throwIfAborted();
         browser = new BetterWright({
           home: this.home,
+          heliumKeychainPassword: (timeoutMs) =>
+            new Promise<string>((resolve, reject) => {
+              interrupt.signal.throwIfAborted();
+              if (process.platform !== "darwin") {
+                reject(new Error("Helium Keychain acquisition requires macOS."));
+                return;
+              }
+              execProcessFile(
+                "/usr/bin/security",
+                ["find-generic-password", "-w", "-a", "Helium", "-s", "Helium Storage Key"],
+                {
+                  encoding: "utf8",
+                  timeout: Math.max(1_000, Math.min(timeoutMs, 15_000)),
+                  maxBuffer: 4_096,
+                  signal: interrupt.signal,
+                  killSignal: "SIGKILL",
+                },
+                (error, stdout) => {
+                  if (interrupt.signal.aborted) {
+                    reject(interrupt.signal.reason);
+                    return;
+                  }
+                  if (error) {
+                    // Keychain output is private; only fixed categories cross the reader boundary.
+                    const message = String(error.message);
+                    reject(
+                      Object.assign(new Error("Helium Keychain acquisition failed."), {
+                        cookieReaderCode: error.killed ? "timed_out" : "source_extraction_failed",
+                        cookieReaderStage: "decrypt",
+                        cookiePermissionDenied: /\bcancel+ed\b|interaction|auth/i.test(message),
+                      }),
+                    );
+                    return;
+                  }
+                  const password = stdout.replace(/\r?\n$/, "");
+                  if (password) resolve(password);
+                  else
+                    reject(
+                      Object.assign(new Error("Helium Keychain value is unavailable."), {
+                        cookieReaderCode: "reader_failed",
+                        cookieReaderStage: "decrypt",
+                      }),
+                    );
+                },
+              );
+            }),
           hostTarget,
           downloadPolicy: "deny",
           credentialCapture: false,

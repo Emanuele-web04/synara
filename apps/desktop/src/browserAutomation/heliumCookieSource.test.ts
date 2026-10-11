@@ -287,6 +287,12 @@ const futureUtc =
   BigInt(Math.floor(Date.now() / 1000) + 86_400 + CHROMIUM_EPOCH_OFFSET_SECONDS) * 1_000_000n;
 
 describe("Helium synthetic macOS profile fixtures", () => {
+  it("fails closed when the trusted owner does not provide Keychain acquisition", async () => {
+    await expect(heliumSource.readHeliumCookieSnapshot(heliumOptions())).rejects.toMatchObject({
+      cookieReaderCode: "reader_unavailable",
+      cookieReaderStage: "decrypt",
+    });
+  });
   it("lists only profiles that contain a cookie database", async () => {
     await expect(heliumSource.listHeliumProfiles()).resolves.toEqual([
       { id: "Default", name: "Default", isDefault: true },

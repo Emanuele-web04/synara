@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopBrowserManager } from "../browserManager";
 
 const mocks = vi.hoisted(() => ({
+  execProcessFile: vi.fn(),
   sources: vi.fn(),
   profiles: vi.fn(),
   sync: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   constructedOptions: { current: undefined as unknown },
 }));
+vi.mock("@synara/shared/processRuntime", () => ({ execProcessFile: mocks.execProcessFile }));
 vi.mock("betterwright", () => ({
   listCookieSourceBrowsers: mocks.sources,
   listCookieSourceProfiles: mocks.profiles,
@@ -113,6 +115,78 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
 }
 
 describe("human-only cookie import", () => {
+  it.skipIf(process.platform !== "darwin")(
+    "cancels owner-only Keychain acquisition on destination navigation",
+    async () => {
+      const { importer, contents } = fixture();
+      mocks.sync.mockImplementation(async () => {
+        const options = mocks.constructedOptions.current as {
+          heliumKeychainPassword(timeoutMs: number): Promise<string>;
+        };
+        const acquisition = options.heliumKeychainPassword(30_000);
+        const [command, args, processOptions, callback] = mocks.execProcessFile.mock.calls[0]!;
+        expect(command).toBe("/usr/bin/security");
+        expect(args).toEqual([
+          "find-generic-password",
+          "-w",
+          "-a",
+          "Helium",
+          "-s",
+          "Helium Storage Key",
+        ]);
+        expect(processOptions).toMatchObject({
+          timeout: 15_000,
+          maxBuffer: 4_096,
+          killSignal: "SIGKILL",
+        });
+        expect(processOptions.signal.aborted).toBe(false);
+        contents.emit("did-start-navigation", {}, "https://other.test", false, true);
+        expect(processOptions.signal.aborted).toBe(true);
+        callback(
+          Object.assign(new Error("synthetic-private-diagnostic"), { killed: true }),
+          "",
+          "",
+        );
+        await expect(acquisition).rejects.toMatchObject({
+          cookieReaderCode: "timed_out",
+          cookieReaderStage: "decrypt",
+        });
+        return { ok: false };
+      });
+      await expect(importer.import({ ...input, browser: "helium" })).rejects.toThrow();
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "keeps Keychain diagnostic output out of reader errors",
+    async () => {
+      const { importer } = fixture();
+      mocks.sync.mockImplementation(async () => {
+        const options = mocks.constructedOptions.current as {
+          heliumKeychainPassword(timeoutMs: number): Promise<string>;
+        };
+        const acquisition = options.heliumKeychainPassword(10_000);
+        const callback = mocks.execProcessFile.mock.calls[0]![3];
+        callback(
+          new Error("security: User interaction is not allowed. synthetic-secret"),
+          "",
+          "synthetic-secret",
+        );
+        const error = await acquisition.catch((value: unknown) => value);
+        expect(error).toMatchObject({
+          cookieReaderCode: "source_extraction_failed",
+          cookieReaderStage: "decrypt",
+          cookiePermissionDenied: true,
+        });
+        expect(String(error)).not.toContain("synthetic-secret");
+        return { ok: false, cookiePermissionDenied: true };
+      });
+      expect(await importer.import({ ...input, browser: "helium" })).toMatchObject({
+        ok: false,
+        code: "permission_denied",
+      });
+    },
+  );
   it("offers Helium and uses the same human-only scoped transfer policy", async () => {
     mocks.sources.mockResolvedValue([
       { id: "helium", name: "Helium" },

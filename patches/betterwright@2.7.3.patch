@@ -1,8 +1,16 @@
 diff --git a/dist/src/client.js b/dist/src/client.js
-index 55deabe..747cea4 100644
+index 55deabe..28caa3e 100644
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
-@@ -1024,7 +1024,7 @@ export class BetterWright {
+@@ -333,6 +333,7 @@ export class BetterWright {
+      */
+     constructor(options = {}) {
+         this.hostTarget = options.hostTarget;
++        this.heliumKeychainPassword = options.heliumKeychainPassword;
+         this.hostUploadFiles = options.hostUploadFiles ?? [];
+         if (this.hostTarget && (!isCallable(this.hostTarget.connect) || options.provider != null)) {
+             throw new TypeError("hostTarget requires connect() and cannot be combined with provider.");
+@@ -1024,7 +1025,7 @@ export class BetterWright {
          let consentTarget;
          try {
              normalized = normalizeCookieSyncOptions(options);
@@ -11,7 +19,7 @@ index 55deabe..747cea4 100644
              if (consentTarget && normalized.cloudConsent !== consentTarget) {
                  return {
                      ok: false,
-@@ -1049,15 +1049,17 @@ export class BetterWright {
+@@ -1049,15 +1050,17 @@ export class BetterWright {
              };
          }
          if (!extracted.cookies.length) {
@@ -31,6 +39,15 @@ index 55deabe..747cea4 100644
          }
          const config = await this._prepare();
          const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+@@ -1073,7 +1076,7 @@ export class BetterWright {
+         }, timeoutSeconds);
+     }
+     _extractCookieSync(options) {
+-        return extractCookieSync(options);
++        return extractCookieSync(options, undefined, { keychainPassword: this.heliumKeychainPassword });
+     }
+     /**
+      * Fill a stored credential into the current page from trusted host code.
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
 index ae6a917..d9802f0 100644
 --- a/dist/src/cookie-sync.js
@@ -132,16 +149,15 @@ index ae6a917..d9802f0 100644
      try {
 diff --git a/dist/src/helium-cookie-source.js b/dist/src/helium-cookie-source.js
 new file mode 100644
-index 0000000..d85b415
+index 0000000..b0d7100
 --- /dev/null
 +++ b/dist/src/helium-cookie-source.js
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,316 @@
 +// Helium (net.imput.helium) cookie source for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
 +// and emits the same detailed-cookie snapshot shape as the native reader so
 +// the regular Cookie Sync transfer pipeline stays in charge.
-+import { execFile } from "node:child_process";
 +import { createDecipheriv, createHash, timingSafeEqual, pbkdf2Sync } from "node:crypto";
 +import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 +import { homedir, tmpdir } from "node:os";
@@ -267,28 +283,6 @@ index 0000000..d85b415
 +    if (cause?.killed === true || /timed out/i.test(message)) return heliumError("timed_out", "decrypt");
 +    if (/\bcancel+ed\b|interaction|auth/i.test(message)) return heliumError("source_extraction_failed", "decrypt", true);
 +    return heliumError("source_extraction_failed", "decrypt");
-+}
-+
-+function spawnKeychainPassword(timeoutMs) {
-+    return new Promise((resolve, reject) => {
-+        execFile(
-+            "/usr/bin/security",
-+            ["find-generic-password", "-w", "-a", HELIUM_KEYCHAIN_ACCOUNT, "-s", HELIUM_KEYCHAIN_SERVICE],
-+            { timeout: Math.max(1_000, Math.min(timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS)), maxBuffer: 4_096, windowsHide: true },
-+            (error, stdout) => {
-+                if (!error) {
-+                    const password = String(stdout).replace(/\r?\n$/, "");
-+                    if (password) {
-+                        resolve(password);
-+                        return;
-+                    }
-+                    reject(heliumError("reader_failed", "decrypt"));
-+                    return;
-+                }
-+                reject(keychainFailure(error));
-+            },
-+        );
-+    });
 +}
 +
 +export function decryptChromiumValue(encrypted, key, version = 0, hostKey = "") {
@@ -459,7 +453,8 @@ index 0000000..d85b415
 +    const workspace = await mkdtemp(join(tmpdir(), "betterwright-helium-"));
 +    try {
 +        const copyPath = await snapshotHeliumDatabase(databasePath, workspace);
-+        const keychainPassword = deps.keychainPassword ?? spawnKeychainPassword;
++        const keychainPassword = deps.keychainPassword;
++        if (typeof keychainPassword !== "function") throw heliumError("reader_unavailable", "decrypt");
 +        const password = await keychainPassword(Math.min(options.timeoutMs, HELIUM_KEYCHAIN_TIMEOUT_MS));
 +        if (!password) throw heliumError("source_extraction_failed", "decrypt");
 +        const key = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
@@ -522,7 +517,7 @@ index 654e06e..9e8c08c 100755
      finally {
          cookieSyncActive = false;
 diff --git a/types/public.d.ts b/types/public.d.ts
-index 429dc05..7e53848 100644
+index 429dc05..e0a5f97 100644
 --- a/types/public.d.ts
 +++ b/types/public.d.ts
 @@ -104,6 +104,12 @@ export type CookieSyncResult =
@@ -538,3 +533,12 @@ index 429dc05..7e53848 100644
        warnings?: CookieSyncWarning[];
        profileMode?: "persistent" | "ephemeral";
      }
+@@ -122,6 +128,8 @@ export interface CookieSourceProfile {
+ }
+
+ export interface BetterWrightOptions {
++  /** Trusted owner-only Helium Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
++  heliumKeychainPassword?: (timeoutMs: number) => Promise<string>;
+   /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
+   hostTarget?: import("./host.js").HostTarget;
+   /** Exact staged files a trusted host authorizes for upload. Requires hostTarget. */

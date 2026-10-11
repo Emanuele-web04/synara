@@ -20,3 +20,5 @@ The Helium tests use synthetic encrypted values and temporary SQLite profiles, m
 
 - [Helium Keychain branding](https://github.com/imputnet/helium-macos/blob/main/patches/helium/macos/change-keychain-name.patch)
 - [Chromium macOS key provider and v10 key tag](https://github.com/chromium/chromium/blob/main/components/os_crypt/async/browser/keychain_key_provider.mm)
+
+The trusted desktop import owner acquires the Keychain value through the shared process runtime. The helper has a 15-second maximum and a bounded output buffer; navigation or tab destruction aborts it along with the import transport. The patched reader fails closed without this owner hook and never launches a Keychain helper itself. Synthetic tests cover that wiring and fixed error categories; they do not prove native Keychain permission prompts or packaged process cleanup.
