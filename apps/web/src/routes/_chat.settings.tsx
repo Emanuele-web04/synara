@@ -7,6 +7,7 @@ import {
   type DesktopAudioInputDevice,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
+  type ThreadTitleRefreshMode,
   type SidechatExpiry,
   type ThreadTitleRefreshMode,
 } from "@synara/contracts";
@@ -207,6 +208,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const TITLE_REFRESH_MODE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "suggested", label: "Suggested" },
+  { value: "automatic", label: "Automatic" },
+] as const satisfies ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string }>;
+
 const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "1h", label: "1 hour" },
   { value: "24h", label: "24 hours" },
@@ -319,12 +326,6 @@ const VOICE_ENTER_BEHAVIOR_OPTIONS = [
   { value: "stop", label: "Stop" },
   { value: "send", label: "Stop and send" },
 ] as const satisfies ReadonlyArray<{ value: VoiceEnterBehavior; label: string }>;
-
-const TITLE_REFRESH_MODE_OPTIONS = [
-  { value: "off", label: "Off" },
-  { value: "suggested", label: "Suggested" },
-  { value: "automatic", label: "Automatic" },
-] as const satisfies ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string }>;
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 

@@ -23,3 +23,5 @@ private text can be recognized.
 The additive migration preserves existing titles and starts with no automatic
 refresh policy on legacy projects or threads. Signed desktop and live-provider
 behavior require separate validation; source and fixture checks do not prove it.
+
+During onboarding, title refresh remains Off unless the user explicitly selects Suggested or Automatic. Manual renames clear pending candidates and pin the title. Explicit regeneration releases the pin even when the generated title is unchanged. Background generation runs in the reactor scope without blocking terminal event delivery; shutdown cancels it. Automatic generation rechecks effective policy after completion and discards results after opting out.

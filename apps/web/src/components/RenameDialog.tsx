@@ -25,6 +25,8 @@ export interface RenameDialogProps {
   allowEmpty?: boolean | undefined;
   placeholder?: string | undefined;
   saveLabel?: string | undefined;
+  /** Extra controls rendered between the input and the footer actions. */
+  belowField?: ReactNode | undefined;
   /** Snooze reuses this dialog with a native date-time field. */
   inputType?: "text" | "datetime-local" | undefined;
   /** Extra gate on Save beyond the empty check, e.g. a date in the future. */
@@ -48,6 +50,7 @@ export function RenameDialog({
   allowEmpty: allowEmptyProp,
   placeholder,
   saveLabel: saveLabelProp,
+  belowField,
   inputType,
   isValueValid,
   belowField,
@@ -72,6 +75,7 @@ export function RenameDialog({
           allowEmpty={allowEmpty}
           placeholder={placeholder}
           saveLabel={saveLabel}
+          belowField={belowField}
           inputType={inputType ?? "text"}
           isValueValid={isValueValid}
           belowField={belowField}
@@ -89,6 +93,7 @@ function RenameDialogForm({
   allowEmpty,
   placeholder,
   saveLabel,
+  belowField,
   inputType,
   isValueValid,
   belowField,
@@ -100,6 +105,7 @@ function RenameDialogForm({
   allowEmpty: boolean;
   placeholder: string | undefined;
   saveLabel: string;
+  belowField: ReactNode | undefined;
   inputType: "text" | "datetime-local";
   isValueValid: ((value: string) => boolean) | undefined;
   belowField: ReactNode | undefined;

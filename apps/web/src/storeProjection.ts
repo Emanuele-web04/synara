@@ -98,6 +98,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     isPinned: thread.isPinned ?? false,
     manualTitlePinned: thread.manualTitlePinned ?? false,
     titleRefreshMode: thread.titleRefreshMode ?? null,
+    pendingSuggestedTitle: thread.pendingSuggestedTitle ?? null,
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,

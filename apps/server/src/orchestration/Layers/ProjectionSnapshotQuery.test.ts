@@ -2138,6 +2138,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           workspace_root,
           default_model_selection_json,
           scripts_json,
+          title_refresh_mode,
           created_at,
           updated_at,
           deleted_at
@@ -2148,6 +2149,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '/tmp/project-shell',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[]',
+          'suggested',
           '2026-03-03T00:00:00.000Z',
           '2026-03-03T00:00:01.000Z',
           NULL
@@ -2167,6 +2169,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           worktree_path,
           latest_turn_id,
           handoff_json,
+          manual_title_pinned,
+          title_refresh_mode,
+          pending_suggested_title,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -2188,6 +2193,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           NULL,
           'turn-shell',
           NULL,
+          1,
+          'automatic',
+          'Stored title candidate',
           '2026-03-03T00:00:02.500Z',
           2,
           1,
@@ -2277,6 +2285,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.equal(shellSnapshot.projects[0]?.titleRefreshMode, "suggested");
+      const projectsByIds = yield* snapshotQuery.getProjectShellsByIds([
+        asProjectId("project-shell"),
+      ]);
+      assert.deepEqual(projectsByIds, shellSnapshot.projects);
       assert.deepEqual(shellSnapshot.threads, [
         {
           id: ThreadId.makeUnsafe("thread-shell"),
@@ -2298,9 +2311,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreeRef: null,
           createBranchFlowCompleted: false,
           isPinned: false,
-          manualTitlePinned: false,
-          titleRefreshMode: null,
-          pendingSuggestedTitle: null,
+          manualTitlePinned: true,
+          titleRefreshMode: "automatic",
+          pendingSuggestedTitle: "Stored title candidate",
           parentThreadId: null,
           creationSource: null,
           sourceThreadId: null,

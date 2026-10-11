@@ -67,6 +67,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
+
     githubInboxIncludeUpstreams: false,
     sidechatExpiry: "1h",
     sourceControlWritingStyle: "repository",
