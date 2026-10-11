@@ -10,7 +10,9 @@ const platforms = [
   {
     id: "mac-x64",
     label: "macOS x64",
-    runner: "macos-15-intel",
+    // Apple Silicon cross-builds Intel (the Intel runner took 15-20 minutes
+    // for arm64's ~10); release-platform.yml launches it on Intel to qualify.
+    runner: "macos-15",
     platform: "mac",
     target: "dmg",
     arch: "x64",

@@ -193,6 +193,11 @@ import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator
 import { makeKeyedSingleFlightCache } from "@synara/shared/KeyedSingleFlightCache";
 import { resolveProviderSessionThread as resolveProviderSessionThreadFromProjection } from "../providerSessionThread.ts";
 
+class ProviderSessionOwnerUnavailable extends Schema.TaggedErrorClass<ProviderSessionOwnerUnavailable>()(
+  "ProviderSessionOwnerUnavailable",
+  { threadId: ThreadId },
+) {}
+
 const providerIntentEventTypes = OrchestrationEventType.literals.filter(isProviderIntentEventType);
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 
@@ -1740,7 +1745,7 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
-  const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const lookupProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const projected = yield* resolveProviderSessionThreadFromProjection(
       projectionSnapshotQuery,
       threadId,
@@ -1756,16 +1761,23 @@ const make = Effect.gen(function* () {
     // and their owner locks on the same committed identity during that gap.
     // Query failures propagate; only an absent/unresolved shell uses hot state.
     const threads = (yield* orchestrationEngine.getReadModel()).threads;
-    const thread = projected ?? threads.find((entry) => entry.id === threadId) ?? null;
+    const thread =
+      projected ??
+      threads.find((entry) => entry.id === threadId && entry.deletedAt === null) ??
+      null;
+    if (
+      thread === null &&
+      (yield* projectionSnapshotQuery.threadIdExistsIncludingDeleted(threadId))
+    )
+      return null;
     if (thread?.parentThreadId) {
       const parent =
         Option.getOrNull(
           yield* projectionSnapshotQuery.getThreadShellById(thread.parentThreadId),
-        ) ?? threads.find((entry) => entry.id === thread.parentThreadId);
+        ) ??
+        threads.find((entry) => entry.id === thread.parentThreadId && entry.deletedAt === null);
       if (parent !== undefined && parent !== null) return parent;
-      return yield* Effect.die(
-        new Error(`Provider session parent ${thread.parentThreadId} is missing for ${threadId}`),
-      );
+      return yield* new ProviderSessionOwnerUnavailable({ threadId });
     }
     if (threadId.startsWith("subagent:")) {
       const parent =
@@ -1778,9 +1790,38 @@ const make = Effect.gen(function* () {
           )
           .toSorted((a, b) => b.id.length - a.id.length)[0];
       if (parent !== undefined && parent !== null) return parent;
-      return yield* Effect.die(new Error(`Provider session owner is missing for ${threadId}`));
+      return yield* new ProviderSessionOwnerUnavailable({ threadId });
     }
     return thread;
+  });
+
+  const resolveProviderSessionThread = (threadId: ThreadId) =>
+    lookupProviderSessionThread(threadId).pipe(
+      Effect.catchTag("ProviderSessionOwnerUnavailable", (error) => Effect.die(error)),
+    );
+
+  // Only delivery recovery may interpret a missing owner as stale work. All
+  // provider-call/lease paths still fail closed, and persistence failures propagate.
+  const resolveDeliverySessionThread = (threadId: ThreadId) =>
+    lookupProviderSessionThread(threadId).pipe(
+      Effect.catchTag("ProviderSessionOwnerUnavailable", () => Effect.succeed(null)),
+    );
+
+  const settleUnavailableProviderThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const thread = yield* resolveThread(threadId);
+    if (thread) {
+      const detail = formatProviderDeliveryBlockDetail(
+        "Provider session owner is missing or deleted; pending commands were not replayed.",
+      );
+      if (thread.session?.lastError !== detail || thread.session.activeTurnId !== null) {
+        yield* setThreadSessionError({
+          threadId: thread.id,
+          detail,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+    yield* queuedTurnPromotions.cancelThread({ threadId, updatedAt: new Date().toISOString() });
   });
 
   // Provider lifecycle effects on a child share its parent's session. A fresh
@@ -3216,14 +3257,25 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      const nativeObservation = providerService.getClaudeCacheObservation
-        ? yield* awaitClaudeCompactionPreparation(
-            providerService
-              .getClaudeCacheObservation(input.threadId)
-              .pipe(Effect.catch(() => Effect.succeed(undefined))),
-            input.claudeCompactionCancellation,
-          )
-        : undefined;
+      // Mirrors Claude Code: the review is off unless the person turns it on, as
+      // embedded Claude Code never asks. When on, only a person is asked before
+      // resuming a long-idle, large conversation, never for /compact (the choice
+      // the prompt recommends); agents and automations proceed as the SDK would.
+      const reviewsColdCache =
+        (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+        (yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providers.claudeAgent.confirmColdCacheResume),
+          Effect.catch(() => Effect.succeed(false)),
+        ));
+      const nativeObservation =
+        reviewsColdCache && providerService.getClaudeCacheObservation
+          ? yield* awaitClaudeCompactionPreparation(
+              providerService
+                .getClaudeCacheObservation(input.threadId)
+                .pipe(Effect.catch(() => Effect.succeed(undefined))),
+              input.claudeCompactionCancellation,
+            )
+          : undefined;
       // In-session model controls run inside sendTurn, after this preflight.
       // Assess the requested model now without changing the native session.
       const requestedSelection = input.modelSelection ?? thread.modelSelection;
@@ -3237,6 +3289,7 @@ const make = Effect.gen(function* () {
       if (
         observation &&
         assessment.requiresConfirmation &&
+        !/^\/compact(?:\s|$)/.test(input.messageText.trim()) &&
         (!input.acceptedCacheReview ||
           !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation))
       ) {
@@ -5871,11 +5924,12 @@ const make = Effect.gen(function* () {
     // absent thread, including when an operator retries an older dead delivery
     // after the corresponding thread deletion has already been consumed.
     const thread = yield* resolveThread(threadId);
-    if (!thread || thread.deletedAt !== null) {
-      yield* queuedTurnPromotions.cancelThread({
-        threadId,
-        updatedAt: new Date().toISOString(),
-      });
+    if (
+      !thread ||
+      thread.deletedAt !== null ||
+      (yield* resolveDeliverySessionThread(threadId)) === null
+    ) {
+      yield* settleUnavailableProviderThread(threadId);
       return;
     }
     if (yield* hasLiveProviderTurn(threadId)) {
@@ -7075,10 +7129,6 @@ const make = Effect.gen(function* () {
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         case "thread.deleted":
-          if (Option.isSome(computerService))
-            yield* Effect.promise(() =>
-              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
-            );
           // Cancel any queued/promoting turns for the deleted thread BEFORE
           // clearing runtime caches so a concurrent drain cannot resurrect them
           // (see cancelThread). Best-effort: the event stays unclaimed either way.
@@ -7087,6 +7137,12 @@ const make = Effect.gen(function* () {
             updatedAt: event.payload.deletedAt,
           });
           yield* clearThreadRuntimeCaches(event.payload.threadId);
+          // Finish local cleanup before computer teardown, which can reject or
+          // time out independently of the durable queue and runtime caches.
+          if (Option.isSome(computerService))
+            yield* Effect.promise(() =>
+              computerService.value.manager.handleThreadRemoved(event.payload.threadId),
+            );
           return;
         case "thread.archived":
           if (Option.isSome(computerService))
@@ -7437,11 +7493,13 @@ const make = Effect.gen(function* () {
         .reduceRight((work, owner) => deliveryThreadLock.withLock(owner, work), effect);
     const withDeliveryOwnerLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.gen(function* () {
-        const providerOwner =
-          (yield* resolveProviderSessionThread(ThreadId.makeUnsafe(threadId)))?.id ?? threadId;
+        const providerThread = yield* resolveDeliverySessionThread(ThreadId.makeUnsafe(threadId));
+        const providerOwner = providerThread?.id ?? threadId;
         const operationOwner =
-          ownerAliases.get(providerOwner)?.ownerThreadId ??
-          (yield* resolveProviderOperationOwner(threadId));
+          providerThread === null
+            ? threadId
+            : (ownerAliases.get(providerOwner)?.ownerThreadId ??
+              (yield* resolveProviderOperationOwner(threadId)));
         return yield* withOwnerLocks([providerOwner, operationOwner], effect);
       });
     const readQuarantinedProcessedThrough = Effect.fnUntraced(function* (threadId: string) {
@@ -7604,6 +7662,7 @@ const make = Effect.gen(function* () {
       readonly threadId: ThreadId;
       readonly detail: string;
     }) {
+      if (!(yield* resolveThread(input.threadId))) return;
       const detail = formatProviderDeliveryBlockDetail(input.detail);
       const session = yield* readLatestThreadSession(input.threadId);
       const createdAt = new Date().toISOString();
@@ -7748,6 +7807,84 @@ const make = Effect.gen(function* () {
       }
       yield* recordQuarantinedProcessed(event);
       yield* requireCursorAdvance(event);
+      return true;
+    });
+
+    const skipUnavailableProviderOwner = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
+      if ((yield* resolveDeliverySessionThread(event.payload.threadId)) !== null) return false;
+      // A deleted queue entry has an existing idempotent enqueue/cancel path.
+      if (event.type === "thread.turn-queued" && !(yield* resolveThread(event.payload.threadId)))
+        return false;
+      // Deletion cleanup is local and must still cancel queued work and clear caches.
+      if (event.type === "thread.deleted") {
+        yield* processDomainEventSafely(event);
+        return true;
+      }
+      const key = {
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: event.sequence,
+      };
+      let existing = yield* deliveryRepository.getDelivery(key);
+      // A live claim still owns this row. Keep its source position pending until
+      // it settles or expires; acknowledging it now would strand an inflight
+      // external call behind the cursor without a reconciliation record.
+      while (Option.isSome(existing) && existing.value.state === "inflight") {
+        const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
+        const remainingMs = Number.isFinite(expiresAt) ? expiresAt - Date.now() : 0;
+        if (remainingMs <= 0) break;
+        yield* awaitInflightClaimSettlement({
+          readClaim: () =>
+            deliveryRepository
+              .getDelivery(key)
+              .pipe(Effect.map(Option.getOrUndefined), Effect.orDie),
+          deadlineMs: remainingMs,
+        });
+        existing = yield* deliveryRepository.getDelivery(key);
+      }
+      // Preserve completed and ambiguous outcomes. A still-owned inflight call
+      // must not be stolen, retried, or reported as never sent by this recovery.
+      if (Option.isSome(existing) && existing.value.state !== "retry") {
+        if (existing.value.state === "inflight") {
+          const settled = yield* deliveryRepository.markTerminalFailure({
+            ...key,
+            expectedClaimOwner: existing.value.claimOwner ?? "",
+            state: "uncertain",
+            error: "Provider session owner is unavailable; the expired command was not replayed.",
+            updatedAt: new Date().toISOString(),
+          });
+          if (!settled)
+            return yield* Effect.die(
+              new Error(`Stale delivery ${event.sequence} lost settlement ownership`),
+            );
+        }
+      } else if (isClaimedProviderIntent(event)) {
+        const claimOwner = `${processOwner}:${event.sequence}`;
+        const now = new Date().toISOString();
+        const claimed = yield* deliveryRepository.claim({
+          ...key,
+          threadId: event.payload.threadId,
+          claimOwner,
+          claimedAt: now,
+          claimExpiresAt: now,
+        });
+        if (Option.isNone(claimed))
+          return yield* Effect.die(
+            new Error(`Stale delivery ${event.sequence} could not be claimed`),
+          );
+        const settled = yield* deliveryRepository.markTerminalFailure({
+          ...key,
+          expectedClaimOwner: claimOwner,
+          state: "dead",
+          error: "Provider session owner is missing or deleted; command was not executed.",
+          updatedAt: now,
+        });
+        if (!settled)
+          return yield* Effect.die(
+            new Error(`Stale delivery ${event.sequence} lost settlement ownership`),
+          );
+      }
+      yield* recordQuarantinedProcessed(event);
+      yield* settleUnavailableProviderThread(event.payload.threadId);
       return true;
     });
 
@@ -8075,6 +8212,7 @@ const make = Effect.gen(function* () {
     const processClaimedProviderIntentWithRecovery = Effect.fnUntraced(function* (
       event: ProviderIntentEvent,
     ) {
+      if (yield* skipUnavailableProviderOwner(event)) return;
       yield* processClaimedProviderIntent(event);
       if (event.type === "thread.turn-queued") {
         yield* recoverQueuedTurnAfterDeliverySafely(event);
@@ -8113,6 +8251,12 @@ const make = Effect.gen(function* () {
 
     const processOrderedEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
       if (event.sequence <= cursor) return;
+      if (
+        isProviderIntentEvent(event) &&
+        !isClaimedProviderIntent(event) &&
+        (yield* skipUnavailableProviderOwner(event))
+      )
+        return;
       // Startup auto-heal must not resend already-skipped provider effects just
       // because another thread held the global cursor below their private fence.
       if (
@@ -8506,6 +8650,13 @@ const make = Effect.gen(function* () {
           limit: pageSize,
         });
         for (const blocker of startupBlockers) {
+          if (
+            (yield* resolveDeliverySessionThread(blocker.threadId)) === null &&
+            (yield* skipUnavailableProviderOwner(
+              yield* readProviderIntentEvent(blocker.eventSequence),
+            ))
+          )
+            continue;
           const settledQuit = yield* isSettledQuitInterruptBlocker(blocker);
           if (!settledQuit && !isSafeLegacyProviderBlocker(blocker.lastError)) {
             // A surviving blocker keeps the thread quarantined across the
@@ -8657,6 +8808,7 @@ const make = Effect.gen(function* () {
       (delivery) =>
         Effect.gen(function* () {
           const event = yield* readProviderIntentEvent(delivery.eventSequence);
+          if (yield* skipUnavailableProviderOwner(event)) return;
           return yield* withDeliveryOwnerLock(
             delivery.threadId,
             event.type === "thread.claude-cache-response-requested"
@@ -8893,12 +9045,15 @@ const make = Effect.gen(function* () {
         }
         // Resolve once and pin the owner while this logical range is outstanding.
         // Session binding changes cannot move an already-admitted FIFO item.
-        const providerOwnerThreadId =
-          (yield* resolveProviderSessionThread(ThreadId.makeUnsafe(event.aggregateId)))?.id ??
-          event.aggregateId;
+        const providerThread = yield* resolveDeliverySessionThread(
+          ThreadId.makeUnsafe(event.aggregateId),
+        );
+        const providerOwnerThreadId = providerThread?.id ?? event.aggregateId;
         const resolvedOperationOwner =
-          ownerAliases.get(providerOwnerThreadId)?.ownerThreadId ??
-          (yield* resolveProviderOperationOwner(event.aggregateId));
+          providerThread === null
+            ? event.aggregateId
+            : (ownerAliases.get(providerOwnerThreadId)?.ownerThreadId ??
+              (yield* resolveProviderOperationOwner(event.aggregateId)));
         yield* sourceLaneSlots.take(1);
         const alias = ownerAliases.get(providerOwnerThreadId);
         const ownerThreadId = alias?.ownerThreadId ?? resolvedOperationOwner;
@@ -8979,6 +9134,13 @@ const make = Effect.gen(function* () {
           review.status !== "failed")
       )
         continue;
+      // Compaction recovery must respect the same unavailable-owner boundary
+      // as delivery replay. Keep the review/journal for reconciliation instead
+      // of resolving a live session or resending a held message.
+      if ((yield* resolveDeliverySessionThread(thread.id)) === null) {
+        yield* settleUnavailableProviderThread(thread.id);
+        continue;
+      }
       const terminal = yield* readClaudeCompactionTerminal(thread.id, review.compactionTurnId);
       if (terminal && review.status !== "failed") {
         yield* processClaudeCompactionTerminal(terminal).pipe(
