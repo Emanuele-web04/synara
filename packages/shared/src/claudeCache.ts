@@ -1,6 +1,10 @@
 import type { ClaudeCacheObservation } from "@synara/contracts";
 
+// Claude Code (2.1.296) asks before resuming a conversation whose last response
+// is at least 70 minutes old and whose context is at least 100k tokens, whatever
+// the cache state; Synara asks at the same point so both behave alike.
 export const CLAUDE_LARGE_CONTEXT_TOKENS = 100_000;
+export const CLAUDE_RESUME_REVIEW_IDLE_SECONDS = 70 * 60;
 
 /** Re-evaluate persisted evidence without making a request or extending its TTL. */
 export function assessClaudeCache(
@@ -52,8 +56,9 @@ export function assessClaudeCache(
     state,
     ...(idleSeconds !== undefined ? { idleSeconds } : {}),
     requiresConfirmation:
-      state === "likely-expired" &&
+      idleSeconds !== undefined &&
+      idleSeconds >= CLAUDE_RESUME_REVIEW_IDLE_SECONDS &&
       observation.contextTokens !== undefined &&
-      observation.contextTokens > CLAUDE_LARGE_CONTEXT_TOKENS,
+      observation.contextTokens >= CLAUDE_LARGE_CONTEXT_TOKENS,
   };
 }

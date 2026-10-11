@@ -6220,7 +6220,7 @@ layer("AutomationService", (it) => {
   );
 });
 
-layer("Stable saved Groups automations", (it) => {
+layer("Saved Groups automations with Hubs disabled", (it) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.effect("refuses saved group check-ins without changing their definitions or runs", () =>
@@ -6251,7 +6251,8 @@ layer("Stable saved Groups automations", (it) => {
         const savedDefinition = yield* repository.getDefinitionById({ id: definition.id });
         const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
         assert.equal(result._tag, "Failure");
-        if (result._tag === "Failure") assert.match(result.failure.message, /Synara Beta/);
+        if (result._tag === "Failure")
+          assert.equal(result.failure.message, "Hubs are unavailable on this host.");
         assert.deepEqual(
           yield* repository.getDefinitionById({ id: definition.id }),
           savedDefinition,
