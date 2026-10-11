@@ -969,9 +969,15 @@ async function getCachedProviderUsageSnapshot(input: {
   homePath?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
-  const cacheKey =
-    `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:` +
-    `${input.env?.CODEX_HOME?.trim() ?? ""}:${input.env?.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
+  const env = input.env ?? process.env;
+  const cacheKey = JSON.stringify([
+    input.provider,
+    input.homeDir,
+    input.homePath?.trim() ?? "",
+    env.CODEX_HOME ?? "",
+    env.CLAUDE_CONFIG_DIR?.trim() ?? "",
+    env.XDG_CONFIG_HOME?.trim() ?? "",
+  ]);
   const nowMs = Date.now();
   const existing = usageSnapshotCache.get(cacheKey);
 

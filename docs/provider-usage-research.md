@@ -23,7 +23,8 @@ carry their canonical session reference into cost accounting. Future Claude
 samples are excluded from usage lines, activity periods, and freshness timestamps.
 
 Local scans are bounded, exclude future timestamps, and report partial evidence
-when reads are skipped. Grok signals are approximate cumulative session snapshots
+when reads are skipped. Cached local snapshots include the configured provider and
+XDG homes in their identity, so switching homes cannot reuse another home’s totals. Grok signals are approximate cumulative session snapshots
 at the file's modification time, not a per-turn billing ledger. Cost/token coverage
 is explicit when some or all turns have no telemetry. Provider usage token totals
 include archived history; turn/cost details describe retained projections only.

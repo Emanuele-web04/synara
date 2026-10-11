@@ -10,6 +10,7 @@ import {
   __readClaudeUsageSamplesForTests,
   __resolveClaudeProjectsRootsForTests,
   __selectRecentFilesForTests,
+  loadLocalProviderUsageSnapshot,
 } from "./providerUsageSnapshot.ts";
 
 const tempDirs: string[] = [];
@@ -248,4 +249,39 @@ it("ignores future Codex counters without advancing the current window", async (
   const snapshot = await __loadCodexUsageSnapshotForTests({ homeDir, nowMs });
   expect(snapshot?.activity?.periods.map((period) => period.tokens.total)).toEqual([10, 10, 10]);
   expect(snapshot?.updatedAt).toBe(new Date(nowMs - 1000).toISOString());
+});
+
+it("isolates cached Claude usage when the configured XDG home changes", async () => {
+  const directory = await mkdtemp(nodePath.join(tmpdir(), "synara-claude-cache-homes-"));
+  tempDirs.push(directory);
+  const homeDir = nodePath.join(directory, "home");
+  const configRoots = [
+    nodePath.join(directory, "first-config"),
+    nodePath.join(directory, "second-config"),
+  ];
+  for (const [index, root] of configRoots.entries()) {
+    const projectsRoot = nodePath.join(root, "claude", "projects", "project");
+    await mkdir(projectsRoot, { recursive: true });
+    await writeClaudeTranscript(nodePath.join(projectsRoot, "session.jsonl"), {
+      type: "assistant",
+      sessionId: `session-${index}`,
+      timestamp: new Date(Date.now() - 60_000).toISOString(),
+      message: {
+        model: "claude-sonnet-4-5",
+        usage: { input_tokens: (index + 1) * 100, output_tokens: 10 },
+      },
+    });
+  }
+  const first = await loadLocalProviderUsageSnapshot({
+    provider: "claudeAgent",
+    homeDir,
+    env: { XDG_CONFIG_HOME: configRoots[0] },
+  });
+  const second = await loadLocalProviderUsageSnapshot({
+    provider: "claudeAgent",
+    homeDir,
+    env: { XDG_CONFIG_HOME: configRoots[1] },
+  });
+  expect(first?.activity?.periods.find((period) => period.id === "30d")?.tokens.total).toBe(110);
+  expect(second?.activity?.periods.find((period) => period.id === "30d")?.tokens.total).toBe(210);
 });
