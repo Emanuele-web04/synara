@@ -127,7 +127,7 @@ export function useComposerSlashCommands(input: {
   };
 }) {
   const [isSlashStatusDialogOpen, setIsSlashStatusDialogOpen] = useState(false);
-  const openGlobalFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
+  const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const {
     activeProject,
     activeThread,
@@ -836,33 +836,6 @@ export function useComposerSlashCommands(input: {
       });
     });
   }, [canOfferExportCommand, threadId]);
-
-  const openFeedbackDialog = useCallback(() => {
-    openGlobalFeedbackDialog({
-      provider: selectedProvider,
-      model: selectedModelSelection.model,
-      projectKind: activeProject?.kind ?? null,
-      environmentMode,
-      runtimeMode,
-      interactionMode,
-      sessionStatus: activeThread?.session?.status ?? null,
-      latestTurnState: activeThread?.latestTurn?.state ?? null,
-      messageCount: activeThread?.messages.length ?? 0,
-      activityCount: activeThread?.activities.length ?? 0,
-      hasPendingApproval: activeThread?.hasPendingApprovals === true,
-      hasPendingUserInput: activeThread?.hasPendingUserInput === true,
-      hasThreadError: Boolean(activeThread?.error),
-    });
-  }, [
-    activeProject?.kind,
-    activeThread,
-    environmentMode,
-    interactionMode,
-    openGlobalFeedbackDialog,
-    runtimeMode,
-    selectedModelSelection.model,
-    selectedProvider,
-  ]);
 
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
