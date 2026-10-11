@@ -15,8 +15,6 @@ import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { useTerminalStateStore } from "~/terminalStateStore";
 import { onboardingTerminalThreadId } from "../onboardingTerminalScope";
 
-const CONNECT_TERMINAL_HEIGHT = 280;
-
 export function ProviderConnectTerminal(props: {
   provider: ProviderKind;
   signInCommand: string;
@@ -71,36 +69,19 @@ export function ProviderConnectTerminal(props: {
   }, [activeTerminalId, props.cwd, props.signInCommand, scopeId, terminalState.terminalOpen]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/70">
+    <div className="h-70 overflow-hidden rounded-lg border border-border/70">
       <ThreadTerminalDrawer
         key={scopeId}
         threadId={scopeId}
         cwd={props.cwd}
         runtimeEnv={{}}
-        height={CONNECT_TERMINAL_HEIGHT}
-        presentationMode="workspace"
         isVisible
-        terminalIds={terminalState.terminalIds}
         terminalLabelsById={terminalState.terminalLabelsById}
         terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
         terminalCliKindsById={terminalState.terminalCliKindsById}
-        terminalAttentionStatesById={terminalState.terminalAttentionStatesById ?? {}}
-        runningTerminalIds={terminalState.runningTerminalIds}
         activeTerminalId={terminalState.activeTerminalId}
-        terminalGroups={terminalState.terminalGroups}
-        activeTerminalGroupId={terminalState.activeTerminalGroupId}
         focusRequestId={terminal.focusRequestId}
-        onSplitTerminal={terminal.splitRight}
-        onSplitTerminalDown={terminal.splitDown}
-        onNewTerminal={terminal.newTerminalGroup}
-        onNewTerminalTab={terminal.createTerminalTab}
-        onMoveTerminalToGroup={terminal.moveTerminalToNewGroup}
-        onActiveTerminalChange={terminal.activateTerminal}
-        onCloseTerminal={terminal.closeTerminal}
         onTerminalSessionExited={terminal.handleTerminalSessionExited}
-        onCloseTerminalGroup={terminal.closeTerminalGroup}
-        onHeightChange={terminal.setTerminalHeight}
-        onResizeTerminalSplit={terminal.resizeTerminalSplit}
         onTerminalMetadataChange={terminal.setTerminalMetadata}
         onTerminalActivityChange={terminal.setTerminalActivity}
       />

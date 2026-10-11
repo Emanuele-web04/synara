@@ -292,6 +292,8 @@ describe("selected provider discovery", () => {
   afterEach(() => vi.useRealTimers());
   const ready: ServerProviderStatus = {
     provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
     status: "ready",
     available: true,
     authStatus: "authenticated",

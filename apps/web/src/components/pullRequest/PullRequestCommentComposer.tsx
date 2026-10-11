@@ -1,26 +1,40 @@
 // FILE: PullRequestCommentComposer.tsx
-// Purpose: Inline "Leave a comment" pill at the bottom of the detail panel's Comments section.
-//          Posts an issue comment through the gh-backed comment RPC as the authenticated GitHub
-//          user (hence the GitHub glyph in the leading slot), then invalidates the detail query
-//          so the new comment appears on the next refetch. Enter submits; Shift+Enter breaks a
-//          line (comments accept markdown). Successful or ambiguous submissions revalidate both
-//          the detail and repository list scopes so comment data and updated ordering converge.
+// Purpose: Inline "Leave a comment" pill at the bottom of a GitHub item's Comments section. Posts
+//          through the comment mutation its host passes in (pull request or issue), as the
+//          authenticated GitHub user (hence the GitHub glyph in the leading slot); the mutation
+//          owns revalidating the detail and the lists. Enter submits; Shift+Enter breaks a line
+//          (comments accept markdown).
 // Layer: Pull request presentation
-// Exports: PullRequestCommentComposer
+// Exports: PullRequestCommentComposer, GitHubCommentTarget, GitHubCommentMutation
 
-import type { PullRequestDetail } from "@synara/contracts";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import type { PullRequestDetailInput } from "@synara/contracts";
 import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
 import { ArrowUpIcon, GitHubIcon } from "~/lib/icons";
-import { pullRequestCommentMutationOptions } from "~/lib/pullRequestReactQuery";
 import { PR_BODY_TEXT_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
-export function PullRequestCommentComposer({ detail }: { detail: PullRequestDetail }) {
-  const queryClient = useQueryClient();
-  const mutation = useMutation(pullRequestCommentMutationOptions(queryClient));
+/** The item a comment goes to. Pull requests and issues share one number space per repository. */
+export type GitHubCommentTarget = Pick<
+  PullRequestDetailInput,
+  "projectId" | "repository" | "number"
+>;
+
+/** The slice of a React Query comment mutation the composer drives. */
+export interface GitHubCommentMutation {
+  mutateAsync: (input: GitHubCommentTarget & { body: string }) => Promise<unknown>;
+  isPending: boolean;
+}
+
+export function PullRequestCommentComposer({
+  target,
+  mutation,
+}: {
+  target: GitHubCommentTarget;
+  mutation: GitHubCommentMutation;
+}) {
   const [body, setBody] = useState("");
   // Synchronous re-entrancy lock: mutation.isPending updates on React's schedule, which is
   // too late to stop a rapid double Enter from posting the comment twice.
@@ -35,9 +49,9 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
     submittingRef.current = true;
     void mutation
       .mutateAsync({
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
+        projectId: target.projectId,
+        repository: target.repository,
+        number: target.number,
         body: trimmed,
       })
       .then(() => {
@@ -57,7 +71,9 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
   };
 
   return (
-    <div className="flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm">
+    <div
+      className={`${GLASS_RAISED_SURFACE_CLASS_NAME} flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm`}
+    >
       <span
         className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-secondary)] text-muted-foreground"
         title="Commenting as your GitHub account"

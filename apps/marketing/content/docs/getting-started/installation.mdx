@@ -19,9 +19,10 @@ Download the latest stable build from the [Synara download page](/install). If t
 | Fedora / RHEL          | x86_64 `.rpm`        |
 
 <Callout type="info" title="Linux updates come from one place per format">
-  The AppImage updates itself from inside Synara. The `.deb` and `.rpm` packages are updated by your
-  package manager (`apt`, `dnf`) instead, so Synara never installs over your distribution's copy.
-  Pick the format you already update; they are all built from the same release.
+  The AppImage updates itself from inside Synara. To update a `.deb` or `.rpm` install, download the
+  newer package and install it with `apt` or `dnf` again. Installing a downloaded package does not
+  add a Synara package repository or enable automatic system updates for Synara. Only formats
+  included in the selected release have an active download on the install page.
 </Callout>
 
 <Callout type="info" title="Synara does not include a model subscription">
@@ -75,10 +76,10 @@ entry, which the AppImage does not.
 
 ```bash
 # Debian, Ubuntu
-sudo apt install ./synara-desktop_*_amd64.deb
+sudo apt install ./Synara-*-amd64.deb
 
 # Fedora, RHEL
-sudo dnf install ./synara-desktop-*.x86_64.rpm
+sudo dnf install ./Synara-*-x86_64.rpm
 ```
 
 </Step>

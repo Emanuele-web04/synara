@@ -87,7 +87,7 @@ const nativeApi = vi.hoisted(() => ({
   available: true,
 }));
 
-const toast = vi.hoisted(() => ({ add: vi.fn() }));
+const toast = vi.hoisted(() => ({ add: vi.fn(), reportIssue: vi.fn() }));
 const voiceAvailability = vi.hoisted(() => ({
   canStartVoiceNotes: true,
   showVoiceNotesControl: true,
@@ -106,6 +106,8 @@ vi.mock("../../lib/voiceRecorder", () => ({
     error instanceof Error && error.name === "VoiceRecordingCancelledError",
   useVoiceRecorder: () => ({
     isRecording: recorder.isRecording,
+    isStarting: false,
+    hasAudioSignal: true,
     durationMs: 0,
     waveformLevels: [],
     startRecording: recorder.startRecording,
@@ -126,7 +128,7 @@ vi.mock("../../nativeApi", () => ({
       : null,
 }));
 
-vi.mock("../ui/toast", () => ({ toastManager: toast }));
+vi.mock("../ui/toast", () => ({ toastManager: toast, reportToastIssue: toast.reportIssue }));
 
 vi.mock("../ChatView.logic", () => ({
   deriveComposerVoiceState: () => ({ ...voiceAvailability }),
@@ -194,11 +196,14 @@ describe("useComposerVoiceController", () => {
     voiceAvailability.canStartVoiceNotes = true;
     voiceAvailability.showVoiceNotesControl = true;
     toast.add.mockReset();
+    toast.reportIssue.mockReset();
     options = {
       activeProject: PROJECT,
       activeThreadId: THREAD_A,
       threadId: THREAD_A,
       selectedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      voiceProviderInstanceId: "codex",
       activeProviderStatus: null,
       pendingUserInputCount: 0,
       onTranscriptReady: vi.fn(),
@@ -226,12 +231,13 @@ describe("useComposerVoiceController", () => {
 
     expect(nativeApi.prewarmVoice).toHaveBeenCalledWith({
       provider: "codex",
+      providerInstanceId: "codex",
       cwd: PROJECT.cwd,
       threadId: THREAD_A,
     });
   });
 
-  it.each(["thread", "provider", "cancel"] as const)(
+  it.each(["thread", "provider", "instance", "cancel"] as const)(
     "ignores a stale transcription after %s changes",
     async (staleCause) => {
       const transcription = deferred<{ text: string }>();
@@ -243,13 +249,18 @@ describe("useComposerVoiceController", () => {
       if (staleCause === "thread") {
         render({ activeThreadId: THREAD_B, threadId: THREAD_B });
       } else if (staleCause === "provider") {
-        render({ selectedProvider: "claudeAgent" as ProviderKind });
+        render({
+          selectedProvider: "claudeAgent" as ProviderKind,
+          selectedProviderInstanceId: "claudeAgent",
+        });
+      } else if (staleCause === "instance") {
+        render({ selectedProviderInstanceId: "codex_work" });
       } else {
         result.cancelComposerVoiceRecording();
       }
 
       transcription.resolve({ text: "stale" });
-      await submission;
+      await expect(submission).resolves.toBe(false);
       render();
 
       expect(options.onTranscriptReady).not.toHaveBeenCalled();
@@ -269,6 +280,7 @@ describe("useComposerVoiceController", () => {
     await result.startComposerVoiceRecording();
 
     expect(toast.add).not.toHaveBeenCalled();
+    expect(toast.reportIssue).not.toHaveBeenCalled();
     expect(nativeApi.prewarmVoice).not.toHaveBeenCalled();
   });
 
@@ -322,8 +334,15 @@ describe("useComposerVoiceController", () => {
   it("refreshes status for expired auth and keeps the refresh action available", async () => {
     nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("session expired"));
 
-    await result.submitComposerVoiceRecording();
+    await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
+    expect(toast.reportIssue).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        code: "voice.transcribe.failed",
+        reason: "auth",
+      }),
+    );
     expect(options.refreshVoiceStatus).toHaveBeenCalledTimes(1);
     const failureToast = toast.add.mock.calls.at(-1)?.[0];
     expect(failureToast).toMatchObject({
@@ -348,6 +367,8 @@ describe("useComposerVoiceController", () => {
     render({
       activeProviderStatus: {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "error",
         available: false,
         authStatus: "unauthenticated",
@@ -394,7 +415,7 @@ describe("useComposerVoiceController", () => {
 
     firstTranscription.resolve({ text: "stale first transcript" });
     secondTranscription.resolve({ text: "current second transcript" });
-    await Promise.all([firstSubmission, secondSubmission]);
+    await expect(Promise.all([firstSubmission, secondSubmission])).resolves.toEqual([false, true]);
 
     expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
     expect(options.onTranscriptReady).toHaveBeenCalledWith("current second transcript");

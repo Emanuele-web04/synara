@@ -5,25 +5,24 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
+  type LoadProjectImportHistoryInput,
   type ImportProjectInput,
   type ImportProjectResult,
   type ListProjectImportsInput,
   type ListProjectImportsResult,
+  type ModelSelection,
   type ProjectImportProvider,
   type ProviderStartOptions,
 } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
-import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { Effect } from "effect";
 import type {
   ProjectImportRepository,
   ProjectImportOrigin,
+  ProjectImportHistoryState,
 } from "../persistence/projectImportRepository";
 import { discoverClaudeProjects } from "../provider/claudeProjectImport";
-import {
-  discoverCodexProjects,
-  resolveCodexProjectImportHome,
-} from "../provider/codexProjectImport";
+import { discoverCodexProjects } from "../provider/codexProjectImport";
 import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import { makeKeyedLock } from "../provider/keyedLock";
 import type { NativeProjectImportCatalog } from "../provider/projectImportTypes";
@@ -48,6 +47,12 @@ import {
 } from "./projectImportHistory";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import { makeProjectImportDestinations } from "./projectImportDestinations";
+import { listClaudeSessionsInEnvironment } from "./importThreadRoute";
+import {
+  type ProjectImportSource,
+  resolveProjectImportSourceHome,
+  resolveProjectImportSources,
+} from "./projectImportSources";
 
 interface ProjectImportRouteOptions {
   readonly repository: ProjectImportRepository;
@@ -57,9 +62,12 @@ interface ProjectImportRouteOptions {
   readonly serverSettings: ServerSettingsShape;
   readonly discover?: (
     provider: ProjectImportProvider,
-    homePath?: string,
+    source: ProjectImportSource,
   ) => Promise<NativeProjectImportCatalog>;
   readonly readHistory?: ReturnType<typeof makeProjectImportHistoryReader>;
+  /** Server paths used to derive isolated account homes, matching the runtime. */
+  readonly homeDir?: string;
+  readonly stateDir?: string;
 }
 
 const CATALOG_TTL_MS = 30 * 60 * 1000;
@@ -77,10 +85,124 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
     options.readHistory ?? makeProjectImportHistoryReader(options.providerAdapterRegistry);
   const discover =
     options.discover ??
-    ((provider, homePath) =>
-      provider === "codex"
-        ? discoverCodexProjects(homePath ? { homePath } : undefined)
-        : discoverClaudeProjects());
+    ((provider, source) => {
+      if (provider === "codex") {
+        return discoverCodexProjects({
+          env: source.environment,
+          ...(source.codexHomePath ? { homePath: source.codexHomePath } : {}),
+        });
+      }
+      const claudeEnvironment = source.claudeEnvironment;
+      return discoverClaudeProjects({
+        ...(source.claudeConfigDir ? { configDir: source.claudeConfigDir } : {}),
+        ...(claudeEnvironment
+          ? { listSessions: () => listClaudeSessionsInEnvironment(claudeEnvironment) }
+          : {}),
+      });
+    });
+  const sourcePaths = { homeDir: options.homeDir, stateDir: options.stateDir };
+
+  const saveOlderPageBoundary = Effect.fn(function* (state: ProjectImportHistoryState) {
+    const page = state.pending;
+    if (
+      page?.nextCursor &&
+      !(yield* options.repository.getHistory(state.threadId, state.revision + 1))
+    ) {
+      yield* options.repository.saveHistory({
+        ...state,
+        pending: null,
+        cursor: page.nextCursor,
+        before: page.messages[0]?.createdAt ?? state.before,
+        revision: state.revision + 1,
+      });
+    }
+  });
+
+  const applyInitialHistoryPage = Effect.fn(function* (state: ProjectImportHistoryState) {
+    const page = state.pending;
+    if (!page) return;
+    for (let offset = 0; offset < page.messages.length; offset += 20) {
+      yield* options.orchestrationEngine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe(`project-import:${state.threadId}:history:0:${offset}`),
+        threadId: state.threadId,
+        messages: page.messages.slice(offset, offset + 20),
+        createdAt: state.sourceCreatedAt,
+      });
+    }
+    yield* saveOlderPageBoundary(state);
+    yield* options.repository.saveHistory({ ...state, pending: null, cursor: page.nextCursor });
+  });
+
+  const loadProjectImportHistory = (input: LoadProjectImportHistoryInput) =>
+    imports.withLock(
+      "imports",
+      Effect.gen(function* () {
+        const model = yield* options.orchestrationEngine.getReadModel();
+        const thread = model.threads.find(
+          (entry) => entry.id === input.threadId && !entry.deletedAt,
+        );
+        if (!thread)
+          return yield* new ProjectImportError({
+            message: "The imported conversation no longer exists.",
+          });
+        if (!(yield* options.repository.isCompleted(input.threadId)))
+          return { nextCursor: null, messages: [] };
+        if (input.cursor === undefined) {
+          const initial = yield* options.repository.getHistory(input.threadId);
+          return { nextCursor: initial?.cursor ? "1" : null, messages: [] };
+        }
+        const revision = Number(input.cursor);
+        if (!Number.isSafeInteger(revision) || revision < 1 || String(revision) !== input.cursor) {
+          return yield* new ProjectImportError({ message: "Invalid imported history cursor." });
+        }
+        let state = yield* options.repository.getHistory(input.threadId, revision);
+        if (!state || !state.cursor)
+          return yield* new ProjectImportError({
+            message: "This imported history page is unavailable.",
+          });
+        if (!state.pending) {
+          yield* ensureProviderEnabled(state.provider, options.serverSettings);
+          const settings = yield* options.serverSettings.getSettings;
+          const source = resolveProjectImportSources(settings, [state.provider], sourcePaths).find(
+            (candidate) => candidate.instanceId === state!.providerInstanceId,
+          );
+          if (!source)
+            return yield* new ProjectImportError({
+              message: "The source account is unavailable. Enable it to load older messages.",
+            });
+          const currentHome = yield* projectImportPromise(() =>
+            resolveProjectImportSourceHome(source),
+          );
+          if (!workspaceRootsEqual(currentHome, state.sourceHome, { platform: process.platform })) {
+            return yield* new ProjectImportError({
+              message:
+                "The source account's history location changed. Restore it to load older messages.",
+            });
+          }
+          const page = yield* readHistory({
+            ...state,
+            cursor: state.cursor,
+            before: state.before ?? undefined,
+            providerOptions: source.providerOptions,
+            claudeEnvironment: source.claudeEnvironment,
+          });
+          if (page.nextCursor === state.cursor)
+            return yield* new ProjectImportError({
+              message: "The provider did not advance the history cursor.",
+            });
+          state = { ...state, pending: page };
+          yield* options.repository.saveHistory(state);
+        }
+        // Cache display pages independently of live messages. Retrying the same
+        // cursor returns the same page; it never appends history to an active turn.
+        yield* saveOlderPageBoundary(state);
+        return {
+          nextCursor: state.pending!.nextCursor ? String(revision + 1) : null,
+          messages: state.pending!.messages,
+        };
+      }),
+    );
 
   const readKnownBindings = Effect.fn(function* (
     destinations: ReturnType<typeof makeProjectImportDestinations>,
@@ -106,22 +228,26 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
   const listProjectImports = Effect.fn(function* (input: ListProjectImportsInput) {
     const settings = yield* options.serverSettings.getSettings;
     const providers = [...new Set(input.providers)];
+    // Every enabled account is scanned; accounts sharing one store dedupe by
+    // source key, keeping the default account's attribution.
+    const importSources = resolveProjectImportSources(settings, providers, sourcePaths);
     const results = yield* Effect.forEach(
-      providers,
-      (provider) =>
+      importSources,
+      (source) =>
         projectImportPromise(async () => {
           try {
             return {
-              provider,
-              catalog: await discover(
-                provider,
-                provider === "codex" ? settings.providers.codex.homePath : undefined,
-              ),
+              provider: source.provider,
+              providerInstanceId: source.instanceId,
+              accountLabel: source.accountLabel,
+              catalog: await discover(source.provider, source),
               error: null,
             };
           } catch (error) {
             return {
-              provider,
+              provider: source.provider,
+              providerInstanceId: source.instanceId,
+              accountLabel: source.accountLabel,
               catalog: null,
               error: error instanceof Error ? error.message : String(error),
             };
@@ -129,12 +255,27 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         }),
       { concurrency: 2 },
     );
+    const accountLabels = new Map(
+      importSources.flatMap((source) =>
+        source.accountLabel !== undefined
+          ? [[source.instanceId, source.accountLabel] as const]
+          : [],
+      ),
+    );
     const readModel = yield* options.orchestrationEngine.getReadModel();
     const destinations = makeProjectImportDestinations(readModel);
     const candidates = yield* projectImportPromise(() =>
       buildProjectImportCatalog(
         results.flatMap((result) =>
-          result.catalog ? [{ provider: result.provider, catalog: result.catalog }] : [],
+          result.catalog
+            ? [
+                {
+                  provider: result.provider,
+                  providerInstanceId: result.providerInstanceId,
+                  catalog: result.catalog,
+                },
+              ]
+            : [],
         ),
         readModel.projects,
       ),
@@ -169,6 +310,13 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         threads: project.threads.map((session) => ({
           key: session.key,
           provider: session.provider,
+          ...(session.providerInstanceId !== undefined
+            ? { providerInstanceId: session.providerInstanceId }
+            : {}),
+          ...(session.providerInstanceId !== undefined &&
+          accountLabels.has(session.providerInstanceId)
+            ? { accountLabel: accountLabels.get(session.providerInstanceId) }
+            : {}),
           title: session.title,
           cwd: session.cwd,
           createdAt: session.createdAt,
@@ -179,7 +327,12 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             (!origins.has(session.key) && known.has(`${session.provider}:${session.id}`)),
         })),
       })),
-      sources: results.map(({ provider, error }) => ({ provider, error })),
+      sources: results.map(({ provider, providerInstanceId, accountLabel, error }) => ({
+        provider,
+        providerInstanceId,
+        ...(accountLabel !== undefined ? { accountLabel } : {}),
+        error,
+      })),
     } satisfies ListProjectImportsResult;
   });
 
@@ -218,15 +371,22 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           );
           if (known) return { ...known, status: "already-present" } satisfies ImportProjectResult;
         }
+        let importSource: ProjectImportSource | undefined;
         if (source) {
           yield* ensureProviderEnabled(source.provider, options.serverSettings);
           const settings = yield* options.serverSettings.getSettings;
+          const sourceInstanceId = source.providerInstanceId ?? source.provider;
+          importSource = resolveProjectImportSources(settings, [source.provider], sourcePaths).find(
+            (candidate) => candidate.instanceId === sourceInstanceId,
+          );
+          if (!importSource)
+            return yield* new ProjectImportError({
+              message:
+                "The account this conversation was found in is unavailable. Refresh the list.",
+            });
+          const resolvedSource = importSource;
           const currentHome = yield* projectImportPromise(() =>
-            source.provider === "codex"
-              ? resolveCodexProjectImportHome({ homePath: settings.providers.codex.homePath })
-              : canonicalImportPath(
-                  process.env.CLAUDE_CONFIG_DIR?.trim() || nodePath.join(homedir(), ".claude"),
-                ),
+            resolveProjectImportSourceHome(resolvedSource),
           );
           if (
             !workspaceRootsEqual(currentHome, source.sourceHome, { platform: process.platform }) &&
@@ -348,10 +508,21 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           return yield* new ProjectImportError({
             message: "The import destination was removed. Retry to create a new conversation copy.",
           });
-        const modelSelection =
-          project.defaultModelSelection?.provider === source.provider
-            ? project.defaultModelSelection
-            : { provider: source.provider, model: DEFAULT_MODEL_BY_PROVIDER[source.provider] };
+        const sourceAccount = importSource!;
+        const accountInstance = sourceAccount.isDefault
+          ? {}
+          : { instanceId: sourceAccount.instanceId };
+        const projectDefault = project.defaultModelSelection;
+        // The copy lives in the source account, so only that account's default applies.
+        const modelSelection: ModelSelection =
+          projectDefault?.provider === source.provider &&
+          (projectDefault.instanceId ?? projectDefault.provider) === sourceAccount.instanceId
+            ? projectDefault
+            : ({
+                provider: source.provider,
+                ...accountInstance,
+                model: DEFAULT_MODEL_BY_PROVIDER[source.provider],
+              } as ModelSelection);
         const sourceDirectoryExists = yield* projectImportPromise(() =>
           importDirectoryExists(source.cwd),
         );
@@ -410,13 +581,12 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             createdAt: source.createdAt,
           });
         }
-        const settings = yield* options.serverSettings.getSettings;
-        const configuredOptions = providerStartOptionsFromServerSettings(settings);
-        const claudeBinaryPath = configuredOptions.claudeAgent?.binaryPath;
+        // Always name the provider: an explicit (possibly empty) entry marks the
+        // launch options as authoritative for the copied continuation.
         const providerOptions: ProviderStartOptions =
           source.provider === "codex"
-            ? { codex: configuredOptions.codex }
-            : { claudeAgent: { ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}) } };
+            ? { codex: sourceAccount.providerOptions?.codex ?? {} }
+            : { claudeAgent: sourceAccount.providerOptions?.claudeAgent ?? {} };
         const runtimeCwd = workingDirectory ?? (directoryExists ? workspaceRoot : undefined);
         // The ledger and native binding survive failures. Retrying the same origin
         // resumes this frozen copy, while deterministic command IDs prevent replay.
@@ -436,25 +606,84 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             return yield* new ProjectImportError({
               message: "The provider did not create an independent conversation copy.",
             });
-          const messages = yield* readHistory({
-            provider: source.provider,
-            threadId,
-            nativeId,
-            sourceHome: source.sourceHome,
-            sourceCwd: source.cwd,
-            sourceCreatedAt: source.createdAt,
-            providerOptions,
-            ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
-          });
-          for (let offset = 0; offset < messages.length; offset += 100) {
-            yield* options.orchestrationEngine.dispatch({
-              type: "thread.messages.import",
-              commandId: CommandId.makeUnsafe(`project-import:${threadId}:messages:${offset}`),
-              threadId,
-              messages: messages.slice(offset, offset + 100),
-              createdAt: origin!.createdAt,
+          let history = yield* options.repository.getHistory(threadId);
+          if (history?.nativeId !== undefined && history.nativeId !== nativeId) {
+            return yield* new ProjectImportError({
+              message: "The imported native copy changed unexpectedly.",
             });
           }
+          if (!history) {
+            const historyInput = {
+              provider: source.provider,
+              threadId,
+              nativeId,
+              sourceHome: source.sourceHome,
+              sourceCwd: source.cwd,
+              sourceCreatedAt: source.createdAt,
+              providerOptions,
+              providerInstanceId: sourceAccount.instanceId,
+              ...(sourceAccount.claudeEnvironment
+                ? { claudeEnvironment: sourceAccount.claudeEnvironment }
+                : {}),
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+            };
+            let page = yield* readHistory(historyInput);
+            const legacyMessages = yield* options.repository.getLegacyMessages(threadId);
+            if (legacyMessages.length > 0) {
+              // Finish the old oldest-first import in its original live transcript.
+              // Mixing its persisted prefix with read-only older pages duplicates
+              // rows and can overwrite full text with Codex summary text.
+              const pages = [page];
+              const cursors = new Set<string>();
+              while (page.nextCursor) {
+                if (cursors.has(page.nextCursor))
+                  return yield* new ProjectImportError({
+                    message: "The provider repeated a history cursor.",
+                  });
+                cursors.add(page.nextCursor);
+                page = yield* readHistory({ ...historyInput, cursor: page.nextCursor });
+                pages.push(page);
+              }
+              const existingIds = new Set(legacyMessages.map((message) => message.messageId));
+              let previousDate = Date.parse(legacyMessages.at(-1)!.createdAt);
+              page = {
+                nextCursor: null,
+                messages: pages
+                  .reverse()
+                  .flatMap((entry) => entry.messages)
+                  .flatMap((message) => {
+                    if (existingIds.has(message.messageId)) return [];
+                    existingIds.add(message.messageId);
+                    previousDate = Math.max(previousDate + 1, Date.parse(message.createdAt));
+                    return [
+                      {
+                        ...message,
+                        createdAt: new Date(previousDate).toISOString(),
+                        updatedAt: new Date(
+                          Math.max(previousDate, Date.parse(message.updatedAt)),
+                        ).toISOString(),
+                      },
+                    ];
+                  }),
+              };
+            }
+            history = {
+              provider: source.provider,
+              threadId,
+              nativeId,
+              providerInstanceId: sourceAccount.instanceId,
+              sourceHome: source.sourceHome,
+              sourceCwd: source.cwd,
+              sourceCreatedAt: source.createdAt,
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+              cursor: null,
+              before: null,
+              revision: 0,
+              pending: page,
+            };
+            yield* options.repository.saveHistory(history);
+          }
+          yield* applyInitialHistoryPage(history);
         });
         // Cleanup failure must be surfaced. It cannot be silently reported as a
         // successful import with an unproven provider process still attached.
@@ -472,6 +701,7 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           session: {
             threadId,
             providerName: source.provider,
+            providerInstanceId: sourceAccount.instanceId,
             status: "stopped",
             runtimeMode: "approval-required",
             activeTurnId: null,
@@ -494,5 +724,5 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         } satisfies ImportProjectResult;
       }),
     );
-  return { listProjectImports, importProject };
+  return { listProjectImports, importProject, loadProjectImportHistory };
 }

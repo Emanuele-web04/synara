@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
+    "./diagnosticIssue": {
+      "types": "./src/diagnosticIssue.ts",
+      "import": "./src/diagnosticIssue.ts"
+    },
     "./betaFeatures": {
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"
@@ -40,6 +48,10 @@
       "types": "./src/git.ts",
       "import": "./src/git.ts"
     },
+    "./kanban": {
+      "types": "./src/kanban.ts",
+      "import": "./src/kanban.ts"
+    },
     "./githubAvatar": {
       "types": "./src/githubAvatar.ts",
       "import": "./src/githubAvatar.ts"
@@ -51,6 +63,10 @@
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
+    },
+    "./KeyedSingleFlightCache": {
+      "types": "./src/KeyedSingleFlightCache.ts",
+      "import": "./src/KeyedSingleFlightCache.ts"
     },
     "./errorMessages": {
       "types": "./src/errorMessages.ts",
@@ -132,6 +148,10 @@
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
     },
+    "./KeyedDrainableWorker": {
+      "types": "./src/KeyedDrainableWorker.ts",
+      "import": "./src/KeyedDrainableWorker.ts"
+    },
     "./DrainableWorker": {
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"
@@ -139,6 +159,10 @@
     "./chatThreads": {
       "types": "./src/chatThreads.ts",
       "import": "./src/chatThreads.ts"
+    },
+    "./todo": {
+      "types": "./src/todo.ts",
+      "import": "./src/todo.ts"
     },
     "./localServers": {
       "types": "./src/localServers.ts",
@@ -188,6 +212,10 @@
       "types": "./src/sidechatExpiry.ts",
       "import": "./src/sidechatExpiry.ts"
     },
+    "./sidechatThread": {
+      "types": "./src/sidechatThread.ts",
+      "import": "./src/sidechatThread.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
@@ -195,6 +223,10 @@
     "./pendingInteractions": {
       "types": "./src/pendingInteractions.ts",
       "import": "./src/pendingInteractions.ts"
+    },
+    "./groupSlug": {
+      "types": "./src/groupSlug.ts",
+      "import": "./src/groupSlug.ts"
     },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
@@ -204,6 +236,10 @@
       "types": "./src/projectDirectoryName.ts",
       "import": "./src/projectDirectoryName.ts"
     },
+    "./projectAgent": {
+      "types": "./src/projectAgent.ts",
+      "import": "./src/projectAgent.ts"
+    },
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
       "import": "./src/pinnedMessages.ts"
@@ -211,6 +247,10 @@
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
+    },
+    "./projectFolders": {
+      "types": "./src/projectFolders.ts",
+      "import": "./src/projectFolders.ts"
     },
     "./threadHierarchy": {
       "types": "./src/threadHierarchy.ts",
@@ -291,6 +331,14 @@
     "./providerMetadata": {
       "types": "./src/providerMetadata.ts",
       "import": "./src/providerMetadata.ts"
+    },
+    "./providerInstances": {
+      "types": "./src/providerInstances.ts",
+      "import": "./src/providerInstances.ts"
+    },
+    "./providerCliProfiles": {
+      "types": "./src/providerCliProfiles.ts",
+      "import": "./src/providerCliProfiles.ts"
     },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
@@ -383,6 +431,18 @@
     "./asyncUserInput": {
       "types": "./src/asyncUserInput.ts",
       "import": "./src/asyncUserInput.ts"
+    },
+    "./groupThreadState": {
+      "types": "./src/groupThreadState.ts",
+      "import": "./src/groupThreadState.ts"
+    },
+    "./coordinatorCheckin": {
+      "types": "./src/coordinatorCheckin.ts",
+      "import": "./src/coordinatorCheckin.ts"
+    },
+    "./keybindingRules": {
+      "types": "./src/keybindingRules.ts",
+      "import": "./src/keybindingRules.ts"
     }
   },
   "scripts": {

@@ -31,6 +31,18 @@ describe("redactDiagnosticText", () => {
       "~/…/main.ts",
       "secret-repo",
     ],
+    [
+      "Windows directory names with spaces are dropped",
+      "open C:\\Users\\John Doe\\Private Project\\work tree\\main.ts:12:3 failed",
+      "~/…/main.ts:12:3",
+      "Private Project",
+    ],
+    [
+      "POSIX directory names with spaces are dropped",
+      "at load (/Users/kartik/Private Project/work tree/main.ts:12:3)",
+      "~/…/main.ts:12:3",
+      "work tree",
+    ],
     ["email", "contact user@example.com for help", "<email>", "user@example.com"],
     [
       "URL query and fragment dropped",
@@ -49,6 +61,24 @@ describe("redactDiagnosticText", () => {
       "connect postgres://admin:s3cret@db.internal:5432/app?ssl=true",
       "postgres://<redacted>@db.internal:5432/…",
       "s3cret",
+    ],
+    [
+      "loopback IPv4 URL keeps a recognizable local host and port",
+      "fetch http://127.0.0.1:43123/api failed",
+      "http://localhost:43123/…",
+      "127.0.0.1",
+    ],
+    [
+      "loopback IPv6 WebSocket URL keeps a recognizable local host and port",
+      "connect ws://[::1]:43123/api failed",
+      "ws://localhost:43123/…",
+      "::1",
+    ],
+    [
+      "external IP URL remains redacted with its port",
+      "connect wss://192.168.1.20:43123/api failed",
+      "wss://<ip>:43123/…",
+      "192.168.1.20",
     ],
     [
       "https git remote keeps only the host",
@@ -130,6 +160,7 @@ describe("redactDiagnosticText", () => {
     ],
     ["IPv4", "dial 192.168.1.20:8080 refused", "<ip>", "192.168.1.20"],
     ["IPv6", "dial fe80::1ff:fe23:4567:890a refused", "<ip>", "fe80::"],
+    ["numeric IPv6", "dial [2001:4860:4860::8888] refused", "<ip>", "2001:4860"],
     [
       "long opaque token",
       "trace 0123456789abcdef0123456789abcdef01234567 done",
@@ -170,6 +201,14 @@ describe("redactDiagnosticText", () => {
   it("keeps HH:MM:SS timestamps in log excerpts readable", () => {
     const out = redact("2026-09-23T12:34:56.789Z backend exited");
     expect(out).toContain("12:34:56");
+  });
+
+  it.each([
+    "net::ERR_CONNECTION_CLOSED",
+    "net::ERR_NETWORK_CHANGED",
+    "at writeOrBuffer (node:internal/streams/writable:570:12)",
+  ])("keeps network codes and Node stack locations readable: %s", (input) => {
+    expect(redact(redact(input))).toBe(input);
   });
 
   it("truncates to maxLength", () => {

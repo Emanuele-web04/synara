@@ -16,6 +16,8 @@ import {
   reconcileActiveRailItem,
   normalizeHiddenRailItems,
   normalizeRailItemOrder,
+  isRailItemAvailable,
+  RAIL_ORDERABLE_ITEM_IDS,
 } from "./appRail.logic";
 
 describe("rail item order", () => {
@@ -23,10 +25,30 @@ describe("rail item order", () => {
     expect(normalizeRailItemOrder(["automations", "gone", "home", "automations"])).toEqual([
       "automations",
       "home",
+      "inbox",
       "spaces",
       "kanban",
+      "tasks",
       "pullRequests",
       "studio",
+    ]);
+  });
+
+  it("slots Inbox next to Home in orders saved before it shipped, then keeps its place", () => {
+    expect(normalizeRailItemOrder(["kanban", "home", "spaces"])).toEqual([
+      "kanban",
+      "home",
+      "inbox",
+      "spaces",
+      "tasks",
+      "pullRequests",
+      "automations",
+      "studio",
+    ]);
+    expect(normalizeRailItemOrder(["home", "spaces", "inbox"]).slice(0, 3)).toEqual([
+      "home",
+      "spaces",
+      "inbox",
     ]);
   });
 
@@ -34,7 +56,7 @@ describe("rail item order", () => {
     expect(normalizeHiddenRailItems(["home", "kanban", "gone", "kanban"])).toEqual(["kanban"]);
   });
 
-  it("drops hidden items unless active, and Studio unless its section is available", () => {
+  it("drops hidden items unless active, and Studio or Inbox unless available", () => {
     const order = normalizeRailItemOrder([]);
     expect(
       buildRailItemOrder({
@@ -42,11 +64,33 @@ describe("rail item order", () => {
         hidden: new Set(["spaces", "automations"]),
         activeItem: "automations",
         studioAvailable: false,
+        inboxAvailable: false,
       }),
-    ).toEqual(["home", "kanban", "pullRequests", "automations"]);
+    ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
     expect(
-      buildRailItemOrder({ order, hidden: new Set(), activeItem: "home", studioAvailable: true }),
+      buildRailItemOrder({
+        order,
+        hidden: new Set(),
+        activeItem: "home",
+        studioAvailable: true,
+        inboxAvailable: true,
+      }),
     ).toEqual(order);
+  });
+
+  it("offers Inbox and Studio in Customize only where they exist", () => {
+    const stable = { studioAvailable: false, inboxAvailable: false };
+    expect(RAIL_ORDERABLE_ITEM_IDS.filter((id) => isRailItemAvailable(id, stable))).toEqual([
+      "home",
+      "spaces",
+      "kanban",
+      "tasks",
+      "pullRequests",
+      "automations",
+    ]);
+    expect(isRailItemAvailable("inbox", { studioAvailable: false, inboxAvailable: true })).toBe(
+      true,
+    );
   });
 });
 
@@ -99,7 +143,9 @@ describe("rail shortcuts", () => {
 describe("railItemShowsPanel", () => {
   it("hides the panel only for the full-width sections", () => {
     expect(railItemShowsPanel("kanban")).toBe(false);
+    expect(railItemShowsPanel("tasks")).toBe(false);
     expect(railItemShowsPanel("pullRequests")).toBe(false);
+    expect(railItemShowsPanel("inbox")).toBe(false);
     for (const id of ["home", "spaces", "automations", "studio", "settings"] as const) {
       expect(railItemShowsPanel(id)).toBe(true);
     }
@@ -108,10 +154,16 @@ describe("railItemShowsPanel", () => {
 
 describe("railItemForPathname", () => {
   it("maps route prefixes to their rail item and everything else to null", () => {
+    expect(railItemForPathname("/inbox")).toBe("inbox");
     expect(railItemForPathname("/kanban")).toBe("kanban");
+    expect(railItemForPathname("/tasks")).toBe("tasks");
     expect(railItemForPathname("/pull-requests/42")).toBe("pullRequests");
     expect(railItemForPathname("/automations")).toBe("automations");
     expect(railItemForPathname("/studio/abc")).toBe("studio");
+    expect(railItemForPathname("/groups")).toBe("studio");
+    expect(railItemForPathname("/hubs")).toBe("studio");
+    expect(railItemForPathname("/hubs/alpha")).toBe("studio");
+    expect(railItemForPathname("/hubsish")).toBeNull();
     expect(railItemForPathname("/settings")).toBe("settings");
     expect(railItemForPathname("/kanbanish")).toBeNull();
     expect(railItemForPathname("/")).toBeNull();

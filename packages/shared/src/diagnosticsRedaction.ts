@@ -62,7 +62,13 @@ const RULES: ReadonlyArray<Replacement> = [
     replace: (_match, scheme, userinfo, host, path) => {
       const keepPath = typeof scheme === "string" && LOCAL_URL_SCHEME.test(scheme);
       const tail = typeof path === "string" && path !== "/" ? (keepPath ? path : "/…") : "";
-      return `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${host}${tail}`;
+      // Keep loopback origins recognizable across renderer/main redaction
+      // passes so fingerprinting can still normalize their changing ports.
+      const safeHost =
+        typeof scheme === "string" && /^(?:https?|wss?)$/i.test(scheme) && typeof host === "string"
+          ? host.replace(/^(?:127\.0\.0\.1|\[::1\])(?=:\d{1,5}$|$)/, "localhost")
+          : host;
+      return `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${safeHost}${tail}`;
     },
   },
   // Email addresses.
@@ -75,7 +81,7 @@ const RULES: ReadonlyArray<Replacement> = [
   // Paths under ~ or <user> collapse to the basename: folder and repo names
   // are dropped entirely.
   {
-    pattern: /(~|<user>)[\\/](?:[^\s'"()\\/]+[\\/])*([^\s'"()\\/]+)/g,
+    pattern: /(~|<user>)[\\/](?:[^\r\n'"()\\/]+[\\/])*([^\s'"()\\/]+)/g,
     replace: (_match, _prefix, basename) => `~/…/${basename}`,
   },
   // Bearer tokens and Authorization header values.
@@ -124,12 +130,13 @@ const RULES: ReadonlyArray<Replacement> = [
   },
   // IPv4 addresses.
   { pattern: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g, replace: "<ip>" },
-  // IPv6 addresses. Pure-digit colon runs (HH:MM:SS timestamps) are kept so
-  // log excerpts stay readable.
+  // IPv6 addresses. HH:MM:SS timestamps are kept so
+  // log excerpts stay readable. Word boundaries prevent matching suffixes of
+  // net::ERR_* codes or Node stack locations such as writable:570:12.
   {
     pattern:
-      /(?<![0-9a-fA-F:])(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}(?![0-9a-fA-F:])|(?<![0-9a-fA-F:])[0-9a-fA-F:]*::[0-9a-fA-F:]*/g,
-    replace: (match) => (/^[0-9:]+$/.test(match) ? match : "<ip>"),
+      /(?<![\w:])(?:(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}|[0-9a-fA-F:]*::[0-9a-fA-F:]*)(?![\w:])/g,
+    replace: (match) => (/^(?:[01]?\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(match) ? match : "<ip>"),
   },
   // Catch-all: any remaining long hex or base64url run is treated as a secret.
   { pattern: /\b[A-Za-z0-9_-]{32,}\b/g, replace: REDACTED },

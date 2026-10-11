@@ -117,6 +117,28 @@ do {
         withExtendedLifetime((monitor, commandListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case .listAudioInputs:
+        emitter.emit(["type": "audio-inputs", "devices": listAudioInputDevices()])
+    case let .audioLevel(sources, inputDeviceUID):
+        let meter = AudioLevelMeter(emitter: emitter, sources: sources, inputDeviceUID: inputDeviceUID)
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+
+        // The parent stops the reader with SIGTERM; tear the readers down first
+        // so the private aggregate device never outlives the helper.
+        signal(SIGTERM, SIG_IGN)
+        let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminationSource.setEventHandler {
+            meter.stop()
+            exit(EXIT_SUCCESS)
+        }
+        terminationSource.resume()
+
+        try meter.start()
+
+        withExtendedLifetime((meter, parentProcessMonitor, terminationSource)) {
+            RunLoop.main.run()
+        }
     case let .permissionGuide(pane, appPath, appName):
         try MainActor.assumeIsolated { try ensurePermissionSetupAppRegistration(appPath: appPath) }
         _ = NSApplication.shared.setActivationPolicy(.accessory)

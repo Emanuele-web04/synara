@@ -13,6 +13,7 @@ import { createSidechatThread } from "./sidechatCreation";
 import type { NewThreadOptions } from "./threadBootstrap";
 import { randomUUID } from "./utils";
 import type { TranscriptAssistantSelection } from "../components/chat/chatSelectionActions";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 function requireSelection(selection: TranscriptAssistantSelection) {
   const attachment = createAssistantSelectionAttachment(selection);
@@ -27,7 +28,8 @@ export async function addSelectionToSide(
   > & { selection: TranscriptAssistantSelection },
 ): Promise<void> {
   const attachment = requireSelection(input.selection);
-  if (input.sourceThread.sidechatSourceThreadId || input.sourceThread.sidechatExpiredAt) {
+  // No sidechat of a sidechat, forked or standalone.
+  if (isSidechatThread(input.sourceThread) || input.sourceThread.sidechatExpiredAt) {
     throw new Error("Open a main chat before starting Side.");
   }
   await createSidechatThread({

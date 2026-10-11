@@ -6,6 +6,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderNativeCommandDescriptor,
@@ -36,7 +37,10 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isMacNavigatorPlatform } from "~/lib/utils";
-import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
+import type {
+  ProviderModelOptionsByProviderInstance,
+  ProviderModelPickerInstance,
+} from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 type ComposerPluginSuggestion = {
@@ -54,10 +58,13 @@ const KANBAN_SUPPORTED_APP_SLASH_COMMANDS = new Set(["clear", "default", "plan"]
 interface UseKanbanTaskComposerDiscoveryInput {
   readonly composerTrigger: ComposerTrigger | null;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  readonly modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
+  readonly providerInstances: ReadonlyArray<ProviderModelPickerInstance>;
   readonly selectedRuntimeAgents: readonly ProviderAgentDescriptor[];
   readonly selectedProjectCwd: string | null;
   readonly serverCwd: string | null;
@@ -80,7 +87,10 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const {
     composerTrigger,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,
@@ -116,11 +126,12 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   });
 
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       binaryPath:
@@ -150,6 +161,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       agentDir:
@@ -166,6 +178,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       enabled:
@@ -197,8 +210,15 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const searchableModelOptions = buildSearchableModelOptions({
-    providerOptions: AVAILABLE_PROVIDER_OPTIONS,
+    providerOptions: providerInstances
+      .filter((instance) => instance.enabled)
+      .map((instance) => ({
+        value: instance.provider,
+        label: instance.label,
+        instanceId: instance.instanceId,
+      })),
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     providerOrder,
     hiddenProviders,
     protectedProviders: [selectedProvider],

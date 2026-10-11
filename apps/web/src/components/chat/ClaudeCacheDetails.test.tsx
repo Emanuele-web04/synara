@@ -32,6 +32,10 @@ describe("ClaudeCacheDetails", () => {
     expect(expired).toContain("next request may reprocess about");
     expect(expired).toContain("Cache state is estimated.");
     expect(expired).not.toContain("saved");
+    const partiallyExpired = renderDetails({ partialTtlSeconds: 300 }, 10);
+    expect(partiallyExpired).toContain("Unknown");
+    expect(partiallyExpired).toContain("5 minutes to 1 hour");
+    expect(partiallyExpired).not.toContain("next request may reprocess about");
   });
 
   it("keeps unavailable timing and token counters distinct from zero", () => {

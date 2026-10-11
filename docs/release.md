@@ -13,7 +13,7 @@ This document covers build-only native validation and publishing desktop release
   `js` validation stages cannot publish and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Builds four platform legs in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
   - Linux `x64` AppImage, `.deb`, and `.rpm` (one electron-builder pass)
@@ -52,8 +52,11 @@ This document covers build-only native validation and publishing desktop release
 - Linux package formats:
   - the AppImage is the only Linux updater payload; `latest-linux.yml` and `synara-linux.yml` describe it
   - `.deb` and `.rpm` are package-manager installs and are never mirrored to the pinned updater feed
-  - `linuxPackageArtifacts()` in `scripts/lib/release-artifact-provenance.ts` proves each format the
-    Linux leg claims to build, so a leg cannot silently publish an AppImage-only release
+  - packaging, provenance and startup use the same strict Linux target declaration
+  - provenance requires one nonempty payload per requested format and verifies the sole Linux
+    updater manifest against the AppImage's exact version, filename, SHA-512 and size
+  - startup checks every requested format from its own temporary payload and user-data tree;
+    Debian/RPM metadata, desktop registration and archive paths are checked before launch
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
@@ -259,7 +262,8 @@ as a supported 0.9.0 feature.
 
 The `linux-x64` leg additionally builds `.deb` and `.rpm` through electron-builder's
 fpm target. It needs `rpmbuild` (the `rpm` package) for the RPM, and `libcrypt.so.1`
-for the bundled fpm Ruby. The workflow installs `rpm` and `libcrypt1` explicitly so
+for the bundled fpm Ruby. Native startup verification uses `rpm2cpio` and `cpio` to
+inspect and extract the RPM without installing it. The workflow installs those tools and `libcrypt1` explicitly so
 the build does not depend on what the runner image happens to carry. On a local Arch
 or Fedora host the equivalents are `rpm` and `libxcrypt-compat`.
 
@@ -269,10 +273,16 @@ is why `DESKTOP_PACKAGE_AUTHOR_EMAIL` and `DESKTOP_PACKAGE_HOMEPAGE` exist in
 `scripts/build-desktop-artifact.ts`. That email is written into the `.deb` control
 file and the RPM maintainer field, so it must stay a real contactable address.
 
-Note that electron-builder treats `deb`/`rpm` as auto-update-capable targets and bakes
-`app-update.yml` plus a `package-type` file into those packages. Synara's own gate in
-`getAutoUpdateDisabledReason` requires `process.env.APPIMAGE` on Linux, so a package
-install still has automatic updates disabled and defers to the package manager.
+electron-builder treats `deb`/`rpm` as auto-update-capable targets by default. The target-level
+`publish: null` settings exclude their artifact events from updater metadata; AppImage keeps
+the existing publish configuration. Synara's gate in `getAutoUpdateDisabledReason` additionally
+requires `process.env.APPIMAGE` on Linux, so package-manager installs have in-app updates disabled.
+Users download a newer Deb/RPM and install it again; these installers do not configure an apt/dnf repository.
+
+Before release, qualify actual installation, launch, upgrade and removal on disposable Debian/Ubuntu
+and Fedora systems, including Stable/Beta coexistence. The extraction/startup gate above does not
+execute package scripts and cannot replace those checks. Arch/Omarchy windowed verification remains
+separate below. Record the exact packages, source and hosts with any outstanding checks.
 
 ### Arch / Omarchy release checklist
 
@@ -368,6 +378,26 @@ version without the `v` prefix (for example, `0.8.4`). The workflow checks equal
 with the resolved release version before packaging; do not use a permanent broad
 opt-out. Packaging, source provenance, startup smoke, and artifact upload must
 still pass. Missing Azure credentials are expected for this unsigned path.
+
+Before startup smoke and artifact upload, the Windows job scans each final
+installer with Microsoft Defender. The guard enables protection and removes
+the hosted image's exclusions inside that disposable runner, updates security
+intelligence, verifies the actual file is not excluded, and requires an explicit
+clean scan plus unchanged installer bytes. If the configured update source returns
+definitions older than 24 hours, it retries Microsoft's direct MMPC source.
+An older local timestamp then requires the installed version to match the latest
+version fetched from Microsoft's security intelligence page; unavailable or
+ambiguous vendor data fails closed. Missing signatures or Defender's own
+out-of-date status also block the scan. Detection, remediation, stale
+intelligence, a missing file, or a scan error blocks publication. Scan evidence
+is retained as `windows-defender-x64`, including on failure. Cloud participation
+and sample-submission settings are not changed. This server scan does not replace
+Windows 11 browser-download qualification.
+
+Signing, provenance, and startup smoke alone do not establish Microsoft Defender
+acceptance. For a reported antivirus block, collect the exact artifact hash,
+engine/definition versions, and detected component before changing packaging;
+see [Windows Defender investigation and qualification](windows-defender-1376.md).
 
 Without the matching exception, published Windows installers must be signed with
 Azure Trusted Signing, and the workflow fails closed when a required signing

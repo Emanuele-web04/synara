@@ -1,47 +1,59 @@
-import type { ProjectId } from "@synara/contracts";
+import type { GitHubInboxListResult, ProjectId } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
-  invalidateOtherPullRequestListQueries,
+  githubIssueCommentMutationOptions,
+  githubIssueDetailQueryOptions,
+} from "./githubInboxQueryOptions";
+import {
+  githubInboxListQueryOptions,
+  githubInboxQueryKeys,
+  githubInboxReviewBadgeQueryOptions,
   pullRequestDetailQueryOptions,
   pullRequestQueryErrorState,
-  pullRequestQueryKeys,
-  prefetchPullRequestListState,
-  pullRequestsExactInvolvementQueryOptions,
-  pullRequestsListQueryOptions,
-  shouldLoadExactPullRequestInvolvement,
 } from "./pullRequestReactQuery";
 
-afterEach(() => {
-  vi.restoreAllMocks();
+describe("GitHub inbox list query options", () => {
+  it("polls every five minutes only while the page is visible, and refreshes on focus", () => {
+    const options = githubInboxListQueryOptions("open");
+
+    expect(options.queryKey).toEqual(["github-inbox", "list", "open", "created"]);
+    expect(options.staleTime).toBe(60_000);
+    expect(options.refetchInterval).toBe(5 * 60_000);
+    expect(options.refetchIntervalInBackground).toBe(false);
+    expect(options.refetchOnWindowFocus).toBe(true);
+    // Cross-key placeholders rendered actionable rows under the wrong state heading.
+    expect(options.placeholderData).toBeUndefined();
+  });
+
+  it("drives the sidebar badge from the open list every fifteen minutes", () => {
+    const options = githubInboxReviewBadgeQueryOptions();
+    const result = {
+      reviewRequestedCount: 3,
+      reviewRequestedCountIncomplete: true,
+    } as GitHubInboxListResult;
+
+    expect(options.queryKey).toEqual(githubInboxQueryKeys.list("open"));
+    expect(options.refetchInterval).toBe(15 * 60_000);
+    expect(options.refetchOnWindowFocus).toBe(true);
+    expect(options.select?.(result)).toEqual({ count: 3, incomplete: true });
+  });
 });
 
-describe("pull request list query options", () => {
-  it("never reuses another filter's rows as placeholders", () => {
-    // Cross-key placeholders rendered actionable rows under the wrong state/involvement
-    // heading; both list options must go to the network (or warm cache) instead.
-    expect(
-      pullRequestsListQueryOptions({ state: "closed", projectId: null }).placeholderData,
-    ).toBeUndefined();
-    expect(
-      pullRequestsExactInvolvementQueryOptions({
-        involvement: "reviewing",
-        state: "open",
-        projectId: null,
-      }).placeholderData,
-    ).toBeUndefined();
+describe("pull request detail query options", () => {
+  const input = { projectId: "project-a" as ProjectId, repository: "acme/widgets", number: 42 };
+
+  it("polls every two minutes while visible", () => {
+    const options = pullRequestDetailQueryOptions(input);
+
+    expect(options.staleTime).toBe(60_000);
+    expect(options.refetchInterval).toBe(2 * 60_000);
+    expect(options.refetchIntervalInBackground).toBe(false);
   });
 
   it("disables detail polling and focus refresh while its dock is collapsed", () => {
-    const options = pullRequestDetailQueryOptions(
-      {
-        projectId: "project-a" as ProjectId,
-        repository: "acme/widgets",
-        number: 42,
-      },
-      { pollingEnabled: false },
-    );
+    const options = pullRequestDetailQueryOptions(input, { pollingEnabled: false });
 
     expect(options.enabled).toBe(true);
     expect(options.refetchInterval).toBe(false);
@@ -51,7 +63,7 @@ describe("pull request list query options", () => {
 
   it("keeps stale data visible when a background refresh fails", () => {
     const error = new Error("refresh failed");
-    expect(pullRequestQueryErrorState({ data: { entries: [] }, error, isError: true })).toEqual({
+    expect(pullRequestQueryErrorState({ data: { items: [] }, error, isError: true })).toEqual({
       initialError: null,
       backgroundError: error,
     });
@@ -60,86 +72,55 @@ describe("pull request list query options", () => {
       backgroundError: null,
     });
   });
+});
 
-  it("prefetches only the state named by user intent", async () => {
-    const queryClient = new QueryClient();
-    const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
-    const projectA = "project-a" as ProjectId;
+describe("GitHub issue queries", () => {
+  const input = { projectId: "project-a" as ProjectId, repository: "acme/widgets", number: 7 };
 
-    await prefetchPullRequestListState(queryClient, {
-      state: "closed",
-      projectId: projectA,
-    });
-
-    expect(prefetchQuery).toHaveBeenCalledTimes(1);
-    expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
-      pullRequestQueryKeys.list({ state: "closed", projectId: projectA }),
+  it("polls issue detail like pull request detail", () => {
+    const options = githubIssueDetailQueryOptions(input);
+    expect(options.staleTime).toBe(60_000);
+    expect(options.refetchInterval).toBe(2 * 60_000);
+    expect(githubIssueDetailQueryOptions(input, { pollingEnabled: false }).refetchInterval).toBe(
+      false,
     );
   });
 
-  it("skips the known-empty reviewing fallback for closed and merged states", () => {
-    expect(
-      shouldLoadExactPullRequestInvolvement({
-        involvement: "reviewing",
-        state: "closed",
-        supersetTruncated: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldLoadExactPullRequestInvolvement({
-        involvement: "reviewing",
-        state: "open",
-        supersetTruncated: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldLoadExactPullRequestInvolvement({
-        involvement: "authored",
-        state: "merged",
-        supersetTruncated: true,
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("invalidateOtherPullRequestListQueries", () => {
-  it("invalidates only same-state, same-project list siblings", async () => {
+  it("refreshes the commented issue and both inbox lists after a comment", async () => {
     const queryClient = new QueryClient();
-    const projectA = "project-a" as ProjectId;
-    const projectB = "project-b" as ProjectId;
-    const refreshedKey = pullRequestQueryKeys.list({ state: "open", projectId: projectA });
-    const exactSiblingKey = pullRequestsExactInvolvementQueryOptions({
-      involvement: "reviewing",
-      state: "open",
-      projectId: projectA,
-    }).queryKey;
-    const otherStateKey = pullRequestQueryKeys.list({ state: "merged", projectId: projectA });
-    const otherProjectKey = pullRequestQueryKeys.list({ state: "open", projectId: projectB });
-    const detailInput = {
-      projectId: projectA,
-      repository: "acme/widgets",
-      number: 42,
-    } as const;
-    const detailKey = pullRequestQueryKeys.detail(detailInput);
-    const diffKey = pullRequestQueryKeys.diff(detailInput);
+    const detailKey = githubIssueDetailQueryOptions(input).queryKey;
+    const otherDetailKey = githubIssueDetailQueryOptions({ ...input, number: 8 }).queryKey;
     for (const key of [
-      refreshedKey,
-      exactSiblingKey,
-      otherStateKey,
-      otherProjectKey,
       detailKey,
-      diffKey,
+      otherDetailKey,
+      githubInboxQueryKeys.list("open"),
+      githubInboxQueryKeys.list("closed"),
+      githubInboxQueryKeys.list("open", "updated"),
+      githubInboxQueryKeys.list("closed", "updated"),
     ]) {
-      queryClient.setQueryData(key, { entries: [] });
+      queryClient.setQueryData(key, {});
     }
+    const options = githubIssueCommentMutationOptions(queryClient);
+    if (!options.onSettled) throw new Error("Comment onSettled hook is missing.");
 
-    await invalidateOtherPullRequestListQueries(queryClient, refreshedKey);
+    await Reflect.apply(options.onSettled, undefined, [
+      {},
+      null,
+      { ...input, body: "Thanks" },
+      undefined,
+      undefined,
+    ]);
 
-    expect(queryClient.getQueryState(refreshedKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(exactSiblingKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(otherStateKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(otherProjectKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(diffKey)?.isInvalidated).toBe(false);
+    for (const state of ["open", "closed"] as const) {
+      expect(
+        queryClient.getQueryState(githubInboxQueryKeys.list(state, "updated"))?.isInvalidated,
+      ).toBe(true);
+    }
+    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherDetailKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(githubInboxQueryKeys.list("open"))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(githubInboxQueryKeys.list("closed"))?.isInvalidated).toBe(
+      true,
+    );
   });
 });

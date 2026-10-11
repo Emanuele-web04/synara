@@ -1,8 +1,8 @@
 // FILE: usePullRequestPaneStateIcon.tsx
 // Purpose: Dock-tab glyph for a pull request pane that tracks the PR's live state. Mirrors the
 //          detail query cache (never fetches — the detail panel owns fetching) so the chip
-//          icon flips to draft/merged/closed the moment the panel's data does. Shared by both
-//          dock hosts (chat thread route and /pull-requests route).
+//          icon flips to draft/merged/closed the moment the panel's data does. Used by the chat
+//          thread dock host.
 // Layer: Pull request presentation
 // Exports: usePullRequestPaneStateIcon
 

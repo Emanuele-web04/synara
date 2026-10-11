@@ -14,6 +14,7 @@ import { promisify } from "node:util";
 
 import { EDITORS, type EditorId } from "@synara/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import {
   getEditorMacApplications,
@@ -660,7 +661,17 @@ async function writeIconArtifact(input: {
     "$bitmap.Dispose()",
     "$icon.Dispose()",
   ].join("; ");
-  await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script]);
+  // Route through the shared process boundary: it resolves the interpreter and
+  // keeps its console window hidden, so icon extraction cannot flash a
+  // PowerShell window on Windows.
+  await new Promise<void>((resolve, reject) => {
+    execProcessFile(
+      "powershell.exe",
+      ["-NoProfile", "-Command", script],
+      { encoding: "utf8" },
+      (error) => (error ? reject(error) : resolve()),
+    );
+  });
 }
 
 async function resolveCachedEditorIconUncached(input: {

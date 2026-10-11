@@ -145,6 +145,68 @@ function verifyReleaseWorkflowSafety(): void {
     workflow.indexOf("  build:\n"),
     workflow.indexOf("  publish_cli:\n"),
   );
+  const buildSteps = buildJob.split(/\n      - /).slice(1);
+  const defenderIndex = buildSteps.findIndex((step) =>
+    step.includes("run: ./scripts/verify-windows-defender.ps1"),
+  );
+  const startupIndex = buildSteps.findIndex((step) =>
+    step.includes("node scripts/verify-packaged-desktop-startup.ts"),
+  );
+  const uploadIndex = buildSteps.findIndex((step) =>
+    step.includes("name: desktop-${{ matrix.platform }}-${{ matrix.arch }}"),
+  );
+  if (defenderIndex < 0 || startupIndex <= defenderIndex || uploadIndex <= defenderIndex) {
+    throw new Error("Windows Defender must qualify installers before startup or artifact upload.");
+  }
+  const defenderStep = buildSteps[defenderIndex]!;
+  if (/continue-on-error:\s*(?!false(?:\s|$))\S/.test(defenderStep)) {
+    throw new Error("Windows Defender qualification must not be optional.");
+  }
+  const defenderPredicate = defenderStep.match(/\n        if: (.+)/)?.[1];
+  if (!defenderPredicate) throw new Error("Missing Windows Defender platform predicate.");
+  const scans = new Function("matrix", "needs", `return ${defenderPredicate};`) as (
+    matrix: { platform: string },
+    needs: { preflight: { outputs: { package_artifacts: string } } },
+  ) => boolean;
+  for (const platform of ["win", "mac", "linux"]) {
+    for (const packageArtifacts of ["true", "false"]) {
+      if (
+        scans({ platform }, { preflight: { outputs: { package_artifacts: packageArtifacts } } }) !==
+        (platform === "win" && packageArtifacts === "true")
+      ) {
+        throw new Error(`Incorrect Defender routing for ${platform}/${packageArtifacts}.`);
+      }
+    }
+  }
+  const defenderId = defenderStep.match(/\n        id: (.+)/)?.[1];
+  const evidenceStep = buildSteps.find((step) =>
+    step.includes("name: windows-defender-${{ matrix.arch }}"),
+  );
+  const evidencePredicate = evidenceStep?.match(/\n        if: \$\{\{ (.+) \}\}/)?.[1];
+  if (!defenderId || !evidencePredicate) throw new Error("Missing Defender evidence routing.");
+  const preservesEvidence = new Function(
+    "matrix",
+    "needs",
+    "steps",
+    "always",
+    `return ${evidencePredicate};`,
+  ) as (
+    matrix: { platform: string },
+    needs: { preflight: { outputs: { package_artifacts: string } } },
+    steps: Record<string, { outcome: string }>,
+    always: () => boolean,
+  ) => boolean;
+  for (const outcome of ["success", "failure", "cancelled", "skipped"]) {
+    const upload = preservesEvidence(
+      { platform: "win" },
+      { preflight: { outputs: { package_artifacts: "true" } } },
+      { [defenderId]: { outcome } },
+      () => true,
+    );
+    if (upload !== (outcome !== "skipped")) {
+      throw new Error(`Incorrect Defender evidence upload after ${outcome} scan.`);
+    }
+  }
   // Execute the actual job predicate against failed/skipped prerequisites. A
   // matching source string would not detect a permissive OR elsewhere in it.
   const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
@@ -555,7 +617,7 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    ")`npm rebuild node-pty --foreground-scripts`,",
+    'npm rebuild node-pty --foreground-scripts --prefix ${path.join(stageAppDir, "node_modules", "node-pty")}',
     "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
   );
   assertNotContains(

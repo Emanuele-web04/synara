@@ -36,10 +36,9 @@ export function observedClaudeCacheTtl(usage: Record<string, unknown>): number |
   const creation = usage.cache_creation;
   if (!creation || typeof creation !== "object") return undefined;
   const fields = creation as Record<string, unknown>;
-  // Mixed-duration prefixes expire in parts. Use the shortest observed duration
-  // for the warning instead of promising the entire prefix one hour of warmth.
-  if ((tokenCount(fields.ephemeral_5m_input_tokens) ?? 0) > 0) return 300;
+  // A short-lived tail does not expire a longer-lived prefix.
   if ((tokenCount(fields.ephemeral_1h_input_tokens) ?? 0) > 0) return 3_600;
+  if ((tokenCount(fields.ephemeral_5m_input_tokens) ?? 0) > 0) return 300;
   return undefined;
 }
 
@@ -47,6 +46,7 @@ export function claudeCacheFromSessionStart(
   input: Record<string, unknown>,
   observedAt: string,
   lifecycleGeneration?: string,
+  previous?: ClaudeCacheObservation,
 ): ClaudeCacheObservation | undefined {
   if (input.hook_event_name !== "SessionStart" || typeof input.session_id !== "string") {
     return undefined;
@@ -55,15 +55,29 @@ export function claudeCacheFromSessionStart(
   const idle = tokenCount(input.seconds_since_last_response);
   const expired = input.prompt_cache_likely_expired;
   const estimate = input.estimated_cache_write_usd;
+  const lastResponseAt =
+    idle !== undefined && Date.parse(observedAt) - idle * 1_000 >= 0
+      ? new Date(Date.parse(observedAt) - idle * 1_000).toISOString()
+      : undefined;
+  const restored = previous?.nativeSessionId === input.session_id ? previous : undefined;
+  // Native idle seconds are rounded. Retain a known request-start timestamp
+  // only for the same response, including a long response whose cache has expired.
+  // A newer native response may have run outside this adapter; its start and TTL
+  // are unknown, so an older request cannot establish its expiry.
+  const sameResponse =
+    lastResponseAt !== undefined &&
+    restored?.lastResponseAt !== undefined &&
+    Math.abs(Date.parse(lastResponseAt) - Date.parse(restored.lastResponseAt)) < 1_000;
+  const retainRequestEvidence = sameResponse || (lastResponseAt === undefined && expired !== false);
   return {
+    ...(retainRequestEvidence ? restored : {}),
+    ...(restored?.model ? { model: restored.model } : {}),
     nativeSessionId: input.session_id,
     ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
     ...(typeof input.model === "string" && input.model ? { model: input.model } : {}),
     observedAt,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
-    ...(idle !== undefined && Date.parse(observedAt) - idle * 1_000 >= 0
-      ? { lastResponseAt: new Date(Date.parse(observedAt) - idle * 1_000).toISOString() }
-      : {}),
+    ...(lastResponseAt !== undefined ? { lastResponseAt } : {}),
     state: expired === true ? "likely-expired" : expired === false ? "likely-warm" : "unknown",
     source: "session-start",
     ...(typeof estimate === "number" && Number.isFinite(estimate) && estimate >= 0
@@ -90,8 +104,28 @@ export function claudeCacheFromRequest(input: {
   const sameIdentity =
     input.previous?.nativeSessionId === input.nativeSessionId &&
     input.previous?.model === input.model;
-  const ttlSeconds =
-    observedClaudeCacheTtl(usage) ?? (sameIdentity ? input.previous?.ttlSeconds : undefined);
+  const observedTtl = observedClaudeCacheTtl(usage);
+  const previousRequest =
+    sameIdentity && input.previous?.lastRequest?.messageId === input.messageId
+      ? input.previous
+      : undefined;
+  const retainedLifetime =
+    sameIdentity &&
+    (previousRequest || (cacheReadInputTokens ?? 0) > 0 || observedTtl === undefined)
+      ? input.previous
+      : undefined;
+  const creation =
+    usage.cache_creation && typeof usage.cache_creation === "object"
+      ? (usage.cache_creation as Record<string, unknown>)
+      : undefined;
+  const lifetimes = [
+    observedTtl,
+    (tokenCount(creation?.ephemeral_5m_input_tokens) ?? 0) > 0 ? 300 : undefined,
+    retainedLifetime?.ttlSeconds,
+    retainedLifetime?.ttlSeconds !== undefined ? retainedLifetime.partialTtlSeconds : undefined,
+  ].filter((ttl): ttl is number => ttl !== undefined);
+  const ttlSeconds = lifetimes.length > 0 ? Math.max(...lifetimes) : undefined;
+  const partialTtlSeconds = lifetimes.length > 0 ? Math.min(...lifetimes) : undefined;
   const knownCounts = [inputTokens, cacheReadInputTokens, cacheCreationInputTokens, outputTokens];
   const contextTokens = knownCounts.every((count) => count !== undefined)
     ? knownCounts.reduce<number>((sum, count) => sum + count!, 0)
@@ -103,12 +137,14 @@ export function claudeCacheFromRequest(input: {
     ...(input.model ? { model: input.model } : {}),
     observedAt: input.observedAt,
     lastResponseAt: input.observedAt,
-    cacheReferenceAt:
-      sameIdentity && input.previous?.lastRequest?.messageId === input.messageId
-        ? (input.previous.cacheReferenceAt ?? input.previous.observedAt)
-        : (input.cacheReferenceAt ?? input.observedAt),
+    cacheReferenceAt: previousRequest
+      ? (previousRequest.cacheReferenceAt ?? previousRequest.observedAt)
+      : (input.cacheReferenceAt ?? input.observedAt),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(ttlSeconds !== undefined && cached ? { ttlSeconds } : {}),
+    ...(partialTtlSeconds !== undefined && partialTtlSeconds !== ttlSeconds && cached
+      ? { partialTtlSeconds }
+      : {}),
     state: cached ? "likely-warm" : "unknown",
     source: "request-usage",
     lastRequest: {

@@ -10,6 +10,7 @@
 import "server-only";
 
 import storedLatestReleaseDownloads from "@/data/latest-release-downloads.json";
+import { findReleaseAssetUrl } from "./release-assets";
 
 const REPO = "Emanuele-web04/synara";
 const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -23,7 +24,7 @@ export type ReleaseDownloads = {
   releasesUrl: string;
   mac: { arm64: string; x64: string };
   windows: string;
-  linux: { appImage: string; deb: string; rpm: string };
+  linux: { appImage: string; deb: string | null; rpm: string | null };
 };
 
 /** Linux package formats Synara ships. AppImage owns in-app updates. */
@@ -53,7 +54,7 @@ const FALLBACK: ReleaseDownloads = {
   releasesUrl: RELEASES_URL,
   mac: { arm64: RELEASES_URL, x64: RELEASES_URL },
   windows: RELEASES_URL,
-  linux: { appImage: RELEASES_URL, deb: RELEASES_URL, rpm: RELEASES_URL },
+  linux: { appImage: RELEASES_URL, deb: null, rpm: null },
 };
 
 // Uses the checked-in snapshot before the generic releases page so installer
@@ -63,9 +64,7 @@ function getFallbackDownloads(): ReleaseDownloads {
     STORED_FALLBACK.mac?.arm64 &&
     STORED_FALLBACK.mac?.x64 &&
     STORED_FALLBACK.windows &&
-    STORED_FALLBACK.linux?.appImage &&
-    STORED_FALLBACK.linux?.deb &&
-    STORED_FALLBACK.linux?.rpm
+    STORED_FALLBACK.linux?.appImage
     ? {
         version: STORED_FALLBACK.version,
         releasesUrl: STORED_FALLBACK.releasesUrl,
@@ -101,9 +100,7 @@ export async function getReleaseDownloads(): Promise<ReleaseDownloads> {
     const releasesUrl = release.html_url ?? RELEASES_URL;
 
     // First asset whose name matches wins; fall back to the listing page.
-    const urlFor = (pattern: RegExp): string =>
-      assets.find((asset) => asset.name && pattern.test(asset.name))?.browser_download_url ??
-      releasesUrl;
+    const urlFor = (pattern: RegExp): string => findReleaseAssetUrl(assets, pattern) ?? releasesUrl;
 
     return {
       version: release.tag_name ?? null,
@@ -115,8 +112,8 @@ export async function getReleaseDownloads(): Promise<ReleaseDownloads> {
       windows: urlFor(/\.exe$/i),
       linux: {
         appImage: urlFor(/\.AppImage$/i),
-        deb: urlFor(/\.deb$/i),
-        rpm: urlFor(/\.rpm$/i),
+        deb: findReleaseAssetUrl(assets, /\.deb$/i),
+        rpm: findReleaseAssetUrl(assets, /\.rpm$/i),
       },
     };
   } catch {

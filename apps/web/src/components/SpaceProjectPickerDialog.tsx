@@ -45,6 +45,7 @@ export function SpaceProjectPickerDialog(props: {
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
 
   useEffect(() => {
     if (!props.open) return;
@@ -64,10 +65,21 @@ export function SpaceProjectPickerDialog(props: {
     () =>
       props.projects.filter(
         (project) =>
-          isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }) &&
-          (project.spaceId ?? null) !== targetSpaceId,
+          isOrdinarySpaceProject(project, {
+            homeDir,
+            chatWorkspaceRoot,
+            studioWorkspaceRoot,
+            groupsWorkspaceRoot,
+          }) && (project.spaceId ?? null) !== targetSpaceId,
       ),
-    [chatWorkspaceRoot, homeDir, props.projects, studioWorkspaceRoot, targetSpaceId],
+    [
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      props.projects,
+      studioWorkspaceRoot,
+      targetSpaceId,
+    ],
   );
   const candidates = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();

@@ -22,7 +22,7 @@ const platforms = [
     platform: "linux",
     // AppImage stays the updater payload; deb/rpm are package-manager
     // updates built from the same staged payload in the same electron-builder
-    // pass, so a second runner or a second smoke would prove nothing new.
+    // pass. Each resulting package still receives its own startup check.
     target: "AppImage,deb,rpm",
     arch: "x64",
   },

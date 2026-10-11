@@ -26,6 +26,9 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
+/** A chat back from snooze and not yet opened: outlined so it stands out until read. */
+export const SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME = "bg-info/8 ring-1 ring-info/50 ring-inset";
+
 /**
  * Resting foreground for primary sidebar item labels and their accompanying
  * leading/pin icons (inactive thread name, project/folder name, folder + pin

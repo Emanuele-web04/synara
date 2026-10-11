@@ -2,6 +2,7 @@ import type {
   ProjectEntry,
   ProviderAgentDescriptor,
   ProviderArtifactsState,
+  ProviderInstanceId,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -30,6 +31,7 @@ import {
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import type { ProviderModelOption } from "../providerModelOptions";
@@ -44,6 +46,7 @@ type ComposerPluginSuggestion = {
 
 export type SearchableModelOption = {
   provider: ProviderKind;
+  instanceId: ProviderInstanceId;
   providerLabel: string;
   slug: string;
   name: string;
@@ -62,7 +65,10 @@ function threadSuggestionTitle(title: string): string {
 function threadSuggestionContainerName(project: Project | undefined): string {
   if (!project) return "Unknown project";
   if (project.kind === "chat") return "Chats";
-  if (project.kind === "studio") return "Studio";
+  // Group containers (legacy "studio" included) use their own title in mentions.
+  if (isGroupContainerKind(project.kind)) {
+    return project.name.trim() || "Hubs";
+  }
   return project.name.trim() || project.folderName.trim() || "Untitled project";
 }
 
@@ -231,8 +237,15 @@ export function buildThreadMentionComposerItems(input: {
 }
 
 export function buildSearchableModelOptions(input: {
-  providerOptions: ReadonlyArray<{ value: ProviderKind; label: string }>;
+  providerOptions: ReadonlyArray<{
+    value: ProviderKind;
+    label: string;
+    instanceId?: ProviderInstanceId | undefined;
+  }>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?:
+    | Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption>>>
+    | undefined;
   providerOrder: readonly ProviderKind[];
   hiddenProviders: readonly ProviderKind[];
   protectedProviders: readonly ProviderKind[];
@@ -249,20 +262,23 @@ export function buildSearchableModelOptions(input: {
         ? option.value === input.lockedProvider
         : protectedProviderSet.has(option.value) || !hiddenProviderSet.has(option.value),
     )
-    .flatMap((option) =>
-      input.modelOptionsByProvider[option.value].map(
-        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
-        }),
-      ),
-    );
+    .flatMap((option) => {
+      const instanceId = option.instanceId ?? option.value;
+      return (
+        input.modelOptionsByProviderInstance?.[instanceId] ??
+        input.modelOptionsByProvider[option.value]
+      ).map(({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+        provider: option.value,
+        instanceId,
+        providerLabel: option.label,
+        slug,
+        name,
+        searchSlug: slug.toLowerCase(),
+        searchName: name.toLowerCase(),
+        searchProvider: option.label.toLowerCase(),
+        searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+      }));
+    });
 }
 
 export function useComposerCommandMenuItems(input: {
@@ -484,10 +500,11 @@ export function useComposerCommandMenuItems(input: {
     { value: option.providerLabel, weight: 200 },
     { value: option.searchProvider, weight: 200 },
     { value: option.searchUpstreamProvider, weight: 200 },
-  ]).map(({ provider, providerLabel, slug, name }) => ({
-    id: `model:${provider}:${slug}`,
+  ]).map(({ provider, instanceId, providerLabel, slug, name }) => ({
+    id: `model:${instanceId}:${slug}`,
     type: "model" as const,
     provider,
+    instanceId,
     model: slug,
     label: name,
     description: `${providerLabel} · ${slug}`,

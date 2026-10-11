@@ -34,8 +34,19 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { LEGACY_PROVIDER_MIGRATIONS, ProviderKind } from "@synara/contracts";
+import {
+  DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
+  DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
+  type DesktopRendererError,
+  type DesktopUpdateState,
+  DesktopDiagnosticBreadcrumb,
+  DesktopDiagnosticIssue,
+  type DesktopDiagnosticReportStatus,
+  LEGACY_PROVIDER_MIGRATIONS,
+  ProviderKind,
+} from "@synara/contracts";
 import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import { Schema } from "effect";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
 export const BETA_DIAGNOSTICS_ENDPOINT = "https://synara-beta-diagnostics.kartik-9f9.workers.dev";
@@ -55,12 +66,22 @@ const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const USAGE_COUNT_MAX = 100_000;
 
-export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = 1024;
-export const DIAGNOSTICS_STACK_MAX_LENGTH = 8 * 1024;
+export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH;
+export const DIAGNOSTICS_STACK_MAX_LENGTH = DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH;
 export const DIAGNOSTICS_LOG_TAIL_MAX_LENGTH = 16 * 1024;
 export const DIAGNOSTICS_LOG_TAIL_MAX_LINES = 200;
 const ERROR_FINGERPRINT_WINDOW_MS = 10 * 60 * 1000;
 const ERROR_HOURLY_CAP = 30;
+const CONTEXT_MAX_ENTRIES = 24;
+const CONTEXT_MAX_AGE_MS = 10 * 60 * 1000;
+const MEMORY_SAMPLE_INTERVAL_MS = 30_000;
+
+type DiagnosticMemoryCounters = {
+  readonly mainRssMb: number;
+  readonly rendererRssMb: number;
+  readonly gpuRssMb: number;
+  readonly utilityRssMb: number;
+};
 
 /**
  * Allowlist of event names. Adding an event means extending this union and the
@@ -118,6 +139,8 @@ export type BetaDiagnosticsPayload =
       readonly durationMs?: number;
       readonly targetVersion?: string;
       readonly errorContext?: "check" | "download" | "install";
+      /** Redacted updater failure detail; accepted only for update.error. */
+      readonly message?: string;
     }
   | {
       readonly kind: "usage";
@@ -234,6 +257,12 @@ export function sanitizeBetaDiagnosticsPayload(
       payload.errorContext === "install"
         ? { errorContext: payload.errorContext }
         : {}),
+      ...(event === "update.error" &&
+      payload.outcome === "error" &&
+      typeof payload.message === "string" &&
+      payload.message.length > 0
+        ? { message: redact(payload.message, DIAGNOSTICS_MESSAGE_MAX_LENGTH) }
+        : {}),
     };
   }
   if (payload.kind === "usage") {
@@ -314,9 +343,21 @@ function topStackFrame(stack: string | undefined): string {
   return stack.split("\n")[0]?.trim() ?? "";
 }
 
-function errorFingerprint(message: string, stack: string | undefined): string {
+function errorFingerprint(message: string, stack: string | undefined, homeDir: string): string {
+  // Local backend ports change on each launch. Normalize only loopback origins
+  // before redaction so unrelated external services keep their port identity.
+  const normalize = (text: string, maxLength: number): string =>
+    redactDiagnosticText(
+      text.replace(
+        /\b((?:https?|wss?):\/\/(?:localhost|127\.0\.0\.1|\[::1\])):\d{1,5}(?=[/\s'"?#]|$)/gi,
+        "$1:0",
+      ),
+      { homeDir, maxLength },
+    );
   return createHash("sha256")
-    .update(`${message}\n${topStackFrame(stack)}`)
+    .update(
+      `${normalize(message, DIAGNOSTICS_MESSAGE_MAX_LENGTH)}\n${topStackFrame(stack === undefined ? undefined : normalize(stack, DIAGNOSTICS_STACK_MAX_LENGTH))}`,
+    )
     .digest("hex")
     .slice(0, 16);
 }
@@ -355,6 +396,10 @@ export class BetaDiagnostics {
   private flushing = false;
   private flushPromise: Promise<void> | null = null;
   private disposed = false;
+  private readonly recentActivity: Array<DesktopDiagnosticBreadcrumb & { at: number }> = [];
+  private readonly memorySamples: Array<{ at: number; counters: DiagnosticMemoryCounters }> = [];
+  private memoryTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly sampleMemory: (() => DiagnosticMemoryCounters) | undefined;
 
   constructor(input: {
     readonly homeDir: string;
@@ -363,6 +408,7 @@ export class BetaDiagnostics {
     readonly arch: string;
     readonly env?: NodeJS.ProcessEnv;
     readonly now?: () => Date;
+    readonly sampleMemory?: () => DiagnosticMemoryCounters;
   }) {
     this.queuePath = join(input.homeDir, "diagnostics", "events.jsonl");
     this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
@@ -375,6 +421,7 @@ export class BetaDiagnostics {
     this.platform = input.platform;
     this.arch = input.arch;
     this.homeDir = input.homeDir;
+    this.sampleMemory = input.sampleMemory;
   }
 
   private readonly now: () => Date;
@@ -384,6 +431,8 @@ export class BetaDiagnostics {
   private readonly homeDir: string;
   private readonly errorFingerprintSentAt = new Map<string, number>();
   private readonly errorSentTimestamps: number[] = [];
+  private readonly issueReports = new Map<string, { id: string; at: number }>();
+  private readonly reportStatuses = new Map<string, DesktopDiagnosticReportStatus>();
 
   private loadInstallId(homeDir: string): string {
     const diagnosticsDir = join(homeDir, "diagnostics");
@@ -438,6 +487,11 @@ export class BetaDiagnostics {
       void this.flush();
     }, FLUSH_INTERVAL_MS);
     this.flushTimer.unref?.();
+    if (this.sampleMemory) {
+      this.captureMemorySample();
+      this.memoryTimer = setInterval(() => this.captureMemorySample(), MEMORY_SAMPLE_INTERVAL_MS);
+      this.memoryTimer.unref?.();
+    }
     // First usage relay 2 minutes after startup, then every 6h. Timers are
     // unref'd so diagnostics never hold the process open.
     const first = setTimeout(() => {
@@ -450,9 +504,19 @@ export class BetaDiagnostics {
     this.usageTimers.push(first);
   }
 
-  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): void {
+  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): string | undefined {
     if (this.disposed) return;
-    const sanitized = sanitizeBetaDiagnosticsPayload(payload, this.homeDir, event);
+    if (payload.kind === "crash" && payload.reason === "clean-exit") return;
+    const withContext =
+      payload.kind === "crash"
+        ? {
+            ...payload,
+            logTail: this.attachContext(payload.logTail, DIAGNOSTICS_LOG_TAIL_MAX_LENGTH, true),
+          }
+        : payload.kind === "error"
+          ? { ...payload, stack: this.attachContext(payload.stack, DIAGNOSTICS_STACK_MAX_LENGTH) }
+          : payload;
+    const sanitized = sanitizeBetaDiagnosticsPayload(withContext, this.homeDir, event);
     // A beta lifecycle event without a valid outcome is meaningless — drop it.
     if (sanitized.kind === "beta" && !("outcome" in sanitized)) return;
     const record: BetaDiagnosticsEvent = {
@@ -474,8 +538,168 @@ export class BetaDiagnostics {
         mode: 0o600,
       });
       this.trimQueueIfNeeded();
+      return record.id;
     } catch {
       // Diagnostics must never break the app.
+    }
+  }
+
+  /** Reuse the deployed app.error envelope; no receiver schema change is required. */
+  trackIssue(source: "main" | "renderer", input: unknown): string | null {
+    if (this.disposed) return null;
+    try {
+      if (!Schema.is(DesktopDiagnosticIssue)(input)) return null;
+      if (
+        input.durationMs !== undefined &&
+        (!Number.isFinite(input.durationMs) ||
+          input.durationMs < 0 ||
+          input.durationMs > 604_800_000)
+      )
+        return null;
+      const message = `Handled issue: ${input.code} (${input.reason ?? "unknown"})`;
+      const fingerprint = errorFingerprint(message, undefined, this.homeDir);
+      const now = this.now().getTime();
+      const previous = this.issueReports.get(fingerprint);
+      if (
+        previous &&
+        now - previous.at < ERROR_FINGERPRINT_WINDOW_MS &&
+        this.getReportStatus(previous.id) !== "unavailable"
+      )
+        return previous.id;
+      if (!this.allowError(fingerprint, false)) return null;
+      const id = this.track("app.error", {
+        kind: "error",
+        source,
+        message,
+        fingerprint,
+        ...(input.durationMs === undefined
+          ? {}
+          : { stack: `durationMs=${Math.round(input.durationMs)}` }),
+      });
+      if (!id) return null;
+      this.allowError(fingerprint);
+      this.issueReports.set(fingerprint, { id, at: now });
+      this.reportStatuses.set(id, "queued");
+      if (this.reportStatuses.size > 128)
+        this.reportStatuses.delete(this.reportStatuses.keys().next().value!);
+      // Use the existing bounded queue and retry cadence. Uploads never delay the operation.
+      void this.flush();
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  getReportStatus(id: unknown): DesktopDiagnosticReportStatus {
+    return typeof id === "string" ? (this.reportStatuses.get(id) ?? "unavailable") : "unavailable";
+  }
+
+  /** Reconstruct from the allowlist so unknown IPC properties never enter the ring. */
+  recordActivity(input: unknown): void {
+    if (this.disposed) return;
+    try {
+      if (!Schema.is(DesktopDiagnosticBreadcrumb)(input)) return;
+      const at = this.now().getTime();
+      const previous = this.recentActivity.at(-1);
+      if (
+        previous?.activity === input.activity &&
+        previous.phase === input.phase &&
+        at - previous.at < 1000
+      )
+        return;
+      this.recentActivity.push({ activity: input.activity, phase: input.phase, at });
+      if (this.recentActivity.length > CONTEXT_MAX_ENTRIES) this.recentActivity.shift();
+    } catch {
+      // Malformed/accessor-backed input must not interfere with the app.
+    }
+  }
+
+  private captureMemorySample(): void {
+    if (this.disposed || !this.sampleMemory) return;
+    try {
+      const input = this.sampleMemory();
+      const counters = {
+        mainRssMb: input.mainRssMb,
+        rendererRssMb: input.rendererRssMb,
+        gpuRssMb: input.gpuRssMb,
+        utilityRssMb: input.utilityRssMb,
+      };
+      if (
+        Object.values(counters).some(
+          (value) => !Number.isFinite(value) || value < 0 || value > 16_777_216,
+        )
+      )
+        return;
+      this.memorySamples.push({ at: this.now().getTime(), counters });
+      if (this.memorySamples.length > 4) this.memorySamples.shift();
+    } catch {
+      // Process metrics are best effort, including during shutdown.
+    }
+  }
+
+  private attachContext(
+    text: string | undefined,
+    limit: number,
+    keepTail = false,
+  ): string | undefined {
+    const cutoff = this.now().getTime() - CONTEXT_MAX_AGE_MS;
+    const lines = [
+      ...this.memorySamples
+        .filter((sample) => sample.at >= cutoff)
+        .map(
+          (sample) =>
+            `${new Date(sample.at).toISOString()} memory MiB main=${Math.round(sample.counters.mainRssMb)} renderer=${Math.round(sample.counters.rendererRssMb)} gpu=${Math.round(sample.counters.gpuRssMb)} utility=${Math.round(sample.counters.utilityRssMb)}`,
+        ),
+      ...this.recentActivity
+        .filter((entry) => entry.at >= cutoff)
+        .map((entry) => `${new Date(entry.at).toISOString()} ${entry.activity} ${entry.phase}`),
+    ];
+    if (!lines.length) return text;
+    const context = `\n[Beta diagnostic context]\n${lines.join("\n")}`;
+    const available = Math.max(0, limit - context.length);
+    const original = redactDiagnosticText(text ?? "", { homeDir: this.homeDir, maxLength: limit });
+    return (
+      (available === 0
+        ? ""
+        : keepTail
+          ? original.slice(-available)
+          : original.slice(0, available)) + context
+    );
+  }
+
+  /** Records update transitions using only the diagnostics payload allowlist. */
+  trackUpdateStateChange(previous: DesktopUpdateState, next: DesktopUpdateState): void {
+    // Retryable failures retain available/downloaded instead of becoming error.
+    if (next.status === "error" || next.errorContext !== null) {
+      if (
+        next.status !== previous.status ||
+        next.errorContext !== previous.errorContext ||
+        next.message !== previous.message
+      )
+        this.track("update.error", {
+          kind: "update",
+          outcome: "error",
+          ...(next.errorContext ? { errorContext: next.errorContext } : {}),
+          ...(next.message ? { message: next.message } : {}),
+        });
+      return;
+    }
+    if (next.status === previous.status) return;
+    const status = next.status;
+    if (status === "checking") {
+      this.track("update.check", { kind: "update", outcome: "ok" });
+    } else if (status === "available") {
+      this.track("update.available", {
+        kind: "update",
+        outcome: "ok",
+        ...(next.availableVersion ? { targetVersion: next.availableVersion } : {}),
+      });
+    } else if (status === "downloaded") {
+      this.track("update.downloaded", {
+        kind: "update",
+        outcome: "ok",
+        ...(next.downloadedVersion ? { targetVersion: next.downloadedVersion } : {}),
+      });
     }
   }
 
@@ -487,8 +711,22 @@ export class BetaDiagnostics {
   trackError(source: "main" | "renderer", error: unknown): void {
     if (this.disposed) return;
     try {
-      const message = error instanceof Error ? error.message : String(error);
-      const stack = error instanceof Error ? error.stack : undefined;
+      const rendererError =
+        source === "renderer" && error !== null && typeof error === "object"
+          ? (error as Partial<DesktopRendererError>)
+          : undefined;
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof rendererError?.message === "string"
+            ? rendererError.message
+            : String(error);
+      const stack =
+        error instanceof Error
+          ? error.stack
+          : typeof rendererError?.stack === "string"
+            ? rendererError.stack
+            : undefined;
       const redactedMessage = redactDiagnosticText(message, {
         homeDir: this.homeDir,
         maxLength: DIAGNOSTICS_MESSAGE_MAX_LENGTH,
@@ -500,7 +738,7 @@ export class BetaDiagnostics {
               homeDir: this.homeDir,
               maxLength: DIAGNOSTICS_STACK_MAX_LENGTH,
             });
-      const fingerprint = errorFingerprint(redactedMessage, redactedStack);
+      const fingerprint = errorFingerprint(message, stack, this.homeDir);
       if (!this.allowError(fingerprint)) return;
       this.track("app.error", {
         kind: "error",
@@ -565,7 +803,7 @@ export class BetaDiagnostics {
     }
   }
 
-  private allowError(fingerprint: string): boolean {
+  private allowError(fingerprint: string, record = true): boolean {
     const nowMs = this.now().getTime();
     while (
       this.errorSentTimestamps.length > 0 &&
@@ -576,6 +814,7 @@ export class BetaDiagnostics {
     if (this.errorSentTimestamps.length >= ERROR_HOURLY_CAP) return false;
     const lastSent = this.errorFingerprintSentAt.get(fingerprint);
     if (lastSent !== undefined && nowMs - lastSent < ERROR_FINGERPRINT_WINDOW_MS) return false;
+    if (!record) return true;
     this.errorFingerprintSentAt.set(fingerprint, nowMs);
     if (this.errorFingerprintSentAt.size > 256) {
       for (const [key, sentAt] of this.errorFingerprintSentAt) {
@@ -604,6 +843,18 @@ export class BetaDiagnostics {
       const stagingPath = `${this.queuePath}.trim-${process.pid}`;
       writeFileSync(stagingPath, `${kept.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
       renameSync(stagingPath, this.queuePath);
+      const keptIds = new Set(
+        kept.map((line) => {
+          try {
+            return (JSON.parse(line) as { id?: unknown }).id;
+          } catch {
+            return undefined;
+          }
+        }),
+      );
+      for (const [id, status] of this.reportStatuses) {
+        if (status === "queued" && !keptIds.has(id)) this.reportStatuses.set(id, "unavailable");
+      }
     } catch {
       // best effort
     }
@@ -667,6 +918,9 @@ export class BetaDiagnostics {
           // unparseable sent line: leave a defensive retry in place below
         }
       }
+      for (const id of sentIds) {
+        if (this.reportStatuses.has(id)) this.reportStatuses.set(id, "sent");
+      }
       const current = readFileSync(this.queuePath, "utf8")
         .split("\n")
         .filter((line) => line.length > 0);
@@ -709,6 +963,8 @@ export class BetaDiagnostics {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
+    if (this.memoryTimer) clearInterval(this.memoryTimer);
+    this.memoryTimer = null;
     for (const timer of this.usageTimers) clearTimeout(timer);
     this.usageTimers = [];
     const deadline = Date.now() + timeoutMs;

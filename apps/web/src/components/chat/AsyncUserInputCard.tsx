@@ -160,6 +160,13 @@ export function AsyncUserInputCard({
                       );
                       setAnswers((current) => ({ ...current, [activeQuestion.id]: draft }));
                     }}
+                    onKeyDown={(event) => {
+                      // Match the chat composer: Enter (or Cmd/Ctrl+Enter) sends, Shift+Enter breaks the line.
+                      if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
+                        return;
+                      event.preventDefault();
+                      void advance();
+                    }}
                   />
                   {error && (
                     <p role="alert" className="text-ui leading-snug text-destructive">

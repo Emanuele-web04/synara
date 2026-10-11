@@ -7,14 +7,19 @@ import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useAppSettings } from "~/appSettings";
+import { useNowMs } from "~/hooks/useNowMs";
 import { useStableValue } from "~/hooks/useStableValue";
+import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { toastManager } from "~/components/ui/toast";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
-import { isStudioContainerProject } from "../../lib/studioProjects";
+import { isGroupContainerProject } from "../../lib/groupProjects";
 import { useStore } from "../../store";
-import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
+import {
+  createLastActivityTimestampSelector,
+  createSidebarDisplayThreadsSelector,
+} from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { sortProjectsForSidebar } from "../Sidebar.logic";
@@ -22,8 +27,9 @@ import {
   areKanbanComposerDraftSnapshotsEqual,
   buildKanbanBoard,
   buildKanbanComposerDraftSnapshot,
-  deriveKanbanColumn,
+  hasKanbanAttentionCandidate,
   resolveOptimisticDispatchOutcome,
+  shouldToastForExpiredDispatch,
   type KanbanBoard,
   type KanbanComposerDraftSnapshot,
   type KanbanDraftThreadSnapshot,
@@ -49,10 +55,19 @@ export function useKanbanBoard(): KanbanBoard {
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  // Referential stability comes from the selector itself: it returns the
+  // previous result object while no surfaced timestamp actually advanced, so
+  // the board does not re-derive on unrelated shell churn.
+  const selectLastActivityTimestamps = useMemo(() => createLastActivityTimestampSelector(), []);
+  const lastActivityTimestampMsByThreadId = useStore(selectLastActivityTimestamps);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
   const projectSortOrder = settings.sidebarProjectSortOrder;
+  const kanbanViewMode = useKanbanUiStore((state) => state.kanbanViewMode);
+  const kanbanNeedsReviewFilter = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
+  const hasRevealedReviewFold = useKanbanUiStore((state) => state.hasRevealedReviewFold);
 
   // Mirror the sidebar's grouping: projects in the user's sidebar sort order, then one
   // "Chats" board for the hidden home chat container. Stale duplicate containers (cleaned
@@ -62,10 +77,18 @@ export function useKanbanBoard(): KanbanBoard {
     const chatContainers = allProjects.filter((project) =>
       isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
     );
+    // Group containers are intentionally excluded: a group coordinates chats
+    // rather than owning a task board, and its threads surface on the Groups
+    // view, not Kanban.
     const otherProjects = allProjects.filter(
       (project) =>
         !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
-        !isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+        !isGroupContainerProject(project, {
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
+          groupsWorkspaceRoot,
+        }),
     );
     const canonicalContainer =
       chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
@@ -84,7 +107,15 @@ export function useKanbanBoard(): KanbanBoard {
       ],
       projectIdAliases: aliases,
     };
-  }, [allProjects, chatWorkspaceRoot, homeDir, projectSortOrder, studioWorkspaceRoot, threads]);
+  }, [
+    allProjects,
+    chatWorkspaceRoot,
+    groupsWorkspaceRoot,
+    homeDir,
+    projectSortOrder,
+    studioWorkspaceRoot,
+    threads,
+  ]);
   const draftsByThreadId = useComposerDraftStore((state) => state.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const draftOrderByProjectId = useKanbanUiStore((state) => state.draftOrderByProjectId);
@@ -173,7 +204,10 @@ export function useKanbanBoard(): KanbanBoard {
         // (slow provider) just stop watching for failure — the card is already
         // In Progress from derived state, so a revert toast would be a lie.
         const thread = threadsRef.current.find((candidate) => candidate.id === threadId);
-        if (thread && deriveKanbanColumn(thread) === "inProgress") {
+        // A thread that left the display set while its dispatch was still on
+        // the wire cannot be confirmed as reverted here — stay silent rather
+        // than claim a revert we can't verify (H5).
+        if (!shouldToastForExpiredDispatch(thread)) {
           continue;
         }
         toastManager.add({
@@ -225,29 +259,102 @@ export function useKanbanBoard(): KanbanBoard {
     return snapshots;
   }, [draftThreadsByThreadId]);
 
-  // The board is only rebuilt when one of its inputs changes; the 1s `useNowMs`
-  // tick and unrelated store notifications in KanbanView reuse the last board.
-  return useMemo(
+  // v2 attention-first boards only tick the wall clock while a live-work
+  // candidate could still go stale: a thread with live pending/attention state
+  // that can move into Awaiting you as the heartbeat ages. Classic boards never
+  // tick (they have no staleness rules). The gate reuses the shared liveness
+  // definition (`hasKanbanLiveWork` via `hasKanbanAttentionCandidate`) so a
+  // wedged starting session, a running no-turn session, and live-tail threads
+  // all tick too (C2).
+  const hasAttentionCandidate = threads.some((thread) =>
+    hasKanbanAttentionCandidate(thread, lastActivityTimestampMsByThreadId[thread.id]),
+  );
+  const nowMs = useNowMs(kanbanViewMode === "v2" && hasAttentionCandidate);
+
+  // The needs-review filter is a v2-only surface (S1-P8). Its active predicate
+  // ("at least one card has an open PR") and the per-thread flag consult the same
+  // live resolved PR rows the card chips render — a merged PR drops the "Needs
+  // review" flag even though `lastKnownPr` still says open (H2). Polling is
+  // bounded: only threads whose persisted seed says open (pill and filter
+  // candidates) run live lookups, in v2 mode only — the pills need the live
+  // state even when the filter itself is off. When v2 is off, nothing polls.
+  const projectCwdById = useMemo(
+    () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
+    [allProjects],
+  );
+  const needsReviewSeedThreads = useMemo(
     () =>
-      buildKanbanBoard({
-        projects,
-        threads,
-        draftThreads,
-        composerDraftByThreadId,
-        draftOrderByProjectId,
-        projectIdAliases,
-        terminalEntryThreadIds,
-        optimisticDispatchByThreadId,
-      }),
+      kanbanViewMode === "v2"
+        ? threads.filter((t) => t.worktreePath !== null && t.lastKnownPr?.state === "open")
+        : [],
+    [kanbanViewMode, threads],
+  );
+  const needsReviewPrLookup = useThreadPullRequests({
+    threads: needsReviewSeedThreads,
+    projectCwdById,
+    // Needs-review is a live-confirmed claim: without a resolved git-status
+    // snapshot the persisted "open" PR would keep the flag on stale evidence.
+    requireLiveStatus: true,
+  });
+  const needsReviewByThreadId = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    for (const thread of threads) {
+      // Needs-review is a live-confirmed claim: only threads with a dedicated
+      // worktree can be verified against git. A no-worktree thread with a
+      // persisted-open PR (e.g. the checkout was deleted after opening) cannot be
+      // confirmed, so it must not keep a stale "Needs review" flag (C3/H2).
+      if (thread.worktreePath === null) {
+        continue;
+      }
+      const livePr = needsReviewPrLookup.get(thread.id);
+      if (livePr?.state === "open") {
+        map[thread.id] = true;
+      }
+    }
+    return map;
+  }, [needsReviewPrLookup, threads]);
+
+  const board = useMemo(
+    () =>
+      buildKanbanBoard(
+        {
+          projects,
+          threads,
+          draftThreads,
+          composerDraftByThreadId,
+          draftOrderByProjectId,
+          projectIdAliases,
+          terminalEntryThreadIds,
+          optimisticDispatchByThreadId,
+        },
+        kanbanViewMode === "v2"
+          ? {
+              now: nowMs,
+              needsReviewByThreadId,
+              isNeedsReviewActive: kanbanNeedsReviewFilter,
+              // The board-level "Show more" affordance drops the per-column review
+              // cap so the folded tail renders (H1).
+              uncapped: hasRevealedReviewFold,
+              lastActivityTimestampMsByThreadId,
+            }
+          : undefined,
+      ),
     [
+      projects,
+      threads,
+      draftThreads,
       composerDraftByThreadId,
       draftOrderByProjectId,
-      draftThreads,
-      optimisticDispatchByThreadId,
       projectIdAliases,
-      projects,
       terminalEntryThreadIds,
-      threads,
+      optimisticDispatchByThreadId,
+      kanbanViewMode,
+      nowMs,
+      needsReviewByThreadId,
+      kanbanNeedsReviewFilter,
+      hasRevealedReviewFold,
+      lastActivityTimestampMsByThreadId,
     ],
   );
+  return board;
 }

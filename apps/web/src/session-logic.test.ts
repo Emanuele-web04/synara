@@ -6,6 +6,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
   deriveActiveWorkStartedAt,
+  derivePendingBackgroundWork,
   findLatestProposedPlan,
   findSidebarProposedPlan,
   formatClockDuration,
@@ -16,6 +17,7 @@ import {
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   PROVIDER_OPTIONS,
+  countOutstandingBackgroundWork,
 } from "./session-logic";
 import { makeActivity } from "./storeTestFixtures";
 
@@ -300,6 +302,221 @@ describe("deriveActiveBackgroundTasksState", () => {
     ];
 
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
+  });
+});
+
+describe("countOutstandingBackgroundWork", () => {
+  const movedToBackground = (taskId: string) =>
+    makeActivity({
+      id: `moved-${taskId}`,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      tone: "info",
+      turnId: "turn-1",
+      payload: {
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
+      },
+    });
+  const completed = (taskId: string, status = "completed") =>
+    makeActivity({
+      id: `done-${taskId}`,
+      createdAt: "2026-02-23T00:01:00.000Z",
+      kind: "task.completed",
+      summary: "Task completed",
+      tone: "info",
+      payload: { taskId, status },
+    });
+  const activities = [
+    movedToBackground("agent-a"),
+    movedToBackground("agent-b"),
+    completed("agent-a"),
+  ];
+
+  it.each(["completed", "stopped"])(
+    "counts older subagents until %s evidence settles them in a live replacement session",
+    (status) => {
+      expect(
+        countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "ready" } }),
+      ).toBe(1);
+      expect(
+        countOutstandingBackgroundWork({
+          activities: [...activities, completed("agent-b", status)],
+          session: { orchestrationStatus: "ready" },
+        }),
+      ).toBe(0);
+    },
+  );
+
+  it("stops counting once the session can no longer finish them", () => {
+    expect(
+      countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "stopped" } }),
+    ).toBe(0);
+    expect(countOutstandingBackgroundWork({ activities, session: null })).toBe(0);
+  });
+});
+
+describe("derivePendingBackgroundWork", () => {
+  function backgroundedTaskActivities(
+    taskId: string,
+    turnId = "turn-1",
+  ): OrchestrationThreadActivity[] {
+    return [
+      makeActivity({
+        id: `${taskId}-started`,
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "Subagent task started",
+        tone: "info",
+        turnId,
+        payload: { taskId, taskType: "subagent" },
+      }),
+      makeActivity({
+        id: `${taskId}-backgrounded`,
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.updated",
+        summary: "Task moved to background",
+        tone: "info",
+        turnId,
+        payload: { taskId, status: "running", isBackgrounded: true },
+      }),
+    ];
+  }
+
+  function pendingWork(
+    activities: OrchestrationThreadActivity[],
+    overrides?: {
+      latestTurnId?: string | null;
+      orchestrationStatus?: "idle" | "ready" | "running" | "stopped" | "error" | null;
+    },
+  ) {
+    const latestTurnId = overrides?.latestTurnId === undefined ? "turn-1" : overrides.latestTurnId;
+    const orchestrationStatus =
+      overrides?.orchestrationStatus === undefined ? "ready" : overrides.orchestrationStatus;
+    return derivePendingBackgroundWork({
+      activities,
+      latestTurn: latestTurnId ? { turnId: TurnId.makeUnsafe(latestTurnId) } : null,
+      session: orchestrationStatus ? { orchestrationStatus } : null,
+    });
+  }
+
+  it("counts only isBackgrounded tasks created by the latest turn", () => {
+    const activities = [
+      ...backgroundedTaskActivities("task-b", "turn-2"),
+      makeActivity({
+        id: "foreground-task",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.started",
+        summary: "Foreground task started",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { taskId: "task-foreground", taskType: "subagent" },
+      }),
+    ];
+
+    expect(pendingWork(activities, { latestTurnId: "turn-2" })).toEqual({
+      count: 1,
+      taskIds: ["task-b"],
+    });
+  });
+
+  it("returns null for a stale backgrounded task from an older turn", () => {
+    const activities = backgroundedTaskActivities("task-a", "turn-1");
+
+    expect(pendingWork(activities, { latestTurnId: "turn-2" })).toBeNull();
+  });
+
+  it("returns null without a latest turn", () => {
+    const activities = backgroundedTaskActivities("task-a");
+
+    expect(pendingWork(activities, { latestTurnId: null })).toBeNull();
+  });
+
+  it("returns null without a session", () => {
+    const activities = backgroundedTaskActivities("task-a");
+
+    expect(pendingWork(activities, { orchestrationStatus: null })).toBeNull();
+  });
+
+  it.each(["stopped", "error"] as const)(
+    "returns null when the session orchestration status is %s",
+    (orchestrationStatus) => {
+      const activities = backgroundedTaskActivities("task-a");
+
+      expect(pendingWork(activities, { orchestrationStatus })).toBeNull();
+    },
+  );
+
+  it.each(["ready", "idle", "running"] as const)(
+    "counts a live backgrounded task when the session is %s",
+    (orchestrationStatus) => {
+      const activities = backgroundedTaskActivities("task-a");
+
+      expect(pendingWork(activities, { orchestrationStatus })).toEqual({
+        count: 1,
+        taskIds: ["task-a"],
+      });
+    },
+  );
+
+  it("drops tasks settled by task.completed or a terminal task.updated", () => {
+    const activities = [
+      ...backgroundedTaskActivities("task-done"),
+      ...backgroundedTaskActivities("task-failed"),
+      makeActivity({
+        id: "task-done-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-done", status: "completed" },
+      }),
+      makeActivity({
+        id: "task-failed-updated",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "task.updated",
+        summary: "Task failed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-failed", status: "failed" },
+      }),
+    ];
+
+    expect(pendingWork(activities)).toBeNull();
+  });
+
+  it("drops tasks settled by a turnless provider-initiated task.completed", () => {
+    const activities = [
+      ...backgroundedTaskActivities("task-a"),
+      makeActivity({
+        id: "task-a-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        payload: { taskId: "task-a", status: "completed" },
+      }),
+    ];
+
+    expect(pendingWork(activities)).toBeNull();
+  });
+
+  it("ignores tasks that were never marked isBackgrounded", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "task-running",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.updated",
+        summary: "Task running",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-fg", status: "running", isBackgrounded: false },
+      }),
+    ];
+
+    expect(pendingWork(activities)).toBeNull();
   });
 });
 

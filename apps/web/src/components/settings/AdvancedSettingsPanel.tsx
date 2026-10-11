@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import { logoutCurrentBrowserSession } from "~/authLogout";
+import { useFeatureTourStore } from "~/featureTour/store";
 import { APP_VERSION } from "~/branding";
 import { resolveAndPersistPreferredEditor } from "~/editorPreferences";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
@@ -244,6 +245,19 @@ export function AdvancedSettingsPanel(props: {
             <code className="text-ui leading-snug font-medium text-muted-foreground">
               {APP_VERSION}
             </code>
+          }
+        />
+        <SettingsRow
+          title="What’s new since 0.9.2"
+          description="Explore the redesigned workspace, provider accounts, and Code review."
+          control={
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => useFeatureTourStore.getState().open()}
+            >
+              Replay feature tour
+            </Button>
           }
         />
         <SettingsRow

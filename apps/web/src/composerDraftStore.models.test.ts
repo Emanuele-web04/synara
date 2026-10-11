@@ -1,4 +1,4 @@
-import { ThreadId, type ModelSelection } from "@synara/contracts";
+import { ProviderInstanceId, ThreadId, type ModelSelection } from "@synara/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   deriveEffectiveComposerModelState,
@@ -65,6 +65,204 @@ describe("resolvePreferredComposerModelSelection", () => {
       }),
     ).toEqual(cursorSelection);
   });
+
+  it("does not infer an active instance from arbitrary same-provider draft selections", () => {
+    const resolved = resolvePreferredComposerModelSelection({
+      draft: {
+        modelSelectionByProvider: {
+          claude_work: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-work",
+            undefined,
+            "claude_work",
+          ),
+          claude_personal: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-personal",
+            undefined,
+            "claude_personal",
+          ),
+        },
+        activeProvider: null,
+      },
+      threadModelSelection: null,
+      projectModelSelection: null,
+      defaultProvider: "claudeAgent",
+      resolveProviderForInstanceId: (instanceId) =>
+        instanceId === ProviderInstanceId.makeUnsafe("claude_work") ||
+        instanceId === ProviderInstanceId.makeUnsafe("claude_personal")
+          ? "claudeAgent"
+          : null,
+    });
+
+    expect(resolved).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-5",
+    });
+  });
+});
+
+describe("OMP role-era persisted selections", () => {
+  const customModelsByProvider = {
+    codex: [],
+    claudeAgent: [],
+    cursor: [],
+    devin: [],
+    antigravity: [],
+    grok: [],
+    droid: [],
+    opencode: [],
+    pi: [],
+    omp: [],
+  };
+  const catalog = {
+    omp: [{ slug: "upstream/catalog-model", name: "Catalog Model" }],
+  };
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("normalizes the old concrete model + thinking shape without changing the account", () => {
+    expect(
+      normalizeModelSelection({
+        provider: "omp",
+        instanceId: "omp_work",
+        model: "upstream/catalog-model",
+        options: { thinkingLevel: "high", role: "smol" },
+        role: { name: "smol", model: "different/model" },
+      }),
+    ).toEqual({
+      provider: "omp",
+      instanceId: "omp_work",
+      model: "upstream/catalog-model",
+      options: { thinkingLevel: "high" },
+    });
+  });
+
+  it.each(["role:smol", "opaque-custom-selector", "provider/router:max", "@smol", "pi/slow"])(
+    "keeps hydrated OMP selector %s and its account until an explicit model selection",
+    (model) => {
+      const threadId = ThreadId.makeUnsafe("thread-omp-legacy-model");
+      const rawSelection = {
+        provider: "omp",
+        instanceId: "omp_work",
+        model,
+        options: { thinkingLevel: "high" },
+      };
+      const store = useComposerDraftStore.getState();
+      const merged = useComposerDraftStore.persist.getOptions().merge!(
+        {
+          draftsByThreadId: {
+            [threadId]: {
+              modelSelectionByProvider: { omp_work: rawSelection },
+              activeProvider: "omp_work",
+              prompt: "Keep this prompt",
+            },
+          },
+          stickyModelSelectionByProvider: { omp_work: rawSelection },
+          stickyActiveProvider: "omp_work",
+        },
+        store,
+      );
+      const draft = merged.draftsByThreadId[threadId]!;
+      expect(draft.modelSelectionByProvider.omp_work).toEqual(rawSelection);
+      expect(merged.stickyModelSelectionByProvider.omp_work).toEqual(rawSelection);
+      expect(draft.prompt).toBe("Keep this prompt");
+      const input = {
+        draft,
+        selectedProvider: "omp" as const,
+        selectedProviderInstanceId: "omp_work",
+        threadModelSelection: modelSelection(
+          "omp",
+          "upstream/catalog-model",
+          undefined,
+          "omp_work",
+        ),
+        projectModelSelection: modelSelection("codex", "gpt-5.5"),
+        customModelsByProvider,
+        availableModelOptionsByProvider: catalog,
+      };
+      expect(deriveEffectiveComposerModelState(input)).toMatchObject({
+        selectedModel: model,
+        modelOptions: { omp: { thinkingLevel: "high" } },
+      });
+      expect(resolvePreferredComposerModelSelection(input)).toEqual(rawSelection);
+      store.setModelSelection(
+        threadId,
+        modelSelection("omp", "upstream/catalog-model", undefined, "omp_work"),
+      );
+      const selectedDraft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+      expect(
+        deriveEffectiveComposerModelState({ ...input, draft: selectedDraft }).selectedModel,
+      ).toBe("upstream/catalog-model");
+      expect(
+        resolvePreferredComposerModelSelection({ ...input, draft: selectedDraft }),
+      ).toMatchObject({
+        provider: "omp",
+        instanceId: "omp_work",
+        model: "upstream/catalog-model",
+      });
+    },
+  );
+
+  it.each(["thread", "project"] as const)(
+    "preserves a stale %s role key for actionable rejection, not a catalog fallback",
+    (source) => {
+      const staleSelection = modelSelection(
+        "omp",
+        "role:smol",
+        { thinkingLevel: "high" },
+        "omp_work",
+      );
+      const input = {
+        draft: null,
+        selectedProvider: "omp" as const,
+        selectedProviderInstanceId: "omp_work",
+        threadModelSelection: source === "thread" ? staleSelection : null,
+        projectModelSelection:
+          source === "project"
+            ? staleSelection
+            : modelSelection("omp", "upstream/catalog-model", undefined, "omp_work"),
+        customModelsByProvider,
+        availableModelOptionsByProvider: catalog,
+      };
+      expect(deriveEffectiveComposerModelState(input).selectedModel).toBe("role:smol");
+      expect(resolvePreferredComposerModelSelection(input)).toEqual(staleSelection);
+    },
+  );
+
+  it("does not borrow another OMP account's selection or thinking options", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          omp_work: modelSelection("omp", "work/custom", { thinkingLevel: "high" }, "omp_work"),
+        },
+        activeProvider: "omp_work",
+      },
+      selectedProvider: "omp",
+      selectedProviderInstanceId: "omp_personal",
+      threadModelSelection: modelSelection(
+        "omp",
+        "role:smol",
+        { thinkingLevel: "low" },
+        "omp_work",
+      ),
+      projectModelSelection: modelSelection(
+        "omp",
+        "personal/custom",
+        { thinkingLevel: "medium" },
+        "omp_personal",
+      ),
+      customModelsByProvider,
+      availableModelOptionsByProvider: catalog,
+    });
+    expect(state).toEqual({
+      selectedModel: "personal/custom",
+      modelOptions: { omp: { thinkingLevel: "medium" } },
+    });
+  });
 });
 
 describe("composerDraftStore modelSelection", () => {
@@ -72,6 +270,45 @@ describe("composerDraftStore modelSelection", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
+  });
+
+  it("preserves provider instance ids when reusing existing model options", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadId,
+      modelSelection("codex", "gpt-5.3-codex", { reasoningEffort: "xhigh" }, "codex_work"),
+    );
+
+    store.setModelSelection(threadId, modelSelection("codex", "gpt-5.4", undefined, "codex_work"));
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider
+        .codex_work,
+    ).toEqual(modelSelection("codex", "gpt-5.4", { reasoningEffort: "xhigh" }, "codex_work"));
+  });
+
+  it("keeps same-provider instance selections in separate draft slots", () => {
+    const store = useComposerDraftStore.getState();
+    const personal = modelSelection(
+      "claudeAgent",
+      "claude-sonnet-personal",
+      undefined,
+      "claude_personal",
+    );
+    const work = modelSelection(
+      "claudeAgent",
+      "claude-sonnet-work",
+      { effort: "max" },
+      "claude_work",
+    );
+
+    store.setModelSelection(threadId, personal);
+    store.setModelSelection(threadId, work);
+
+    const selections =
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider;
+    expect(selections?.claude_personal).toEqual(personal);
+    expect(selections?.claude_work).toEqual(work);
   });
 
   it.each(["max"])(
@@ -112,6 +349,37 @@ describe("composerDraftStore modelSelection", () => {
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.devin,
     ).toEqual(modelSelection("devin", "adaptive", { fastMode: true }));
+  });
+
+  it("seeds a per-provider model selection without switching the active provider", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadId, modelSelection("codex", "gpt-5.4"));
+
+    store.seedModelSelection(threadId, modelSelection("claudeAgent", "claude-opus-4-5"));
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.activeProvider).toBe("codex");
+    expect(draft?.modelSelectionByProvider.codex).toEqual(modelSelection("codex", "gpt-5.4"));
+    expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-5"),
+    );
+    // A later explicit pick can still switch providers — the seed is only a default.
+    store.setModelSelection(threadId, modelSelection("claudeAgent", "claude-fable-5"));
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.activeProvider).toBe(
+      "claudeAgent",
+    );
+  });
+
+  it("does not create an active provider when seeding an untouched draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.seedModelSelection(threadId, modelSelection("claudeAgent", "claude-opus-4-5"));
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.activeProvider).toBeNull();
+    expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-5"),
+    );
   });
 
   it("stores Antigravity base models and effort options separately", () => {
@@ -338,6 +606,47 @@ describe("composerDraftStore modelSelection", () => {
     });
 
     expect(state.selectedModel).toBe("opencode/gpt-5-nano");
+  });
+
+  it("uses only the selected instance's draft model and options", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          codex_work: modelSelection(
+            "codex",
+            "gpt-5-work",
+            { reasoningEffort: "xhigh" },
+            "codex_work",
+          ),
+          codex_personal: modelSelection(
+            "codex",
+            "gpt-5-personal",
+            { reasoningEffort: "low" },
+            "codex_personal",
+          ),
+        },
+        activeProvider: "codex",
+      },
+      selectedProvider: "codex",
+      selectedProviderInstanceId: "codex_work",
+      threadModelSelection: null,
+      projectModelSelection: null,
+      customModelsByProvider: {
+        codex: ["gpt-5-work", "gpt-5-personal"],
+        claudeAgent: [],
+        cursor: [],
+        antigravity: [],
+        grok: [],
+        droid: [],
+        opencode: [],
+        pi: [],
+        devin: [],
+        omp: [],
+      },
+    });
+
+    expect(state.selectedModel).toBe("gpt-5-work");
+    expect(state.modelOptions?.codex).toEqual({ reasoningEffort: "xhigh" });
   });
 
   it("preserves the persisted OpenCode thread model when discovery omits it", () => {

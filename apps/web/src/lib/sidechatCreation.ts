@@ -1,13 +1,18 @@
 // FILE: sidechatCreation.ts
-// Purpose: Own the sidechat fork/start/snapshot lifecycle independently of composer state.
+// Purpose: Own the sidechat create/start/snapshot lifecycle independently of composer state:
+//          forked sidechats (a source thread's /side) and standalone ones (the inbox's Ask
+//          about a GitHub item, with no source thread).
 // Layer: Chat orchestration
 
 import type {
+  ClientOrchestrationCommand,
   ModelSelection,
   NativeApi,
   OrchestrationShellSnapshot,
+  ProjectId,
   RuntimeMode,
   ThreadId,
+  ThreadSidechatContext,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
@@ -183,7 +188,7 @@ export function clearSidechatPaneRetention(threadId: ThreadId): void {
   }
 }
 
-function resolveSidechatRuntimeMode(
+export function resolveSidechatRuntimeMode(
   runtimeMode: RuntimeMode,
   modelSelection: ModelSelection,
 ): RuntimeMode {
@@ -265,13 +270,38 @@ export async function createSidechatThread(input: {
     createdAt,
   });
 
-  // The fork now exists. Expose it immediately so a slow snapshot refresh cannot
+  return finishSidechatCreation({
+    api: input.api,
+    threadId: nextThreadId,
+    openSidechat: input.openSidechat,
+    syncServerShellSnapshot: input.syncServerShellSnapshot,
+    sendInitialPrompt: () =>
+      sendSidechatPrompt({
+        api: input.api,
+        threadId: nextThreadId,
+        selectedModelSelection: input.selectedModelSelection,
+        runtimeMode,
+        prompt: initialPrompt,
+      }),
+  });
+}
+
+// Shared by both kinds once the server accepted the create: expose the pane, sync the shell
+// snapshot, and send an optional first prompt, each failure reported without undoing the rest.
+async function finishSidechatCreation(input: {
+  api: NativeApi;
+  threadId: ThreadId;
+  openSidechat: (threadId: ThreadId) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  sendInitialPrompt?: () => Promise<void>;
+}): Promise<SidechatCreationResult> {
+  // The sidechat now exists. Expose it immediately so a slow snapshot refresh cannot
   // leave a successful creation invisible and tempt the user into creating duplicates.
-  markSidechatSyncing(nextThreadId);
-  input.openSidechat(nextThreadId);
+  markSidechatSyncing(input.threadId);
+  input.openSidechat(input.threadId);
 
   // Start snapshot synchronization before an optional prompt. A slow/queued turn
-  // must never prevent the successful fork from reaching the shell projection.
+  // must never prevent the successful create from reaching the shell projection.
   const snapshotPromise = (async (): Promise<unknown | null> => {
     try {
       const snapshot = await input.api.orchestration.getShellSnapshot();
@@ -284,13 +314,7 @@ export async function createSidechatThread(input: {
 
   const promptPromise = (async (): Promise<unknown | null> => {
     try {
-      await sendSidechatPrompt({
-        api: input.api,
-        threadId: nextThreadId,
-        selectedModelSelection: input.selectedModelSelection,
-        runtimeMode,
-        prompt: initialPrompt,
-      });
+      await input.sendInitialPrompt?.();
       return null;
     } catch (error) {
       return error;
@@ -299,10 +323,54 @@ export async function createSidechatThread(input: {
 
   const [snapshotError, promptError] = await Promise.all([snapshotPromise, promptPromise]);
   if (snapshotError) {
-    markSidechatSyncFailed(nextThreadId);
+    markSidechatSyncFailed(input.threadId);
   } else {
-    clearSidechatPaneRetention(nextThreadId);
+    clearSidechatPaneRetention(input.threadId);
   }
 
-  return { threadId: nextThreadId, promptError, snapshotError };
+  return { threadId: input.threadId, promptError, snapshotError };
+}
+
+/**
+ * Ask about a GitHub item: a sidechat with no source thread, in the project's own checkout
+ * (local, no branch change), so there is no transcript to import and no permissions to
+ * inherit. The caller seeds the item's context card in `openSidechat`, before the pane's
+ * composer mounts, and the user writes the question.
+ */
+export async function createStandaloneSidechat(input: {
+  api: NativeApi;
+  projectId: ProjectId;
+  context: ThreadSidechatContext;
+  itemTitle: string;
+  modelSelection: ModelSelection;
+  runtimeMode: RuntimeMode;
+  openSidechat: (threadId: ThreadId) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  /** `promoteThreadCreate` in the app; injected so this module stays store-free. */
+  dispatchCreate: (
+    command: Extract<ClientOrchestrationCommand, { type: "thread.create" }>,
+  ) => Promise<unknown>;
+}): Promise<SidechatCreationResult> {
+  const threadId = newThreadId();
+  await input.dispatchCreate({
+    type: "thread.create",
+    commandId: newCommandId(),
+    threadId,
+    projectId: input.projectId,
+    title: `Sidechat: ${input.itemTitle}`,
+    modelSelection: input.modelSelection,
+    runtimeMode: resolveSidechatRuntimeMode(input.runtimeMode, input.modelSelection),
+    interactionMode: "default",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    sidechatContext: input.context,
+    createdAt: new Date().toISOString(),
+  });
+  return finishSidechatCreation({
+    api: input.api,
+    threadId,
+    openSidechat: input.openSidechat,
+    syncServerShellSnapshot: input.syncServerShellSnapshot,
+  });
 }

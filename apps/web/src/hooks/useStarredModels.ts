@@ -19,7 +19,7 @@ import { useLocalStorage } from "./useLocalStorage";
 export function useStarredModels(): {
   starredModels: ReadonlyArray<StarredModel>;
   toggleStarredModel: (entry: StarredModel) => void;
-  unstarModel: (entry: Pick<StarredModel, "provider" | "model">) => void;
+  unstarModel: (entry: Pick<StarredModel, "provider" | "instanceId" | "model">) => void;
 } {
   // Until the first edit writes the new key, legacy per-provider favourites stand in.
   const [legacySeed] = useState(seedStarredModelsFromLegacyFavorites);

@@ -6,6 +6,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findReleaseAssetUrl, isInstallerAsset } from "../src/lib/release-assets.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
@@ -13,8 +14,6 @@ const downloadsOutputPath = resolve(projectRoot, "src/data/installer-downloads.j
 const latestOutputPath = resolve(projectRoot, "src/data/latest-release-downloads.json");
 const releasesApiUrl = "https://api.github.com/repos/Emanuele-web04/synara/releases";
 const latestReleaseApiUrl = `${releasesApiUrl}/latest`;
-const installerFilePattern = /\.(dmg|exe|AppImage|deb|rpm)$/i;
-
 function createGitHubHeaders() {
   const headers = {
     Accept: "application/vnd.github+json",
@@ -82,7 +81,7 @@ function countInstallerDownloads(releases) {
   return releases.reduce((total, release) => {
     const releaseTotal =
       release.assets?.reduce((assetTotal, asset) => {
-        if (!asset.name || !installerFilePattern.test(asset.name)) {
+        if (!isInstallerAsset(asset.name)) {
           return assetTotal;
         }
 
@@ -97,9 +96,7 @@ function getReleaseDownloads(release, source) {
   const assets = release.assets ?? [];
   const releasesUrl =
     release.html_url ?? `https://github.com/Emanuele-web04/synara/releases/tag/${release.tag_name}`;
-  const urlFor = (pattern) =>
-    assets.find((asset) => asset.name && pattern.test(asset.name))?.browser_download_url ??
-    releasesUrl;
+  const urlFor = (pattern) => findReleaseAssetUrl(assets, pattern) ?? releasesUrl;
 
   const downloads = {
     version: release.tag_name ?? null,
@@ -111,8 +108,8 @@ function getReleaseDownloads(release, source) {
     windows: urlFor(/\.exe$/i),
     linux: {
       appImage: urlFor(/\.AppImage$/i),
-      deb: urlFor(/\.deb$/i),
-      rpm: urlFor(/\.rpm$/i),
+      deb: findReleaseAssetUrl(assets, /\.deb$/i),
+      rpm: findReleaseAssetUrl(assets, /\.rpm$/i),
     },
     updatedAt: new Date().toISOString(),
     source,

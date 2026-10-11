@@ -15,6 +15,7 @@ import { PickerPanelShell } from "./chat/PickerPanelShell";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { IconButton } from "./ui/icon-button";
+import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import {
   resolveFileDiffPath,
@@ -94,7 +95,7 @@ export function DiffPanelFileJumpMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-foreground"
+            className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
             label="Jump to file"
             title="Jump to file"
           >

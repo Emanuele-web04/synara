@@ -4,34 +4,88 @@
 // Exports: Vitest suites for appSettings.ts
 
 import { Schema } from "effect";
-import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS_VIEW,
+  ProviderInstanceId,
+} from "@synara/contracts";
+import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  buildProviderInstanceSettingsPatch,
   applyLocalAppSettingsPatch,
   appSettingsPatchToServerSettingsPatch,
+  buildInitialServerSettingsMigrationPatch,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_FOLLOW_UP_BEHAVIOR,
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   didProviderCommandDiscoverySettingsChange,
   didProviderEnablementChange,
   getAppModelOptions,
+  getCodexProviderDiscoveryOptions,
   getCustomBinaryPathForProvider,
+  getCustomBinaryPathForProviderInstance,
   getDefaultNativeFontSmoothing,
   getCustomModelsByProvider,
-  getGitTextGenerationModelOptions,
+  getCustomModelsForProviderInstance,
+  getManageableProviderInstances,
+  getProviderInstanceOptions,
+  getUnsupportedProviderInstanceOptions,
   getServerDisabledProviders,
   isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
+  mergeProviderInstanceConfigPatch,
+  mergeProviderStartOptions,
   normalizeChatFontSizePx,
+  normalizeInitialStoredAppSettingsForServerMigration,
   normalizeStoredAppSettings,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
+  patchCustomModelsForProviderInstance,
+  removeManageableProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
+  resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
+  serverSettingsToAppSettings,
 } from "./appSettings";
+
+describe("provider process priority settings", () => {
+  it("defaults on and forwards explicit opt-out and reset to the server", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).lowerProviderProcessPriority).toBe(true);
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: false })).toEqual({
+      lowerProviderProcessPriority: false,
+    });
+    expect(appSettingsPatchToServerSettingsPatch({ lowerProviderProcessPriority: true })).toEqual({
+      lowerProviderProcessPriority: true,
+    });
+  });
+});
+
+describe("source control writing settings", () => {
+  it("defaults old settings to repository conventions and saves both preferences to the server", () => {
+    const settings = Schema.decodeSync(AppSettingsSchema)({});
+    expect(settings.sourceControlWritingStyle).toBe("repository");
+    expect(settings.sourceControlCustomInstructions).toBe("");
+    expect(
+      appSettingsPatchToServerSettingsPatch({
+        sourceControlWritingStyle: "custom",
+        sourceControlCustomInstructions: "Use short bullets.",
+      }),
+    ).toEqual({
+      sourceControlWritingStyle: "custom",
+      sourceControlCustomInstructions: "Use short bullets.",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ sourceControlWritingStyle: "conventional" }),
+    ).toEqual({ sourceControlWritingStyle: "conventional" });
+    expect(appSettingsPatchToServerSettingsPatch({ sourceControlCustomInstructions: "" })).toEqual({
+      sourceControlCustomInstructions: "",
+    });
+  });
+});
 
 describe("computer control defaults", () => {
   it("leaves computer control off until a preference is explicitly saved", () => {
@@ -267,55 +321,6 @@ describe("getAppModelOptions", () => {
   });
 });
 
-describe("getGitTextGenerationModelOptions", () => {
-  it("merges codex and OpenCode model options for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: ["custom/codex-model"],
-      customOpenCodeModels: ["openrouter/gpt-oss-120b"],
-      textGenerationModel: "openai/gpt-5",
-      textGenerationProvider: "opencode",
-    });
-
-    expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
-    expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-  });
-
-  it("prefers runtime-discovered OpenCode models for git writing settings", () => {
-    const options = getGitTextGenerationModelOptions(
-      {
-        customCodexModels: [],
-        customOpenCodeModels: [],
-        textGenerationModel: "openrouter/custom-model",
-        textGenerationProvider: "opencode",
-      },
-      {
-        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
-      },
-    );
-
-    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
-    expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
-  });
-
-  it("omits chat-only providers that have no Git text-generation backend", () => {
-    const options = getGitTextGenerationModelOptions({
-      customCodexModels: [],
-      customClaudeModels: ["claude-opus-4-8"],
-      customGrokModels: ["grok-4.6"],
-      customOpenCodeModels: [],
-      textGenerationModel: "gpt-5.6-luna",
-      textGenerationProvider: "codex",
-    });
-
-    expect(options.some((option) => option.provider === "claudeAgent")).toBe(false);
-    expect(options.some((option) => option.provider === "grok")).toBe(false);
-    expect(options.some((option) => option.provider === "antigravity")).toBe(false);
-    expect(options.some((option) => option.provider === "pi")).toBe(false);
-    expect(options.some((option) => option.provider === "devin")).toBe(false);
-  });
-});
-
 describe("isGitTextGenerationSettingsDirty", () => {
   it("compares the normalized provider and model defaults", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
@@ -330,10 +335,22 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
-describe("sidebar layout", () => {
-  it("decodes settings saved before the layout existed as classic", () => {
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("classic");
+describe("code review sort", () => {
+  it("defaults existing settings to newest and preserves a stored activity order", () => {
+    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
+    expect(decode({}).githubInboxSort).toBe("created");
+    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
+  });
+});
+
+describe("removed settings", () => {
+  it("ignores a code review list width stored before widths became fractions", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      githubInboxListWidth: 420,
+      githubInboxKind: "issue",
+    });
+    expect(decoded).not.toHaveProperty("githubInboxListWidth");
+    expect(decoded.githubInboxKind).toBe("issue");
   });
 });
 
@@ -479,6 +496,125 @@ describe("normalizeStoredAppSettings", () => {
     });
   });
 
+  it("redacts provider instance secrets so plaintext never persists locally", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        providerInstances: {
+          grok_work: {
+            driver: "grok",
+            environment: [
+              { name: "XAI_API_KEY", value: "super-secret", sensitive: true },
+              { name: "XAI_BASE_URL", value: "https://example.test", sensitive: false },
+            ],
+          },
+          opencode_work: {
+            driver: "opencode",
+            config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+          },
+        },
+      }),
+    );
+
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+    expect(normalized.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+      { name: "XAI_BASE_URL", value: "https://example.test", sensitive: false },
+    ]);
+    expect(normalized.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "",
+      serverPasswordRedacted: true,
+    });
+  });
+
+  it("builds the initial server migration patch from legacy plaintext before storage redaction", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        providerInstances: {
+          grok_work: {
+            driver: "grok",
+            environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+          },
+          opencode_work: {
+            driver: "opencode",
+            config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+          },
+        },
+      }),
+    );
+
+    expect(buildInitialServerSettingsMigrationPatch(decodedSettings).providerInstances).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+      },
+    });
+    expect(normalizeStoredAppSettings(decodedSettings).providerInstances).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "",
+          serverPasswordRedacted: true,
+        },
+      },
+    });
+  });
+
+  it("keeps legacy provider secrets until the server migration is committed", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        providerInstances: {
+          grok_work: {
+            driver: "grok",
+            environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+          },
+          opencode_work: {
+            driver: "opencode",
+            config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+          },
+        },
+      }),
+    );
+
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, false).providerInstances,
+    ).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+      },
+    });
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, true).providerInstances,
+    ).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "",
+          serverPasswordRedacted: true,
+        },
+      },
+    });
+  });
+
   it("drops default provider command names so they do not look like custom paths", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({
@@ -503,8 +639,45 @@ describe("normalizeStoredAppSettings", () => {
       droidBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
+      ompBinaryPath: "",
+      ompAgentDir: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
+  });
+
+  it("keeps server-valid Codex account ids that need slugged instance ids", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        codexAccounts: [
+          {
+            id: "work@example.com",
+            label: "Work Email",
+            homePath: "/Users/you/.codex",
+            shadowHomePath: "/Users/you/.codex-work",
+          },
+        ],
+        selectedCodexAccountId: "work@example.com",
+      }),
+    );
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(normalized.codexAccounts).toEqual([
+      {
+        id: "work@example.com",
+        label: "Work Email",
+        homePath: "/Users/you/.codex",
+        shadowHomePath: "/Users/you/.codex-work",
+      },
+    ]);
+    expect(normalized.selectedCodexAccountId).toBe("work@example.com");
+    expect(getProviderInstanceOptions(normalized)).toContainEqual(
+      expect.objectContaining({
+        instanceId,
+        provider: "codex",
+        label: "Work Email",
+      }),
+    );
   });
 });
 
@@ -515,6 +688,8 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "/usr/local/bin/claude",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         antigravityBinaryPath: "/usr/local/bin/agy",
@@ -558,6 +733,8 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
@@ -575,12 +752,311 @@ describe("getProviderStartOptions", () => {
     ).toBeUndefined();
   });
 
+  it("resolves the selected Codex account into provider start options", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "/Users/you/.codex",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "work",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        devinBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
+      }),
+    ).toEqual({
+      codex: {
+        accountId: "work",
+        homePath: "/Users/you/.codex",
+        shadowHomePath: "/Users/you/.codex_work",
+      },
+    });
+  });
+
+  it("uses an explicit default Codex instance instead of the legacy selected account", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "/Users/you/.codex",
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/Users/you/.codex_work",
+            },
+          ],
+          selectedCodexAccountId: "work",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          devinBinaryPath: "",
+          antigravityBinaryPath: "",
+          grokBinaryPath: "",
+          droidBinaryPath: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          ompBinaryPath: "",
+          ompAgentDir: "",
+        },
+        "codex",
+      ),
+    ).toEqual({
+      codex: {
+        homePath: "/Users/you/.codex",
+      },
+    });
+  });
+
+  it("resolves a legacy Codex account instance into account-isolated options", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "/Users/you/.codex",
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "/Users/work/.codex",
+              shadowHomePath: "/Users/work/.codex-shadow",
+            },
+          ],
+          selectedCodexAccountId: "default",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          devinBinaryPath: "",
+          antigravityBinaryPath: "",
+          grokBinaryPath: "",
+          droidBinaryPath: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          ompBinaryPath: "",
+          ompAgentDir: "",
+        },
+        "codex_work",
+      ),
+    ).toEqual({
+      codex: {
+        accountId: "work",
+        homePath: "/Users/work/.codex",
+        shadowHomePath: "/Users/work/.codex-shadow",
+      },
+    });
+  });
+
+  it("overlays explicit Claude provider instance HOME options", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "/usr/local/bin/claude",
+          claudeHomePath: "/Users/base",
+          codexBinaryPath: "",
+          codexHomePath: "",
+          codexAccounts: [],
+          selectedCodexAccountId: "default",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          devinBinaryPath: "",
+          antigravityBinaryPath: "",
+          grokBinaryPath: "",
+          droidBinaryPath: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          ompBinaryPath: "",
+          ompAgentDir: "",
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              displayName: "Claude Work",
+              enabled: true,
+              config: {
+                binaryPath: "/custom/bin/claude",
+                homePath: "/Users/work",
+              },
+            },
+          },
+        },
+        "claude_work",
+      ),
+    ).toEqual({
+      claudeAgent: {
+        binaryPath: "/custom/bin/claude",
+        homePath: "/Users/work",
+      },
+    });
+  });
+
+  it("does not inherit the selected Codex account into a custom Codex instance", () => {
+    const result = getProviderStartOptions(
+      {
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "/Users/default/.codex",
+        codexAccounts: [
+          {
+            id: "selected",
+            label: "Selected",
+            homePath: "/Users/selected/.codex",
+            shadowHomePath: "/Users/selected/.codex-shadow",
+          },
+        ],
+        selectedCodexAccountId: "selected",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        devinBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: { homePath: "/Users/work/.codex" },
+          },
+        },
+      },
+      "codex_work",
+    );
+
+    expect(result).toEqual({ codex: { homePath: "/Users/work/.codex" } });
+  });
+
+  it("keeps legacy launch settings for a configured default instance", () => {
+    const result = getProviderStartOptions(
+      {
+        claudeBinaryPath: "/opt/bin/claude",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        devinBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
+        providerInstances: {
+          claudeAgent: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { customModels: ["claude/custom"] },
+          },
+        },
+      },
+      "claudeAgent",
+    );
+
+    expect(result).toEqual({ claudeAgent: { binaryPath: "/opt/bin/claude" } });
+  });
+
+  it("emits an empty Codex options object when switching back to default among accounts", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "default",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        devinBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
+      }),
+    ).toEqual({
+      codex: {},
+    });
+  });
+
+  it("keeps default Codex account discovery separate from custom accounts", () => {
+    expect(
+      getCodexProviderDiscoveryOptions({
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "default",
+      }),
+    ).toEqual({
+      binaryPath: null,
+      homePath: null,
+      shadowHomePath: null,
+      accountId: "default",
+    });
+  });
+
   it("ignores default provider command names as custom binary overrides", () => {
     expect(
       getProviderStartOptions({
         claudeBinaryPath: "claude",
         codexBinaryPath: "codex",
         codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",
@@ -599,6 +1075,476 @@ describe("getProviderStartOptions", () => {
   });
 });
 
+describe("mergeProviderStartOptions", () => {
+  it("returns the base when there is no overlay", () => {
+    const base = { codex: { binaryPath: "/opt/codex" } };
+    expect(mergeProviderStartOptions(base, undefined)).toEqual(base);
+  });
+
+  it("returns the overlay when there is no base", () => {
+    const overlay = { claudeAgent: { binaryPath: "/opt/claude" } };
+    expect(mergeProviderStartOptions(undefined, overlay)).toEqual(overlay);
+  });
+
+  it("keeps base providers the overlay does not name", () => {
+    expect(
+      mergeProviderStartOptions(
+        { codex: { binaryPath: "/opt/codex" }, claudeAgent: { permissionMode: "plan" } },
+        { claudeAgent: { binaryPath: "/opt/claude" } },
+      ),
+    ).toEqual({
+      codex: { binaryPath: "/opt/codex" },
+      claudeAgent: { permissionMode: "plan", binaryPath: "/opt/claude" },
+    });
+  });
+
+  it("lets the overlay win only the keys it sets on a shared provider", () => {
+    expect(
+      mergeProviderStartOptions(
+        { codex: { binaryPath: "/opt/codex", homePath: "/home/me/.codex" } },
+        { codex: { binaryPath: "/group/codex" } },
+      ),
+    ).toEqual({
+      codex: { binaryPath: "/group/codex", homePath: "/home/me/.codex" },
+    });
+  });
+});
+
+describe("getProviderInstanceOptions", () => {
+  it("disables every account of a globally disabled provider and preserves account switches", () => {
+    const settings = {
+      ...AppSettingsSchema.makeUnsafe({}),
+      disabledProviders: ["codex" as const],
+      codexAccounts: [{ id: "work", label: "Work", homePath: "", shadowHomePath: "" }],
+      providerInstances: {
+        codex_personal: { driver: "codex", enabled: true },
+        codex_off: { driver: "codex", enabled: false },
+      },
+    };
+    const options = getProviderInstanceOptions(settings);
+    expect(
+      options.filter((option) => option.provider === "codex").map((option) => option.enabled),
+    ).toEqual([false, false, false, false]);
+    expect(options.find((option) => option.provider === "claudeAgent")?.enabled).toBe(true);
+    const restored = getProviderInstanceOptions({ ...settings, disabledProviders: [] });
+    expect(restored.find((option) => option.instanceId === "codex_personal")?.enabled).toBe(true);
+    expect(restored.find((option) => option.instanceId === "codex_off")?.enabled).toBe(false);
+  });
+
+  it("keeps derived Codex account instance ids schema-valid for long account ids", () => {
+    const accountId = `a${"b".repeat(63)}`;
+    const options = getProviderInstanceOptions({
+      codexAccounts: [
+        {
+          id: accountId,
+          label: "Long Codex Account",
+          homePath: "",
+          shadowHomePath: "",
+        },
+      ],
+      codexHomePath: "",
+      providerInstances: {},
+      selectedCodexAccountId: "default",
+    });
+
+    const accountOption = options.find((option) => option.label === "Long Codex Account");
+    expect(accountOption?.instanceId.length).toBeLessThanOrEqual(64);
+    expect(Schema.is(ProviderInstanceId)(accountOption?.instanceId)).toBe(true);
+  });
+
+  it("keeps the provider's own name on a default account that only stores overrides", () => {
+    const options = getProviderInstanceOptions({
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claudeAgent: { driver: "claudeAgent", accentColor: "#7c3aed" },
+        opencode: { driver: "opencode", displayName: "Team OpenCode" },
+        codex_work: { driver: "codex", accentColor: "#16a34a" },
+      },
+      selectedCodexAccountId: "default",
+    });
+    const byId = new Map(options.map((option) => [String(option.instanceId), option]));
+
+    expect(byId.get("claudeAgent")).toMatchObject({
+      label: "Claude",
+      accentColor: "#7c3aed",
+      isDefault: true,
+    });
+    expect(byId.get("opencode")).toMatchObject({ label: "Team OpenCode", isDefault: true });
+    // A named-by-id account falls back to its humanized id.
+    expect(byId.get("codex_work")).toMatchObject({
+      label: "Codex Work",
+      accentColor: "#16a34a",
+      isDefault: false,
+    });
+    expect(byId.get("codex")?.accentColor).toBeUndefined();
+  });
+
+  it("keeps a migrated Codex account's saved name when its explicit entry only overrides", () => {
+    const instanceId = codexAccountInstanceId("work");
+    const options = getProviderInstanceOptions({
+      codexAccounts: [{ id: "work", label: "Office", homePath: "", shadowHomePath: "" }],
+      codexHomePath: "",
+      providerInstances: { [instanceId]: { driver: "codex", enabled: false } },
+      selectedCodexAccountId: "default",
+    });
+
+    expect(options.find((option) => option.instanceId === instanceId)).toMatchObject({
+      label: "Office",
+      enabled: false,
+    });
+  });
+
+  it("keeps unsupported instances visible for missing-driver affordances", () => {
+    expect(
+      getUnsupportedProviderInstanceOptions({
+        providerInstances: {
+          fork_work: {
+            driver: "customFork",
+            displayName: "Fork Work",
+            enabled: true,
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        instanceId: "fork_work",
+        driver: "customFork",
+        label: "Fork Work",
+        enabled: true,
+        isDefault: false,
+        supported: false,
+      },
+    ]);
+  });
+
+  it("surfaces legacy derived Codex accounts as manageable rows", () => {
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(
+      getManageableProviderInstances(
+        {
+          codexAccounts: [
+            {
+              id: "work@example.com",
+              label: "Work",
+              homePath: "/Users/you/.codex-work",
+              shadowHomePath: "/Users/you/.codex-work-shadow",
+            },
+          ],
+          codexBinaryPath: "/opt/codex",
+          codexHomePath: "",
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              enabled: false,
+              config: { binaryPath: "/opt/work-codex" },
+            },
+          },
+          selectedCodexAccountId: "work@example.com",
+        },
+        "codex",
+      ),
+    ).toEqual([
+      {
+        instanceId,
+        legacyCodexAccountId: "work@example.com",
+        instance: {
+          driver: "codex",
+          displayName: "Work",
+          enabled: false,
+          config: {
+            accountId: "work@example.com",
+            binaryPath: "/opt/work-codex",
+            homePath: "/Users/you/.codex-work",
+            shadowHomePath: "/Users/you/.codex-work-shadow",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("removes a legacy Codex account and its exact-instance preferences together", () => {
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(
+      removeManageableProviderInstance(
+        {
+          codexAccounts: [
+            {
+              id: "work@example.com",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "",
+            },
+          ],
+          codexHomePath: "",
+          providerInstances: {
+            [instanceId]: { driver: "codex", enabled: false },
+          },
+          selectedCodexAccountId: "work@example.com",
+        },
+        instanceId,
+      ),
+    ).toEqual({
+      codexAccounts: [],
+      providerInstances: {},
+      selectedCodexAccountId: "default",
+    });
+  });
+});
+
+describe("buildProviderInstanceSettingsPatch", () => {
+  const instanceId = codexAccountInstanceId("work@example.com");
+  const migrated = {
+    codexAccounts: [
+      {
+        id: "work@example.com",
+        label: "Work",
+        homePath: "/Users/you/.codex-work",
+        shadowHomePath: "",
+      },
+      { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+    ],
+    codexHomePath: "",
+    providerInstances: {},
+    selectedCodexAccountId: "work@example.com",
+  };
+
+  it("routes a migrated account's rename and homes to its codexAccounts entry", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        migrated,
+        instanceId,
+        { displayName: "Office", config: { shadowHomePath: "/Users/you/.codex-shadow" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Office",
+          homePath: "/Users/you/.codex-work",
+          shadowHomePath: "/Users/you/.codex-shadow",
+        },
+        { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+      ],
+    });
+  });
+
+  it("clears a stale explicit copy of the identity it moves, keeping other overrides", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        {
+          ...migrated,
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              displayName: "Stale name",
+              enabled: false,
+              config: {
+                homePath: "/stale/home",
+                shadowHomePath: "/stale/shadow",
+                binaryPath: "/opt/work-codex",
+              },
+            },
+          },
+        },
+        instanceId,
+        { config: { homePath: "/Users/you/.codex-office" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Work",
+          homePath: "/Users/you/.codex-office",
+          shadowHomePath: "",
+        },
+        { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+      ],
+      providerInstances: {
+        [instanceId]: {
+          driver: "codex",
+          enabled: false,
+          config: { binaryPath: "/opt/work-codex" },
+        },
+      },
+    });
+  });
+
+  it("keeps a migrated account's other edits on an explicit entry that carries no identity", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        migrated,
+        instanceId,
+        { enabled: false, accentColor: "#16a34a", config: { binaryPath: "/opt/work-codex" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      providerInstances: {
+        [instanceId]: {
+          driver: "codex",
+          accentColor: "#16a34a",
+          enabled: false,
+          config: { binaryPath: "/opt/work-codex" },
+        },
+      },
+    });
+  });
+
+  it("edits an explicit account in place and clears what the patch empties", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        {
+          ...migrated,
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              displayName: "Work",
+              accentColor: "#2563eb",
+              enabled: true,
+              config: { configDir: "~/.claude-work" },
+            },
+          },
+        },
+        "claude_work",
+        { displayName: "  ", accentColor: null, config: { configDir: "~/.claude-office" } },
+      ),
+    ).toEqual({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { configDir: "~/.claude-office" },
+        },
+      },
+    });
+  });
+
+  it("gives a default account its first explicit entry", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(migrated, "claudeAgent", { displayName: "Personal" }),
+    ).toEqual({
+      providerInstances: { claudeAgent: { driver: "claudeAgent", displayName: "Personal" } },
+    });
+  });
+
+  it("ignores an account that does not exist", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(migrated, "codex_gone", { enabled: false }),
+    ).toBeNull();
+  });
+});
+
+describe("provider instance configuration", () => {
+  it("does not leak a provider-wide binary path into a custom instance", () => {
+    expect(
+      getCustomBinaryPathForProviderInstance(
+        {
+          claudeBinaryPath: "/legacy/bin/claude",
+          claudeHomePath: "",
+          codexAccounts: [],
+          codexBinaryPath: "",
+          codexHomePath: "",
+          selectedCodexAccountId: "default",
+          cursorBinaryPath: "",
+          cursorApiEndpoint: "",
+          devinBinaryPath: "",
+          antigravityBinaryPath: "",
+          grokBinaryPath: "",
+          droidBinaryPath: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerUrl: "",
+          piBinaryPath: "",
+          ompBinaryPath: "",
+          ompAgentDir: "",
+          piAgentDir: "",
+          providerInstances: {
+            claude_work: { driver: "claudeAgent", enabled: true, config: {} },
+          },
+        },
+        "claudeAgent",
+        "claude_work",
+      ),
+    ).toBe("");
+  });
+
+  it("drops a stale redaction marker when replacing a secret", () => {
+    expect(
+      mergeProviderInstanceConfigPatch(
+        { serverPassword: "", serverPasswordRedacted: true },
+        { serverPassword: "new-secret" },
+      ),
+    ).toEqual({ serverPassword: "new-secret" });
+  });
+});
+
+describe("resolveSelectableProviderInstanceId", () => {
+  it("uses the selected Codex account when only the provider is requested", () => {
+    const settings = {
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Work",
+          homePath: "",
+          shadowHomePath: "",
+        },
+      ],
+      codexHomePath: "",
+      providerInstances: {},
+      selectedCodexAccountId: "work@example.com",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "codex")).toBe(
+      codexAccountInstanceId("work@example.com"),
+    );
+  });
+
+  it("keeps a requested enabled provider instance", () => {
+    const settings = {
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+      selectedCodexAccountId: "default",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_work")).toBe(
+      "claude_work",
+    );
+  });
+
+  it("falls back from a deleted or disabled custom instance to the provider default", () => {
+    const settings = {
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: false,
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+      selectedCodexAccountId: "default",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_work")).toBe(
+      "claudeAgent",
+    );
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_deleted")).toBe(
+      "claudeAgent",
+    );
+  });
+});
+
 describe("provider-indexed custom model settings", () => {
   const settings = {
     customCodexModels: ["custom/codex-model"],
@@ -613,6 +1559,174 @@ describe("provider-indexed custom model settings", () => {
     customOmpModels: [],
   } as const;
 
+  it("stores default-instance custom models in the provider instance map", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          providerInstances: {},
+        },
+        { instanceId: "claudeAgent", provider: "claudeAgent", isDefault: true },
+        ["claude/default-instance"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          config: { customModels: ["claude/default-instance"] },
+        },
+      },
+    });
+  });
+
+  it("patches custom models for a selected provider instance", () => {
+    const providerSettings = {
+      ...settings,
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          displayName: "Claude Work",
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+    } as const;
+
+    expect(
+      patchCustomModelsForProviderInstance(
+        providerSettings,
+        {
+          instanceId: "claude_work",
+          provider: "claudeAgent",
+          isDefault: false,
+        },
+        ["claude/work-only"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          displayName: "Claude Work",
+          config: { homePath: "/tmp/claude-work", customModels: ["claude/work-only"] },
+        },
+      },
+    });
+  });
+
+  it("patches custom models for the default provider instance into providerInstances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          providerInstances: {},
+          selectedCodexAccountId: "default",
+        },
+        {
+          instanceId: "claudeAgent",
+          provider: "claudeAgent",
+          isDefault: true,
+        },
+        ["claude/default-instance"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          // Launch settings are not copied: derived default instances merge the
+          // live legacy settings in at derivation time, so later edits to the
+          // provider settings keep applying.
+          config: {
+            customModels: ["claude/default-instance"],
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves server settings when saving custom models for default provider instances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          providerInstances: {},
+          selectedCodexAccountId: "default",
+        },
+        {
+          instanceId: "opencode",
+          provider: "opencode",
+          isDefault: true,
+        },
+        ["openrouter/custom-opencode"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        opencode: {
+          driver: "opencode",
+          config: {
+            customModels: ["openrouter/custom-opencode"],
+          },
+        },
+      },
+    });
+  });
+
+  it("materializes Codex account-derived instances when saving custom models", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "/tmp/codex-work",
+              shadowHomePath: "/tmp/codex-shadow",
+            },
+          ],
+          codexHomePath: "/tmp/codex-default",
+          providerInstances: {},
+          selectedCodexAccountId: "work",
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          isDefault: false,
+        },
+        ["custom/work-codex"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        codex_work: {
+          driver: "codex",
+          displayName: "Work",
+          // Account launch fields stay in the legacy codexAccounts entry and are
+          // merged into the derived instance, so the patch stores only models.
+          config: {
+            customModels: ["custom/work-codex"],
+          },
+        },
+      },
+    });
+  });
+
+  it("drops stale redaction markers when replacing provider instance secrets", () => {
+    expect(
+      mergeProviderInstanceConfigPatch(
+        {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "",
+          serverPasswordRedacted: true,
+        },
+        { serverPassword: "new-secret" },
+      ),
+    ).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "new-secret",
+    });
+  });
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -627,9 +1741,106 @@ describe("provider-indexed custom model settings", () => {
       omp: [],
     });
   });
+
+  it("reads custom models from the selected provider instance without leaking provider buckets", () => {
+    const derivedCodexInstanceId = codexAccountInstanceId("work@example.com");
+    const modelSettings = {
+      ...settings,
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Work Email",
+          homePath: "",
+          shadowHomePath: "",
+        },
+      ],
+      codexHomePath: "",
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { customModels: ["claude/work-only"] },
+        },
+        claude_empty: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: {},
+        },
+        codex_work: {
+          driver: "codex",
+          enabled: true,
+          config: {},
+        },
+      },
+    } as const;
+
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claudeAgent",
+        provider: "claudeAgent",
+        isDefault: true,
+      }),
+    ).toEqual(["claude/custom-opus"]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claude_work",
+        provider: "claudeAgent",
+        isDefault: false,
+      }),
+    ).toEqual(["claude/work-only"]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claude_empty",
+        provider: "claudeAgent",
+        isDefault: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "codex_work",
+        provider: "codex",
+        isDefault: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: derivedCodexInstanceId,
+        provider: "codex",
+        isDefault: false,
+      }),
+    ).toEqual(["custom/codex-model"]);
+  });
 });
 
 describe("AppSettingsSchema", () => {
+  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
+      anchorSentMessagesToTop: true,
+      chatFontSizePx: 17,
+    });
+  });
+
+  it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    const settings = applyLocalAppSettingsPatch(defaults, { anchorSentMessagesToTop: false });
+    const restored = decode(Schema.encodeSync(codec)(settings));
+
+    expect(restored).toMatchObject({ anchorSentMessagesToTop: false });
+    expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
+      anchorSentMessagesToTop: true,
+    });
+  });
+
+  it("opens Tasks as the list until the user picks the Kanban view", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
+    expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
+  });
+
   it("migrates persisted Gemini provider settings to Antigravity", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
@@ -689,13 +1900,89 @@ describe("AppSettingsSchema", () => {
       JSON.stringify({
         hiddenProviders: ["some-future-provider", "codex"],
         providerOrder: ["gemini", "codex"],
+        railUsageProviders: ["some-future-provider", "codex", "gemini"],
+        chatFontSizePx: 17,
       }),
     );
 
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+      railUsageProviders: ["codex", "antigravity"],
+      chatFontSizePx: 17,
     });
+  });
+
+  it("migrates sidebar provider selections to their default account ids", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(normalizeStoredAppSettings(decode("{}")).railUsageInstanceIds).toEqual([
+      "codex",
+      "claudeAgent",
+    ]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: ["gemini"] })))
+        .railUsageInstanceIds,
+    ).toEqual(["antigravity"]);
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ railUsageProviders: [] })))
+        .railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("persists two Claude accounts and an explicit empty sidebar selection", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const updated = applyLocalAppSettingsPatch(decode("{}"), {
+      railUsageInstanceIds: ["claudeAgent", "claude_work"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(updated))).railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work"]);
+    const withDisabledChoice = applyLocalAppSettingsPatch(updated, {
+      railUsageInstanceIds: ["claudeAgent", "claude_work", "codex"],
+    });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(withDisabledChoice)))
+        .railUsageInstanceIds,
+    ).toEqual(["claudeAgent", "claude_work", "codex"]);
+    const hidden = applyLocalAppSettingsPatch(updated, { railUsageInstanceIds: [] });
+    expect(
+      normalizeStoredAppSettings(decode(Schema.encodeSync(codec)(hidden))).railUsageInstanceIds,
+    ).toEqual([]);
+  });
+
+  it("drops malformed sidebar account ids without resetting unrelated preferences", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        railUsageInstanceIds: ["claude_work", "invalid id", "", "../account"],
+        chatFontSizePx: 17,
+      }),
+    );
+    expect(decoded.railUsageInstanceIds).toEqual(["claude_work"]);
+    expect(decoded.chatFontSizePx).toBe(17);
+  });
+
+  it("drops rail ids this build does not know and ignores the retired classic-sidebar keys", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        sidebarLayout: "classic",
+        railItemOrder: ["some-future-item", "kanban", "home"],
+        hiddenRailItems: ["some-future-item", "studio"],
+        sidebarNavOrder: ["some-future-item", "kanban"],
+        hiddenSidebarNavItems: ["some-future-item"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      railItemOrder: ["kanban", "home"],
+      hiddenRailItems: ["studio"],
+    });
+    // Settings saved while the classic sidebar existed still decode; its keys are dropped.
+    expect(decoded).not.toHaveProperty("sidebarLayout");
+    expect(decoded).not.toHaveProperty("sidebarNavOrder");
+    expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {
@@ -705,6 +1992,20 @@ describe("AppSettingsSchema", () => {
     expect(
       decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
     ).toBe(true);
+  });
+
+  it("keeps usage popover details collapsed by default and preserves an explicit choice", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
+    expect(decode("{}").usagePopoverShowResetCredits).toBe(true);
+    expect(decode("{}").usagePopoverShowUsageLines).toBe(true);
+    expect(
+      decode(JSON.stringify({ usagePopoverShowUsageLines: false })).usagePopoverShowUsageLines,
+    ).toBe(false);
+    expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
+      true,
+    );
   });
 
   it("preserves a disabled simulator auto-open preference across settings persistence", () => {
@@ -747,7 +2048,7 @@ describe("AppSettingsSchema", () => {
       followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
       sidebarProjectSortOrder: "manual",
       sidebarThreadSortOrder: "updated_at",
-      showStudioSection: true,
+      showGroupsSection: true,
       showAutomationRunThreads: true,
       timestampFormat: "locale",
       customCodexModels: [],
@@ -757,6 +2058,7 @@ describe("AppSettingsSchema", () => {
       customDroidModels: [],
       customOpenCodeModels: [],
       customPiModels: [],
+      customOmpModels: [],
     });
   });
 
@@ -771,5 +2073,29 @@ describe("AppSettingsSchema", () => {
     expect(
       normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
     ).not.toHaveProperty("enableAppshots");
+  });
+});
+
+describe("keepAwakeMode mapping", () => {
+  it("defaults to off when absent from stored settings", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode("{}").keepAwakeMode).toBe("off");
+  });
+
+  it("maps the server setting into app settings", () => {
+    const mapped = serverSettingsToAppSettings({
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      keepAwakeMode: "always",
+    });
+    expect(mapped.keepAwakeMode).toBe("always");
+  });
+
+  it("maps the app setting into a server patch", () => {
+    expect(appSettingsPatchToServerSettingsPatch({ keepAwakeMode: "agent" })).toEqual({
+      keepAwakeMode: "agent",
+    });
+    expect(
+      appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
+    ).not.toHaveProperty("keepAwakeMode");
   });
 });

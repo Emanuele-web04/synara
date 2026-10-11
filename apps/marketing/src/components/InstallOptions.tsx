@@ -53,7 +53,7 @@ export default function InstallOptions({
   const arch = archOverride ?? detectedArch;
 
   // AppImage is the only Linux build with in-app updates, so it is the
-  // default; deb/rpm are installed and updated by the distribution.
+  // default; deb/rpm are installed and upgraded with the package manager.
   const [linuxFormatOverride, setLinuxFormatOverride] = useState<LinuxPackageFormat | null>(null);
   const linuxFormat = linuxFormatOverride ?? "appImage";
 
@@ -149,7 +149,7 @@ function PlatformCard({
   icon: ReactNode;
   name: string;
   subtitle: string;
-  href: string;
+  href: string | null;
   recommended: boolean;
   children?: ReactNode;
 }) {
@@ -181,13 +181,23 @@ function PlatformCard({
       {/* Pinned to the bottom so every card's Download button lines up. */}
       <div className="mt-auto w-full pt-6">
         {children ? <div className="mb-3 flex justify-center">{children}</div> : null}
-        <a
-          href={href}
-          className="flex w-full items-center justify-center gap-2 rounded-full bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-medium text-[var(--btn-primary-fg)] transition-opacity hover:opacity-90"
-        >
-          Download
-          <LuArrowDownToLine className="size-4" aria-hidden="true" />
-        </a>
+        {href ? (
+          <a
+            href={href}
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-[var(--btn-primary-bg)] px-4 py-2.5 text-[13px] font-medium text-[var(--btn-primary-fg)] transition-opacity hover:opacity-90"
+          >
+            Download
+            <LuArrowDownToLine className="size-4" aria-hidden="true" />
+          </a>
+        ) : (
+          <button
+            type="button"
+            disabled
+            className="flex w-full items-center justify-center rounded-full border border-[var(--divide)] px-4 py-2.5 text-[13px] text-[var(--text-tertiary)]"
+          >
+            Unavailable in this release
+          </button>
+        )}
       </div>
     </div>
   );
