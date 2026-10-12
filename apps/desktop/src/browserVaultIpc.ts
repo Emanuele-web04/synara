@@ -61,6 +61,7 @@ export function registerBrowserVaultIpc(
   handle(channels.cookieProfiles, (input) =>
     requireCookies().profiles(Schema.decodeUnknownSync(BrowserCookieSource)(input)),
   );
+  handle(channels.inventoryChromiumProfiles, () => requireCookies().inventoryChromiumProfiles());
   handle(channels.importCookies, (input) =>
     requireCookies().import(Schema.decodeUnknownSync(BrowserCookieImportInput)(input)),
   );

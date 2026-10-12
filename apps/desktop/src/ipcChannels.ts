@@ -102,6 +102,7 @@ export const DESKTOP_IPC_CHANNELS = {
       reveal: "desktop:browser-vault-reveal",
       cookieSources: "desktop:browser-cookie-sources",
       cookieProfiles: "desktop:browser-cookie-profiles",
+      inventoryChromiumProfiles: "desktop:browser-inventory-chromium-profiles",
       importCookies: "desktop:browser-cookie-import",
       changed: "desktop:browser-vault-changed",
     },

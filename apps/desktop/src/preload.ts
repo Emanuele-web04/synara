@@ -359,6 +359,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       reveal: (input) => ipcRenderer.invoke(IPC.browser.vault.reveal, input),
       cookieSources: () => ipcRenderer.invoke(IPC.browser.vault.cookieSources),
       cookieProfiles: (browser) => ipcRenderer.invoke(IPC.browser.vault.cookieProfiles, browser),
+      inventoryChromiumProfiles: () =>
+        ipcRenderer.invoke(IPC.browser.vault.inventoryChromiumProfiles),
       importCookies: (input) => ipcRenderer.invoke(IPC.browser.vault.importCookies, input),
       onChanged: (listener) => {
         const wrapped = () => listener();

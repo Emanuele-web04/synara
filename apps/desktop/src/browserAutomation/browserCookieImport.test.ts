@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { homedir } from "node:os";
 import { BrowserCookieImportInput, ThreadId } from "@synara/contracts";
 import { Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   closeBrowser: vi.fn(),
   closeConnection: vi.fn(),
   connect: vi.fn(),
+  inventory: vi.fn(),
   exec: vi.fn(),
   constructedOptions: { current: undefined as unknown },
 }));
@@ -42,6 +44,9 @@ vi.mock("betterwright", () => ({
   },
 }));
 vi.mock("./betterwrightConnection", () => ({ openBetterwrightConnection: mocks.connect }));
+vi.mock("./chromiumProfileInventory", () => ({
+  listChromiumProfileInventory: mocks.inventory,
+}));
 vi.mock("@synara/shared/processRuntime", async (original) => ({
   ...(await original<typeof import("@synara/shared/processRuntime")>()),
   execProcessFile: mocks.exec,
@@ -74,6 +79,7 @@ beforeEach(() => {
   mocks.closeBrowser.mockResolvedValue(undefined);
   mocks.closeConnection.mockResolvedValue(undefined);
   mocks.constructedOptions.current = undefined;
+  mocks.inventory.mockResolvedValue([]);
   mocks.connect.mockImplementation(async () => {
     let closing: Promise<void> | undefined;
     return {
@@ -118,6 +124,13 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
 }
 
 describe("human-only cookie import", () => {
+  it("uses the OS user home for inventory instead of the browser-engine state directory", async () => {
+    const { importer } = fixture();
+    await importer.inventoryChromiumProfiles();
+    expect(mocks.inventory).toHaveBeenCalledExactlyOnceWith(homedir());
+    expect(mocks.inventory).not.toHaveBeenCalledWith("/synthetic-home");
+  });
+
   it("imports only the selected visible site with app-bound injection disabled and returns counts", async () => {
     const { importer, contents } = fixture();
     expect(await importer.sources()).toEqual([{ id: "chrome", name: "Chrome" }]);

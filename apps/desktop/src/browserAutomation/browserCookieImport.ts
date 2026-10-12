@@ -10,9 +10,11 @@ import {
   type BrowserCookieImportResult,
 } from "@synara/contracts";
 import { Schema } from "effect";
+import { homedir } from "node:os";
 import { execProcessFile } from "@synara/shared/processRuntime";
 import type { DesktopBrowserManager } from "../browserManager";
 import { synaraHostTarget } from "./betterwrightHostTarget";
+import { listChromiumProfileInventory } from "./chromiumProfileInventory";
 
 const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
   helium: { account: "Helium", service: "Helium Storage Key" },
@@ -42,6 +44,10 @@ export class BrowserCookieImport {
   async profiles(browser: string) {
     if (!Schema.is(BrowserCookieSource)(browser)) throw new Error("Unsupported cookie source.");
     return (await listCookieSourceProfiles(browser)).map(({ id, name }) => ({ id, name }));
+  }
+
+  async inventoryChromiumProfiles() {
+    return listChromiumProfileInventory(homedir());
   }
 
   async import(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult> {

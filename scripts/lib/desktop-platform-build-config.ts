@@ -110,7 +110,11 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    files,
+    extraResources: [{ from: "THIRD_PARTY_NOTICES.md", to: "THIRD_PARTY_NOTICES.md" }],
+  };
 
   if (input.platform === "mac") {
     const mac = {
@@ -219,7 +223,10 @@ export function createDesktopPlatformBuildConfig(
         "!apps/desktop/resources/cua-driver/**",
         "!apps/desktop/prod-resources/cua-driver/**",
       ],
-      extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
+      extraResources: [
+        ...nativePackaging.extraResources,
+        { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+      ],
       linux: {
         target: [input.target],
         executableName: "synara",

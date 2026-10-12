@@ -51,6 +51,45 @@ export const BrowserCookieSource = Schema.Literals([
   "dia",
 ]);
 
+/** macOS inventory candidates; these IDs do not grant cookie-import support. */
+export const BrowserInventorySourceId = Schema.Literals([
+  "chrome",
+  "chrome-beta",
+  "chrome-dev",
+  "chrome-canary",
+  "edge",
+  "brave",
+  "arc",
+  "dia",
+  "vivaldi",
+  "opera",
+  "opera-gx",
+  "chromium",
+  "helium",
+  "comet",
+  "aside",
+]);
+export const BrowserInventoryCount = Schema.Struct({
+  count: Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+  status: Schema.Literals(["available", "unavailable", "locked"]),
+});
+export const BrowserProfileInventory = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  isDefault: Schema.Boolean,
+  cookieCount: BrowserInventoryCount.fields.count,
+  passwordCount: BrowserInventoryCount.fields.count,
+  cookieStatus: BrowserInventoryCount.fields.status,
+  passwordStatus: BrowserInventoryCount.fields.status,
+});
+export const BrowserInventory = Schema.Struct({
+  id: BrowserInventorySourceId,
+  name: Schema.String,
+  profileStatus: Schema.Literals(["available", "no_profiles", "unavailable"]),
+  profiles: Schema.Array(BrowserProfileInventory),
+});
+export const BrowserInventoryList = Schema.Array(BrowserInventory);
+
 const CookieImportDestination = {
   threadId: ThreadId,
   tabId: Schema.String,
@@ -102,6 +141,7 @@ export interface BrowserVaultMethods {
   reveal(input: { id: string; password: string }): Promise<{ password: string; expiresAt: number }>;
   cookieSources(): Promise<Array<{ id: string; name: string }>>;
   cookieProfiles(browser: string): Promise<Array<{ id: string; name: string }>>;
+  inventoryChromiumProfiles(): Promise<typeof BrowserInventoryList.Type>;
   importCookies(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult>;
   onChanged(listener: () => void): () => void;
 }
