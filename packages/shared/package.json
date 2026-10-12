@@ -8,6 +8,10 @@
       "types": "./src/pairingUrl.ts",
       "import": "./src/pairingUrl.ts"
     },
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"
@@ -446,7 +450,6 @@
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
