@@ -14675,7 +14675,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("aligns the inline plan card with the composer input", async () => {
+  it("shows the skinny inline plan card for active turn plans", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithActiveInlinePlan(),
@@ -14705,11 +14705,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the composer column width while the input keeps its
-      // rounded top corners. The stacked frame must stay aligned at every viewport size.
+      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
+      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
