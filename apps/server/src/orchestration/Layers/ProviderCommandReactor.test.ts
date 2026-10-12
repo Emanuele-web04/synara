@@ -15375,7 +15375,8 @@ describe("ProviderCommandReactor", () => {
           blocked?.activities.some(
             (activity) =>
               activity.kind === "provider.turn.start.failed" &&
-              (activity.payload as Record<string, unknown> | null)?.settlementStatus === "retryable",
+              (activity.payload as Record<string, unknown> | null)?.settlementStatus ===
+                "retryable",
           ),
         ).toBe(true);
         expect(harness.startSession).toHaveBeenCalledTimes(0);
