@@ -15,6 +15,7 @@ import {
   isGroupSettingsSection,
   memoryNoteDocumentPath,
   modelSelectionsEqual,
+  rebaseGroupSettingsBaseline,
   resolveGroupModelCatalogPrefetchProviders,
   resolveSaveAttemptRequestId,
   saveAttemptFingerprint,
@@ -286,6 +287,47 @@ describe("resolveSaveAttemptRequestId", () => {
         generateRequestId: () => "req-fresh",
       }),
     ).toBe("req-fresh");
+  });
+});
+
+describe("rebaseGroupSettingsBaseline", () => {
+  it("adopts a newer revision that only changed lifecycle state or links", () => {
+    const baseline = makeBaseline({ name: "edited" });
+    const paused: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 5,
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      pausedAt: "2026-09-02T00:00:00.000Z",
+      archivedAt: "2026-09-02T00:00:00.000Z",
+      pausedAutomationIds: [],
+      linkedProjectIds: [ProjectId.makeUnsafe("project-linked")],
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, paused)).toEqual({
+      draft: baseline.draft,
+      config: paused,
+    });
+  });
+
+  it("keeps the baseline when a newer revision changed a setting", () => {
+    const baseline = makeBaseline();
+    const otherSave: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 5,
+      pausedAt: "2026-09-02T00:00:00.000Z",
+      coordinatorModelSelection: claudeSelection,
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, otherSave)).toBe(baseline);
+  });
+
+  it("keeps the baseline when the config is not newer or is missing", () => {
+    const baseline = makeBaseline();
+    const older: ProjectAgentConfig = {
+      ...baseConfig,
+      revision: 3,
+      pausedAt: "2026-09-02T00:00:00.000Z",
+    };
+    expect(rebaseGroupSettingsBaseline(baseline, older)).toBe(baseline);
+    expect(rebaseGroupSettingsBaseline(baseline, null)).toBe(baseline);
   });
 });
 
