@@ -14,7 +14,7 @@ Repaired the BetterWright 2.7.3 patch hunks that prevented clean dependency inst
 - Browser import catalog contract tests: 2 passed.
 - Desktop, web, and contracts native TypeScript checks: passed. Web/contracts emitted existing Effect suggestion diagnostics.
 - Repository `bun run fmt:check`: passed (4,644 files).
-- `git diff --check` reports three blank context lines inside the nested unified patch. They are structural blank-context records in the dependency patch, not source-code whitespace; removing them caused the hunks to stop applying.
+- `git diff --check upstream/main...HEAD`: passed after representing the three nested blank context lines as blank-line replacements; the dependency patch still applies cleanly.
 
 ## Cross-platform report review
 
