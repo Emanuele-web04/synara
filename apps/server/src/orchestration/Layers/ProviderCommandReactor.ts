@@ -5976,6 +5976,10 @@ const make = Effect.gen(function* () {
                 createdAt,
               });
             }
+            // Retain the rejected continuation outside the delivery lock; its
+            // delivery can settle while the checkpoint remains busy. The retry
+            // queue rechecks the current goal and pause state before dispatch.
+            yield* deferGoalContinuation(event);
           }),
       },
     );
