@@ -5959,7 +5959,7 @@ export default function ChatView({
         <ComposerColumnFrame>
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
-          <div data-composer-panels>
+          <div>
             <ComposerTransportNotice />
             {isSidechatExpired ? (
               <ExpiredSidechatNotice onStartNew={startReplacementSidechat} />

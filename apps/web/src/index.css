@@ -3182,13 +3182,6 @@ diffs-container {
 .chat-composer-stacked-top {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
-  border-top-left-radius: var(--composer-radius);
-  border-top-right-radius: var(--composer-radius);
-}
-
-/* Banners sit inside the input border; equal-width stacked panels own an outer
-   outline and use the full composer radius in every view. */
-.chat-composer-surface-banner {
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
 }
@@ -3201,23 +3194,6 @@ diffs-container {
 .chat-composer-stacked-top[data-composer-stacked-attached="true"] {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
-}
-
-/* Join the input to the last visible flush panel, including panels with a
-   side-margin wrapper. Detached notices or cards between the rail and input
-   retain the input's rounded top. This follows rendered panels rather than
-   duplicating the visibility state of queue, file, task, and notice components. */
-[data-composer-panels]:has(
-    > [data-composer-flush-panel]:last-child,
-    > [data-composer-stacked-wrapper]:last-child > [data-composer-flush-panel]
-  )
-  + .chat-composer-shell {
-  &,
-  & .chat-composer-surface,
-  & .chat-composer-surface-banner {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-  }
 }
 
 /* Composer glass — the same material as the floating menus/pickers

@@ -71,7 +71,7 @@ export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFra
 
   if (passthroughSideMargins) {
     return (
-      <div data-composer-stacked-wrapper className="pointer-events-none w-full">
+      <div className="pointer-events-none w-full">
         <div ref={ref} className={cn("pointer-events-auto", frameClassName)} {...rest}>
           {children}
         </div>
