@@ -9,15 +9,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WORK_ITEMS_SEARCH_DEBOUNCE_MS, useDebouncedWorkItemsSearch } from "./workItemReactQuery";
 
-const searchCalls = vi.hoisted(() => [] as Array<{ at: number; query: string }>);
+const searchCalls = vi.hoisted(
+  () => [] as Array<{ at: number; query: string; signal?: AbortSignal }>,
+);
+const pending = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("~/nativeApi", () => ({
   onNativeApiServerCapabilitiesChange: () => () => undefined,
   readNativeApiServerCapability: () => true,
   ensureNativeApi: () => ({
     workItems: {
-      search: async (input: { cwd: string; query: string; limit: number }) => {
-        searchCalls.push({ at: Date.now(), query: input.query });
+      search: async (
+        input: { cwd: string; query: string; limit: number },
+        options?: { signal?: AbortSignal },
+      ) => {
+        searchCalls.push({
+          at: Date.now(),
+          query: input.query,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        });
+        if (pending.enabled)
+          return new Promise((_resolve, reject) =>
+            options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+              once: true,
+            }),
+          );
         return { available: true, errorHint: null, items: [] };
       },
     },
@@ -37,6 +53,7 @@ describe("useDebouncedWorkItemsSearch", () => {
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
     searchCalls.length = 0;
+    pending.enabled = false;
   });
 
   afterEach(() => {
@@ -79,5 +96,31 @@ describe("useDebouncedWorkItemsSearch", () => {
     );
 
     await screen.unmount();
+  });
+  it("aborts the superseded request and its unmounted replacement", async () => {
+    pending.enabled = true;
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <SearchProbe cwd="/repo" query="" />
+      </QueryClientProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(searchCalls).toHaveLength(1));
+      const first = searchCalls[0]!.signal!;
+      expect(first.aborted).toBe(false);
+      await screen.rerender(
+        <QueryClientProvider client={queryClient}>
+          <SearchProbe cwd="/repo" query="current" />
+        </QueryClientProvider>,
+      );
+      await vi.waitFor(() => expect(searchCalls).toHaveLength(2));
+      expect(first.aborted).toBe(true);
+      const current = searchCalls[1]!.signal!;
+      expect(current.aborted).toBe(false);
+      await screen.unmount();
+      expect(current.aborted).toBe(true);
+    } finally {
+      queryClient.clear();
+    }
   });
 });

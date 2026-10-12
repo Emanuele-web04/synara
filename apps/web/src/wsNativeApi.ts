@@ -706,7 +706,10 @@ export function createWsNativeApi(): NativeApi {
       setAutoFix: (input) => transport.request(WS_METHODS.pullRequestsSetAutoFix, input),
     },
     workItems: {
-      search: (input) => transport.request(WS_METHODS.workItemsSearch, input),
+      search: (input, options) =>
+        options?.signal
+          ? transport.request(WS_METHODS.workItemsSearch, input, { signal: options.signal })
+          : transport.request(WS_METHODS.workItemsSearch, input),
       availability: (input) => transport.request(WS_METHODS.workItemsAvailability, input),
     },
     contextMenu: {

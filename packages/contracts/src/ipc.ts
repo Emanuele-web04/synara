@@ -1275,7 +1275,10 @@ export interface NativeApi {
     setAutoFix: (input: PullRequestAutoFixSetInput) => Promise<PullRequestAutoFixResult>;
   };
   workItems: {
-    search: (input: WorkItemSearchInput) => Promise<WorkItemSearchResult>;
+    search: (
+      input: WorkItemSearchInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<WorkItemSearchResult>;
     availability: (input: WorkItemAvailabilityInput) => Promise<WorkItemAvailabilityResult>;
   };
   contextMenu: {

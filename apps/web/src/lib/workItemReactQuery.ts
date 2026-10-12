@@ -27,11 +27,11 @@ export const workItemQueryKeys = {
 export function workItemsSearchQueryOptions(input: WorkItemSearchInput | null, enabled = true) {
   return queryOptions({
     queryKey: workItemQueryKeys.search(input),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!input) {
         return { available: false, errorHint: "No project directory.", items: [] };
       }
-      return ensureNativeApi().workItems.search(input);
+      return ensureNativeApi().workItems.search(input, { signal });
     },
     enabled: enabled && input !== null,
     staleTime: 30_000,
