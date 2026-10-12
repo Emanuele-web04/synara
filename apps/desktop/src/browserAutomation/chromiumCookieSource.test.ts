@@ -328,4 +328,53 @@ describe("macOS Chromium-family cookie sources", () => {
       message: "Cookie Sync could not read the selected Chromium profile.",
     });
   });
+  it("rejects custom profile roots beyond the discovery cap", async () => {
+    const root = join(home, "Library", "Application Support", browsers[0][1]);
+    await mkdir(root, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 257 }, (_, index) => mkdir(join(root, `Profile ${index}`))),
+    );
+    await expect(reader.listChromiumProfiles("helium", home)).rejects.toMatchObject({
+      cookieReaderCode: "resource_exhausted",
+      cookieReaderStage: "discovery",
+    });
+  });
+  it("rejects synthesized cookie views before reading their output", async () => {
+    const file = await profile(browsers[0]);
+    const db = new DatabaseSync(file);
+    db.exec(
+      "ALTER TABLE cookies RENAME TO stored_cookies; CREATE VIEW cookies AS SELECT *, zeroblob(1000000000) AS synthetic FROM stored_cookies",
+    );
+    db.close();
+    await expect(
+      reader.readChromiumCookieSnapshot(options("helium"), { home, keychainPassword }),
+    ).rejects.toMatchObject({
+      cookieReaderCode: "source_extraction_failed",
+      cookieReaderStage: "query",
+    });
+  });
+  it("rejects oversized cookie cells before allocating them", async () => {
+    const file = await profile(browsers[0]);
+    const db = new DatabaseSync(file);
+    db.exec("UPDATE cookies SET encrypted_value = zeroblob(1048576)");
+    db.close();
+    await expect(
+      reader.readChromiumCookieSnapshot(options("helium"), { home, keychainPassword }),
+    ).rejects.toMatchObject({ cookieReaderCode: "resource_exhausted", cookieReaderStage: "query" });
+  });
+  it("bounds aggregate cookie bytes across individually valid rows", async () => {
+    const file = await profile(browsers[0]);
+    const db = new DatabaseSync(file);
+    db.exec("DELETE FROM cookies");
+    const insert = db.prepare(
+      "INSERT INTO cookies (host_key, name, value, encrypted_value, path, is_secure, is_httponly, samesite, expires_utc, has_expires) VALUES ('.example.test', ?, ?, x'', '/', 1, 1, 1, 0, 0)",
+    );
+    db.exec("BEGIN");
+    for (let index = 0; index < 700; index++) insert.run(`cookie-${index}`, "x".repeat(10000));
+    db.exec("COMMIT");
+    db.close();
+    await expect(
+      reader.readChromiumCookieSnapshot(options("helium"), { home, keychainPassword }),
+    ).rejects.toMatchObject({ cookieReaderCode: "resource_exhausted", cookieReaderStage: "query" });
+  });
 });

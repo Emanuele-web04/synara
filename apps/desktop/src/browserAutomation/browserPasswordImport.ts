@@ -125,7 +125,10 @@ export class BrowserPasswordImport {
       const code = error instanceof BrowserPasswordReadError ? error.code : "reader_failed";
       return {
         ok: false,
-        code: code === "source_missing" || code === "too_many_logins" ? code : "reader_failed",
+        code:
+          code === "source_missing" || code === "too_many_logins" || code === "source_too_large"
+            ? code
+            : "reader_failed",
         platform: currentPlatform,
       };
     } finally {

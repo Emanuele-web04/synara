@@ -136,6 +136,7 @@ export type BrowserPasswordImportResult =
         | "permission_denied"
         | "timed_out"
         | "too_many_logins"
+        | "source_too_large"
         | "vault_locked"
         | "vault_failed"
         | "unsupported_platform";

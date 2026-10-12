@@ -28,6 +28,8 @@ function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false
       return "The browser Keychain request timed out. Close the browser and retry.";
     case "source_missing":
       return "This browser profile is no longer available. Refresh the list and retry.";
+    case "source_too_large":
+      return "This profile exceeds the safe password import size limit.";
     case "too_many_logins":
       return "This profile has more saved passwords than Synara can safely import in one operation.";
     case "vault_locked":

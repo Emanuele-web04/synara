@@ -2,14 +2,14 @@ diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-sourc
 new file mode 100644
 --- /dev/null
 +++ b/dist/src/chromium-cookie-source.js
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,337 @@
 +// macOS Chromium-family sources for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
 +// and emits the same detailed-cookie snapshot shape as the native reader so
 +// the regular Cookie Sync transfer pipeline stays in charge.
 +import { createDecipheriv, createHash, timingSafeEqual, pbkdf2Sync } from "node:crypto";
-+import { lstat, mkdtemp, readdir, realpath, rm, stat } from "node:fs/promises";
++import { lstat, mkdtemp, opendir, realpath, rm, stat } from "node:fs/promises";
 +import { homedir, tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { DatabaseSync } from "node:sqlite";
@@ -98,18 +98,20 @@ new file mode 100644
 +
 +export async function listChromiumProfiles(browser, home = homedir()) {
 +    if (process.platform !== "darwin") return [];
-+    let entries;
++    const profiles = [];
 +    try {
-+        entries = await readdir(chromiumProfileRoot(browser, home), { withFileTypes: true });
++        const directory = await opendir(chromiumProfileRoot(browser, home));
++        let entriesRead = 0;
++        for await (const entry of directory) {
++            if (++entriesRead > 256) throw chromiumError("resource_exhausted", "discovery");
++            if (!entry.isDirectory() || !CHROMIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
++            if (await chromiumCookieDatabasePath(join(chromiumProfileRoot(browser, home), entry.name)) === null) continue;
++            profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
++        }
 +    } catch (error) {
++        if (error?.cookieReaderCode) throw error;
 +        if (isMissingError(error)) return [];
 +        throw chromiumError("discovery_failed", "discovery", isPermissionError(error));
-+    }
-+    const profiles = [];
-+    for (const entry of entries) {
-+        if (!entry.isDirectory() || !CHROMIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
-+        if (await chromiumCookieDatabasePath(join(chromiumProfileRoot(browser, home), entry.name)) === null) continue;
-+        profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
 +    }
 +    return profiles.sort((left, right) => (right.isDefault ? 1 : 0) - (left.isDefault ? 1 : 0) || left.id.localeCompare(right.id));
 +}
@@ -230,6 +232,8 @@ new file mode 100644
 +        throw classifySqliteError(error, "acquisition");
 +    }
 +    try {
++        if (database.prepare("SELECT type FROM sqlite_schema WHERE name = 'cookies'").get()?.type !== "table")
++            throw chromiumError("source_extraction_failed", "query");
 +        const columns = new Set(
 +            queryChromiumRows(database, "PRAGMA table_info(cookies)").map((column) => String(column.name)),
 +        );
@@ -255,7 +259,9 @@ new file mode 100644
 +        ].filter(Boolean);
 +        let version = 0;
 +        try {
-+            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version'").get();
++            const metaType = database.prepare("SELECT type FROM sqlite_schema WHERE name = 'meta'").get()?.type;
++            if (metaType !== undefined && metaType !== "table") throw chromiumError("source_extraction_failed", "query");
++            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version' AND octet_length(value) <= 32 LIMIT 1").get();
 +            if (meta) {
 +                // Real Chromium databases store meta.value as INTEGER, which
 +                // readBigInts surfaces as bigint; legacy and synthetic stores
@@ -270,10 +276,24 @@ new file mode 100644
 +            if (error?.cookieReaderCode) throw error;
 +            if (!/no such table: meta/i.test(String(error?.message))) throw classifySqliteError(error, "query");
 +        }
-+        const rows = queryChromiumRows(database, `SELECT ${selection.join(", ")} FROM cookies LIMIT 100001`);
-+        if (rows.length > 100000) throw chromiumError("resource_exhausted", "query");
++        const textColumns = ["host_key", "name", "value", "path", ...(topFrameSiteKey ? [topFrameSiteKey] : [])];
++        const byteColumns = [...textColumns, "encrypted_value"];
++        const oversized = byteColumns.map((column) => `COALESCE(octet_length(${column}), 0) > 16384`).join(" OR ");
++        if (database.prepare(`SELECT 1 FROM cookies WHERE ${oversized} LIMIT 1`).get())
++            throw chromiumError("resource_exhausted", "query");
++        const numericColumns = [columns.has("is_secure") ? "is_secure" : "secure", columns.has("is_httponly") ? "is_httponly" : "httponly", "samesite", "expires_utc", "has_expires", ...["source_scheme", "source_port", "has_cross_site_ancestor"].filter((column) => columns.has(column))];
++        const invalidNumeric = numericColumns.map((column) => `typeof(${column}) NOT IN ('integer', 'real', 'null')`).join(" OR ");
++        if (database.prepare(`SELECT 1 FROM cookies WHERE ${invalidNumeric} LIMIT 1`).get()) throw chromiumError("source_extraction_failed", "query");
++        const rows = database.prepare(`SELECT ${selection.join(", ")} FROM cookies LIMIT 100001`).iterate();
 +        const detailedCookies = [];
++        let rowsRead = 0;
++        let bytesRead = 0;
 +        for (const row of rows) {
++            if (++rowsRead > 100000) throw chromiumError("resource_exhausted", "query");
++            for (const value of Object.values(row)) {
++                bytesRead += typeof value === "string" ? Buffer.byteLength(value) : value instanceof Uint8Array ? value.byteLength : 8;
++            }
++            if (bytesRead > 6 * 1024 * 1024) throw chromiumError("resource_exhausted", "query");
 +            const detailed = chromiumCookieRow(row, key, warnings, version);
 +            if (detailed) detailedCookies.push(detailed);
 +        }

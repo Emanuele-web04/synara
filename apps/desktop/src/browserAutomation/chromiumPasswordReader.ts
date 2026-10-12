@@ -10,6 +10,7 @@ import {
 } from "./chromiumProfileInventory";
 
 const MAX_PROFILE_LOGINS = 50_000;
+const MAX_PLAINTEXT_BYTES = 6 * 1024 * 1024;
 const MAX_PASSWORD_BYTES = 16 * 1024;
 const MAX_LOGIN_TEXT_BYTES = 4096;
 
@@ -20,7 +21,9 @@ export type BrowserPasswordLogin = {
 };
 
 export class BrowserPasswordReadError extends Error {
-  constructor(readonly code: "source_missing" | "reader_failed" | "too_many_logins") {
+  constructor(
+    readonly code: "source_missing" | "reader_failed" | "too_many_logins" | "source_too_large",
+  ) {
     super(code);
     this.name = "BrowserPasswordReadError";
   }
@@ -98,11 +101,16 @@ export async function readChromiumProfilePasswords(
     } catch {
       throw new BrowserPasswordReadError("reader_failed");
     }
+    if (
+      database.prepare("SELECT type FROM sqlite_schema WHERE name = 'logins'").get()?.type !==
+      "table"
+    )
+      throw new BrowserPasswordReadError("reader_failed");
     let count: number;
     try {
       const row = database
         .prepare(
-          "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0",
+          "SELECT COUNT(*) AS count FROM (SELECT 1 FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0 LIMIT 50001)",
         )
         .get() as { count?: number | bigint } | undefined;
       count = Number(row?.count);
@@ -132,6 +140,7 @@ export async function readChromiumProfilePasswords(
     const seen = new Set<string>();
     let skipped = 0;
     let rowsRead = 0;
+    let plaintextBytes = 0;
     try {
       for (const row of statement.iterate() as Iterable<{
         origin_url: string | null;
@@ -155,6 +164,10 @@ export async function readChromiumProfilePasswords(
           skipped++;
           continue;
         }
+        plaintextBytes +=
+          Buffer.byteLength(origin) + Buffer.byteLength(username) + Buffer.byteLength(password);
+        if (plaintextBytes > MAX_PLAINTEXT_BYTES)
+          throw new BrowserPasswordReadError("source_too_large");
         seen.add(identity);
         logins.push({ origin, username, password });
       }

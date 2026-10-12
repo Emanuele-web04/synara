@@ -133,3 +133,27 @@ it("skips oversized password, origin and username values before materializing lo
     skipped: 3,
   });
 });
+
+it("rejects synthesized login views before counting or decoding them", async () => {
+  const { database, profileId } = await makeProfile();
+  database.exec(
+    "ALTER TABLE logins RENAME TO stored_logins; CREATE VIEW logins AS SELECT * FROM stored_logins",
+  );
+  database.close();
+  await expect(
+    readChromiumProfilePasswords(home, "chrome", profileId, "test-safe-storage"),
+  ).rejects.toMatchObject({ code: "reader_failed" });
+});
+it("bounds aggregate decrypted credentials before returning an import batch", async () => {
+  const { database, profileId } = await makeProfile();
+  const insert = database.prepare("INSERT INTO logins VALUES (?, ?, ?, 0, 0)");
+  const encrypted = encryptPassword("x".repeat(10000));
+  database.exec("BEGIN");
+  for (let index = 0; index < 700; index++)
+    insert.run(`https://site${index}.test/`, `user${index}`, encrypted);
+  database.exec("COMMIT");
+  database.close();
+  await expect(
+    readChromiumProfilePasswords(home, "chrome", profileId, "test-safe-storage"),
+  ).rejects.toMatchObject({ code: "source_too_large" });
+});
