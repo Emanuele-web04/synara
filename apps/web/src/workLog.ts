@@ -167,6 +167,9 @@ export interface WorkLogEntry {
     name: string;
     output: string;
     outcome: "updated" | "completed" | "failed" | "stopped";
+    // Arrived while its turn was already working: an update inside that
+    // response, not a wake-up that starts a new one.
+    midTurn?: true;
   };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
   // One background task for its whole life: the row sits where the agent
@@ -560,7 +563,23 @@ export function deriveWorkLogEntries(
       derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
     }
   }
-  const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
+  const midTurnNotificationIds = deriveMidTurnNotificationIds(ordered);
+  if (midTurnNotificationIds.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      if (!entry.monitorNotification || !midTurnNotificationIds.has(entry.id)) continue;
+      // Copy rather than mutate: the entry is shared with the per-activity cache.
+      derived[index] = {
+        ...entry,
+        monitorNotification: { ...entry.monitorNotification, midTurn: true },
+      };
+    }
+  }
+  const completions = deriveBackgroundTaskCompletionEntries(
+    ordered,
+    latestTurnId,
+    visibleTurnIds,
+    midTurnNotificationIds,
+  );
   return [
     ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered),
     ...completions,
@@ -1021,14 +1040,50 @@ function deriveTurnFailureEntries(
   return [...failures.values()];
 }
 
+// A background task completion or Monitor event wakes an idle agent into a new
+// response. One that arrives while its turn is already working (the agent
+// stopped its own server, or a build finished between tool calls) is only a
+// status update inside that response. A turn is working once it has run a tool
+// or launched a task, until it completes; a response woken by the notification
+// itself has done neither yet.
+function deriveMidTurnNotificationIds(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): Set<string> {
+  const workingTurnIds = new Set<string>();
+  const ids = new Set<string>();
+  for (const activity of ordered) {
+    const turnId = activity.turnId;
+    if (!turnId) continue;
+    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
+      workingTurnIds.delete(turnId);
+    } else if (
+      activity.kind.startsWith("tool.") ||
+      activity.kind.startsWith("approval.") ||
+      activity.kind === "task.started"
+    ) {
+      workingTurnIds.add(turnId);
+    } else if (
+      workingTurnIds.has(turnId) &&
+      (activity.kind === "task.completed" ||
+        (activity.kind === "runtime.warning" &&
+          asRecord(activity.payload)?.nativeEventType === "monitor_event"))
+    ) {
+      ids.add(activity.id);
+    }
+  }
+  return ids;
+}
+
 // Completions of tasks a visible "Moved to background" notice announced. They
 // bypass the turn filter once the notice that launched them is visible, and
 // belong to the turn that launched the task: a completion can arrive after the
 // user already started another turn (a stopped turn's subagents report late).
+// A mid-turn completion adds nothing: the task's own row already shows it.
 function deriveBackgroundTaskCompletionEntries(
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+  midTurnNotificationIds: ReadonlySet<string>,
 ): WorkLogEntry[] {
   const backgroundTasks = new Map<
     string,
@@ -1059,6 +1114,7 @@ function deriveBackgroundTaskCompletionEntries(
     const launched = backgroundTasks.get(payload.taskId);
     if (!launched) continue;
     backgroundTasks.delete(payload.taskId);
+    if (midTurnNotificationIds.has(activity.id)) continue;
     const { turnId: launchTurnId, ...task } = launched;
     const turnId = launchTurnId ?? activity.turnId;
     const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";

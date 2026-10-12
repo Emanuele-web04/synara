@@ -20,6 +20,7 @@ import {
   deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
   formatTurnHeaderLabel,
+  isPinnedBackgroundTaskEntry,
   normalizeCompactToolLabel,
   summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
@@ -1093,6 +1094,87 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+  });
+
+  it("keeps one response when a Monitor event arrives mid-turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("watching", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Watching CI",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        {
+          id: "entry-ci",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "ci",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Monitor · CI updated",
+            tone: "info",
+            monitorNotification: {
+              taskId: "ci",
+              name: "CI",
+              output: "build passed",
+              outcome: "updated",
+              midTurn: true,
+            },
+          },
+        },
+        workEntry("read", "2026-01-01T00:00:04Z", "Read file"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "CI is green.",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(collapsedSignature(messageRow(rows, "done")!)).toEqual([
+      "narration:watching",
+      "work:ci",
+      "work:read",
+    ]);
+    expect(messageRow(rows, "watching")).toBeUndefined();
+    expect(messageRow(rows, "done")?.turnHeader?.resumedBy).toBeNull();
+  });
+
+  it("pins only background tasks that outlived their turn", () => {
+    const runningTask = {
+      taskId: "task",
+      taskType: "local_bash",
+      description: "dev server",
+      command: "bun run dev",
+      status: "running" as const,
+      startedAt: "2026-01-01T00:00:00Z",
+      completedAt: null,
+      exitCode: null,
+    };
+    const plainWork: WorkLogEntry = {
+      id: "launch",
+      createdAt: "2026-01-01T00:00:00Z",
+      label: "Command run",
+      tone: "tool",
+    };
+    const turnEndedAt = "2026-01-01T00:05:00Z";
+    const pinned = (completedAt: string | null) =>
+      isPinnedBackgroundTaskEntry(
+        {
+          ...plainWork,
+          backgroundTask: completedAt
+            ? { ...runningTask, status: "stopped", completedAt }
+            : runningTask,
+        },
+        turnEndedAt,
+      );
+    expect(pinned(null)).toBe(true);
+    expect(pinned("2026-01-01T00:06:00Z")).toBe(true);
+    // The turn stopped its own server: the row folds with the turn's work.
+    expect(pinned("2026-01-01T00:04:00Z")).toBe(false);
+    expect(isPinnedBackgroundTaskEntry(plainWork, turnEndedAt)).toBe(false);
   });
 
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
