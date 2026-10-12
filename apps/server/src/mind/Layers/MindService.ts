@@ -96,35 +96,18 @@ const escapeDigestText = (text: string): string => text.replace(/</g, "\\u003c")
 const renderDigestLine = (item: MindRecallItem): string =>
   `- [${item.type}] ${escapeDigestText(item.text)}`;
 
-/** Renders whole lines only, stopping before the digest char cap would be exceeded. */
-const renderDigest = (items: ReadonlyArray<MindRecallItem>): string => {
-  const lines: string[] = [];
-  for (const item of items) {
-    const line = renderDigestLine(item);
-    const candidate = lines.length === 0 ? line : `${lines.join("\n")}\n${line}`;
-    if (candidate.length > MIND_RECALL_MAX_DIGEST_CHARS) break;
-    lines.push(line);
-  }
-  return lines.join("\n");
-};
-
-/** Framed profile block: quoted user data, same `<`-escape as memory lines. */
-const renderProfileDigestBlock = (text: string): string =>
-  `\nProfile:\n- ${escapeDigestText(text)}`;
-
 /**
  * Memory digest plus the opted-in profile block. Memory lines render first
  * within the char budget left after reserving the profile block, so the
  * result always fits the contracts' digest cap; the profile text itself is
  * truncated only in the degenerate case where it alone exceeds the cap.
  */
-export const renderDigestWithProfile = (
+const renderDigestWithProfile = (
   items: ReadonlyArray<MindRecallItem>,
   profileText: string | null,
 ): string => {
-  if (profileText === null) return renderDigest(items);
-  const block = renderProfileDigestBlock(profileText);
-  if (block.length >= MIND_RECALL_MAX_DIGEST_CHARS) {
+  const block = profileText === null ? "" : `\nProfile:\n- ${escapeDigestText(profileText)}`;
+  if (profileText !== null && block.length >= MIND_RECALL_MAX_DIGEST_CHARS) {
     const head = "\nProfile:\n- ";
     return `${head.slice(1)}${escapeDigestText(profileText).slice(
       0,
