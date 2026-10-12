@@ -54,6 +54,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   lazy,
   startTransition,
   useMemo,
@@ -1442,6 +1443,28 @@ export default function Sidebar() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+  const pendingThreadRowAnchorRef = useRef<{
+    threadId: ThreadId;
+    row: HTMLElement;
+    viewport: HTMLElement;
+    top: number;
+    scrollTop: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const anchor = pendingThreadRowAnchorRef.current;
+    pendingThreadRowAnchorRef.current = null;
+    if (
+      !anchor ||
+      anchor.threadId !== routeThreadId ||
+      !anchor.row.isConnected ||
+      anchor.viewport.scrollTop !== anchor.scrollTop
+    ) {
+      return;
+    }
+    // Keep the activated row in place when navigation replaces the subagent subtree.
+    // Native anchoring can instead hold an earlier row; scroll bounds still apply.
+    anchor.viewport.scrollTop += anchor.row.getBoundingClientRect().top - anchor.top;
+  }, [routeThreadId]);
   const routeProjectId = useParams({
     strict: false,
     select: (params) =>
@@ -1860,6 +1883,9 @@ export default function Sidebar() {
     }
 
     const timeout = window.setTimeout(() => {
+      if (pendingThreadRowAnchorRef.current?.threadId === optimisticActiveThreadId) {
+        pendingThreadRowAnchorRef.current = null;
+      }
       setOptimisticActiveThreadId((current) =>
         current === optimisticActiveThreadId ? null : current,
       );
@@ -3860,6 +3886,21 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
+  // Capture at activation, after selection modifiers and before the route changes layout.
+  const activateThreadRow = (threadId: ThreadId, row: HTMLElement) => {
+    const viewport = row.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    pendingThreadRowAnchorRef.current =
+      viewport && threadId !== routeThreadId
+        ? {
+            threadId,
+            row,
+            viewport,
+            top: row.getBoundingClientRect().top,
+            scrollTop: viewport.scrollTop,
+          }
+        : null;
+    activateThreadFromSidebarIntent(threadId);
+  };
   // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
   // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
   const openThreadPullRequest = useCallback(
@@ -4813,7 +4854,11 @@ export default function Sidebar() {
   }, [isOnSettings, routeSearch.splitViewId, routeThreadId]);
 
   const handleThreadClick = useCallback(
-    (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
+    (
+      event: MouseEvent<HTMLElement>,
+      threadId: ThreadId,
+      orderedProjectThreadIds: readonly ThreadId[],
+    ) => {
       const isMac = isMacNavigatorPlatform();
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
@@ -4830,9 +4875,9 @@ export default function Sidebar() {
         return;
       }
 
-      activateThreadFromSidebarIntent(threadId);
+      activateThreadRow(threadId, event.currentTarget);
     },
-    [activateThreadFromSidebarIntent, rangeSelectTo, toggleThreadSelection],
+    [activateThreadRow, rangeSelectTo, toggleThreadSelection],
   );
 
   const classicVisibleSidebarThreadIds = useMemo(() => {
@@ -5279,7 +5324,7 @@ export default function Sidebar() {
                   ),
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-            onClick={() => activateThreadFromSidebarIntent(thread.id)}
+            onClick={(event) => activateThreadRow(thread.id, event.currentTarget)}
             onDoubleClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -5289,7 +5334,7 @@ export default function Sidebar() {
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                activateThreadFromSidebarIntent(thread.id);
+                activateThreadRow(thread.id, event.currentTarget);
               }
             }}
             onContextMenu={(event) => {
@@ -5442,7 +5487,7 @@ export default function Sidebar() {
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
-                  activateThreadFromSidebarIntent(thread.id);
+                  activateThreadRow(thread.id, event.currentTarget);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();

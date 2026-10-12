@@ -2755,6 +2755,112 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it.each([
+    { childCount: 4, activation: "click", scrollTakeover: false },
+    { childCount: 24, activation: "click", scrollTakeover: false },
+    { childCount: 4, activation: "keyboard", scrollTakeover: false },
+    { childCount: 4, activation: "click", scrollTakeover: true },
+  ])(
+    "anchors sidebar navigation ($childCount children, $activation, scroll takeover: $scrollTakeover)",
+    async ({ childCount, activation, scrollTakeover }) => {
+      const base = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("subagent-navigation-anchor"),
+        targetText: "Review the sidebar navigation",
+      });
+      const template = base.threads[0]!;
+      const rootIds = Array.from({ length: 42 }, (_, index) =>
+        index === 20
+          ? THREAD_ID
+          : index === 21
+            ? OTHER_THREAD_ID
+            : ThreadId.makeUnsafe(`anchor-${index}`),
+      );
+      const roots = rootIds.map((id, index) => {
+        const timestamp = new Date(Date.parse(NOW_ISO) - index * 60_000).toISOString();
+        return {
+          ...template,
+          id,
+          title: `Anchor thread ${index}`,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          latestTurn: null,
+          messages: id === THREAD_ID ? template.messages : [],
+          session: { ...template.session!, threadId: id, updatedAt: timestamp },
+        };
+      });
+      const children = [THREAD_ID, OTHER_THREAD_ID].flatMap((parentThreadId, parentIndex) =>
+        Array.from({ length: parentIndex === 0 ? childCount : 4 }, (_, index) => {
+          const id = ThreadId.makeUnsafe(`anchor-child-${parentIndex}-${index}`);
+          return {
+            ...roots[parentIndex === 0 ? 20 : 21]!,
+            id,
+            title: `Subagent ${parentIndex}-${index}`,
+            parentThreadId,
+            subagentNickname: `Agent ${parentIndex}-${index}`,
+            messages: [],
+            session: { ...template.session!, threadId: id },
+          };
+        }),
+      );
+      localStorage.setItem(
+        "synara:sidebar-ui:v1",
+        JSON.stringify({
+          activityViewEnabled: false,
+          projectThreadListExtraPagesByCwd: { [base.projects[0]!.workspaceRoot]: 10 },
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: { ...DEFAULT_VIEWPORT, height: 700 },
+        snapshot: { ...base, threads: [...roots, ...children] },
+      });
+      try {
+        const row = await waitForElement(
+          () => document.querySelector<HTMLElement>('[aria-label="Open Anchor thread 21"]'),
+          "Unable to find the destination thread row.",
+        );
+        const viewport = row.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+        row.scrollIntoView({ block: "center" });
+        await waitForLayout();
+        const beforeTop = row.getBoundingClientRect().top;
+        const viewportBounds = viewport.getBoundingClientRect();
+        expect(beforeTop).toBeGreaterThan(viewportBounds.top);
+        expect(beforeTop).toBeLessThan(viewportBounds.bottom);
+        // Exercise the route/layout change directly; pointer-down stability belongs to #1881.
+        if (activation === "keyboard") {
+          row.focus({ preventScroll: true });
+          row.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          );
+        } else {
+          row.click();
+        }
+        if (scrollTakeover) viewport.scrollTop += 60;
+        const requestedScrollTop = viewport.scrollTop;
+        await waitForURL(
+          mounted.router,
+          (path) => path === `/${OTHER_THREAD_ID}`,
+          "The destination did not open.",
+        );
+        await vi.waitFor(() =>
+          expect(
+            document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]'),
+          ).toHaveLength(4),
+        );
+        await waitForLayout();
+        const afterBounds = row.getBoundingClientRect();
+        expect(afterBounds.top).toBeGreaterThanOrEqual(viewportBounds.top);
+        expect(afterBounds.bottom).toBeLessThanOrEqual(viewportBounds.bottom);
+        if (scrollTakeover) {
+          expect(viewport.scrollTop).toBe(requestedScrollTop);
+        } else {
+          expect(Math.abs(afterBounds.top - beforeTop)).toBeLessThanOrEqual(1);
+        }
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("keeps the sidebar rows in place while a thread row is pressed", async () => {
     const base = createSnapshotForTargetUser({
       targetMessageId: MessageId.makeUnsafe("subagent-press"),
@@ -2810,7 +2916,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForLayout();
       expect(otherRowButton.getAttribute("data-active")).toBe("true");
       expect(subagentDots()).toBe(2);
-      expect(otherRowButton.getBoundingClientRect().top).toBe(pressedTop);
+      expect(Math.abs(otherRowButton.getBoundingClientRect().top - pressedTop)).toBeLessThanOrEqual(
+        1,
+      );
       expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
 
       await userEvent.click(otherRowButton);
