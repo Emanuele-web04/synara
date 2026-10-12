@@ -3026,14 +3026,14 @@ export type OrchestrationReconcileProviderDeliveryResult =
   typeof OrchestrationReconcileProviderDeliveryResult.Type;
 
 /**
- * Desktop quit with "Resume chats automatically": the server durably records the
- * listed threads (plus their current turn) and interrupts them in one step, so
- * the renderer can reply to the quit request only after the record exists.
+ * Desktop quit preparation: optionally record continuations, then admit
+ * interrupts. Backend shutdown drains their deliveries before stopping admission.
  */
 export const QUIT_RESUME_MAX_THREADS = 256;
 export const QUIT_RESUME_MAX_PROMPT_CHARS = 2_000;
 
 export const OrchestrationPrepareQuitResumeInput = Schema.Struct({
+  resumeAfterRestart: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   threadIds: Schema.Array(ThreadId).check(
     Schema.isMinLength(1),
     Schema.isMaxLength(QUIT_RESUME_MAX_THREADS),

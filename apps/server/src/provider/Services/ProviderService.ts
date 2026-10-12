@@ -283,6 +283,18 @@ export interface ProviderServiceShape {
   readonly closeRuntimeEvents: Effect.Effect<void>;
 
   /**
+   * Prove that shutdown completed the adapter teardown for this exact turn.
+   * The durable receipt is written after stopAll succeeds; stopped projections
+   * and early session.exited notifications are not teardown evidence.
+   * Lightweight services may omit this and retain conservative recovery.
+   */
+  readonly hasConfirmedShutdown?: (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly requestedAt: string;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
+
+  /**
    * Snapshot the supervised runtime-event pumps. The state is operational
    * evidence for reconciliation and diagnostics, not provider availability.
    */

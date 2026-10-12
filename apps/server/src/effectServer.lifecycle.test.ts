@@ -7,6 +7,7 @@ describe("server runtime pipeline shutdown", () => {
   it("persists accepted provider terminal work before the engine stops", async () => {
     const order: string[] = [];
     let terminalAccepted = false;
+    let providerDrains = 0;
     let terminalPersisted = false;
     let attachmentsDrained = false;
     const subscriptionsScope = await Effect.runPromise(Scope.make("sequential"));
@@ -45,6 +46,17 @@ describe("server runtime pipeline shutdown", () => {
             order.push("managed-attachments-drained");
           }),
         },
+        orchestrationReactor: {
+          drainProviderCommands: Effect.sync(() => {
+            expect(terminalAccepted).toBe(providerDrains > 0);
+            expect(terminalPersisted).toBe(false);
+            order.push(
+              providerDrains++ === 0
+                ? "provider-commands-drained-before-close"
+                : "provider-commands-drained",
+            );
+          }),
+        },
         subscriptionsScope,
       }),
     );
@@ -52,7 +64,9 @@ describe("server runtime pipeline shutdown", () => {
     expect(order).toEqual([
       "engine-quiesced",
       "admitted-commands-drained",
+      "provider-commands-drained-before-close",
       "provider-terminal-events-fenced",
+      "provider-commands-drained",
       "reactors-drained-and-persisted",
       "managed-attachments-drained",
       "engine-stopped",

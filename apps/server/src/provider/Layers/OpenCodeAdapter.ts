@@ -1,3 +1,4 @@
+import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -670,12 +671,15 @@ function bufferPendingTextDelta(
     return;
   }
   const previous = context.pendingTextDeltasByPartId.get(partId);
+  const knownPart = context.partById.get(partId);
+  const baseText = previous?.baseText ?? (knownPart ? textFromPart(knownPart) : undefined);
   const { nextText } = appendOpenCodeAssistantTextDelta(previous?.text ?? "", delta);
   context.pendingTextDeltasByPartId.set(partId, {
     messageId,
     text: nextText,
     bufferedAfterKnownSnapshot:
       (previous?.bufferedAfterKnownSnapshot ?? false) || context.partById.has(partId),
+    ...(baseText !== undefined ? { baseText } : {}),
   });
 }
 
@@ -690,14 +694,16 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
     return part;
   }
 
-  // A delta buffered before the first part snapshot may already be present in
-  // the later cumulative snapshot. A delta buffered after a known snapshot
-  // (for example while the message role is still unknown) is newer than that
-  // snapshot and must be appended even when its text matches the snapshot suffix.
+  // Preserve the baseline of a known snapshot while role metadata is delayed.
+  // A later cumulative snapshot can already contain the buffered delta; compare
+  // it with baseline + delta instead of appending that delta a second time.
+  // Comparing the whole accumulated value also preserves intentional repeats.
   const nextText =
-    !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
-      ? part.text
-      : part.text + pendingDelta.text;
+    pendingDelta.baseText !== undefined
+      ? resolveLatestAssistantText(pendingDelta.baseText + pendingDelta.text, part.text)
+      : !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
+        ? part.text
+        : part.text + pendingDelta.text;
   context.pendingTextDeltasByPartId.delete(part.id);
   return nextText === part.text ? part : { ...part, text: nextText };
 }
@@ -1366,11 +1372,15 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     return;
   }
 
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
+  yield* Effect.gen(function* () {
+    yield* runOpenCodeSdk("session.abort", () =>
+      context.client.session.abort({ sessionID: context.openCodeSessionId }),
+    ).pipe(Effect.ignore({ log: true }));
 
-  yield* releaseOpenCodeSessionResources(context, beforeRelease);
+    yield* releaseOpenCodeSessionResources(context, beforeRelease);
+  }).pipe(
+    Effect.onExit((exit) => (Exit.isFailure(exit) ? Ref.set(context.stopped, false) : Effect.void)),
+  );
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -5116,21 +5126,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         } satisfies ProviderComposerCapabilities);
 
       const stopAll: OpenCodeAdapterShape["stopAll"] = () =>
-        Effect.gen(function* () {
-          const contexts = [...sessions.values()];
-          sessions.clear();
-          yield* Effect.forEach(
-            contexts,
-            (context) =>
-              Effect.ignoreCause(
-                stopOpenCodeContext(
-                  context,
-                  settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
-                ),
-              ),
-            { concurrency: "unbounded", discard: true },
-          );
-        });
+        settleConcurrentTeardowns([...sessions.entries()], ([threadId, context]) =>
+          stopOpenCodeContext(
+            context,
+            settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+          ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (sessions.get(threadId) === context) sessions.delete(threadId);
+              }),
+            ),
+            Effect.mapError((cause) => toAdapterProcessError(threadId, cause)),
+          ),
+        );
 
       const didResumeSession: NonNullable<OpenCodeAdapterShape["didResumeSession"]> = (
         input,

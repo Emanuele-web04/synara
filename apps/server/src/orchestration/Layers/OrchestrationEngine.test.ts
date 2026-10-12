@@ -1691,6 +1691,31 @@ describe("OrchestrationEngine", () => {
     );
 
     await system.run(system.engine.quiesce);
+    const lateMessageId = MessageId.makeUnsafe("message-quiesce-late-native-output");
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.makeUnsafe("provider:quiesce-late-chunk"),
+        threadId,
+        messageId: lateMessageId,
+        delta: "Late native output",
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe("provider:quiesce-late-completion"),
+        threadId,
+        messageId: lateMessageId,
+        createdAt,
+      }),
+    );
+    const lateEvents = Array.from(await system.run(Stream.runCollect(system.engine.readEvents(0))));
+    expect(
+      lateEvents.findLast((event) => event.type === "thread.message-sent")?.payload,
+    ).toMatchObject({ text: "Late native output", streaming: false });
+
     const diagnostic = {
       type: "thread.activity.append",
       commandId: CommandId.makeUnsafe("cmd-engine-quiesce-diagnostic"),

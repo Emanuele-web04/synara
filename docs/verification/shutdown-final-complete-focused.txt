@@ -1,0 +1,20 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/effectServer.lifecycle.test.ts src/provider/Layers/ProviderService.test.ts src/provider/Layers/OpenCodeAdapter.test.ts src/provider/openCodeMessageState.test.ts src/orchestration/Layers/OrchestrationEngine.test.ts src/orchestration/Layers/ProviderRuntimeReconciler.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1809/apps/server
+
+
+ Test Files  5 passed (5)
+      Tests  333 passed (333)
+   Start at  22:43:17
+   Duration  35.86s (transform 5.53s, setup 0ms, import 8.35s, tests 26.84s, environment 0ms)
+
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/ProviderService.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1809/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  172 passed (172)
+   Start at  22:35:31
+   Duration  15.99s (transform 1.53s, setup 0ms, import 2.18s, tests 13.64s, environment 0ms)
+

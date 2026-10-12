@@ -1,3 +1,4 @@
+import nativeLateRoleTrace from "../testSupport/opencode-native-late-role-trace.json";
 import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
@@ -3036,6 +3037,81 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       payload: {
         itemType: "assistant_message",
         detail: "Hello",
+      },
+    });
+  });
+
+  it("replays the captured native late-role trace without duplicating cumulative text", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    const sdk = client as unknown as { session: { create: () => Promise<unknown> } };
+    sdk.session.create = async () => ({
+      data: { id: nativeLateRoleTrace[0]!.properties.sessionID },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "turn.completed"),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-ordered-events"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-ordered-events"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        for (const event of nativeLateRoleTrace) eventQueue.push(event);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+
+        return { events, turn };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.turn.turnId).toBeDefined();
+    expect(result.events.find((event) => event.type === "content.delta")).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "NATIVE_PARALLEL_OK",
+      },
+    });
+    expect(result.events.find((event) => event.type === "item.completed")).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "assistant_message",
+        detail: "NATIVE_PARALLEL_OK",
       },
     });
   });

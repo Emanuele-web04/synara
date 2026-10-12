@@ -119,6 +119,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
     const reactor = {
       start: Effect.void,
       reconcileSettledOpenTurns: Effect.void,
+      drainProviderCommands: Effect.void,
     } satisfies OrchestrationReactorShape;
     const snapshotQuery = {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
@@ -205,6 +206,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
     const reactor = {
       start: Effect.void,
       reconcileSettledOpenTurns: Effect.void,
+      drainProviderCommands: Effect.void,
     } satisfies OrchestrationReactorShape;
     const snapshotQuery = {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
@@ -284,6 +286,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
         }),
     } as unknown as OrchestrationEngineShape;
     const reactor = {
+      drainProviderCommands: Effect.void,
       start: Effect.void,
       reconcileSettledOpenTurns: Effect.sync(reconcileSettledOpenTurns),
     } satisfies OrchestrationReactorShape;

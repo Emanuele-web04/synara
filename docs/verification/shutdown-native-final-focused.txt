@@ -1,0 +1,10 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/effectServer.lifecycle.test.ts src/provider/Layers/ProviderService.test.ts src/provider/Layers/OpenCodeAdapter.test.ts src/provider/openCodeMessageState.test.ts src/orchestration/Layers/OrchestrationEngine.test.ts src/orchestration/orchestrationAdmission.test.ts src/orchestration/Layers/ProviderRuntimeReconciler.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1809/apps/server
+
+
+ Test Files  6 passed (6)
+      Tests  341 passed (341)
+   Start at  22:18:43
+   Duration  44.45s (transform 6.22s, setup 0ms, import 9.81s, tests 33.49s, environment 1ms)
+

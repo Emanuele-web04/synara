@@ -1,0 +1,1 @@
+$ node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo

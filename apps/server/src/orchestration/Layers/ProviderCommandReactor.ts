@@ -1559,27 +1559,44 @@ const make = Effect.gen(function* () {
     readonly responseCommandId?: CommandId;
     readonly settlementStatus?: "retryable" | "uncertain";
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId: serverCommandId("provider-failure-activity"),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.makeUnsafe(crypto.randomUUID()),
-        tone: "error",
-        kind: input.kind,
-        summary: input.summary,
-        payload: {
-          detail: input.detail,
-          ...(input.requestId ? { requestId: input.requestId } : {}),
-          ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
-          ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
-          ...(input.settlementStatus ? { settlementStatus: input.settlementStatus } : {}),
+    orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: serverCommandId("provider-failure-activity"),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(crypto.randomUUID()),
+          tone: "error",
+          kind: input.kind,
+          summary: input.summary,
+          payload: {
+            detail: input.detail,
+            ...(input.requestId ? { requestId: input.requestId } : {}),
+            ...(input.lifecycleGeneration
+              ? { lifecycleGeneration: input.lifecycleGeneration }
+              : {}),
+            ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
+            ...(input.settlementStatus ? { settlementStatus: input.settlementStatus } : {}),
+          },
+          turnId: input.turnId,
+          createdAt: input.createdAt,
         },
-        turnId: input.turnId,
         createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
+      })
+      .pipe(
+        Effect.asVoid,
+        Effect.catchTag("OrchestrationCommandAdmissionError", (error) =>
+          error.reason === "stopped" &&
+          (input.kind === "provider.turn.interrupt.failed" ||
+            input.kind === "provider.session.stop.failed")
+            ? Effect.logWarning("provider cleanup diagnostic skipped during shutdown", {
+                threadId: input.threadId,
+                kind: input.kind,
+                detail: input.detail,
+              })
+            : Effect.fail(error),
+        ),
+      );
 
   const setThreadSession = (input: {
     readonly threadId: ThreadId;
@@ -7912,6 +7929,42 @@ const make = Effect.gen(function* () {
           return;
         }
         if (existing.value.state === "inflight") {
+          // A bounded shutdown can interrupt this worker after the adapter has
+          // actually stopped. Only a durable, generation/turn-owned teardown
+          // receipt can settle that quit control without replay or quarantine.
+          // A stopped projection or an early session.exited event cannot.
+          if (
+            event.type === "thread.turn-interrupt-requested" &&
+            event.commandId?.startsWith("quit-resume-interrupt:") &&
+            event.payload.turnId !== undefined &&
+            providerService.hasConfirmedShutdown &&
+            (yield* providerService.hasConfirmedShutdown({
+              threadId,
+              turnId: event.payload.turnId,
+              requestedAt: event.occurredAt,
+            }))
+          ) {
+            const completed = yield* deliveryRepository.complete({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+              claimOwner: existing.value.claimOwner ?? "",
+              completedAt: new Date().toISOString(),
+            });
+            if (completed) {
+              yield* Effect.logInfo("quit interrupt settled from confirmed adapter shutdown", {
+                eventSequence: event.sequence,
+                threadId,
+                turnId: event.payload.turnId,
+              });
+              yield* refreshCursor;
+              return;
+            }
+            existing = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: event.sequence,
+            });
+            continue;
+          }
           const expiresAt = Date.parse(existing.value.claimExpiresAt ?? "");
           const remainingMs = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 0;
           if (remainingMs > 0) {
@@ -9275,8 +9328,8 @@ const make = Effect.gen(function* () {
   ) as ProviderCommandReactorShape["start"];
 
   const drain: ProviderCommandReactorShape["drain"] = Effect.gen(function* () {
+    const targetSequence = yield* orchestrationEngine.getEventHighWaterSequence;
     while (true) {
-      const targetSequence = yield* orchestrationEngine.getEventHighWaterSequence;
       const consumerState = yield* deliveryRepository.getConsumerState(
         PROVIDER_COMMAND_REACTOR_CONSUMER,
       );

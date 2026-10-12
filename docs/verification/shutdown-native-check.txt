@@ -1,0 +1,238 @@
+READY_APP Toggle Sidebar
+Synara
+New thread
+Projects
+fixture-repo
+Chats
+No chats yet
+Support Synara
+Explore sponsorships and help fund development
+What should we do in fixture-repo
+?
+fixture-repo
+main
+Temporary
+Worktree
+
+
+
+
+Ask anything, @tag files/folders, or use / to show available commands
+Full access
+Big Pickle
+
+Environment
+
+Changes
+Local
+main
+Commit and Push
+Local Servers
+0
+
+Editor
+
+Editor view
+Open in VS Code
+Terminal
+Browser
+Files
+Side chats
+Source control
+Activity
+See running tasks, completed work, and anything that needs your attention.
+BUTTON_INVENTORY [
+  { text: 'Toggle Sidebar', aria: 'Toggle thread sidebar' },
+  { text: '', aria: 'Home' },
+  { text: '', aria: 'Inbox' },
+  { text: '', aria: 'Spaces' },
+  { text: '', aria: 'Tasks' },
+  { text: '', aria: 'Code review' },
+  { text: '', aria: 'Automations' },
+  { text: '', aria: 'Hubs' },
+  { text: '', aria: 'More' },
+  { text: '', aria: 'Help' },
+  { text: '', aria: 'Settings' },
+  { text: 'Synara', aria: 'Switch sidebar surface' },
+  { text: '', aria: 'Search' },
+  { text: '', aria: 'Switch to activity view' },
+  { text: 'New thread', aria: null },
+  { text: '', aria: 'Collapse all projects except the active project' },
+  { text: '', aria: 'Sort projects' },
+  { text: '', aria: 'Add project' },
+  { text: 'fixture-repo', aria: null },
+  { text: '', aria: 'Pin fixture-repo' },
+  { text: '', aria: 'Open code review for fixture-repo' },
+  { text: '', aria: 'Create new terminal thread in fixture-repo' },
+  { text: '', aria: 'Create new thread in fixture-repo' },
+  { text: 'Chats', aria: null },
+  { text: '', aria: 'Sort chats' },
+  { text: '', aria: 'Open new chat home' },
+  { text: '', aria: 'Resize Sidebar' },
+  { text: '', aria: 'Toggle environment panel' },
+  { text: '', aria: 'Toggle right sidebar' },
+  {
+    text: 'Support SynaraExplore sponsorships and help fund development',
+    aria: null
+  },
+  { text: '', aria: 'Dismiss sponsor banner' },
+  { text: '', aria: "Don't work in a project" },
+  { text: 'Temporary', aria: 'Temporary chat' },
+  { text: '', aria: 'Composer extras' },
+  { text: 'Full access', aria: null },
+  { text: 'Big Pickle', aria: 'Change model and reasoning' },
+  { text: '', aria: 'Send message' },
+  { text: '', aria: 'Collapse panel' },
+  { text: 'Terminal', aria: 'Open Terminal' },
+  { text: 'Browser', aria: 'Open Browser' },
+  { text: 'Files', aria: 'Open Files' },
+  { text: 'Side chats', aria: 'Open Side chats' },
+  { text: 'Source control', aria: 'Open Source control' },
+  { text: '', aria: 'Toggle Sidebar' }
+]
+COMPOSER_MODELS Toggle Sidebar
+Synara
+New thread
+Projects
+fixture-repo
+Chats
+No chats yet
+Support Synara
+Explore sponsorships and help fund development
+What should we do in fixture-repo
+?
+fixture-repo
+main
+Temporary
+Worktree
+
+
+
+
+Ask anything, @tag files/folders, or use / to show available commands
+Full access
+Big Pickle
+
+Environment
+
+Changes
+Local
+main
+Commit and Push
+Local Servers
+0
+
+Editor
+
+Editor view
+Open in VS Code
+Terminal
+Browser
+Files
+Side chats
+Source control
+Activity
+See running tasks, completed work, and anything that needs your attention.
+LIVE_ACTIVE 1
+PRODUCTION_SHUTDOWN [ 130, null ]
+ACTUAL_TURNS_AFTER_SHUTDOWN [
+  [Object: null prototype] {
+    thread_id: '9e617e21-ab27-454d-b68a-386a1336c792',
+    state: 'completed'
+  },
+  [Object: null prototype] {
+    thread_id: '9e617e21-ab27-454d-b68a-386a1336c792',
+    state: 'error'
+  }
+]
+DELIVERY_STATES [
+  [Object: null prototype] { state: 'inflight', count: 1 },
+  [Object: null prototype] { state: 'succeeded', count: 8 }
+]
+SHUTDOWN_HOME /tmp/shutdown-native-d18QB9
+AFTER_REAL_RESTART Toggle Sidebar
+Synara
+New thread
+Projects
+fixture-repo
+Reply with exactly NATIVE_SHUTDOWN_READY Do not
+Chats
+No chats yet
+Reply with exactly NATIVE_SHUTDOWN_READY Do not
+
+Reply with exactly NATIVE_SHUTDOWN_READY. Do not use tools.
+
+3:05 AM
+
+NATIVE_SHUTDOWN_READY
+
+3:05 AM
+
+Without tools, output every integer from 1 to 20000, one per line, without commentary.
+
+3:05 AM
+
+Interrupted after 20s · Aborted
+
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+
+3:05 AM
+
+Task interrupted
+
+The task was interrupted by a provider error. Work remains incomplete. Aborted
+
+Copy error
+Continue task
+Change model
+
+Checkpoint capture failed Native checkpoint capture was interrupted before its durable outcome was recorded; the workspace was not recaptured during recovery.
+
+
+
+
+Ask anything, @tag files/folders, or use / to show available commands
+Full access
+MiMo-V2.6-Flash Free
+
+Environment
+
+Changes
+Local
+main
+Commit and Push
+Local Servers
+0
+
+Editor
+
+Editor view
+Open in VS Code
+Terminal
+Browser
+Files
+Side chats
+Source control
+Tasks
+Keep your to-dos in one place and hand them to an agent when you’re ready.
+RECOVERED_NATIVE_TURNS [
+  [Object: null prototype] {
+    thread_id: '9e617e21-ab27-454d-b68a-386a1336c792',
+    state: 'completed'
+  },
+  [Object: null prototype] {
+    thread_id: '9e617e21-ab27-454d-b68a-386a1336c792',
+    state: 'error'
+  }
+]
+FINAL_DELIVERIES [
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' },
+  [Object: null prototype] { state: 'succeeded' }
+]
+PASS_NATIVE_SHUTDOWN_RESTART

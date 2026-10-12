@@ -1,0 +1,56 @@
+{
+  "home": "/tmp/shutdown-native-d18QB9",
+  "turnsBeforeRestart": [
+    {
+      "thread_id": "9e617e21-ab27-454d-b68a-386a1336c792",
+      "state": "completed"
+    },
+    {
+      "thread_id": "9e617e21-ab27-454d-b68a-386a1336c792",
+      "state": "error"
+    }
+  ],
+  "turnsAfterRestart": [
+    {
+      "thread_id": "9e617e21-ab27-454d-b68a-386a1336c792",
+      "state": "completed"
+    },
+    {
+      "thread_id": "9e617e21-ab27-454d-b68a-386a1336c792",
+      "state": "error"
+    }
+  ],
+  "productionShutdownExit": 130,
+  "restartShutdownExit": 130,
+  "realAnswer": "NATIVE_SHUTDOWN_READY",
+  "noDuplicateTurns": true,
+  "nativeServerOwnership": "external",
+  "finalDeliveries": [
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    },
+    {
+      "state": "succeeded"
+    }
+  ],
+  "sourceProviderService": "f80fc065af8cfc5d1159807512cedf7e6df3f4bf",
+  "sourceAdmission": "41c5d9990538e637e3a6d2e78ba84271c342a207"
+}

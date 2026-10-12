@@ -400,32 +400,39 @@ export const prepareQuitResume = (input: {
       recordId: randomUUID(),
       now,
     });
-    yield* persistQuitResumeRecord({ path: input.recordPath, record });
+    if (input.request.resumeAfterRestart) {
+      yield* persistQuitResumeRecord({ path: input.recordPath, record });
+    } else {
+      yield* clearQuitResumeRecord(input.recordPath);
+    }
     yield* Effect.logInfo("recorded running chats for resume after quit", {
       recordId: record.recordId,
       threadIds: record.threads.map((entry) => entry.threadId),
     });
 
-    yield* sleepUnref(input.abandonAfter ?? Duration.millis(QUIT_RESUME_ABANDON_AFTER_MS)).pipe(
-      Effect.andThen(clearQuitResumeRecordIfOwned(input.recordPath, record.recordId)),
-      Effect.flatMap((cleared) =>
-        cleared
-          ? Effect.logWarning("quit did not complete; dropped the quit-resume record", {
-              recordId: record.recordId,
-            })
-          : Effect.void,
-      ),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("quit-resume abandon sweep failed", { recordId: record.recordId, cause }),
-      ),
-      // Detached on purpose: the sweep must outlive this request. If the process
-      // exits first (the normal quit), the fiber simply dies with it.
-      Effect.forkDetach,
-    );
+    if (input.request.resumeAfterRestart)
+      yield* sleepUnref(input.abandonAfter ?? Duration.millis(QUIT_RESUME_ABANDON_AFTER_MS)).pipe(
+        Effect.andThen(clearQuitResumeRecordIfOwned(input.recordPath, record.recordId)),
+        Effect.flatMap((cleared) =>
+          cleared
+            ? Effect.logWarning("quit did not complete; dropped the quit-resume record", {
+                recordId: record.recordId,
+              })
+            : Effect.void,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("quit-resume abandon sweep failed", {
+            recordId: record.recordId,
+            cause,
+          }),
+        ),
+        // Detached on purpose: the sweep must outlive this request. If the process
+        // exits first (the normal quit), the fiber simply dies with it.
+        Effect.forkDetach,
+      );
 
-    // The durable write is the RPC acknowledgement contract. Interrupts are
-    // best-effort and must not make the renderer miss its bounded quit wait;
-    // process shutdown itself will stop any provider command that remains live.
+    // Admit interrupts before acknowledging. Backend shutdown drains their
+    // durable deliveries while the engine's control lane remains available.
     yield* Effect.forEach(
       record.threads,
       (entry) =>
@@ -447,10 +454,12 @@ export const prepareQuitResume = (input: {
             ),
           ),
       { discard: true, concurrency: "unbounded" },
-    ).pipe(Effect.forkDetach);
+    );
 
     return {
-      recordedThreadIds: record.threads.map((entry) => entry.threadId),
+      recordedThreadIds: input.request.resumeAfterRestart
+        ? record.threads.map((entry) => entry.threadId)
+        : [],
       recordedAt: record.recordedAt,
     };
   });

@@ -94,6 +94,37 @@ describe("running chats quit confirmation", () => {
     expect(interrupted).toEqual([]);
   });
 
+  it("waits for server admission on plain quit without reporting a resume record", async () => {
+    let acknowledge: (() => void) | undefined;
+    const prepared: ReadonlyArray<string>[] = [];
+    const interrupted: string[] = [];
+    let settled = false;
+    const stopping = stopRunningChatsForQuit({
+      chats: [{ id: "a" }],
+      dispatchInterrupt: (threadId) => {
+        interrupted.push(threadId);
+      },
+      resume: {
+        enabled: false,
+        prepare: (threadIds) => {
+          prepared.push(threadIds);
+          return new Promise<void>((resolve) => {
+            acknowledge = resolve;
+          });
+        },
+      },
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(prepared).toEqual([["a"]]);
+    expect(settled).toBe(false);
+    acknowledge?.();
+    await expect(stopping).resolves.toEqual({ resumeRecorded: false });
+    expect(interrupted).toEqual([]);
+  });
+
   it("falls back to plain interrupts when recording fails", async () => {
     const interrupted: string[] = [];
 

@@ -117,11 +117,12 @@ export interface StopRunningChatsForQuitInput {
   readonly chats: ReadonlyArray<Pick<RunningChatQuitSummary, "id">>;
   readonly dispatchInterrupt: (threadId: string) => Promise<unknown> | unknown;
   /**
-   * When set, ask the server to durably record the chats for resume (it also
-   * interrupts them) and wait — bounded — for that ack. On failure or timeout
+   * Prepare quit on the server, recording a continuation only when enabled.
+   * Wait — bounded — for interrupt admission. On failure or timeout
    * fall back to plain interrupts so quit never hangs and never double-resumes.
    */
   readonly resume?: {
+    readonly enabled?: boolean;
     readonly prepare: (threadIds: ReadonlyArray<string>) => Promise<unknown>;
     readonly timeoutMs?: number;
   };
@@ -146,7 +147,7 @@ export async function stopRunningChatsForQuit(
       input.resume.timeoutMs ?? QUIT_RESUME_PREPARE_TIMEOUT_MS,
     );
     if (recorded) {
-      return { resumeRecorded: true };
+      return { resumeRecorded: input.resume.enabled ?? true };
     }
   }
 

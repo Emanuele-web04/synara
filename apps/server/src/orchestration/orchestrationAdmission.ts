@@ -54,9 +54,16 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
 }
 
 export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
-  // Settlement diagnostics must survive quiesce, but remain in the normal lane
-  // so activity traffic cannot consume the capacity reserved for stopping work.
-  return usesReservedCommandAdmission(type) || type === "thread.activity.append";
+  // Runtime journal ingestion is ordered: rejecting a final output chunk also
+  // blocks the terminal event behind it. Keep transcript/plan settlement in the
+  // normal lane so it cannot consume the capacity reserved for stopping work.
+  return (
+    usesReservedCommandAdmission(type) ||
+    type === "thread.activity.append" ||
+    type === "thread.message.assistant.delta" ||
+    type === "thread.messages.import" ||
+    type === "thread.proposed-plan.upsert"
+  );
 }
 
 export function orchestrationCommandLane(

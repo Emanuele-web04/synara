@@ -23,6 +23,9 @@ export interface OrchestrationReactorShape {
 
   /** Reconciles durable provider replay state after restart turn recovery. */
   readonly reconcileSettledOpenTurns: Effect.Effect<void>;
+
+  /** Drain fenced runtime events and provider intents with a bounded quit deadline. */
+  readonly drainProviderCommands: Effect.Effect<void>;
 }
 
 /**

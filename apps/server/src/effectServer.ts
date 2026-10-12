@@ -109,6 +109,7 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
 export function closeServerRuntimePipeline(input: {
   readonly orchestrationEngine: Pick<OrchestrationEngineShape, "quiesce" | "drain" | "stop">;
   readonly providerService: Pick<ProviderServiceShape, "closeRuntimeEvents">;
+  readonly orchestrationReactor: Pick<OrchestrationReactorShape, "drainProviderCommands">;
   readonly managedAttachmentCleanup: Pick<ManagedAttachmentCleanupShape, "drain">;
   readonly subscriptionsScope: Scope.Closeable;
 }): Effect.Effect<void> {
@@ -117,7 +118,9 @@ export function closeServerRuntimePipeline(input: {
     // close then fences terminal runtime events into subscriber workers; scope
     // close drains those workers before the engine accepts its final stop.
     Effect.andThen(input.orchestrationEngine.drain),
+    Effect.andThen(input.orchestrationReactor.drainProviderCommands),
     Effect.andThen(input.providerService.closeRuntimeEvents),
+    Effect.andThen(input.orchestrationReactor.drainProviderCommands),
     Effect.andThen(Scope.close(input.subscriptionsScope, Exit.void)),
     Effect.andThen(input.managedAttachmentCleanup.drain),
     Effect.andThen(input.orchestrationEngine.stop),
@@ -252,13 +255,21 @@ export const createEffectServer = Effect.fn(function* (
   yield* readiness.markHttpListening;
 
   const subscriptionsScope = yield* Scope.make("sequential");
+  let runtimePipelineStarted = false;
   yield* Effect.addFinalizer(() =>
-    closeServerRuntimePipeline({
-      orchestrationEngine,
-      providerService,
-      managedAttachmentCleanup,
-      subscriptionsScope,
-    }),
+    Effect.suspend(() =>
+      closeServerRuntimePipeline({
+        orchestrationEngine,
+        providerService,
+        orchestrationReactor: {
+          drainProviderCommands: runtimePipelineStarted
+            ? orchestrationReactor.drainProviderCommands
+            : Effect.void,
+        },
+        managedAttachmentCleanup,
+        subscriptionsScope,
+      }),
+    ),
   );
   yield* startServerRuntimePipeline({
     orchestrationReactor,
@@ -279,6 +290,7 @@ export const createEffectServer = Effect.fn(function* (
     ],
     subscriptionsScope,
   });
+  runtimePipelineStarted = true;
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   yield* recoverGitHandoffOperations((command) => orchestrationEngine.dispatch(command)).pipe(

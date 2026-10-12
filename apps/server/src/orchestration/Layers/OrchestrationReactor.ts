@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import {
   OrchestrationReactor,
@@ -35,6 +35,19 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   return {
     start,
     reconcileSettledOpenTurns: providerRuntimeIngestion.reconcileSettledOpenTurns,
+    drainProviderCommands: providerRuntimeIngestion.drain.pipe(
+      Effect.andThen(providerCommandReactor.drain),
+      // An existing genuinely uncertain delivery may hold the durable cursor.
+      // Preserve that evidence instead of waiting forever for it during quit.
+      Effect.timeoutOption("5 seconds"),
+      Effect.flatMap((result) =>
+        Option.isSome(result)
+          ? Effect.void
+          : Effect.logWarning(
+              "provider shutdown drain reached its deadline; durable recovery evidence retained",
+            ),
+      ),
+    ),
   } satisfies OrchestrationReactorShape;
 });
 
