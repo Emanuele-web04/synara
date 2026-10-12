@@ -1,8 +1,31 @@
 import { CommandId, MessageId, ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { type CxOptions, cx } from "class-variance-authority";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
 import * as Random from "effect/Random";
 import * as Effect from "effect/Effect";
+
+// `text-ui*` / `text-chat*` are font sizes from the `@theme` block in index.css.
+// Register them so twMerge resolves them against `text-xs` etc. instead of
+// treating them as text colors.
+const twMerge = extendTailwindMerge({
+  extend: {
+    theme: {
+      text: [
+        "ui",
+        "ui-lg",
+        "ui-sm",
+        "ui-xs",
+        "ui-2xs",
+        "ui-meta",
+        "ui-timestamp",
+        "chat",
+        "chat-code",
+        "chat-meta",
+        "chat-tiny",
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: CxOptions) {
   return twMerge(cx(inputs));

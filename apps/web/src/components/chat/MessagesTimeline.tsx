@@ -5,6 +5,7 @@
 
 import {
   type EditorId,
+  type HubWorkItem,
   type MessageId,
   type ProviderMentionReference,
   type ResolvedKeybindingsConfig,
@@ -30,6 +31,7 @@ import {
   type KeyboardEvent,
   type RefObject,
   type ReactNode,
+  type ReactElement,
   type SetStateAction,
 } from "react";
 import {
@@ -39,16 +41,25 @@ import {
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import {
   type TurnDiffSummary,
   type WorktreeSetupResolutionAction,
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
+import { HubWorkItemCards } from "./group/HubWorkItemCard";
+import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
+import {
+  SubagentBriefCard,
+  SubagentDeliveredNote,
+  type SubagentThreadPresentation,
+} from "./SubagentThreadIntro";
 import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
+  ActivityLoadingIcon,
   BotIcon,
   ChangesIcon,
   CircleAlertIcon,
@@ -56,21 +67,26 @@ import {
   ClockIcon,
   GitForkIcon,
   GoalIcon,
-  LoaderIcon,
+  MessageDeliveryCheckIcon,
   type LucideIcon,
   NewThreadIcon,
   PinIcon,
   SteerIcon,
+  ThinkingIcon,
   Undo2Icon,
   WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
-import { composerOverlayScrollMaskImage } from "./composerOverlay";
+import { LiveStatusSpinner } from "../ui/spinner";
+import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
+import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
+import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -92,6 +108,7 @@ import { UserMessagePullRequestContextCard } from "./PullRequestContextCard";
 import {
   EditedFileRowContent,
   prefersCompactWorkEntryRow,
+  renderWorkEntryIcon,
   TimelineWorkEntryRow,
 } from "./TimelineWorkEntryRow";
 import {
@@ -102,11 +119,16 @@ import {
 import {
   canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
+  collapsibleHiddenRowCount,
+  isFoldedWorkEntryChunk,
+  resolveWorkEntryChunkFold,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
+  formatTurnHeaderLabel,
   findLastLiveWorkGroupId,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
+  MIN_BACKGROUND_TASK_GROUP_SIZE,
   planWorkEntryRenderChunks,
   type CollapsedTurnChunk,
   type CollapsedTurnItem,
@@ -114,10 +136,16 @@ import {
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
   resolveThreadFindJumpTarget,
+  resolveWorkEntryJumpTarget,
   type StableMessagesTimelineRowsState,
+  type TurnTiming,
 } from "./MessagesTimeline.logic";
+import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
+import { BackgroundTaskGroupRow } from "./BackgroundTaskGroupRow";
+import { BackgroundTaskStopContext } from "./BackgroundTaskRow";
+import { TurnHeaderLine } from "./TurnHeaderLine";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
 import { useTimelineRowOverlapGuard } from "./useTimelineRowOverlapGuard";
 import {
@@ -146,6 +174,7 @@ import {
   getChatTranscriptUserMessageTextStyle,
   USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME,
   userMessageBubbleBorderClassName,
 } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
@@ -236,6 +265,8 @@ export interface MessagesTimelineController {
     options?: { segmentIndex?: number; fineScrollFind?: boolean },
   ) => void;
   setActiveFindMatch: (match: ThreadFindMatch | null) => void;
+  /** Scrolls a work row (the subagent card) into view, unfolding its turn if needed. */
+  scrollToWorkEntry: (entryId: string) => void;
 }
 
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
@@ -267,7 +298,7 @@ function UserDispatchModeChip({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1.5 self-end px-0 text-[11px] font-normal tracking-[0.01em] text-muted-foreground/78",
+        "inline-flex items-center gap-1.5 self-end px-0 text-ui-sm font-normal tracking-[0.01em] text-muted-foreground/78",
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
@@ -295,7 +326,7 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
   if (status === "active") {
     // Spinner sized to match the pending nodes, in foreground (black) so the
     // active step reads as the current work rather than an accent flourish.
-    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+    return <LiveStatusSpinner className="size-2.5 text-[var(--color-text-foreground)]" />;
   }
   if (status === "error") {
     return <CircleAlertIcon className="size-2.5 text-destructive" />;
@@ -330,7 +361,7 @@ function WorktreeSetupCard({
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
         <span
           ref={syncAnimationsToTimelineOrigin}
-          className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]"
+          className="shimmer text-ui-lg font-medium text-[var(--color-text-foreground-secondary)]"
         >
           Preparing worktree...
         </span>
@@ -356,7 +387,7 @@ function WorktreeSetupCard({
               </span>
               <span
                 className={cn(
-                  "text-[13px] leading-5",
+                  "text-ui-lg leading-5",
                   step.status === "active" || step.status === "done"
                     ? "text-[var(--color-text-foreground)]"
                     : step.status === "error"
@@ -400,6 +431,10 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   workingLabel?: WorkingLabel | undefined;
   activeTurnInProgress: boolean;
+  /** Keeps the latest turn expanded while background subagents are still running. */
+  subagentsRunning?: boolean;
+  /** User setting: false keeps every finished turn expanded instead of folding it. */
+  collapseFinishedTurns?: boolean;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -408,7 +443,10 @@ interface MessagesTimelineProps {
   /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
   onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
+  /** Normal sends ease into their anchor independently of end-follow ownership. */
+  animateTailAnchorSlide?: boolean;
   emptyStateContent?: ReactNode;
+  historyHeader?: ReactElement | undefined;
   listRef?: RefObject<LegendListRef | null>;
   /** Receives the scroll-to-message controller so the Environment panel can jump to a pin. */
   controllerRef?: RefObject<MessagesTimelineController | null>;
@@ -437,12 +475,25 @@ interface MessagesTimelineProps {
   tailAnchorScrollInFlightRef?: RefObject<boolean> | undefined;
   /** Provenance for a conversation created from another Synara task. */
   crossTaskOrigin?: CrossTaskOrigin | null;
+  /** Set on a subagent's own thread: its brief renders as a card from the parent. */
+  subagentThread?: SubagentThreadPresentation | null;
   /** Immediate source chat for a forked transcript. */
   forkSource?: ForkSourceReference | null;
   /** Marks the transcript as a temporary chat so user bubbles render the dashed primary outline. */
   isTemporaryThread?: boolean;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
+  /** Stable source messages, before plans/tools reshape the presentation rows. */
+  messageChangeSignal?: unknown;
+  hubWorkItemsByMessageId?: ReadonlyMap<MessageId, readonly HubWorkItem[]> | undefined;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /** Real start/end/outcome per turn for settled "Worked for" headers. */
+  turnTimingByTurnId?: ReadonlyMap<TurnId, TurnTiming> | undefined;
+  /** Coordinator/bot chats hide tool rows and keep a text conversation. */
+  conversationOnly?: boolean;
+  recoverableTurnId?: TurnId | null;
+  turnRecoveryDisabled?: boolean;
+  onContinueFailedTurn?: (turnId: TurnId) => Promise<boolean>;
+  onChangeRecoveryModel?: () => void;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -451,9 +502,16 @@ interface MessagesTimelineProps {
   onOpenThread?: (threadId: ThreadId) => void;
   /** Open an automation's detail page from a "created automation" transcript card. */
   onOpenAutomation?: (automationId: string) => void;
+  /** Stop a running background task from its transcript row. */
+  onStopBackgroundTask?: (taskId: string) => void;
+  /** Whether the composer currently has computer control on; flips denial cards to their confirmed state. */
+  computerControlEnabled?: boolean;
+  /** Switch computer control on from a "computer control denied" transcript card. */
+  onEnableComputerControl?: () => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
+  onRespondToAsyncUserInput?: (messageId: MessageId, answers: readonly string[]) => Promise<void>;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   /**
    * The user message the edit affordance may target, resolved by the owner from
@@ -508,14 +566,18 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
+  historyHeader,
   isWorking,
   workingLabel: workingLabelProp,
   activeTurnInProgress,
+  subagentsRunning,
+  collapseFinishedTurns,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
   worktreeSetupPendingAction: worktreeSetupPendingActionProp,
   onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
+  animateTailAnchorSlide,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -527,10 +589,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   tailAnchorMessageId: tailAnchorMessageIdProp,
   tailAnchorScrollInFlightRef,
   crossTaskOrigin: crossTaskOriginProp,
+  subagentThread: subagentThreadProp,
   forkSource: forkSourceProp,
   isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
+  messageChangeSignal: messageChangeSignalProp,
+  hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
+  turnTimingByTurnId,
+  conversationOnly: conversationOnlyProp,
+  recoverableTurnId,
+  turnRecoveryDisabled,
+  onContinueFailedTurn,
+  onChangeRecoveryModel,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -538,10 +609,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  onStopBackgroundTask,
+  computerControlEnabled,
+  onEnableComputerControl,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
   isRevertingCheckpoint,
@@ -577,6 +652,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // entire component (silently, since `panicThreshold` is unset), which would drop
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
   const workingLabel = workingLabelProp ?? "Thinking";
+  const workingIcon =
+    workingLabel === "Thinking"
+      ? ThinkingIcon
+      : workingLabel === "Checking message delivery…"
+        ? MessageDeliveryCheckIcon
+        : ActivityLoadingIcon;
   const worktreeSetup = worktreeSetupProp ?? null;
   const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
@@ -607,6 +688,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setSettledTailAnchorMessageId((current) => (current === messageId ? current : messageId));
   }, []);
   const crossTaskOrigin = crossTaskOriginProp ?? null;
+  const subagentThread = subagentThreadProp ?? null;
   const normalizedChatFontSizePx = normalizeChatFontSizePx(
     chatFontSizePxProp ?? DEFAULT_CHAT_FONT_SIZE_PX,
   );
@@ -615,9 +697,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
   // The bottom inset clears the floating composer the transcript scrolls under; it is
   // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
-  // and initial-scroll machinery is never resized from outside. The mask dissolves rows
-  // as they pass behind the composer's glass so nothing remains visible behind its
-  // footer controls (see composerOverlayScrollMaskImage).
+  // and initial-scroll machinery is never resized from outside. The fade variables move
+  // the list's bottom edge fade up to the composer's top edge and add the dissolve that
+  // keeps content clear of its footer controls (see composerOverlayScrollFadeVars).
   const listScrollStyle = useMemo(() => {
     if (!contentInsetRightPx && !contentInsetBottomPx) {
       return undefined;
@@ -628,14 +710,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     if (contentInsetBottomPx) {
       style.paddingBottom = contentInsetBottomPx;
-      const maskImage = composerOverlayScrollMaskImage(
-        contentInsetBottomPx,
-        contentInsetBottomClearancePx,
+      Object.assign(
+        style,
+        composerOverlayScrollFadeVars(contentInsetBottomPx, contentInsetBottomClearancePx),
       );
-      if (maskImage) {
-        style.maskImage = maskImage;
-        style.WebkitMaskImage = maskImage;
-      }
     }
     return style;
   }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
@@ -739,10 +817,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     anchorScrollInFlightRef: tailAnchorScrollInFlightRef,
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
-    animateAnchorSlide: !followLiveOutput,
+    messageChangeSignal: messageChangeSignalProp ?? timelineEntries,
+    animateAnchorSlide: animateTailAnchorSlide ?? !followLiveOutput,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
+  const conversationOnly = conversationOnlyProp === true;
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -751,20 +831,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
         worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
+        subagentsRunning: subagentsRunning === true,
+        collapseFinishedTurns: collapseFinishedTurns !== false,
         activeTurnId,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        ...(turnTimingByTurnId ? { turnTimingByTurnId } : {}),
+        conversationOnly,
       }),
     [
       timelineEntries,
       isWorking,
       presentedWorktreeSetup,
       activeTurnInProgress,
+      subagentsRunning,
+      collapseFinishedTurns,
       activeTurnId,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      turnTimingByTurnId,
+      conversationOnly,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -879,11 +967,30 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return null;
   }, [rows]);
+  // On a subagent's thread, the answers to its parent's briefs went back to the
+  // parent: the terminal answer after an agent-sent message carries that note.
+  const subagentDeliveredMessageIds = useMemo(() => {
+    const ids = new Set<MessageId>();
+    if (!subagentThread) return ids;
+    let answeringParent = false;
+    for (const row of rows) {
+      if (row.kind !== "message") continue;
+      if (row.message.role === "user") {
+        answeringParent = row.message.dispatchOrigin === "agent";
+      } else if (answeringParent && row.message.role === "assistant") {
+        ids.add(row.message.id);
+      }
+    }
+    return ids;
+  }, [rows, subagentThread]);
   const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      hubWorkItemsByMessageId,
       crossTaskOrigin,
+      subagentThread,
+      subagentDeliveredMessageIds,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -901,7 +1008,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       toolGroupSummaryOverrides,
     }),
     [
+      hubWorkItemsByMessageId,
       crossTaskOrigin,
+      subagentThread,
+      subagentDeliveredMessageIds,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -1064,6 +1174,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       setActiveFindMatch: (match) => {
         activeFindMatchRef.current = match;
         applyActiveFindMatch();
+      },
+      scrollToWorkEntry: (entryId) => {
+        const target = resolveWorkEntryJumpTarget(rowsRef.current, entryId);
+        if (!target) return;
+        onNavigate?.();
+        if (target.expandCollapsedWorkMessageId) {
+          setCollapsedWorkExpanded(target.expandCollapsedWorkMessageId, true);
+        }
+        const row = rowsRef.current[target.rowIndex];
+        const cardEntryId =
+          row?.kind === "work" && row.groupedEntries.every((entry) => entry.subagentRun)
+            ? (row.groupedEntries[0]?.id ?? entryId)
+            : entryId;
+        const selector = `[data-subagent-run-card="${cssAttributeSelectorValue(cardEntryId)}"]`;
+        const mounted = timelineRootRef.current?.querySelector(selector);
+        if (mounted instanceof HTMLElement) {
+          mounted.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          return;
+        }
+        // Not rendered yet (virtualized away): bring its row in, then center it.
+        scrollLegendListToIndex(resolvedListRef, {
+          index: target.rowIndex,
+          animated: true,
+          viewPosition: 0.3,
+        });
       },
     };
     controllerRef.current = controller;
@@ -1357,12 +1492,46 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        row.groupedEntries.map((entry) =>
+          entry.turnFailure ? (
+            <div key={entry.id} data-turn-failure={entry.turnId ?? entry.id}>
+              <ThreadErrorBanner
+                title="Task interrupted"
+                error={entry.turnFailure.message}
+                {...(entry.turnId && entry.turnId === recoverableTurnId && onContinueFailedTurn
+                  ? {
+                      onContinue: () => {
+                        void onContinueFailedTurn(entry.turnId!);
+                      },
+                      ...(onChangeRecoveryModel ? { onChangeModel: onChangeRecoveryModel } : {}),
+                    }
+                  : {})}
+                recoveryDisabled={turnRecoveryDisabled ?? false}
+              />
+            </div>
+          ) : null,
+        )}
+      {row.kind === "work" &&
+        row.groupedEntries.map((workEntry) =>
+          workEntry.providerHandoff ? (
+            <ProviderHandoffDivider
+              key={`provider-handoff:${workEntry.id}`}
+              info={workEntry.providerHandoff}
+            />
+          ) : null,
+        )}
+      {row.kind === "work" &&
+        !conversationOnly &&
         (() => {
           const groupId = row.id;
           // Creation milestones are reserved for the end-of-turn recap card.
           // The provider's actual Synara MCP tool rows remain visible here.
+          // Handoff boundaries render as the divider above, not as work rows.
           const groupedEntries = row.groupedEntries.filter(
-            (workEntry) => !workEntry.synaraThreadCreation,
+            (workEntry) =>
+              !workEntry.synaraThreadCreation &&
+              !workEntry.providerHandoff &&
+              !workEntry.turnFailure,
           );
           if (groupedEntries.length === 0) {
             return null;
@@ -1379,8 +1548,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               timestampFormat={timestampFormat}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
+              {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+              {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             />
           );
+          if (groupedEntries.every((entry) => entry.subagentRun)) {
+            const first = groupedEntries[0]!;
+            return renderEntryRow({
+              ...first,
+              subagents: groupedEntries.flatMap((entry) => entry.subagents ?? []),
+              subagentRun: {
+                members: groupedEntries.flatMap((entry) => entry.subagentRun!.members),
+                entryIds: groupedEntries.map((entry) => entry.id),
+              },
+            });
+          }
           const isLiveGroup =
             groupId === lastLiveWorkGroupId && (activeTurnInProgress || isWorking);
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
@@ -1391,27 +1573,48 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             expanded: isExpanded,
             maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
             keep: "last",
+            // The capability-denied card carries the only affordance to unblock
+            // the agent, so it must never disappear behind the "Show more" cap.
+            // Nor does the subagent card: the "N running" chip scrolls to it.
+            shouldCapEntry: (workEntry) =>
+              !workEntry.computerControlDenied &&
+              !workEntry.computerSetupRequired &&
+              !workEntry.subagentRun,
           });
           const renderChunks = cappedRenderPlan.chunks;
-          const hasCollapsedChunk = renderChunks.some((chunk) => chunk.summary !== null);
+          const hasCollapsedChunk = renderChunks.some(isFoldedWorkEntryChunk);
           if (hasCollapsedChunk) {
             return (
               <div>
                 <div className="space-y-0.5">
                   {renderChunks.map((chunk) => {
-                    if (!chunk.summary) return chunk.entries.map(renderEntryRow);
-                    const summary = chunk.summary;
-                    const summaryKey = `${groupId}:${chunk.id}`;
+                    if (chunk.backgroundGroup) {
+                      const groupKey = `${groupId}:background:${chunk.id}`;
+                      return (
+                        <BackgroundTaskGroupRow
+                          key={`background-group:${groupId}:${chunk.id}`}
+                          entries={chunk.entries}
+                          open={toolGroupSummaryOverrides[groupKey] ?? false}
+                          onToggle={(open) => setToolGroupSummaryOpen(groupKey, open)}
+                          fontSizePx={normalizedChatFontSizePx}
+                          renderEntry={renderEntryRow}
+                        />
+                      );
+                    }
+                    const fold = resolveWorkEntryChunkFold(chunk);
+                    if (!fold) return chunk.entries.map(renderEntryRow);
+                    const summaryKey = `${groupId}:${chunk.id}${fold.keySuffix}`;
                     return (
                       <ToolCallGroupSummaryRow
-                        key={`tool-summary:${summaryKey}`}
-                        summary={summary}
+                        key={`tool-summary:${groupId}:${chunk.id}`}
+                        summary={fold.summary}
+                        liveEntry={chunk.liveEntry}
                         open={toolGroupSummaryOverrides[summaryKey] ?? false}
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
                           <div className="space-y-0.5 pt-0.5">
-                            {chunk.entries.map(renderEntryRow)}
+                            {fold.entries.map(renderEntryRow)}
                           </div>
                         )}
                       />
@@ -1436,7 +1639,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               </div>
             );
           }
-          const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
+          const hasOverflow =
+            collapsibleHiddenRowCount(groupedEntries.length, MAX_VISIBLE_WORK_LOG_ENTRIES) > 0;
           const visibleEntries =
             hasOverflow && !isExpanded
               ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
@@ -1466,6 +1670,35 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
         })()}
 
+      {row.kind === "work" &&
+        conversationOnly &&
+        (() => {
+          // Server-posted coordinator monitor rows (worker settled / stuck /
+          // batch roll-up) read as part of the coordinator's chat reply —
+          // left-aligned body text in the message column, not centered pills
+          // or work entries.
+          const notices = row.groupedEntries.flatMap((workEntry) =>
+            workEntry.synaraWorkerNotice
+              ? [{ entry: workEntry, notice: workEntry.synaraWorkerNotice }]
+              : [],
+          );
+          if (notices.length === 0) {
+            return null;
+          }
+          return (
+            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+              {notices.map(({ entry, notice }) => (
+                <WorkerMonitorNoticePill
+                  key={`worker-monitor:${entry.id}`}
+                  entry={entry}
+                  notice={notice}
+                  {...(onOpenThread ? { onOpenThread } : {})}
+                />
+              ))}
+            </div>
+          );
+        })()}
+
       {row.kind === "message-segment" &&
         (() => {
           const segmentText =
@@ -1483,6 +1716,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -1539,6 +1773,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const renderedPullRequestContexts = displayedUserMessage.pullRequestContexts;
           const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
+          const messageWorkItems = hubWorkItemsByMessageId?.get(row.message.id);
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
           const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -1561,6 +1796,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
             crossTaskOrigin !== null && row.message.id === firstUserMessageId;
+          // A subagent's brief (and later messages from its parent) came from the
+          // launching agent, not the user: a card, not a sent bubble.
+          if (subagentThread && row.message.dispatchOrigin === "agent") {
+            return (
+              <SubagentBriefCard
+                parentTitle={subagentThread.parentTitle}
+                text={userMessageText}
+                timestamp={formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
+                markdownCwd={markdownCwd}
+                textStyle={chatTypographyStyle}
+              />
+            );
+          }
           return (
             <div className="flex w-full flex-col gap-3">
               {showCrossTaskOrigin ? (
@@ -1621,6 +1869,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <UserMessagePullRequestContextCard
                           key={context.index}
                           scope={context.scope}
+                          itemKind={context.itemKind}
                           title={context.title}
                           subtitle={context.subtitle}
                           text={context.text}
@@ -1754,9 +2003,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 </div>
               </div>
+              {messageWorkItems?.length ? (
+                <HubWorkItemCards items={messageWorkItems} onOpenThread={onOpenThread} />
+              ) : null}
             </div>
           );
         })()}
+
+      {row.kind === "message" &&
+        row.message.role === "user" &&
+        row.turnHeader &&
+        row.turnHeader.outcome !== "completed" &&
+        !conversationOnly && (
+          <div className="pt-2">
+            <TurnHeaderLine
+              kind="settled"
+              header={row.turnHeader}
+              fontSize={chatTypographyStyle.fontSize}
+            />
+          </div>
+        )}
 
       {row.kind === "message" &&
         row.message.role === "assistant" &&
@@ -1769,8 +2035,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
             const toolExpanded =
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
+            const collapsibleToolCount = collapsibleHiddenRowCount(
+              toolEntries.length,
+              MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+            );
             const visibleToolEntries =
-              toolExpanded || toolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
+              toolExpanded || collapsibleToolCount === 0
                 ? toolEntries
                 : activeTurnInProgress
                   ? toolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
@@ -1796,6 +2066,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               renderableToolEntries: toolEntries.filter(isRenderableToolEntry),
               visibleRenderableToolEntries: visibleToolEntries.filter(isRenderableToolEntry),
               hiddenToolCount: toolEntries.length - visibleToolEntries.length,
+              hasToolOverflow: collapsibleToolCount > 0,
               hasGenericFileChangeEntry,
             };
           };
@@ -1851,6 +2122,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             isTerminalAssistantMessage && row.message.turnId
               ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
               : null;
+          const showDeliveredNote =
+            isTerminalAssistantMessage && subagentDeliveredMessageIds.has(row.message.id);
           const assistantMeta = [
             isTerminalAssistantMessage
               ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
@@ -1876,8 +2149,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
+          // Computer setup/denied cards carry the only affordance to unblock the
+          // agent, so a settled turn shows the latest of each after the answer
+          // instead of burying it inside the closed "Worked for" disclosure.
+          const collapsedComputerActionEntries = [
+            ...new Map(
+              (row.collapsedTurnItems ?? []).flatMap((item) =>
+                item.kind === "work" &&
+                (item.entry.computerSetupRequired || item.entry.computerControlDenied)
+                  ? [[item.entry.computerSetupRequired ? "setup" : "denied", item.entry] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
+          // Background tasks stay visible under the header while the turn is
+          // folded: each is one row whose status is the turn's lasting result.
+          const pinnedBackgroundEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
+            item.kind === "work" && item.entry.backgroundTask ? [item.entry] : [],
+          );
           const collapsedTurnItems = row.collapsedTurnItems?.filter(
-            (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
+            (item) =>
+              item.kind !== "work" ||
+              !(
+                item.entry.synaraThreadCreation ||
+                item.entry.computerSetupRequired ||
+                item.entry.computerControlDenied ||
+                item.entry.backgroundTask
+              ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
@@ -1905,6 +2203,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
@@ -1927,7 +2227,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
             });
             const renderChunks = cappedRenderPlan.chunks;
-            const collapseAsSummary = renderChunks.some((chunk) => chunk.summary !== null);
+            const collapseAsSummary = renderChunks.some(isFoldedWorkEntryChunk);
             return (
               <>
                 {!hasCollapsedWork &&
@@ -1936,26 +2236,41 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
                       <div className="space-y-px">
                         {renderChunks.map((chunk) => {
-                          if (!chunk.summary) {
+                          if (chunk.backgroundGroup) {
+                            const groupKey = `${placement}:${row.message.id}:background:${chunk.id}`;
+                            return (
+                              <BackgroundTaskGroupRow
+                                key={`inline-background-group:${groupKey}`}
+                                entries={chunk.entries}
+                                open={toolGroupSummaryOverrides[groupKey] ?? false}
+                                onToggle={(open) => setToolGroupSummaryOpen(groupKey, open)}
+                                fontSizePx={normalizedChatFontSizePx}
+                                renderEntry={renderInlineToolRow}
+                              />
+                            );
+                          }
+                          const fold = resolveWorkEntryChunkFold(chunk);
+                          if (!fold) {
                             // Narration-tone entries render in the status block
                             // below; here they only serve as run boundaries.
                             return chunk.entries
                               .filter((workEntry) => workEntry.tone === "tool")
                               .map(renderInlineToolRow);
                           }
-                          const summary = chunk.summary;
                           // Message ids stay stable while a live group's first-entry id can drift.
-                          const summaryOverrideKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryRowKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryOverrideKey = `${summaryRowKey}${fold.keySuffix}`;
                           return (
                             <ToolCallGroupSummaryRow
-                              key={`inline-tool-summary:${summaryOverrideKey}`}
-                              summary={summary}
+                              key={`inline-tool-summary:${summaryRowKey}`}
+                              summary={fold.summary}
+                              liveEntry={chunk.liveEntry}
                               open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
                               onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                               fontSizePx={normalizedChatFontSizePx}
                               renderChildren={() => (
                                 <div className="space-y-px pt-0.5">
-                                  {chunk.entries.map(renderInlineToolRow)}
+                                  {fold.entries.map(renderInlineToolRow)}
                                 </div>
                               )}
                             />
@@ -1988,24 +2303,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <div className="space-y-px">
                         {display.visibleRenderableToolEntries.map(renderInlineToolRow)}
                       </div>
-                      {display.toolGroupId &&
-                        display.toolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
-                          <div className="py-0.5">
-                            <button
-                              type="button"
-                              className={cn(
-                                "transition-colors duration-150 hover:text-foreground",
-                                MUTED_LABEL_TEXT_CLASS_NAME,
-                              )}
-                              style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                              onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
-                            >
-                              {display.toolExpanded
-                                ? "Show less"
-                                : `+${display.hiddenToolCount} more tool calls`}
-                            </button>
-                          </div>
-                        )}
+                      {display.toolGroupId && display.hasToolOverflow && (
+                        <div className="py-0.5">
+                          <button
+                            type="button"
+                            className={cn(
+                              "transition-colors duration-150 hover:text-foreground",
+                              MUTED_LABEL_TEXT_CLASS_NAME,
+                            )}
+                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                            onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
+                          >
+                            {display.toolExpanded
+                              ? "Show less"
+                              : `+${display.hiddenToolCount} more tool calls`}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 {!hasCollapsedWork && display.statusEntries.length > 0 && (
@@ -2031,6 +2345,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         timestampFormat={timestampFormat}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                        {...(computerControlEnabled !== undefined
+                          ? { computerControlEnabled }
+                          : {})}
+                        {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
                       />
                     ))}
                   </div>
@@ -2051,6 +2369,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
               />
             ) : (
               <div
@@ -2062,6 +2382,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={item.message.text}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -2073,6 +2394,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const renderCollapsedTurnChunk = (chunk: CollapsedTurnChunk, keyPrefix: string) => {
             if (chunk.kind === "item") {
               return renderCollapsedTurnItem(chunk.item, keyPrefix);
+            }
+            if (chunk.kind === "background-group") {
+              const groupKey = `turn:${row.message.id}:background:${chunk.id}`;
+              return (
+                <BackgroundTaskGroupRow
+                  key={`${keyPrefix}:background-group:${row.message.id}:${chunk.id}`}
+                  entries={chunk.entries}
+                  open={toolGroupSummaryOverrides[groupKey] ?? false}
+                  onToggle={(open) => setToolGroupSummaryOpen(groupKey, open)}
+                  fontSizePx={normalizedChatFontSizePx}
+                  renderEntry={(entry) =>
+                    renderCollapsedTurnItem({ kind: "work", id: entry.id, entry }, keyPrefix)
+                  }
+                />
+              );
             }
             const summary = summarizeToolCallGroup(chunk.entries);
             if (!summary) {
@@ -2119,73 +2455,131 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </DisclosureRegion>
                 </div>
               )}
-              {hasCollapsedWork && (
-                <div className="mb-3">
-                  <Collapsible
-                    className="group/collapsed-work"
-                    open={isCollapsedWorkExpanded}
-                    onOpenChange={(open) => {
-                      setCollapsedWorkExpanded(row.message.id, open);
-                    }}
-                  >
-                    <CollapsibleTrigger
-                      // ChatView's click anchor preserves this trigger's screen position
-                      // while the disclosure height animates, so opening it should not tail-scroll.
-                      // -ml-0.5 optically aligns the leading "W" with the reply
-                      // text below: the box is already flush, but the W glyph
-                      // carries a left side-bearing that reads as an inset.
-                      className={cn(
-                        "-ml-0.5 inline-flex items-center gap-1 pb-2 text-left transition-colors duration-200 hover:text-foreground",
-                        MUTED_LABEL_TEXT_CLASS_NAME,
-                      )}
-                      style={{ fontSize: chatTypographyStyle.fontSize }}
-                    >
-                      <span>
-                        {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
-                          : "Details"}
-                      </span>
-                      <DisclosureChevron
+              {row.turnHeader &&
+                (hasCollapsedWork ||
+                  pinnedBackgroundEntries.length > 0 ||
+                  row.turnHeader.outcome !== "completed") &&
+                !conversationOnly && (
+                  <div className="mb-3">
+                    {hasCollapsedWork ? (
+                      <Collapsible
+                        className="group/collapsed-work"
                         open={isCollapsedWorkExpanded}
-                        className="text-muted-foreground/70"
-                      />
-                    </CollapsibleTrigger>
-                    <CollapsiblePanel>
-                      <div
-                        className={disclosureContentClassName(
-                          isCollapsedWorkExpanded,
-                          "mb-2.5 space-y-1.5",
-                        )}
+                        onOpenChange={(open) => {
+                          setCollapsedWorkExpanded(row.message.id, open);
+                        }}
                       >
-                        {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
-                          renderCollapsedTurnChunk(chunk, "collapsed-panel"),
+                        <TurnHeaderLine
+                          kind="settled"
+                          header={row.turnHeader}
+                          fontSize={chatTypographyStyle.fontSize}
+                          disclosure={{
+                            open: isCollapsedWorkExpanded,
+                            renderTrigger: (content) => (
+                              <CollapsibleTrigger
+                                // ChatView's click anchor preserves this trigger's screen position
+                                // while the disclosure height animates, so opening it should not tail-scroll.
+                                className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
+                              >
+                                {content}
+                              </CollapsibleTrigger>
+                            ),
+                          }}
+                        />
+                        <CollapsiblePanel>
+                          <div
+                            className={disclosureContentClassName(
+                              isCollapsedWorkExpanded,
+                              "mb-2.5 space-y-1.5",
+                            )}
+                          >
+                            {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
+                              renderCollapsedTurnChunk(chunk, "collapsed-panel"),
+                            )}
+                          </div>
+                        </CollapsiblePanel>
+                        <div className="h-px w-full bg-border" />
+                      </Collapsible>
+                    ) : row.turnHeader.outcome !== "completed" ? (
+                      <TurnHeaderLine
+                        kind="settled"
+                        header={row.turnHeader}
+                        fontSize={chatTypographyStyle.fontSize}
+                      />
+                    ) : null}
+                    {pinnedBackgroundEntries.length > 0 ? (
+                      <div className="space-y-0.5">
+                        {pinnedBackgroundEntries.length >= MIN_BACKGROUND_TASK_GROUP_SIZE ? (
+                          <BackgroundTaskGroupRow
+                            entries={pinnedBackgroundEntries}
+                            open={
+                              toolGroupSummaryOverrides[`turn:${row.message.id}:background`] ??
+                              false
+                            }
+                            onToggle={(open) =>
+                              setToolGroupSummaryOpen(`turn:${row.message.id}:background`, open)
+                            }
+                            fontSizePx={normalizedChatFontSizePx}
+                            renderEntry={(entry) =>
+                              renderCollapsedTurnItem(
+                                { kind: "work", id: entry.id, entry },
+                                "pinned-background",
+                              )
+                            }
+                          />
+                        ) : (
+                          pinnedBackgroundEntries.map((entry) =>
+                            renderCollapsedTurnItem(
+                              { kind: "work", id: entry.id, entry },
+                              "pinned-background",
+                            ),
+                          )
                         )}
                       </div>
-                    </CollapsiblePanel>
-                  </Collapsible>
-                  <div className="h-px w-full bg-border" />
-                </div>
-              )}
+                    ) : null}
+                  </div>
+                )}
               <div className="group min-w-0 py-0.5">
-                {renderWorkDisplay(leadingWorkDisplay, "leading")}
-                {messageText !== null ? (
+                {conversationOnly ? null : renderWorkDisplay(leadingWorkDisplay, "leading")}
+                {row.message.asyncUserInput ? (
+                  <AsyncUserInputCard
+                    key={row.message.id}
+                    messageId={row.message.id}
+                    input={row.message.asyncUserInput}
+                    onRespond={onRespondToAsyncUserInput}
+                  />
+                ) : messageText !== null ? (
                   <div
                     data-assistant-message-id={row.message.id}
                     data-chat-find-document-id={row.message.id}
                   >
                     <ChatMarkdown
-                      text={messageText}
+                      text={
+                        conversationOnly
+                          ? rewriteThreadIdsAsMarkdownLinks(
+                              messageText,
+                              synaraThreadCreationRecaps.flatMap((creation) =>
+                                creation.threads.map((thread) => ({
+                                  id: thread.threadId,
+                                  title: thread.title,
+                                })),
+                              ),
+                            )
+                          : messageText
+                      }
                       cwd={markdownCwd}
+                      directionMode="auto-blocks"
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      {...(conversationOnly && onOpenThread ? { onOpenThread } : {})}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
                 ) : null}
-                {renderWorkDisplay(inlineWorkDisplay, "inline")}
-                {inlineEditedFilesFromTurnSummary.length > 0 && (
+                {conversationOnly ? null : renderWorkDisplay(inlineWorkDisplay, "inline")}
+                {!conversationOnly && inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {inlineEditedFilesFromTurnSummary.map((file) => (
                       <button
@@ -2206,27 +2600,60 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
+                {collapsedComputerActionEntries.map((workEntry) => (
+                  <div key={`computer-action:${row.message.id}:${workEntry.id}`} className="mt-2">
+                    <TimelineWorkEntryRow
+                      workEntry={workEntry}
+                      chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                      textFontSizePx={normalizedChatFontSizePx}
+                      density="compact"
+                      markdownCwd={markdownCwd}
+                      onImageExpand={onImageExpand}
+                      timestampFormat={timestampFormat}
+                      {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                      {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
+                    />
+                  </div>
+                ))}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
-                  ? synaraThreadCreationRecaps.map((creation) => (
-                      <div key={creation.operationId} className="mt-2 mb-4">
-                        <SynaraThreadCreationCard
-                          creation={creation}
-                          {...(onOpenThread
-                            ? {
-                                onOpenThread: (createdThreadId) =>
-                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
-                              }
-                            : {})}
-                        />
-                      </div>
-                    ))
+                  ? synaraThreadCreationRecaps.map((creation) =>
+                      conversationOnly ? (
+                        <p
+                          key={creation.operationId}
+                          className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-ui"
+                        >
+                          {creation.threads.map((thread) => (
+                            <button
+                              key={thread.threadId}
+                              type="button"
+                              className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+                              onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
+                            >
+                              {thread.title}
+                            </button>
+                          ))}
+                        </p>
+                      ) : (
+                        <div key={creation.operationId} className="mt-2 mb-4">
+                          <SynaraThreadCreationCard
+                            creation={creation}
+                            {...(onOpenThread
+                              ? {
+                                  onOpenThread: (createdThreadId) =>
+                                    onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                                }
+                              : {})}
+                          />
+                        </div>
+                      ),
+                    )
                   : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
                   // live-changes strip owns this surface; showing the card too
                   // would duplicate it and pre-empt the strip mid-turn.
-                  if (!turnSummary || row.assistantTurnInProgress) return null;
+                  if (conversationOnly || !turnSummary || row.assistantTurnInProgress) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
@@ -2259,8 +2686,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     checkpointFiles.length,
                     "file",
                   )}`;
-                  const firstCheckpointFiles = checkpointFiles.slice(0, MAX_VISIBLE_CHANGED_FILES);
-                  const overflowCheckpointFiles = checkpointFiles.slice(MAX_VISIBLE_CHANGED_FILES);
+                  const visibleCheckpointFileCount =
+                    collapsibleHiddenRowCount(checkpointFiles.length, MAX_VISIBLE_CHANGED_FILES) > 0
+                      ? MAX_VISIBLE_CHANGED_FILES
+                      : checkpointFiles.length;
+                  const firstCheckpointFiles = checkpointFiles.slice(0, visibleCheckpointFileCount);
+                  const overflowCheckpointFiles = checkpointFiles.slice(visibleCheckpointFileCount);
                   const renderCheckpointFileRow = (
                     file: (typeof checkpointFiles)[number],
                     withFirstReset: boolean,
@@ -2396,7 +2827,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
+                  goalAchievement !== null ||
+                  showDeliveredNote) && (
                   // Turn-end actions read Copy → Fork → Pin → time and stay visible at
                   // rest: they belong to a settled turn, so hiding them behind hover made
                   // the whole row feel undiscoverable. The leading button pulls left by
@@ -2452,6 +2884,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         </p>
                       </>
                     ) : null}
+                    {showDeliveredNote && subagentThread ? (
+                      <SubagentDeliveredNote parentTitle={subagentThread.parentTitle} />
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -2470,33 +2905,53 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
-      {row.kind === "working-header" && (
-        <div>
-          {/* Non-collapsible twin of the settled "Worked for" header: same label
-              tone, size, and full-width divider, but counting up live. -ml-0.5
-              optically aligns the leading "W" with the reply text below. */}
+      {row.kind === "user-input" && (
+        <UserInputExchange
+          items={row.entry.userInputExchange}
+          chatTypographyStyle={chatTypographyStyle}
+          answerTypographyStyle={userMessageTypographyStyle}
+          labelStyle={chatMessageFooterStyle}
+        />
+      )}
+
+      {(row.kind === "work" || row.kind === "message") &&
+        row.turnEndMarker !== undefined &&
+        !conversationOnly && (
           <div
-            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("-ml-0.5 pt-1", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
+            data-stopped-turn={row.turnEndMarker.outcome === "stopped" ? "true" : undefined}
+            data-interrupted-turn={row.turnEndMarker.outcome === "interrupted" ? "true" : undefined}
           >
-            Working for{" "}
-            {nowIso ? (
-              (formatClockElapsed(row.createdAt, nowIso) ?? "0s")
-            ) : (
-              <WorkingTimer createdAt={row.createdAt} />
-            )}
+            {formatTurnHeaderLabel({ ...row.turnEndMarker, resumedBy: null })}
           </div>
-          <div className="h-px w-full bg-border" />
-        </div>
+        )}
+
+      {row.kind === "working-header" && !conversationOnly && (
+        // Non-collapsible twin of the settled turn header: same tone, size and
+        // hairline, but counting up live.
+        <TurnHeaderLine
+          kind="live"
+          startedAt={row.createdAt}
+          nowLabel={nowIso ? (formatClockElapsed(row.createdAt, nowIso) ?? "0s") : null}
+          resumedBy={row.resumedBy ?? null}
+          fontSize={chatTypographyStyle.fontSize}
+        />
       )}
 
       {row.kind === "working" && (
         <div
           ref={syncAnimationsToTimelineOrigin}
-          className={cn("shimmer pt-0.5 font-system-ui", MUTED_LABEL_TEXT_CLASS_NAME)}
+          className={cn(
+            "shimmer-group flex w-fit items-center gap-1.5 pt-0.5 font-system-ui",
+            MUTED_LABEL_TEXT_CLASS_NAME,
+          )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {workingLabel}
+          <span aria-hidden="true" className="flex shrink-0">
+            {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+          </span>
+          <span>{workingLabel}</span>
         </div>
       )}
 
@@ -2519,78 +2974,86 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const hasRenderableTranscriptContent =
     hasMessages || rows.length > 0 || canRenderForkSourceDivider;
   if (!hasRenderableTranscriptContent && !isWorking) {
-    if (emptyStateContent) {
-      return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
-    }
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
-        </p>
+      <div className="flex h-full flex-col">
+        {historyHeader}
+        <div className="flex flex-1 items-center justify-center">
+          {emptyStateContent ?? (
+            <p className="text-ui leading-snug text-muted-foreground/30">
+              Send a message to start the conversation.
+            </p>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
-    <div ref={timelineRootRef} className="contents" data-messages-timeline-root="true">
-      <LegendList<MessagesTimelineRow>
-        ref={resolvedListRef}
-        data={rows}
-        keyExtractor={(row) => row.id}
-        renderItem={({ item }) => renderRowContent(item)}
-        estimatedItemSize={90}
-        // LegendList caches rendered rows, so every local expansion map that changes row content
-        // has to be surfaced through extraData.
-        extraData={timelineExtraData}
-        // Deliberately keyed off the *inherited* anchor rather than
-        // `tailAnchorSlideInFlight`: LegendList re-targets the end on every data
-        // change while this is true, which would yank a live post-send anchor
-        // out of its hold. A remount that inherits an already-settled anchor has
-        // no slide to preserve, so bootstrapping at the end is what we want.
-        initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
-        {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-        maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
-        maintainScrollAtEndThreshold={0.1}
-        {...(tailAnchorMessageId !== null
-          ? { maintainVisibleContentPosition: false }
-          : !followLiveOutput
-            ? { maintainVisibleContentPosition: true }
+    <BackgroundTaskStopContext.Provider value={onStopBackgroundTask ?? null}>
+      <div ref={timelineRootRef} className="contents" data-messages-timeline-root="true">
+        <LegendList<MessagesTimelineRow>
+          ref={resolvedListRef}
+          data={rows}
+          keyExtractor={(row) => row.id}
+          renderItem={({ item }) => renderRowContent(item)}
+          estimatedItemSize={90}
+          // LegendList caches rendered rows, so every local expansion map that changes row content
+          // has to be surfaced through extraData.
+          extraData={timelineExtraData}
+          // Deliberately keyed off the *inherited* anchor rather than
+          // `tailAnchorSlideInFlight`: LegendList re-targets the end on every data
+          // change while this is true, which would yank a live post-send anchor
+          // out of its hold. A remount that inherits an already-settled anchor has
+          // no slide to preserve, so bootstrapping at the end is what we want.
+          initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
+          {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+          maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
+          maintainScrollAtEndThreshold={
+            followLiveOutput && !tailAnchorSlideInFlight ? Number.POSITIVE_INFINITY : 0.1
+          }
+          {...(tailAnchorMessageId !== null
+            ? { maintainVisibleContentPosition: false }
+            : !followLiveOutput
+              ? { maintainVisibleContentPosition: true }
+              : {})}
+          onClickCapture={onMessagesClickCapture}
+          onMouseUp={onMessagesMouseUp}
+          onPointerCancel={handleMessagesPointerCancel}
+          onPointerDown={handleMessagesPointerDown}
+          onPointerUp={onMessagesPointerUp}
+          onScroll={handleListScroll}
+          {...(onTrailHighlightsChange
+            ? {
+                onViewableItemsChanged: handleViewableItemsChanged,
+                viewabilityConfig: TRAIL_VIEWABILITY_CONFIG,
+              }
             : {})}
-        onClickCapture={onMessagesClickCapture}
-        onMouseUp={onMessagesMouseUp}
-        onPointerCancel={handleMessagesPointerCancel}
-        onPointerDown={handleMessagesPointerDown}
-        onPointerUp={onMessagesPointerUp}
-        onScroll={handleListScroll}
-        {...(onTrailHighlightsChange
-          ? {
-              onViewableItemsChanged: handleViewableItemsChanged,
-              viewabilityConfig: TRAIL_VIEWABILITY_CONFIG,
-            }
-          : {})}
-        onTouchEnd={onMessagesTouchEnd}
-        onTouchMove={handleMessagesTouchMove}
-        onTouchStart={handleMessagesTouchStart}
-        onWheel={handleMessagesWheel}
-        data-chat-scroll-container="true"
-        ListFooterComponent={listFooter}
-        // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
-        // edge so streamed content dissolves toward the composer. It is scroll-aware
-        // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
-        // pinned or non-scrollable transcript stays crisp (no permanent shadow).
-        // With the floating composer the viewport bottom sits *behind* the frosted
-        // surface, so the scroll-aware fade is replaced by the fixed composer mask in
-        // `listScrollStyle`: rows dissolve through the glass over the editor region and
-        // are fully cut before the composer's footer controls.
-        className={cn(
-          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-          contentInsetBottomPx ? null : "scroll-fade-b",
-          ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-          CHAT_COLUMN_GUTTER_CLASS_NAME,
-        )}
-        {...(listScrollStyle ? { style: listScrollStyle } : {})}
-      />
-    </div>
+          onTouchEnd={onMessagesTouchEnd}
+          onTouchMove={handleMessagesTouchMove}
+          onTouchStart={handleMessagesTouchStart}
+          onWheel={handleMessagesWheel}
+          data-chat-scroll-container="true"
+          // LegendList sets overflow inline, so a CSS class cannot keep this
+          // vertical transcript from gaining a horizontal scrollbar.
+          showsHorizontalScrollIndicator={false}
+          ListFooterComponent={listFooter}
+          ListHeaderComponent={historyHeader}
+          // `scroll-edge-fade` (index.css) dissolves rows under the chat header and toward
+          // the composer instead of cutting them. It is scroll-aware via
+          // `animation-timeline: scroll()` and paint-only, so each edge clears once nothing
+          // is scrolled past it (a pinned or non-scrollable transcript stays crisp) without
+          // feeding back into auto-follow or list measurement. With the floating composer,
+          // `listScrollStyle` moves the bottom fade up to the composer's top edge and
+          // intersects the footer-controls dissolve.
+          className={cn(
+            "scroll-edge-fade h-full overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+            ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+            CHAT_COLUMN_GUTTER_CLASS_NAME,
+          )}
+          {...(listScrollStyle ? { style: listScrollStyle } : {})}
+        />
+      </div>
+    </BackgroundTaskStopContext.Provider>
   );
 });
 
@@ -3009,32 +3472,6 @@ function collectAbsoluteFilePathsFromWorkEntries(entries: ReadonlyArray<WorkLogE
   return [...paths];
 }
 
-// Keep the live clock scoped to tiny leaf components so active Claude turns do
-// not force the full transcript tree to re-render every second.
-function WorkingTimer({ createdAt }: { createdAt: string }) {
-  const textRef = useRef<HTMLSpanElement>(null);
-  const initialText = formatWorkingTimerNow(createdAt);
-
-  useEffect(() => {
-    const updateText = () => {
-      if (textRef.current) {
-        textRef.current.textContent = formatWorkingTimerNow(createdAt);
-      }
-    };
-    updateText();
-    const id = window.setInterval(updateText, 1000);
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [createdAt]);
-
-  return <span ref={textRef}>{initialText}</span>;
-}
-
-function formatWorkingTimerNow(startIso: string): string {
-  return formatClockElapsed(startIso, new Date().toISOString()) ?? "0s";
-}
-
 const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
   image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
   userImages: Array<
@@ -3303,29 +3740,6 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
-// Measures the clamped message against its content before paint so the fade mask
-// never flickers. Kept in a module helper (not compiled) so the synchronous
-// overflow setState — unavoidable for a layout measurement — stays out of the
-// compiled component.
-function measureUserMessageOverflow(
-  collapsed: boolean,
-  contentRef: RefObject<HTMLDivElement | null>,
-  setOverflowing: (overflowing: boolean) => void,
-): (() => void) | undefined {
-  if (!collapsed) {
-    return undefined;
-  }
-  const element = contentRef.current;
-  if (!element) {
-    return undefined;
-  }
-  const measure = () => {
-    setOverflowing(element.scrollHeight - element.clientHeight > 1);
-  };
-  measure();
-  return observeUserMessageOverflow(element, measure);
-}
-
 // Show more/less for long user messages: a visual max-height clamp (with a fade
 // mask) around the fully rendered message instead of the old character slice.
 const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
@@ -3340,21 +3754,26 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
   const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
   const collapsed = !props.expanded;
 
-  useLayoutEffect(
-    () => measureUserMessageOverflow(collapsed, contentRef, setOverflowing),
-    [collapsed, props.text],
-  );
-
   const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
   const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
   const fadeStartPx = clampHeightPx - USER_MESSAGE_COLLAPSED_FADE_LINES * lineHeightPx;
   const clamped = collapsed && overflowing;
 
+  // Observe the natural content inside the clamp. ResizeObserver reports its
+  // height after layout, including wrapping/font changes, so mounting recycled
+  // transcript rows never forces layout with scrollHeight/clientHeight reads.
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element || !collapsed) return;
+    return observeUserMessageOverflow(element, (contentHeight) => {
+      setOverflowing(contentHeight - clampHeightPx > 1);
+    });
+  }, [collapsed, clampHeightPx, props.text]);
+
   return (
     <>
       <div
         id={contentId}
-        ref={contentRef}
         data-user-message-clamp={clamped ? "true" : "false"}
         className={cn("min-w-0", collapsed && "overflow-hidden")}
         style={
@@ -3370,7 +3789,9 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
             : undefined
         }
       >
-        {props.children}
+        <div ref={contentRef} className="flow-root min-w-0">
+          {props.children}
+        </div>
       </div>
       {(clamped || props.expanded) && (
         <button
@@ -3408,6 +3829,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       <ChatMarkdown
         text={markdownText}
         cwd={props.markdownCwd}
+        directionMode="auto-blocks"
         variant="user"
         mentionReferences={props.mentionReferences}
         terminalContexts={props.terminalContexts}
@@ -3452,6 +3874,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       variant="user"
       text={props.text}
       cwd={props.markdownCwd}
+      directionMode="auto-blocks"
       isStreaming={false}
       mentionReferences={props.mentionReferences}
       className="font-system-ui"
@@ -3461,3 +3884,42 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     />
   );
 });
+
+// An answered agent question: the question as a left bubble and the submitted
+// answer as a right bubble, both dashed so they read as part of the agent's run.
+function UserInputExchange(props: {
+  items: ReadonlyArray<WorkLogUserInputExchangeItem>;
+  chatTypographyStyle: CSSProperties;
+  answerTypographyStyle: CSSProperties;
+  labelStyle: CSSProperties;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 py-0.5">
+      {props.items.map((item) => (
+        <div key={item.id} className="flex min-w-0 flex-col gap-2">
+          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
+            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+              {item.header}
+            </p>
+            <p className="whitespace-pre-wrap break-words" style={props.chatTypographyStyle}>
+              {item.question}
+            </p>
+            {item.options.length > 0 ? (
+              <p className="text-muted-foreground" style={props.labelStyle}>
+                {item.options.join(" · ")}
+              </p>
+            ) : null}
+          </div>
+          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-end")}>
+            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+              Answer
+            </p>
+            <p className="whitespace-pre-wrap break-words" style={props.answerTypographyStyle}>
+              {item.answer ?? "No answer"}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

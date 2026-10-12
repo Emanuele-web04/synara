@@ -3,11 +3,11 @@
 //          whether to create a project — an unhydrated (empty) local store must never be
 //          mistaken for "the container doesn't exist yet".
 // Layer: Web orchestration helper
-// Exports: waitForProjectSnapshotHydration, shared by the chat and Studio container flows.
+// Exports: waitForProjectSnapshotHydration, shared by the chat and Groups container flows.
 
 import { useStore } from "../store";
 
-// Bounds how long ensureHomeChatProject/ensureStudioProject will wait for hydration before
+// Bounds how long ensureHomeChatProject waits for hydration before
 // giving up and returning null (never deciding to create against an unhydrated store). Callers
 // surface a user-visible error on null rather than hanging "new chat" forever.
 export const PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS = 15_000;

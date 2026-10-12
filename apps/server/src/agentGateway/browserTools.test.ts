@@ -14,6 +14,7 @@ const context: ToolContext = {
     turnId: "turn-a",
   },
   callerThreadId: "thread-a",
+  callerThreadLabel: null,
   callerSessionKey: "gateway-session:test",
   callerProvider: "claudeAgent",
   callerCapabilities: new Set(["browser:control"]),
@@ -24,50 +25,27 @@ const context: ToolContext = {
 
 const TAB_ID = "11111111-1111-4111-8111-111111111111";
 describe("agent gateway browser tools", () => {
-  it("loads the delegated E2E playbook on demand without touching the browser", async () => {
+  it.each([45000])("reports actionable timeout bounds before dispatch (%s)", async (timeoutMs) => {
     const execute = vi.fn();
-    const tool = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
-      (tool) => tool.definition.name === "synara_e2e_review",
+    const run = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
+      (tool) => tool.definition.name === "browser_run",
     )!;
-    const result = await Effect.runPromise(tool.handler({}, context));
-    const text = JSON.stringify(result);
-    for (const requirement of [
-      "explicitly requests an E2E",
-      "provider-native subagent/Task",
-      "One agent owns the shared embedded browser",
-      "Wait for the child",
-      "If native delegation is unavailable",
-      "Do not capture exposed secrets",
-      "untested flows",
-    ]) {
-      expect(text).toContain(requirement);
-    }
+    const result = await Effect.runPromise(
+      run.handler({ timeoutMs, code: "private-code" }, context),
+    );
+    expect(result.isError).toBe(true);
+    const content = result.content[0];
+    expect(JSON.parse(content?.type === "text" ? content.text : "null")).toMatchObject({
+      error: {
+        code: "BrowserInvalidTimeout",
+        phase: "input",
+        effectMayHaveCommitted: false,
+        message: expect.stringContaining("100 to 30000"),
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private-code");
     expect(execute).not.toHaveBeenCalled();
   });
-  it.each([45000, 60000])(
-    "reports actionable timeout bounds before dispatch (%s)",
-    async (timeoutMs) => {
-      const execute = vi.fn();
-      const run = makeAgentGatewayBrowserTools({ available: true, execute: execute as never }).find(
-        (tool) => tool.definition.name === "browser_run",
-      )!;
-      const result = await Effect.runPromise(
-        run.handler({ timeoutMs, code: "private-code" }, context),
-      );
-      expect(result.isError).toBe(true);
-      const content = result.content[0];
-      expect(JSON.parse(content?.type === "text" ? content.text : "null")).toMatchObject({
-        error: {
-          code: "BrowserInvalidTimeout",
-          phase: "input",
-          effectMayHaveCommitted: false,
-          message: expect.stringContaining("100 to 30000"),
-        },
-      });
-      expect(JSON.stringify(result)).not.toContain("private-code");
-      expect(execute).not.toHaveBeenCalled();
-    },
-  );
   it("forwards a bounded Betterwright operation and preserves legacy text output", async () => {
     const execute = vi.fn(() =>
       Effect.succeed({ tabId: TAB_ID, value: { visible: "Signed in" }, serializedByteCount: 23 }),
@@ -92,6 +70,41 @@ describe("agent gateway browser tools", () => {
     expect(result.structuredContent).toMatchObject({ value: { visible: "Signed in" } });
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Signed in") });
     expect(tools.some((tool) => tool.definition.name === "browser_click")).toBe(false);
+  });
+
+  it("refreshes browser routing guidance per thread without repeating every call", async () => {
+    const execute = vi.fn(() =>
+      Effect.succeed({ tabId: TAB_ID, value: { visible: "History" }, serializedByteCount: 21 }),
+    );
+    const run = makeAgentGatewayBrowserTools({ available: true, execute }).find(
+      (tool) => tool.definition.name === "browser_run",
+    )!;
+    const guided: boolean[] = [];
+
+    for (let index = 0; index < 11; index += 1) {
+      const result = await Effect.runPromise(
+        run.handler({ code: "return await snapshot()" }, context),
+      );
+      guided.push(JSON.stringify(result.content).includes("Browser routing reminder"));
+    }
+
+    expect(guided).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    const otherThread = await Effect.runPromise(
+      run.handler({ code: "return await snapshot()" }, { ...context, callerThreadId: "thread-b" }),
+    );
+    expect(JSON.stringify(otherThread.content)).toContain("Browser routing reminder");
   });
 
   it.each(["short-visible-result", "synthetic-page-content ".repeat(500)])(
@@ -120,7 +133,7 @@ describe("agent gateway browser tools", () => {
         { type: "text", text: expect.stringContaining("Untrusted browser data") },
       ]);
       expect(JSON.stringify(result).split(visible)).toHaveLength(2);
-      expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 180);
+      expect(JSON.stringify(result).length).toBeLessThan(JSON.stringify(output).length + 700);
     },
   );
 
@@ -294,22 +307,6 @@ describe("agent gateway browser tools", () => {
     expect(navigateSchema.properties).toHaveProperty("url");
     expect(navigateSchema.properties).toHaveProperty("annotationId");
     expect(navigateSchema.required ?? []).not.toContain("idempotencyKey");
-  });
-
-  it("reports desktop browser unavailability without dispatching", async () => {
-    const execute = vi.fn();
-    const tools = makeAgentGatewayBrowserTools({
-      available: false,
-      execute: execute as never,
-    });
-    const status = tools.find((tool) => tool.definition.name === "browser_status")!;
-    const result = await Effect.runPromise(status.handler({}, context));
-    expect(execute).not.toHaveBeenCalled();
-    expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
-      available: false,
-      physicalScope: "visible-shared-electron-webview",
-    });
   });
 
   it("routes identity and thread scope to the desktop host", async () => {

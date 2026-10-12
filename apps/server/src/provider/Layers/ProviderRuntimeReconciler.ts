@@ -13,11 +13,14 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule, Semaphore } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionStaleInFlightThreadCursor,
+} from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
@@ -26,6 +29,7 @@ import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
   planProviderRuntimeReconciliation,
+  RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS,
   type ProviderRuntimeReconciliationPlan,
 } from "../providerRuntimeReconciliation.ts";
 import {
@@ -45,6 +49,7 @@ export interface ProviderRuntimeReconcilerLiveOptions {
   readonly now?: () => number;
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
+  readonly maxStalledStartAgeMs?: number;
   readonly candidateLimit?: number;
 }
 
@@ -79,6 +84,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       1,
       Math.floor(options?.staleAfterMs ?? DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS),
     );
+    const maxStalledStartAgeMs = Math.max(
+      staleAfterMs,
+      Math.floor(options?.maxStalledStartAgeMs ?? RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS),
+    );
     const candidateLimit = Math.max(
       1,
       Math.min(
@@ -95,6 +104,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       current !== null &&
       current.status === next.status &&
       current.providerName === next.providerName &&
+      current.providerInstanceId === next.providerInstanceId &&
       current.runtimeMode === next.runtimeMode &&
       current.activeTurnId === next.activeTurnId &&
       current.lastError === next.lastError;
@@ -121,6 +131,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.providerName
             : plan.provider,
+        providerInstanceId:
+          plan.action === "settle-terminal-projection"
+            ? plan.terminalSession.providerInstanceId
+            : (input.binding?.providerInstanceId ??
+              thread.session?.providerInstanceId ??
+              thread.modelSelection.instanceId ??
+              thread.modelSelection.provider),
         runtimeMode:
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.runtimeMode
@@ -215,12 +232,28 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       }
     });
 
+    const reconciliationLock = yield* Semaphore.make(1);
+    let candidateCursor: ProjectionStaleInFlightThreadCursor | null = null;
+
     const reconcileNow = Effect.gen(function* () {
       const nowMs = (options?.now ?? Date.now)();
-      const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
-        updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+      const updatedBefore = new Date(nowMs - staleAfterMs).toISOString();
+      let page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+        updatedBefore,
         limit: candidateLimit,
+        ...(candidateCursor === null ? {} : { after: candidateCursor }),
       });
+      // The stored ordering key remains usable if the previous candidate was
+      // repaired or deleted. Wrap with at most one extra query at the boundary.
+      if (page.threadIds.length === 0 && candidateCursor !== null) {
+        candidateCursor = null;
+        page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+          updatedBefore,
+          limit: candidateLimit,
+        });
+      }
+      candidateCursor = page.nextCursor;
+      const candidateThreadIds = page.threadIds;
       if (candidateThreadIds.length === 0) return;
       const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
@@ -234,11 +267,11 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         ],
         { concurrency: 4 },
       );
-      const threads = (yield* Effect.forEach(
-        candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-        { concurrency: 8 },
-      )).flatMap(Option.toArray);
+      // One batched read instead of up to `candidateLimit` point reads
+      // contending on the single SQLite handle every reconciliation tick.
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds, {
+        includeLatestMessageActivity: true,
+      });
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const plans = planProviderRuntimeReconciliation({
@@ -249,6 +282,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         runtimeJournalLagging,
         nowMs,
         staleAfterMs,
+        maxStalledStartAgeMs,
       });
       if (plans.length === 0) return;
 
@@ -281,7 +315,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         { concurrency: 1, discard: true },
       );
       yield* orchestrationReactor.reconcileSettledOpenTurns;
-    });
+    }).pipe(reconciliationLock.withPermits(1));
 
     const reconcileSafely = reconcileNow.pipe(
       Effect.catchCause((cause) =>

@@ -22,13 +22,23 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
 /**
- * Recovery grace period for a lifecycle with no authoritative live turn.
- * Thread/session timestamps describe lifecycle and shell changes, not provider
- * progress: assistant text and tools deliberately do not update the shell.
- * An adapter-owned turn must be stopped by its watchdog/interrupt path before
- * reconciliation can settle it, regardless of this deadline.
+ * Recovery grace period for a lifecycle without authoritative live ownership.
+ * Reconciliation includes the projected in-flight turn's message activity in
+ * `thread.updatedAt`, but age alone cannot revoke an adapter-owned turn.
+ * Its watchdog or interrupt path must stop the live turn before reconciliation
+ * can settle it, regardless of this grace period.
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
+
+/**
+ * Upper bound for a lifecycle stranded in `starting`/`running` with no turn to
+ * name. No turn output exists to wait for, and every path that can produce one
+ * is already bounded elsewhere (`thread.turn-start-requested` delivery and the
+ * adapters' own startup timeouts), so the UI must not sit on "starting" for the
+ * full turn-age budget. Deliberately generous: a legitimate start can still
+ * queue behind process-wide provider-command delivery.
+ */
+export const RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS = 10 * 60_000;
 
 export type ProviderRuntimeReconciliationPlan =
   | {
@@ -132,9 +142,10 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
 }
 
 export function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  // The later of the session lifecycle timestamp and the thread timestamp:
-  // neither timestamp is an inactivity clock. Live adapter ownership is
-  // checked separately before any age-based settlement.
+  // The later of the session lifecycle timestamp and the reconciliation shell
+  // timestamp. The shell opts into message activity for projected in-flight
+  // turns, so active streaming does not count as stale even though the session
+  // row only moves on lifecycle transitions.
   const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
   const threadObservedAt = Date.parse(thread.updatedAt);
   const observedAt = Number.isFinite(sessionObservedAt)
@@ -145,7 +156,7 @@ export function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs:
   return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
 }
 
-/** Time since the persisted thread shell changed (not assistant/tool progress). */
+/** Time since anything at all was projected onto the thread (messages included). */
 function threadActivityAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
   const observedAt = Date.parse(thread.updatedAt);
   return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
@@ -193,6 +204,7 @@ export function planProviderRuntimeReconciliation(input: {
   readonly nowMs: number;
   readonly staleAfterMs?: number;
   readonly maxTurnAgeMs?: number;
+  readonly maxStalledStartAgeMs?: number;
 }): ReadonlyArray<ProviderRuntimeReconciliationPlan> {
   const staleAfterMs = Math.max(
     1,
@@ -202,11 +214,18 @@ export function planProviderRuntimeReconciliation(input: {
     staleAfterMs,
     input.maxTurnAgeMs ?? RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS,
   );
+  const maxStalledStartAgeMs = Math.max(
+    staleAfterMs,
+    input.maxStalledStartAgeMs ?? RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS,
+  );
   const bindingByThreadId = new Map(input.bindings.map((binding) => [binding.threadId, binding]));
   const liveSessionByThreadId = new Map(
     input.liveSessions.map((session) => [session.threadId, session]),
   );
-  const healthByProvider = new Map(input.pumpHealth.map((health) => [health.provider, health]));
+  const healthByProvider = new Map<
+    ProviderRuntimeBinding["provider"],
+    ProviderRuntimeEventPumpHealth
+  >(input.pumpHealth.map((health) => [health.provider, health]));
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
   for (const thread of input.threads) {
@@ -223,7 +242,8 @@ export function planProviderRuntimeReconciliation(input: {
     const detail = pumpDetail(provider, healthByProvider);
     const abandoned =
       lifecycleAgeMs >= maxTurnAgeMs && threadActivityAgeMs(thread, input.nowMs) >= maxTurnAgeMs;
-    const abandonedDetail = ` The projected lifecycle has not changed for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
+    const abandonedDetail = ` Nothing has progressed on this thread for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
+    const stalledStartDetail = ` The provider start has been stranded with no turn for over ${Math.round(maxStalledStartAgeMs / 60_000)} minutes.${detail}`;
 
     // Native child threads share a parent session and intentionally have no
     // directory binding of their own; their parent's terminal events settle
@@ -278,26 +298,34 @@ export function planProviderRuntimeReconciliation(input: {
     // still queued would otherwise be "recovered" as interrupted.
     if (input.runtimeJournalLagging === true && !abandoned) continue;
 
+    // A connection still owned by the adapter may be newer than this stale
+    // projection. Its own startup timeout must settle it; the shorter no-turn
+    // clock is not evidence that live work has ended.
+    if (liveSession?.status === "connecting" && !abandoned) continue;
+
     // Settling a projection is normally only safe when it names a concrete
     // in-flight turn; ProviderCommandReactor owns failures before a start
-    // acquires one. An abandoned lifecycle is the exception: a session pinned in
-    // `starting`/`running` with no turn to name hangs the UI just as hard.
+    // acquires one. A lifecycle stranded without a turn is the exception: both
+    // an abandoned one and one stalled past the (shorter) stalled-start bound
+    // hang the UI just as hard, and nothing still bounded can be in flight.
     if (projectedTurnId === null) {
       const session = thread.session;
-      if (!abandoned || session === null) continue;
+      if (session === null) continue;
       if (session.status !== "starting" && session.status !== "running") continue;
+      const stalledStart =
+        lifecycleAgeMs >= maxStalledStartAgeMs &&
+        threadActivityAgeMs(thread, input.nowMs) >= maxStalledStartAgeMs;
+      if (!abandoned && !stalledStart) continue;
       plans.push({
         action: "settle-interrupted",
         threadId: thread.id,
         provider,
         projectedTurnId: null,
         runtimeTurnId: null,
-        reason: `The session is stuck in '${session.status}' with no provider turn to settle.${abandonedDetail}`,
+        reason: `The session is stuck in '${session.status}' with no provider turn to settle.${abandoned ? abandonedDetail : stalledStartDetail}`,
       });
       continue;
     }
-
-    if (liveSession?.status === "connecting" && !abandoned) continue;
 
     const liveSessionSettled =
       liveSession !== undefined &&

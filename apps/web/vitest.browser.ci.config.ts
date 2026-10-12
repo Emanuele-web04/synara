@@ -5,9 +5,11 @@ import stableConfig from "./vitest.browser.stable.config";
 const chatViewFile = "src/components/ChatView.browser.tsx";
 const { testNamePattern, ...stableTestConfig } = stableConfig.test!;
 const stablePattern = testNamePattern as RegExp;
-// This parameterized full-app matrix costs about 100s on hosted runners.
-// Complementary patterns keep every new stable ChatView case in exactly one lane.
-const followPattern = "restores streaming follow";
+// Measured complementary groups keep every stable ChatView case in exactly one lane.
+// The final fallback also owns unknown future stable cases instead of silently skipping them.
+// See .github/CI.md for the paired measurements and runner-time tradeoff.
+const followPattern = "(?:restores streaming follow|anchor|scroll|tool)";
+const projectPattern = "(?:project|worktree|Space|approval|preserves three answers|queued|queue)";
 
 export default defineConfig({
   ...stableConfig,
@@ -30,9 +32,21 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: "chat-projects",
+          include: [chatViewFile],
+          testNamePattern: new RegExp(
+            `${stablePattern.source}(?!.*${followPattern})(?=.*${projectPattern})`,
+          ),
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: "chat-workflows",
           include: [chatViewFile],
-          testNamePattern: new RegExp(`${stablePattern.source}(?!.*${followPattern})`),
+          testNamePattern: new RegExp(
+            `${stablePattern.source}(?!.*${followPattern})(?!.*${projectPattern})`,
+          ),
         },
       },
       {

@@ -8,10 +8,17 @@ import { render } from "vitest-browser-react";
 const { api } = vi.hoisted(() => ({
   api: { projects: { readFile: vi.fn(), writeFile: vi.fn() } },
 }));
-vi.mock("../nativeApi", () => ({ ensureNativeApi: () => api }));
+vi.mock("../nativeApi", () => ({
+  ensureNativeApi: () => api,
+  readNativeApi: () => api,
+  readNativeApiServerCapability: () => false,
+  onNativeApiServerCapabilitiesChange: () => () => undefined,
+}));
 
 import { useWorkspaceFileEditorSession } from "./useWorkspaceFileEditorSession";
 import { projectQueryKeys } from "../lib/projectReactQuery";
+import { flushWorkspaceEditors } from "../lib/workspaceEditorSession";
+import { WorkspaceFileEditorConflictBar } from "../components/chat/WorkspaceFileEditorChrome";
 
 const CWD = "/repo";
 const FILE = "src/app.ts";
@@ -51,7 +58,14 @@ function Session({ onClose }: { onClose: () => void }) {
         onChange={(e) => session.handleChange(e.target.value)}
       />
       <button onClick={session.save}>Save</button>
-      <button onClick={session.overwrite}>Overwrite</button>
+      {session.state.saveError ? (
+        <WorkspaceFileEditorConflictBar
+          message={session.state.saveError}
+          conflict={session.state.conflict}
+          onReload={session.requestReload}
+          onOverwrite={session.overwrite}
+        />
+      ) : null}
       <button onClick={session.requestClose}>Close</button>
       <button onClick={session.requestReload}>Reload</button>
       <button onClick={session.cancelPendingDiscard}>Cancel discard</button>
@@ -80,10 +94,12 @@ async function mount() {
   return { client, onClose, view };
 }
 
-it("keeps edits made during a save and cancels the deferred close", async () => {
+it("saves edits made during a write before completing a deferred close", async () => {
   const { view, onClose } = await mount();
   const write = deferred<ProjectWriteFileResult>();
-  api.projects.writeFile.mockReturnValue(write.promise);
+  api.projects.writeFile
+    .mockReturnValueOnce(write.promise)
+    .mockResolvedValue({ relativePath: FILE, version: "sha256:newest" });
   await page.getByRole("textbox").fill("first edit\n");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.element(page.getByTestId("saving")).toHaveTextContent("true");
@@ -94,9 +110,9 @@ it("keeps edits made during a save and cancels the deferred close", async () => 
   write.resolve({ relativePath: FILE, version: "sha256:saved" });
   await expect.element(page.getByTestId("saving")).toHaveTextContent("false");
   await expect.element(page.getByRole("textbox")).toHaveValue("newer edit\n");
-  await expect.element(page.getByTestId("dirty")).toHaveTextContent("true");
-  expect(onClose).not.toHaveBeenCalled();
-  expect(api.projects.writeFile).toHaveBeenCalledWith({
+  await expect.element(page.getByTestId("dirty")).toHaveTextContent("false");
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(api.projects.writeFile).toHaveBeenNthCalledWith(1, {
     cwd: CWD,
     relativePath: FILE,
     contents: "first edit\n",
@@ -135,18 +151,19 @@ it("retains a conflicted buffer after deferred close and preserves format on exp
   await view.unmount();
 });
 
-it("preserves dirty text on background reads and requires a deliberate discard", async () => {
-  const { client, view, onClose } = await mount();
+it("pauses autosave while a reload discard decision is pending", async () => {
+  const { client, view } = await mount();
   await page.getByRole("textbox").fill("mine\n");
   client.setQueryData(projectQueryKeys.readFile(CWD, FILE), loaded("agent edit\n"));
   await expect.element(page.getByRole("textbox")).toHaveValue("mine\n");
-  await page.getByRole("button", { name: "Close", exact: true }).click();
-  await expect.element(page.getByTestId("intent")).toHaveTextContent("close");
-  await page.getByRole("button", { name: "Cancel discard", exact: true }).click();
-  expect(onClose).not.toHaveBeenCalled();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect.element(page.getByTestId("intent")).toHaveTextContent("reload");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(api.projects.writeFile).not.toHaveBeenCalled();
+  api.projects.readFile.mockResolvedValue(loaded("agent edit\n"));
   await page.getByRole("button", { name: "Confirm discard", exact: true }).click();
-  expect(onClose).toHaveBeenCalledTimes(1);
+  await expect.element(page.getByRole("textbox")).toHaveValue("agent edit\n");
+  await expect.element(page.getByTestId("dirty")).toHaveTextContent("false");
   await view.unmount();
 });
 
@@ -166,3 +183,51 @@ it("does not replace text typed while an explicit reload is pending", async () =
   await expect.element(page.getByRole("textbox")).toHaveValue("typed during reload\n");
   await view.unmount();
 });
+
+it.each([false, true])(
+  "keeps failed saves visible and offers confirmed reload (conflict: %s)",
+  async (conflict) => {
+    const { client, view, onClose } = await mount();
+    try {
+      api.projects.writeFile.mockRejectedValue(
+        Object.assign(
+          new Error(conflict ? "Changed on disk" : "Permission denied"),
+          conflict ? { code: "WORKSPACE_FILE_CONFLICT" } : {},
+        ),
+      );
+      await page.getByRole("textbox").fill("unsaved draft\n");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await expect
+        .element(page.getByTestId("error"))
+        .toHaveTextContent(conflict ? "Changed on disk" : "Permission denied");
+      await expect
+        .element(page.getByRole("button", { name: "Dismiss", exact: true }))
+        .not.toBeInTheDocument();
+      expect(await flushWorkspaceEditors(client, CWD)).toBe(false);
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      const reload = page.getByRole("button", { name: "Reload from disk", exact: true });
+      await reload.click();
+      await expect.element(page.getByTestId("intent")).toHaveTextContent("reload");
+      await page.getByRole("button", { name: "Cancel discard", exact: true }).click();
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      expect(onClose).not.toHaveBeenCalled();
+      await reload.click();
+      api.projects.readFile.mockRejectedValueOnce(new Error("Read temporarily unavailable"));
+      await page.getByRole("button", { name: "Confirm discard", exact: true }).click();
+      await expect
+        .element(page.getByTestId("error"))
+        .toHaveTextContent("Read temporarily unavailable");
+      await expect.element(page.getByRole("textbox")).toHaveValue("unsaved draft\n");
+      await reload.click();
+      api.projects.readFile.mockResolvedValue(loaded("disk contents\n"));
+      await page.getByRole("button", { name: "Confirm discard", exact: true }).click();
+      await expect.element(page.getByRole("textbox")).toHaveValue("disk contents\n");
+      await expect.element(page.getByTestId("dirty")).toHaveTextContent("false");
+      expect(await flushWorkspaceEditors(client, CWD)).toBe(true);
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      await view.unmount();
+    }
+  },
+);

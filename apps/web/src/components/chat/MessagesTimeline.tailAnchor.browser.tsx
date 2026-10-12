@@ -202,6 +202,42 @@ async function settleFrames(count: number): Promise<void> {
 }
 
 describe("MessagesTimeline tail anchor", () => {
+  it("shimmers the typing icon and label together on the shared animation cadence", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
+
+    try {
+      await expect.poll(() => handleRef.current?.listRef.current != null).toBe(true);
+      handleRef.current!.send(FIRST_SENT_MESSAGE_ID);
+      handleRef.current!.showThinking();
+      await expect
+        .poll(() => document.querySelector('[data-timeline-row-kind="working"]')?.textContent, {
+          timeout: 5_000,
+        })
+        .toContain("Thinking");
+      const icon = document.querySelector('[data-timeline-row-kind="working"] svg')!;
+      const indicator = icon.parentElement!.parentElement!;
+      expect(indicator.textContent).toBe("Thinking");
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        expect(getComputedStyle(indicator).maskImage).toBe("none");
+        expect(indicator.getAnimations()).toHaveLength(0);
+      } else {
+        expect(getComputedStyle(indicator).maskImage).toContain("linear-gradient");
+        const animation = indicator.getAnimations()[0]!;
+        expect(animation.startTime).toBe(0);
+        expect(animation.effect?.getTiming().duration).toBe(2000);
+        expect(getComputedStyle(indicator).animationTimingFunction).toBe("steps(40)");
+        animation.pause();
+        animation.currentTime = 0;
+        const initialMaskPosition = getComputedStyle(indicator).maskPosition;
+        animation.currentTime = 1000;
+        expect(getComputedStyle(indicator).maskPosition).not.toBe(initialMaskPosition);
+      }
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
   });
@@ -371,6 +407,10 @@ describe("MessagesTimeline tail anchor", () => {
           handle().finishTurn();
         }
         await settleFrames(1);
+        // Sample after the frame's other rAF callbacks and mutation observers.
+        // Reading inside rAF can catch a row reposition before its pre-paint
+        // anchor correction, even though that intermediate position never paints.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
         if (offset !== null) {
           offsets.push(offset);

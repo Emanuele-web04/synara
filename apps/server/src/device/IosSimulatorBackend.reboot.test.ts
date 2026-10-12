@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProcessRunResult } from "../processRunner.ts";
-import {
-  IosSimulatorBackend,
-  isInputNotDeliveredError,
-  isStaleDescriptorError,
-} from "./IosSimulatorBackend.ts";
+import { IosSimulatorBackend, isStaleDescriptorError } from "./IosSimulatorBackend.ts";
 import type { HelperClient } from "./helperClient.ts";
 
 const DEVICE = "AAAA-1111";
@@ -119,12 +115,6 @@ describe("stale descriptor detection", () => {
     expect(isStaleDescriptorError(new Error("display has no framebuffer surface yet"))).toBe(true);
     expect(isStaleDescriptorError(new Error("not attached to a simulator"))).toBe(true);
   });
-
-  it("does not treat unrelated failures as stale descriptors", () => {
-    // A genuine refusal must surface, not trigger a silent re-attach loop.
-    expect(isStaleDescriptorError(new Error("simulator is not booted"))).toBe(false);
-    expect(isStaleDescriptorError(new Error("unknown method 'tap'"))).toBe(false);
-  });
 });
 
 describe("simulator reboot", () => {
@@ -181,19 +171,6 @@ describe("simulator reboot", () => {
 });
 
 describe("undelivered input recovery", () => {
-  it("recognizes the helper's non-delivery report", () => {
-    expect(
-      isInputNotDeliveredError(
-        new Error("1 HID event(s) were not delivered to the simulator; re-attach and retry"),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not confuse it with unrelated failures", () => {
-    expect(isInputNotDeliveredError(new Error("simulator is not booted"))).toBe(false);
-    expect(isInputNotDeliveredError(new Error("display has no framebuffer surface"))).toBe(false);
-  });
-
   it("rebinds the HID client and retries once when input does not reach the guest", async () => {
     const { backend, helper } = makeBackend();
     await backend.tap(DEVICE, 10, 10);

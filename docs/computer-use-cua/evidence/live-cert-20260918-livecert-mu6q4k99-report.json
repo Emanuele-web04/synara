@@ -1,0 +1,88 @@
+{
+  "run": "livecert-mu6q4k99",
+  "date": "2026-09-18T08:56:08.427Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-TguLPn/host.sock",
+  "elapsedMs": 8284,
+  "rows": [
+    {
+      "name": "recording-privacy",
+      "verdict": "pass",
+      "detail": "redacted=true secureFloor=true fullOptIn=true replay=1steps listed=3",
+      "evidence": {
+        "realOp": {
+          "dispatched": true,
+          "confirmed": true,
+          "readbackExact": true
+        },
+        "sessionA": {
+          "leaked": false,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:27cd842b1d093b8a116f39f6db6d75fdc9cdf77116f80f1511dc996c6fc8fa9e"
+          }
+        },
+        "sessionB": {
+          "leaked": false,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:27cd842b1d093b8a116f39f6db6d75fdc9cdf77116f80f1511dc996c6fc8fa9e",
+            "protected": true
+          }
+        },
+        "sessionC": {
+          "captured": true,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:27cd842b1d093b8a116f39f6db6d75fdc9cdf77116f80f1511dc996c6fc8fa9e",
+            "captured": true
+          }
+        },
+        "replay": {
+          "executed": false,
+          "summary": {
+            "total": 1,
+            "ready": 0,
+            "dispatched": 0,
+            "skipped": 0,
+            "blocked": 1,
+            "failed": 0
+          }
+        },
+        "listed": 3,
+        "deleted": true
+      },
+      "elapsedMs": 5899
+    }
+  ],
+  "speed": [
+    {
+      "tool": "get_window_state",
+      "n": 2,
+      "p50": 111.4,
+      "p95": 180.6,
+      "max": 180.6
+    },
+    {
+      "tool": "list_windows",
+      "n": 3,
+      "p50": 4.2,
+      "p95": 64.5,
+      "max": 64.5
+    },
+    {
+      "tool": "set_value",
+      "n": 1,
+      "p50": 1250.1,
+      "p95": 1250.1,
+      "max": 1250.1
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

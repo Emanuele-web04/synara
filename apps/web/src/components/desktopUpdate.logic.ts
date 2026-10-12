@@ -70,80 +70,6 @@ export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null):
   );
 }
 
-export interface DesktopUpdateButtonPresentation {
-  label: string;
-  secondaryLabel: string | null;
-}
-
-export function getDesktopUpdateButtonPresentation(
-  state: DesktopUpdateState | null,
-  options?: { installing?: boolean },
-): DesktopUpdateButtonPresentation {
-  if (options?.installing) {
-    return {
-      label: "Updating...",
-      secondaryLabel: null,
-    };
-  }
-
-  if (!state) {
-    return {
-      label: "Update",
-      secondaryLabel: null,
-    };
-  }
-
-  if (state.status === "checking") {
-    return {
-      label: "Checking...",
-      secondaryLabel: null,
-    };
-  }
-
-  if (state.status === "downloading") {
-    return {
-      label: "Preparing",
-      secondaryLabel: null,
-    };
-  }
-
-  const action = resolveDesktopUpdateButtonAction(state);
-  if (action === "download") {
-    if (state.errorContext === "download" || state.errorContext === "install") {
-      return {
-        label: "Retry",
-        secondaryLabel: null,
-      };
-    }
-    return {
-      label: "Preparing",
-      secondaryLabel: null,
-    };
-  }
-  if (action === "install") {
-    if (state.errorContext === "install") {
-      return {
-        label: "Retry",
-        secondaryLabel: null,
-      };
-    }
-    return {
-      label: "Update",
-      secondaryLabel: null,
-    };
-  }
-  if (action === "check") {
-    return {
-      label: "Check updates",
-      secondaryLabel: null,
-    };
-  }
-  return {
-    label: "Update",
-    secondaryLabel: null,
-  };
-}
-
 /**
  * Clamped, integer download percentage to surface on the update button while a
  * download is in flight. Returns null outside the downloading state or when the
@@ -233,6 +159,18 @@ export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): 
 
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {
   return result.accepted && !result.completed;
+}
+
+// installUpdate resolves as soon as the quit-and-install handoff starts, while
+// the updater still reports "downloaded". That state means the install is in
+// flight, so callers must not treat the accepted-but-incomplete result as done.
+export function isDesktopUpdateInstallInFlight(result: DesktopUpdateActionResult): boolean {
+  return (
+    result.accepted &&
+    !result.completed &&
+    result.state.status === "downloaded" &&
+    result.state.errorContext !== "install"
+  );
 }
 
 // A download/install request can resolve to "up-to-date" when the offered version

@@ -1,0 +1,28 @@
+{
+  "run": "livecert-mu6m4z66",
+  "date": "2026-09-18T07:04:32.903Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-lgLQtl/host.sock",
+  "elapsedMs": 11894,
+  "rows": [
+    {
+      "name": "hidden-launch-default",
+      "verdict": "fail",
+      "detail": "manager.launchApp(no opts) → pid undefined on_screen=undefined front 12908→12908 wrote=false",
+      "evidence": {
+        "launch": "{\"computerId\":\"desktop\",\"app\":\"TextEdit\",\"window\":null}",
+        "winNum": null,
+        "frontBefore": 12908,
+        "frontAfter": 12908
+      },
+      "elapsedMs": 9532
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

@@ -4,6 +4,7 @@ import { SettingsIcon } from "~/lib/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { Button } from "./ui/button";
+import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -57,7 +58,14 @@ export function SafariAccessSetupButton() {
 }
 
 /** Intro decisions are persisted, never permission claims. No protected files are probed here. */
-export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
+export function SafariAccessOnboarding({
+  children,
+  startup = false,
+}: {
+  children?: ReactNode;
+  /** The root opts automatic first-launch guidance into startup arbitration. */
+  startup?: boolean;
+}) {
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
@@ -65,7 +73,12 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const open = info?.supported === true && (decision === "unseen" || revisit);
+  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
+  const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
+  // Local setup and deliberate Settings revisits must not depend on the root's
+  // first-run gate or wait behind an automatic announcement.
+  const open = wantsOpen && (!startup || revisit || startupOpen);
+  const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
     const show = () => {
@@ -109,7 +122,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
 
   return (
     <>
-      {info && !open ? children : null}
+      {info && (!wantsOpen || revisit || handedOff) ? children : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {
@@ -134,7 +147,7 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
             </DialogHeader>
 
             {info?.supported ? (
-              <ol className="mx-6 mt-5 space-y-3 text-sm leading-relaxed">
+              <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
                   Open <span className="font-medium text-foreground">System Settings</span> ›
                   Privacy &amp; Security › Full Disk Access.
@@ -164,13 +177,13 @@ export function SafariAccessOnboarding({ children }: { children?: ReactNode }) {
               </ol>
             ) : null}
 
-            <p className="mx-6 mt-5 text-xs leading-relaxed text-muted-foreground/80">
+            <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
               Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
               rather not, that's fine. You can find this again under Settings › General.
             </p>
 
             {status ? (
-              <p role="status" className="mx-6 mt-3 text-xs leading-relaxed text-muted-foreground">
+              <p role="status" className="mx-6 mt-3 text-ui leading-relaxed text-muted-foreground">
                 {status}
               </p>
             ) : null}
@@ -200,7 +213,7 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
     <li className="flex gap-3 text-muted-foreground">
       <span
         aria-hidden
-        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium tabular-nums text-foreground/70"
+        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-ui-sm font-medium tabular-nums text-foreground/70"
       >
         {n}
       </span>

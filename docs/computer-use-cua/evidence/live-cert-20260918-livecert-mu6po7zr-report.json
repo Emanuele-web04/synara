@@ -1,0 +1,48 @@
+{
+  "run": "livecert-mu6po7zr",
+  "date": "2026-09-18T08:43:22.001Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-7MCY5X/host.sock",
+  "elapsedMs": 4248,
+  "rows": [
+    {
+      "name": "grant-lifecycle",
+      "verdict": "fail",
+      "detail": "prompts=[\"live-cert-grants-a:Calculator\",\"live-cert-grants-c:Calculator\"] minted=2 listed=1 revoked=true",
+      "evidence": {
+        "prompts": ["live-cert-grants-a:Calculator", "live-cert-grants-c:Calculator"],
+        "grantFor": ["Calculator", "Calculator"],
+        "grant": {
+          "id": "cg_eb2cc6dc-3dc5-4e61-8d07-fb5a7d3c7636",
+          "app": {
+            "name": "Calculator",
+            "bundleId": "com.apple.calculator"
+          },
+          "classes": ["lifecycle"],
+          "createdAt": "2026-09-18T08:43:21.967Z",
+          "expiresAt": "2026-09-19T08:43:21.967Z",
+          "createdByThreadId": "live-cert-grants-a"
+        },
+        "listedCount": 1,
+        "identityBundleId": "com.apple.calculator"
+      },
+      "elapsedMs": 1849
+    }
+  ],
+  "speed": [
+    {
+      "tool": "list_windows",
+      "n": 2,
+      "p50": 4.7,
+      "p95": 66.2,
+      "max": 66.2
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

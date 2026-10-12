@@ -1,4 +1,18 @@
-import type { OrchestrationThreadActivity, ThreadTokenUsageSnapshot } from "@synara/contracts";
+import {
+  ClaudeCacheObservation,
+  type ProviderKind,
+  type OrchestrationThreadActivity,
+  type ThreadTokenUsageSnapshot,
+} from "@synara/contracts";
+import { normalizeModelSlug, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { Schema } from "effect";
+
+const decodeClaudeCacheObservation = Schema.decodeUnknownOption(ClaudeCacheObservation);
+
+function readClaudeCacheObservation(value: unknown): ClaudeCacheObservation | null {
+  const decoded = decodeClaudeCacheObservation(value);
+  return decoded._tag === "Some" ? decoded.value : null;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -67,13 +81,18 @@ export function isCompletedContextCompaction(activity: OrchestrationThreadActivi
 }
 
 // Read the latest token-usage snapshot emitted by the runtime.
-function deriveLatestUsageContextWindowState(
+export function deriveLatestContextWindowState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowState {
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
     if (!activity) {
       continue;
+    }
+    // A new configuration starts a new reporting epoch. Old usage cannot
+    // establish the effective threshold of a resumed or switched session.
+    if (activity.kind === "context-window.configured") {
+      return { snapshot: null, invalidatedByCompaction: false };
     }
     if (isCompletedContextCompaction(activity)) {
       return { snapshot: null, invalidatedByCompaction: true };
@@ -105,6 +124,7 @@ function deriveLatestUsageContextWindowState(
 
     return {
       snapshot: {
+        claudeCache: readClaudeCacheObservation(payload?.claudeCache),
         usedTokens,
         usedPercent: payloadUsedPercent,
         // Older Claude totals counted completed content blocks repeatedly.
@@ -139,81 +159,84 @@ function deriveLatestUsageContextWindowState(
   return { snapshot: null, invalidatedByCompaction: false };
 }
 
-// Use the configured session window as the source of truth for the meter denominator.
-function deriveLatestConfiguredContextWindowMaxTokens(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): number | null {
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
-    if (!activity || activity.kind !== "context-window.configured") {
-      continue;
-    }
-
-    const payload = asRecord(activity.payload);
-    const maxTokens = asFiniteNumber(payload?.maxTokens);
-    return maxTokens !== null && maxTokens > 0 ? maxTokens : null;
-  }
-
-  return null;
+export interface ObservedClaudeContextBudget {
+  readonly model: string;
+  readonly maxTokens: number;
 }
 
-export function deriveLatestContextWindowState(
+/** The context window a configuration activity applies: "auto" when cleared, else its size. */
+function configuredContextWindowKey(activity: OrchestrationThreadActivity): string {
+  const payload = asRecord(activity.payload);
+  if (payload?.cleared === true) return "auto";
+  return String(asFiniteNumber(payload?.maxTokens) ?? "unknown");
+}
+
+/**
+ * The context budget the runtime reported for the newest observed Claude model, held at
+ * the largest value seen while the configured context window stays the same.
+ *
+ * Every session start reconfigures the window, and each turn first reports a provisional
+ * budget from the model catalog (e.g. 200k) that the live session corrects at the end of
+ * the turn (e.g. 1M); usage without a cache observation (task usage) carries no model.
+ * Reading each snapshot on its own made the composer label flip between "(200k)", nothing,
+ * and "(1M)" for the same model while a turn ran. The server only ever raises its
+ * corrected window, so the largest report for one model under one configuration is the
+ * stable answer. Compaction shrinks usage, not the window, so it does not reset this.
+ */
+export function deriveObservedClaudeContextBudget(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-): ContextWindowState {
-  const usageState = deriveLatestUsageContextWindowState(activities);
-  if (usageState.invalidatedByCompaction) {
-    return usageState;
+): ObservedClaudeContextBudget | null {
+  // Walking back, reports gather until the configuration they ran under is reached; they
+  // count only if that configuration matches the newest one.
+  const counted: Array<{ model: string; maxTokens: number }> = [];
+  let pending: Array<{ model: string; maxTokens: number }> = [];
+  let newestConfiguredKey: string | null = null;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity) continue;
+    // A completed handoff can change accounts even with the same model and Auto
+    // configuration. Its previous runtime budget is no longer evidence.
+    if (activity.kind === "provider.handoff") break;
+    if (activity.kind === "context-window.configured") {
+      const key = configuredContextWindowKey(activity);
+      newestConfiguredKey ??= key;
+      if (key !== newestConfiguredKey) break;
+      counted.push(...pending);
+      pending = [];
+      continue;
+    }
+    if (activity.kind !== "context-window.updated") continue;
+    const payload = asRecord(activity.payload);
+    const model = readClaudeCacheObservation(payload?.claudeCache)?.model;
+    const maxTokens = asFiniteNumber(payload?.maxTokens);
+    if (!model || maxTokens === null || maxTokens <= 0) continue;
+    pending.push({ model, maxTokens });
   }
-
-  const usageSnapshot = usageState.snapshot;
-  const configuredMaxTokens = deriveLatestConfiguredContextWindowMaxTokens(activities);
-
-  if (usageSnapshot === null && configuredMaxTokens === null) {
-    return usageState;
-  }
-
-  const usedTokens = usageSnapshot?.usedTokens ?? 0;
-  const maxTokens = configuredMaxTokens ?? usageSnapshot?.maxTokens ?? null;
-  const usedPercentage =
-    usageSnapshot?.usedPercent ??
-    (maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null);
-  const hasReliableTokenUsage =
-    usageSnapshot === null ||
-    usageSnapshot.usedTokens > 0 ||
-    usageSnapshot.usedPercent === null ||
-    usageSnapshot.maxTokens !== null;
-  const remainingTokens =
-    maxTokens !== null && hasReliableTokenUsage
-      ? Math.max(0, Math.round(maxTokens - usedTokens))
-      : null;
-  const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
-
+  // A history that never recorded its configuration still has one running session.
+  if (newestConfiguredKey === null) counted.push(...pending);
+  const newestModel = counted[0]?.model;
+  if (newestModel === undefined) return null;
   return {
-    snapshot: {
-      usedTokens,
-      usedPercent: usageSnapshot?.usedPercent ?? null,
-      totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
-      tokenAccountingVersion: usageSnapshot?.tokenAccountingVersion ?? null,
-      maxTokens,
-      remainingTokens,
-      usedPercentage,
-      remainingPercentage,
-      inputTokens: usageSnapshot?.inputTokens ?? null,
-      cachedInputTokens: usageSnapshot?.cachedInputTokens ?? null,
-      outputTokens: usageSnapshot?.outputTokens ?? null,
-      reasoningOutputTokens: usageSnapshot?.reasoningOutputTokens ?? null,
-      lastUsedTokens: usageSnapshot?.lastUsedTokens ?? null,
-      lastInputTokens: usageSnapshot?.lastInputTokens ?? null,
-      lastCachedInputTokens: usageSnapshot?.lastCachedInputTokens ?? null,
-      lastOutputTokens: usageSnapshot?.lastOutputTokens ?? null,
-      lastReasoningOutputTokens: usageSnapshot?.lastReasoningOutputTokens ?? null,
-      toolUses: usageSnapshot?.toolUses ?? null,
-      durationMs: usageSnapshot?.durationMs ?? null,
-      compactsAutomatically: usageSnapshot?.compactsAutomatically ?? false,
-      updatedAt: usageSnapshot?.updatedAt ?? activities[activities.length - 1]?.createdAt ?? "",
-    },
-    invalidatedByCompaction: false,
+    model: newestModel,
+    maxTokens: Math.max(
+      ...counted.filter((entry) => entry.model === newestModel).map((entry) => entry.maxTokens),
+    ),
   };
+}
+
+// Configuration identifies the applied target, never the runtime denominator.
+export function deriveAppliedContextWindowSelection(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string | null {
+  const activity = activities.findLast((item) => item.kind === "context-window.configured");
+  const payload = asRecord(activity?.payload);
+  if (payload?.cleared === true) return "auto";
+  const maxTokens = asFiniteNumber(payload?.maxTokens);
+  return (
+    Object.entries(KNOWN_CONTEXT_WINDOW_MAX_TOKENS).find(
+      ([, tokens]) => tokens === maxTokens,
+    )?.[0] ?? null
+  );
 }
 
 export function deriveSelectedContextWindowSnapshot(
@@ -231,6 +254,7 @@ export function deriveSelectedContextWindowSnapshot(
   }
 
   return {
+    claudeCache: null,
     usedTokens: 0,
     usedPercent: null,
     totalProcessedTokens: null,
@@ -286,6 +310,33 @@ export function deriveContextWindowMeterDisplay(
   };
 }
 
+/** 16-unit meter glyph: a pie inside an outline ring (1.5 stroke) with a one-unit gap. */
+export const CONTEXT_WINDOW_METER_GEOMETRY = {
+  center: 8,
+  pieRadius: 5.25,
+  outlineRadius: 7,
+} as const;
+
+/**
+ * Filled pie sector for a usage percentage, starting at 12 o'clock and running clockwise.
+ * A filled sector inside a closed outline reads as a gauge; the open stroked arc it replaces
+ * looked like a loading spinner.
+ */
+export function contextWindowMeterSectorPath(percentage: number): string | null {
+  const fraction = Math.max(0, Math.min(100, percentage)) / 100;
+  if (fraction <= 0) return null;
+  const c = CONTEXT_WINDOW_METER_GEOMETRY.center;
+  const r = CONTEXT_WINDOW_METER_GEOMETRY.pieRadius;
+  if (fraction >= 1) {
+    return `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r} Z`;
+  }
+  const angle = fraction * 2 * Math.PI;
+  const x = c + r * Math.sin(angle);
+  const y = c - r * Math.cos(angle);
+  const largeArc = fraction > 0.5 ? 1 : 0;
+  return `M ${c} ${c} L ${c} ${c - r} A ${r} ${r} 0 ${largeArc} 1 ${x.toFixed(3)} ${y.toFixed(3)} Z`;
+}
+
 export function deriveCumulativeCostUsd(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): number | null {
@@ -311,7 +362,7 @@ export function deriveCumulativeCostUsd(
   return foundTurnDelta ? turnDeltaTotal : null;
 }
 
-export function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {
+function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -319,6 +370,7 @@ export function formatContextWindowSelectionLabel(value: string | null | undefin
   if (!normalized) {
     return null;
   }
+  if (normalized === "auto") return "Auto";
   if (normalized === "1m") {
     return "1M";
   }
@@ -349,13 +401,17 @@ export function inferContextWindowSelectionValue(
 
 export function deriveContextWindowSelectionStatus(input: {
   activeSnapshot: ContextWindowSnapshot | null;
+  appliedValue?: string | null;
   selectedValue: string | null | undefined;
 }): ContextWindowSelectionStatus {
-  const activeValue = inferContextWindowSelectionValue(input.activeSnapshot?.maxTokens ?? null);
+  const activeValue =
+    input.appliedValue === undefined
+      ? inferContextWindowSelectionValue(input.activeSnapshot?.maxTokens ?? null)
+      : input.appliedValue;
   const selectedValue = input.selectedValue?.trim().toLowerCase() ?? null;
   const activeLabel =
     formatContextWindowSelectionLabel(activeValue) ??
-    (input.activeSnapshot?.maxTokens != null
+    (input.appliedValue === undefined && input.activeSnapshot?.maxTokens != null
       ? formatContextWindowTokens(input.activeSnapshot.maxTokens)
       : null);
   const selectedLabel = formatContextWindowSelectionLabel(selectedValue);
@@ -369,6 +425,38 @@ export function deriveContextWindowSelectionStatus(input: {
     selectedLabel,
     pendingSelectedLabel,
   };
+}
+
+// Budget is runtime evidence; the configured mode remains a separate target.
+export function deriveComposerContextWindowLabel(input: {
+  provider: ProviderKind;
+  model: string;
+  snapshot: ContextWindowSnapshot | null;
+  status: ContextWindowSelectionStatus;
+  /** Stable budget from `deriveObservedClaudeContextBudget`; preferred over the snapshot's. */
+  observedBudget?: ObservedClaudeContextBudget | null;
+}): string | null {
+  if (input.provider !== "claudeAgent") return null;
+  const observedModel =
+    input.observedBudget === undefined
+      ? input.snapshot?.claudeCache?.model
+      : input.observedBudget?.model;
+  const observedMaxTokens =
+    input.observedBudget === undefined
+      ? input.snapshot?.maxTokens
+      : input.observedBudget?.maxTokens;
+  const sameModel =
+    observedModel !== undefined &&
+    stripClaudeContextWindowSuffix(normalizeModelSlug(observedModel, "claudeAgent") ?? "") ===
+      stripClaudeContextWindowSuffix(normalizeModelSlug(input.model, "claudeAgent") ?? "");
+  const budget = sameModel
+    ? formatContextWindowSelectionLabel(inferContextWindowSelectionValue(observedMaxTokens))
+    : null;
+  const { selectedLabel, activeLabel, pendingSelectedLabel } = input.status;
+  const pending = pendingSelectedLabel ?? (!sameModel ? selectedLabel : null);
+  if (budget) return pending ? `(${budget} · ${pending} next)` : `(${budget})`;
+  if (selectedLabel === null || (selectedLabel === "Auto" && !pendingSelectedLabel)) return null;
+  return `(${selectedLabel} ${pending || activeLabel === null ? "next" : "target"})`;
 }
 
 export function formatCostUsd(value: number): string {

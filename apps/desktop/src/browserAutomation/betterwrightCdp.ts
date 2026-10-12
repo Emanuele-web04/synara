@@ -236,6 +236,12 @@ export class BetterwrightCdpTarget {
       if (method === "Storage.getCookies") {
         return this.send("Network.getCookies", { urls: [this.contents.getURL()] });
       }
+      // The worker installs its download guard on every host-owned target by
+      // sending Browser.setDownloadBehavior { behavior: "deny" }. Downloads are
+      // already denied host-side, so deny is a no-op — matching upstream's
+      // Electron transport. Anything else stays denied: the lease must never
+      // open the browser-wide download gate.
+      if (method === "Browser.setDownloadBehavior" && params.behavior === "deny") return {};
       throw new Error("Browser-wide command denied.");
     }
     if (method === "Target.setAutoAttach") {

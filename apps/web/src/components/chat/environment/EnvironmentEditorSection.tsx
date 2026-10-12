@@ -8,7 +8,7 @@
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
-import { LayoutSidebarIcon } from "~/lib/icons";
+import { EditorViewIcon } from "~/lib/icons";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuShortcut, MenuTrigger } from "../../ui/menu";
@@ -59,7 +59,7 @@ export function EnvironmentEditorSection({
     <EnvironmentLabeledSection label="Editor">
       {onOpenEditorView ? (
         <EnvironmentRow
-          icon={<LayoutSidebarIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+          icon={<EditorViewIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
           label="Editor view"
           onClick={onOpenEditorView}
         />

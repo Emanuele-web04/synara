@@ -40,25 +40,37 @@ export function useCodeEditorSessionOptions(input: {
   const historyControlsRef = input.historyControlsRef;
   const editorRef = useRef<PierreEditor | null>(null);
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    let previousHistory: CodeEditHistoryState | undefined;
+    const publishHistory = (editor: PierreEditor) => {
+      const history = readCodeEditHistoryState(editor);
+      // Most keystrokes change the buffer without changing toolbar availability.
+      if (
+        history.canUndo === previousHistory?.canUndo &&
+        history.canRedo === previousHistory?.canRedo
+      ) {
+        return;
+      }
+      previousHistory = history;
+      onHistoryChangeRef.current?.(history);
+    };
+    return {
       onAttach: (editor: PierreEditor) => {
         editorRef.current = editor;
         if (historyControlsRef) {
           historyControlsRef.current = createCodeEditHistoryControls(editor);
         }
-        onHistoryChangeRef.current?.(readCodeEditHistoryState(editor));
+        publishHistory(editor);
       },
       onChange: (file: { contents: string }) => {
         onChangeRef.current(file.contents);
         const editor = editorRef.current;
         if (editor) {
-          onHistoryChangeRef.current?.(readCodeEditHistoryState(editor));
+          publishHistory(editor);
         }
       },
-    }),
-    [historyControlsRef],
-  );
+    };
+  }, [historyControlsRef]);
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -117,12 +129,18 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
   );
 
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+  // Pierre owns live edits; only a reload or display change needs a React update.
+  const content = useMemo(
+    () => <File file={file} options={options} edit editorOptions={editorOptions} />,
+    [file, options, editorOptions],
+  );
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-auto" onKeyDownCapture={saveKeyDownHandler}>
-      <CodeEditBoundary>
-        <File file={file} options={options} edit editorOptions={editorOptions} />
-      </CodeEditBoundary>
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      onKeyDownCapture={saveKeyDownHandler}
+    >
+      <CodeEditBoundary>{content}</CodeEditBoundary>
     </div>
   );
 }

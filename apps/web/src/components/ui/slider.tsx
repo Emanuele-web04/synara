@@ -115,7 +115,7 @@ function Slider({
       className={cn(
         "group/slider relative flex w-full touch-none select-none items-center data-disabled:cursor-not-allowed data-disabled:opacity-64",
         size === "large"
-          ? "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(6)] [--slider-track-size:--spacing(5)]"
+          ? "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(7)] [--slider-track-size:--spacing(6)]"
           : "[--slider-mark-size:--spacing(1)] [--slider-thumb-size:--spacing(5)] [--slider-track-size:--spacing(3)]",
         className,
       )}

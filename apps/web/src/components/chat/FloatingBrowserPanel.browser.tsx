@@ -191,3 +191,34 @@ it("drags from the preview without opening it, and expands only on a click", asy
     await mounted.unmount();
   }
 });
+
+it("keeps the card above the composer, including when the composer grows", async () => {
+  const mounted = await render(
+    <div className="relative h-[600px] w-[900px] overflow-hidden">
+      {/* The chat's composer, bottom-right where the Send button sits. */}
+      <form
+        data-chat-composer-form="true"
+        className="absolute right-4 bottom-4 left-4 h-[120px]"
+        style={{ height: "120px" }}
+      />
+      <FloatingBrowserPanel
+        threadId={ThreadId.makeUnsafe("thread-floating-browser-composer")}
+        onClose={() => {}}
+        onPopToSidebar={() => {}}
+      />
+    </div>,
+  );
+  const composer = document.querySelector<HTMLElement>("[data-chat-composer-form='true']")!;
+  try {
+    await vi.waitFor(() => {
+      expect(panelRect().bottom).toBeLessThanOrEqual(composer.getBoundingClientRect().top);
+    });
+    // Attachments or approval cards grow the composer upward.
+    composer.style.height = "220px";
+    await vi.waitFor(() => {
+      expect(panelRect().bottom).toBeLessThanOrEqual(composer.getBoundingClientRect().top);
+    });
+  } finally {
+    await mounted.unmount();
+  }
+});

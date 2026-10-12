@@ -1,0 +1,33 @@
+{
+  "run": "livecert-mu6kflcx",
+  "date": "2026-09-18T06:16:57.298Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-xOIG5r/host.sock",
+  "elapsedMs": 20206,
+  "rows": [
+    {
+      "name": "escape-kill-switch",
+      "verdict": "fail",
+      "detail": "baseline=true hostArmed=true immune=true engaged=true refused=true rearmed=false (physical key unverified — VM)",
+      "evidence": {
+        "armedByHost": true,
+        "escArmEvents": [true, false, true, false],
+        "baseline": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confi",
+        "afterSynthetic": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "engaged": true,
+        "refused": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.\"}],\"structuredContent\":{\"effect\":\"refused\"",
+        "rearm": "{\"ok\":true,\"result\":{\"rearmed\":true,\"wasStopped\":true},\"desktopEpoch\":1,\"desktopPauses\":[],\"desktopInterruptions\":0}",
+        "afterRearm": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input remains paused after the desktop resumed. Call computer_screenshot and inspect what it shows before continuing; do ",
+        "value": "livecert-mu6kflcx-esc-after-syn"
+      },
+      "elapsedMs": 17704
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}
