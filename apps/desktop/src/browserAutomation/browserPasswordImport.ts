@@ -2,7 +2,7 @@ import type { BrowserPasswordImportInput, BrowserPasswordImportResult } from "@s
 import { execProcessFile } from "@synara/shared/processRuntime";
 import { homedir } from "node:os";
 import { BrowserVault } from "./browserVault";
-import { listChromiumProfileInventory } from "./chromiumProfileInventory";
+import { inventoryChromiumPasswordProfile } from "./chromiumProfileInventory";
 import { BrowserPasswordReadError, readChromiumProfilePasswords } from "./chromiumPasswordReader";
 
 const MAX_PROFILE_LOGINS = 50_000;
@@ -78,7 +78,7 @@ export class BrowserPasswordImport {
       browser: string,
     ) => Promise<string> = readMacKeychainSecret,
     private readonly home = homedir(),
-    private readonly getInventory = listChromiumProfileInventory,
+    private readonly getProfile = inventoryChromiumPasswordProfile,
   ) {}
 
   async import(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult> {
@@ -88,15 +88,12 @@ export class BrowserPasswordImport {
     if (currentPlatform !== "macos")
       return { ok: false, code: "unsupported_platform", platform: currentPlatform };
 
-    const inventory = await this.getInventory(this.home);
-    const browser = inventory.find(({ id }) => id === input.browser);
-    const profile = browser?.profiles.find(({ id }) => id === input.profile);
-    if (!browser || !profile)
-      return { ok: false, code: "source_missing", platform: currentPlatform };
-    if (profile.passwordCount === 0) return { ok: true, imported: 0, skipped: 0, warnings: [] };
-    if (profile.passwordCount === null || profile.passwordStatus !== "available")
+    const profile = await this.getProfile(this.home, input.browser, input.profile);
+    if (!profile) return { ok: false, code: "source_missing", platform: currentPlatform };
+    if (profile.count === 0) return { ok: true, imported: 0, skipped: 0, warnings: [] };
+    if (profile.count === null || profile.status !== "available")
       return { ok: false, code: "reader_failed", platform: currentPlatform };
-    if (profile.passwordCount > MAX_PROFILE_LOGINS)
+    if (profile.count > MAX_PROFILE_LOGINS)
       return { ok: false, code: "too_many_logins", platform: currentPlatform };
     try {
       if ((await this.vault.snapshot()).protection.locked)

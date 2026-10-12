@@ -461,3 +461,23 @@ it.each(["cookiePath", "loginPath"] as const)(
     expect(key === "cookiePath" ? found?.cookieStatus : found?.passwordStatus).toBe("unavailable");
   },
 );
+
+it("uses profile ids for names absent from Local State own properties", async () => {
+  const source = CHROMIUM_INVENTORY_SOURCES[0];
+  await mkdir(join(home, "Applications", source.app), { recursive: true });
+  for (const id of ["constructor", "toString", "__proto__"]) {
+    const folder = join(dataRoot(source.data), id);
+    await mkdir(folder, { recursive: true });
+    const db = new DatabaseSync(join(folder, "Login Data"));
+    db.exec("CREATE TABLE logins (blacklisted_by_user INTEGER, password_value BLOB)");
+    db.close();
+  }
+  const profiles = (await scan()).find(({ id }) => id === source.id)!.profiles;
+  expect(profiles.map(({ id, name }) => [id, name])).toEqual(
+    expect.arrayContaining([
+      ["constructor", "constructor"],
+      ["toString", "toString"],
+      ["__proto__", "__proto__"],
+    ]),
+  );
+});

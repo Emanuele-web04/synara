@@ -98,15 +98,22 @@ export async function resolveChromiumProfileFolder(
 ): Promise<string | null> {
   const source = CHROMIUM_INVENTORY_SOURCES.find(({ id }) => id === browser);
   if (!source) return null;
-  const result = await profileFolders(source, home);
-  return (
-    result.folders.find(
-      (folder) =>
-        (folder === browserDataPath(home, source.data)
-          ? source.name
-          : folder.split(/[\\/]/).at(-1)) === profileId,
-    ) ?? null
-  );
+  const root = browserDataPath(home, source.data);
+  if (!(await isRealDirectory(root))) return null;
+  const singleProfile =
+    (source.id === "opera" || source.id === "opera-gx") && profileId === source.name;
+  if (
+    !singleProfile &&
+    (!profileId ||
+      profileId === "." ||
+      profileId === ".." ||
+      /[\\/\0]/.test(profileId) ||
+      profileId === "Guest Profile" ||
+      profileId === "System Profile")
+  )
+    return null;
+  const folder = singleProfile ? root : join(root, profileId);
+  return (await isRealDirectory(folder)) && (await hasProfileStore(folder)) ? folder : null;
 }
 
 async function isRealFile(path: string): Promise<boolean> {
@@ -244,6 +251,7 @@ export async function isBoundedChromiumDatabase(
 
 async function countRows(
   path: string,
+  table: "cookies" | "logins",
   query: string,
 ): Promise<{ count: number | null; status: "available" | "unavailable" | "locked" }> {
   let database: DatabaseSync | undefined;
@@ -251,6 +259,10 @@ async function countRows(
     if (!(await isBoundedChromiumDatabase(path))) return { count: null, status: "unavailable" };
     database = new DatabaseSync(path, { readOnly: true, timeout: 100 });
     database.exec("BEGIN");
+    if (
+      database.prepare("SELECT type FROM sqlite_schema WHERE name = ?").get(table)?.type !== "table"
+    )
+      return { count: null, status: "unavailable" };
     const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
     const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
     if (pages.page_count * size.page_size > MAX_CHROMIUM_DATABASE_BYTES)
@@ -280,6 +292,20 @@ async function countRows(
 
 function storePath(folder: string, ...parts: string[]) {
   return join(folder, ...parts);
+}
+
+export async function inventoryChromiumPasswordProfile(
+  home: string,
+  browser: ChromiumInventorySourceId,
+  profile: string,
+) {
+  const folder = await resolveChromiumProfileFolder(home, browser, profile);
+  if (!folder || !(await isRealFile(join(folder, "Login Data")))) return undefined;
+  return countRows(
+    join(folder, "Login Data"),
+    "logins",
+    "SELECT COUNT(*) AS count FROM (SELECT 1 FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0 LIMIT 50001)",
+  );
 }
 
 async function cookieStore(folder: string): Promise<string | undefined> {
@@ -386,6 +412,7 @@ export async function listChromiumProfileInventory(
           cookie = cookies
             ? await countRows(
                 cookies,
+                "cookies",
                 "SELECT COUNT(*) AS count FROM (SELECT 1 FROM cookies LIMIT 100001)",
               )
             : { count: null, status: "unavailable" };
@@ -398,6 +425,7 @@ export async function listChromiumProfileInventory(
           password = (await isRealFile(loginStore))
             ? await countRows(
                 loginStore,
+                "logins",
                 "SELECT COUNT(*) AS count FROM (SELECT 1 FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0 LIMIT 100001)",
               )
             : { count: null, status: "unavailable" };
@@ -406,7 +434,11 @@ export async function listChromiumProfileInventory(
         }
         return {
           id,
-          name: localState.names[id] ?? (id === source.name ? source.name : id),
+          name: Object.hasOwn(localState.names, id)
+            ? localState.names[id]!
+            : id === source.name
+              ? source.name
+              : id,
           isDefault:
             id === source.name ||
             localState.last[0] === id ||

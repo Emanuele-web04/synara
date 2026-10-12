@@ -131,3 +131,26 @@ describe("browser password import", () => {
     expect(vault.snapshot).not.toHaveBeenCalled();
   });
 });
+
+it("reads only the requested profile and never scans a broken unrelated browser", async () => {
+  await makeProfile();
+  const unrelated = join(home, "Library", "Application Support", "Microsoft Edge", "Default");
+  await mkdir(unrelated, { recursive: true });
+  await mkdir(join(home, "Applications", "Microsoft Edge.app"), { recursive: true });
+  const db = new DatabaseSync(join(unrelated, "Login Data"));
+  db.exec(
+    "CREATE VIEW logins AS SELECT zeroblob(1000000000) AS password_value, 0 AS blacklisted_by_user",
+  );
+  db.close();
+  const vault = {
+    snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+    importPasswords: vi.fn(async () => ({ imported: 1, skipped: 0, provenanceSaved: true })),
+  } as unknown as BrowserVault;
+  expect(
+    await new BrowserPasswordImport(vault, async () => "test-safe-storage", home).import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    }),
+  ).toMatchObject({ ok: true, imported: 1 });
+});

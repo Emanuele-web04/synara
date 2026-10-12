@@ -157,3 +157,20 @@ it("bounds aggregate decrypted credentials before returning an import batch", as
     readChromiumProfilePasswords(home, "chrome", profileId, "test-safe-storage"),
   ).rejects.toMatchObject({ code: "source_too_large" });
 });
+
+it("skips non-text username rows without discarding valid credentials", async () => {
+  const { database, profileId } = await makeProfile();
+  database.exec(
+    "DROP TABLE logins; CREATE TABLE logins (origin_url, username_value, password_value, blacklisted_by_user, date_last_used)",
+  );
+  const insert = database.prepare("INSERT INTO logins VALUES (?, ?, ?, 0, 0)");
+  insert.run("https://good.test", "good-user", encryptPassword("good-secret"));
+  insert.run("https://bad.test", 42, encryptPassword("bad-secret"));
+  database.close();
+  expect(
+    await readChromiumProfilePasswords(home, "chrome", profileId, "test-safe-storage"),
+  ).toEqual({
+    logins: [{ origin: "https://good.test", username: "good-user", password: "good-secret" }],
+    skipped: 1,
+  });
+});

@@ -127,6 +127,7 @@ export async function readChromiumProfilePasswords(
         `SELECT origin_url, username_value, password_value FROM logins
          WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0
            AND typeof(date_last_used) IN ('integer', 'real', 'null')
+           AND typeof(origin_url) = 'text' AND typeof(username_value) IN ('text', 'null')
            AND typeof(password_value) = 'blob' AND octet_length(password_value) <= ${MAX_PASSWORD_BYTES}
            AND COALESCE(octet_length(origin_url), 0) <= ${MAX_LOGIN_TEXT_BYTES}
            AND COALESCE(octet_length(username_value), 0) <= ${MAX_LOGIN_TEXT_BYTES}
