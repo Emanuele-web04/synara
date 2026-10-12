@@ -2,19 +2,21 @@
 
 ## Change
 
-Repaired the BetterWright 2.7.3 patch hunks that prevented clean dependency installation. The updated declarations and generated client diff now apply against the pristine 2.7.3 package; the installed reader contains the cookie transfer failure taxonomy and source-size classification.
+Repaired the BetterWright 2.7.3 patch hunks that prevented clean dependency installation. The first clean-install repair exposed a second defect: the worker failure-code hunk landed in the wrong location, making `worker.js` syntactically invalid. Linux Round 7 caught it before release. Regenerated the complete worker diff against pristine 2.7.3 source so the taxonomy stays inside the declared catch result.
 
 ## Verification
 
-- `bun install --frozen-lockfile`: passed; 1,669 installs checked, no lockfile changes.
-- `git apply --check --verbose` against the pristine Bun cache copy of BetterWright 2.7.3: passed for every patch file; worker hunk 2 applied with a 7-line offset.
-- Installed BetterWright runtime contains `cookieSyncFailureCode` in `worker.js` and `source_too_large` classification in `client.js`.
+- `bun install --frozen-lockfile`: passed after both repairs; one package reinstalled and patched.
+- `git apply --check --verbose` against pristine BetterWright 2.7.3: all patch hunks pass.
+- `node --check` on the installed patched `worker.js`: passed after regeneration. The first repair's generated worker failed syntax validation and was discarded.
+- Installed BetterWright runtime contains `cookieSyncFailureCode` in the worker catch response and `source_too_large` classification in the client.
 - Desktop browser import/password/reader/IPC tests: 63 passed across 5 files.
 - Web onboarding logic tests: 22 passed.
 - Browser import catalog contract tests: 2 passed.
 - Desktop, web, and contracts native TypeScript checks: passed. Web/contracts emitted existing Effect suggestion diagnostics.
 - Repository `bun run fmt:check`: passed (4,644 files).
 - `git diff --check upstream/main...HEAD`: passed after representing the three nested blank context lines as blank-line replacements; the dependency patch still applies cleanly.
+- Linux Round 7 on `4d86dd375`: clean install passed but all imports failed because the worker could not parse; the 12k exact error code was unreachable. This is the reason for regenerating the worker hunk. No current-head Linux runtime retest has completed yet.
 
 ## Cross-platform report review
 

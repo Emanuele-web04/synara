@@ -405,17 +405,18 @@ diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
 diff --git a/dist/src/worker.js b/dist/src/worker.js
 --- a/dist/src/worker.js
 +++ b/dist/src/worker.js
-@@ -6809,5 +6809,8 @@
+@@ -6808,8 +6808,9 @@
+     cookieSyncActive = true;
      try {
-+        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
          let target;
++        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
          try {
 -            target = cookieSyncConsentTarget(message.config?.provider);
-+            target = hostOwnedTarget
-+                ? null
-+                : cookieSyncConsentTarget(message.config?.provider);
++            target = hostOwnedTarget ? null : cookieSyncConsentTarget(message.config?.provider);
          }
-@@ -6867,5 +6870,12 @@
+         catch {
+             sendResult({
+@@ -6874,6 +6875,13 @@
                  type: "result",
                  id: message.id,
                  ok: false,
@@ -428,17 +429,26 @@ diff --git a/dist/src/worker.js b/dist/src/worker.js
 +                            : "target_failed",
                  error: capacity
                      ? "Cookie Sync redaction capacity was reached; the browser worker was restarted."
-@@ -6900,3 +6910,3 @@
+                     : targetCapacity
+@@ -6898,7 +6906,7 @@
+                 source.profile = "selected";
+             }
          }
 -        sendResult({
 +        const result = {
              type: "result",
-@@ -6908,3 +6918,3 @@
+             id: message.id,
+             ok: true,
+@@ -6906,13 +6914,17 @@
+             selected,
+             skipped,
              source,
 -            target: target || "local",
 +            target: target || (hostOwnedTarget ? "host" : "local"),
              warnings: [
-@@ -6914,3 +6924,7 @@
+                 ...sanitizedCookieSyncWarnings(message.warnings),
+                 ...(missingCookies ? [{ code: "target_not_stored", count: missingCookies }] : []),
+             ],
              profileMode,
 -        });
 +        };
@@ -447,6 +457,8 @@ diff --git a/dist/src/worker.js b/dist/src/worker.js
 +        }
 +        sendResult(result);
      }
+     finally {
+         cookieSyncActive = false;
 diff --git a/types/public.d.ts b/types/public.d.ts
 --- a/types/public.d.ts
 +++ b/types/public.d.ts
