@@ -95,6 +95,7 @@ import type { ProviderAdapterForkThreadInput } from "./provider/Services/Provide
 import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
+import { startEventLoopDeadline } from "./eventLoopDeadline.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
   teardownChildProcessTree,
@@ -3317,7 +3318,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       try {
         let expired = false;
         const abort = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelDeadline: (() => void) | undefined;
         const read = async () => {
           for (let attempt = 0; ; attempt++) {
             if (expired || context.authInvalidation)
@@ -3345,17 +3346,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               this.authReadSlots.withPermit(Effect.uninterruptible(Effect.promise(read))),
               { signal: abort.signal },
             ),
+            // A timeout stops the session, so a server event-loop stall must not
+            // count against the read: only a hung read on a live loop expires.
             new Promise<never>((_, reject) => {
-              timer = setTimeout(() => {
+              cancelDeadline = startEventLoopDeadline(this.authRevalidationTimeoutMs, () => {
                 expired = true;
                 abort.abort();
                 reject(new Error("Codex auth revalidation timed out."));
-              }, this.authRevalidationTimeoutMs);
-              timer.unref();
+              });
             }),
           ]);
         } finally {
-          if (timer) clearTimeout(timer);
+          cancelDeadline?.();
         }
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
