@@ -53,16 +53,22 @@ function importFailure(
 export function BrowserCookieImport({
   api,
   destination,
+  disabled = false,
+  onBusyChange,
 }: {
   api: BrowserVaultMethods;
   destination: BrowserCookieDestination;
+  disabled?: boolean | undefined;
+  onBusyChange?: ((busy: boolean) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<Choice[]>([]);
   const [profiles, setProfiles] = useState<Choice[]>([]);
   const [source, setSource] = useState("");
   const [profile, setProfile] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [importBusy, setBusy] = useState(false);
+  const busy = importBusy || disabled;
+  useEffect(() => onBusyChange?.(importBusy), [importBusy, onBusyChange]);
   const [status, setStatus] = useState<string | null>(null);
   const [scope, setScope] = useState<"site" | "profile">(destination.origin ? "site" : "profile");
   const [confirmed, setConfirmed] = useState(false);

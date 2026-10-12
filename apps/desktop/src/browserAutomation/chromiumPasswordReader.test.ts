@@ -112,3 +112,24 @@ describe("macOS Chromium password reader", () => {
     ).rejects.toMatchObject({ code: "source_missing" });
   });
 });
+
+it("skips oversized password, origin and username values before materializing login rows", async () => {
+  const { database, profileId } = await makeProfile("Default");
+  const insert = database.prepare("INSERT INTO logins VALUES (?, ?, ?, 0, ?)");
+  insert.run("https://example.test", "large-password", Buffer.alloc(16 * 1024 + 1), 4);
+  insert.run(
+    "https://example.test/" + "a".repeat(4097),
+    "large-origin",
+    encryptPassword("secret"),
+    3,
+  );
+  insert.run("https://example.test", "a".repeat(4097), encryptPassword("secret"), 2);
+  insert.run("https://example.test", "valid", encryptPassword("synthetic-password"), 1);
+  database.close();
+  expect(
+    await readChromiumProfilePasswords(home, "chrome", profileId, "test-safe-storage"),
+  ).toEqual({
+    logins: [{ origin: "https://example.test", username: "valid", password: "synthetic-password" }],
+    skipped: 3,
+  });
+});

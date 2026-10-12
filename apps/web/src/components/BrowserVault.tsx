@@ -42,7 +42,12 @@ export function BrowserVaultDialog() {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<BrowserVaultSnapshot>();
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [acting, setBusy] = useState(false);
+  const [cookiesBusy, setCookiesBusy] = useState(false);
+  const [passwordsBusy, setPasswordsBusy] = useState(false);
+  const busy = acting || cookiesBusy || passwordsBusy;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [deleting, setDeleting] = useState<string | null>(null);
   const [master, setMaster] = useState<
     { kind: "setup" | "unlock" } | { kind: "reveal"; id: string } | null
@@ -71,6 +76,7 @@ export function BrowserVaultDialog() {
   useEffect(() => {
     mounted.current = true;
     const show = (event: Event) => {
+      if (busyRef.current) return;
       setDestination((event as CustomEvent<BrowserCookieDestination | undefined>).detail);
       setOpen(true);
       void reload();
@@ -111,6 +117,7 @@ export function BrowserVaultDialog() {
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        if (busy) return;
         setOpen(next);
         if (!next) {
           setDeleting(null);
@@ -381,9 +388,15 @@ export function BrowserVaultDialog() {
                       key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
                       api={api}
                       destination={destination}
+                      disabled={acting || passwordsBusy}
+                      onBusyChange={setCookiesBusy}
                     />
                   ) : null}
-                  <BrowserPasswordImport api={api} />
+                  <BrowserPasswordImport
+                    api={api}
+                    disabled={acting || cookiesBusy}
+                    onBusyChange={setPasswordsBusy}
+                  />
                 </>
               ) : null}
             </>

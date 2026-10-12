@@ -8,6 +8,9 @@ import {
 } from "./chromiumProfileInventory";
 
 const MAX_PROFILE_LOGINS = 50_000;
+const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
+const MAX_PASSWORD_BYTES = 16 * 1024;
+const MAX_LOGIN_TEXT_BYTES = 4096;
 
 export type BrowserPasswordLogin = {
   origin: string;
@@ -50,7 +53,8 @@ function decodePassword(encrypted: Buffer, key: Buffer): string | null {
 
 async function isFile(path: string): Promise<boolean> {
   try {
-    return (await lstat(path)).isFile();
+    const stat = await lstat(path);
+    return stat.isFile() && stat.size <= MAX_DATABASE_BYTES;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new BrowserPasswordReadError("reader_failed");
@@ -85,6 +89,10 @@ export async function readChromiumProfilePasswords(
     // also lets SQLite include committed WAL pages without copying a live DB.
     try {
       database.exec("BEGIN");
+      const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
+      const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
+      if (pages.page_count * size.page_size > MAX_DATABASE_BYTES)
+        throw new BrowserPasswordReadError("reader_failed");
     } catch {
       throw new BrowserPasswordReadError("reader_failed");
     }
@@ -106,7 +114,12 @@ export async function readChromiumProfilePasswords(
     let statement;
     try {
       statement = database.prepare(
-        "SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0 ORDER BY date_last_used DESC, rowid DESC",
+        `SELECT origin_url, username_value, password_value FROM logins
+         WHERE blacklisted_by_user = 0 AND length(password_value) > 0
+           AND typeof(password_value) = 'blob' AND length(password_value) <= ${MAX_PASSWORD_BYTES}
+           AND length(CAST(COALESCE(origin_url, '') AS BLOB)) <= ${MAX_LOGIN_TEXT_BYTES}
+           AND length(CAST(COALESCE(username_value, '') AS BLOB)) <= ${MAX_LOGIN_TEXT_BYTES}
+         ORDER BY date_last_used DESC, rowid DESC`,
       );
     } catch {
       throw new BrowserPasswordReadError("reader_failed");
@@ -115,12 +128,14 @@ export async function readChromiumProfilePasswords(
     const logins: BrowserPasswordLogin[] = [];
     const seen = new Set<string>();
     let skipped = 0;
+    let rowsRead = 0;
     try {
       for (const row of statement.iterate() as Iterable<{
         origin_url: string | null;
         username_value: string | null;
         password_value: Uint8Array | null;
       }>) {
+        rowsRead++;
         const encrypted = row.password_value ? Buffer.from(row.password_value) : Buffer.alloc(0);
         const origin = normalizeOrigin(row.origin_url ?? "");
         const password = decodePassword(encrypted, key);
@@ -145,7 +160,7 @@ export async function readChromiumProfilePasswords(
       throw new BrowserPasswordReadError("reader_failed");
     }
     database.exec("COMMIT");
-    return { logins, skipped };
+    return { logins, skipped: skipped + count - rowsRead };
   } finally {
     key.fill(0);
     try {

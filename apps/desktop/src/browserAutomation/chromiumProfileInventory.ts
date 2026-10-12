@@ -1,5 +1,6 @@
+import { constants } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -266,7 +267,23 @@ async function readLocalState(
   root: string,
 ): Promise<{ names: Record<string, string>; last: string[] }> {
   try {
-    const state = JSON.parse(await readFile(join(root, "Local State"), "utf8")) as {
+    const limit = 8 * 1024 * 1024;
+    const file = await open(
+      join(root, "Local State"),
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    let contents: string;
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > limit) return { names: {}, last: [] };
+      const buffer = Buffer.alloc(limit + 1);
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > limit) return { names: {}, last: [] };
+      contents = buffer.toString("utf8", 0, bytesRead);
+    } finally {
+      await file.close();
+    }
+    const state = JSON.parse(contents) as {
       profile?: {
         info_cache?: Record<string, { name?: unknown }>;
         last_used?: unknown;

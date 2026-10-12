@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile, symlink, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -380,3 +380,28 @@ describe("Linux Chromium profile inventory", () => {
     ]);
   });
 });
+
+it.each(["oversized", "symlink", "directory"])(
+  "ignores unsafe Local State metadata: %s",
+  async (kind) => {
+    const source = CHROMIUM_INVENTORY_SOURCES[0];
+    await install(source);
+    const statePath = join(dataRoot(source.data), "Local State");
+    await rm(statePath);
+    if (kind === "oversized") {
+      await writeFile(statePath, "{}");
+      await truncate(statePath, 8 * 1024 * 1024 + 1);
+    } else if (kind === "directory") await mkdir(statePath);
+    else {
+      const outside = join(home, "outside.json");
+      await writeFile(
+        outside,
+        JSON.stringify({ profile: { info_cache: { Default: { name: "Untrusted alias" } } } }),
+      );
+      await symlink(outside, statePath);
+    }
+    const browser = (await scan()).find(({ id }) => id === source.id);
+    expect(browser?.profiles[0]?.name).not.toBe("Untrusted alias");
+    expect(browser?.profiles[0]?.name).not.toBe("Work");
+  },
+);

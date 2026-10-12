@@ -83,6 +83,66 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("keeps the dialog, vault controls and cookie sibling fenced during a password import", async () => {
+    const api = harness.api!;
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profileStatus: "available",
+        profiles: [
+          {
+            id: "Default",
+            name: "Personal",
+            isDefault: true,
+            cookieCount: 1,
+            passwordCount: 1,
+            cookieStatus: "available",
+            passwordStatus: "available",
+          },
+        ],
+      },
+    ]);
+    let finish: (() => void) | undefined;
+    vi.mocked(api.importPasswords).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, imported: 1, skipped: 0, warnings: [] });
+        }),
+    );
+    await render(
+      <>
+        <BrowserVaultButton
+          destination={{
+            threadId: ThreadId.makeUnsafe("import-owner"),
+            tabId: "tab",
+            origin: "https://example.test",
+          }}
+        />
+        <BrowserVaultDialog />
+      </>,
+    );
+    await page.getByRole("button", { name: "Saved logins" }).click();
+    await page.getByRole("checkbox", { name: /I authorize Synara/ }).click();
+    await page.getByRole("button", { name: "Import selected passwords" }).click();
+    await expect.element(page.getByRole("button", { name: "Lock saved logins" })).toBeDisabled();
+    await expect
+      .element(page.getByRole("switch", { name: "Allow agents to find saved accounts" }))
+      .toBeDisabled();
+    await expect
+      .element(page.getByRole("button", { name: "Import browser cookies" }))
+      .toBeDisabled();
+    await page
+      .getByRole("dialog")
+      .element()
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    finish!();
+    await expect.element(page.getByRole("button", { name: "Lock saved logins" })).toBeEnabled();
+    expect(api.lock).not.toHaveBeenCalled();
+    expect(api.importCookies).not.toHaveBeenCalled();
+  });
+
   it("prevents a password import while signed-in sessions are importing", async () => {
     const api = harness.api!;
     vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
