@@ -28,10 +28,11 @@ import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return { ...actual, symlink: vi.fn(actual.symlink) };
+  return { ...actual, symlink: vi.fn(actual.symlink), lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
 });
 
 // ── Helpers ──
@@ -3309,19 +3310,28 @@ it.layer(TestLayer)("git integration", (it) => {
           return files.sort((left, right) => left.path.localeCompare(right.path));
         };
         yield* writeTextFile(path.join(tmp, "literal file.txt "), "alpha\nbeta\n");
-        yield* Effect.promise(() => fs.writeFile(path.join(tmp, "literal.bin"), new Uint8Array([0, 1, 2, 3])));
+        yield* Effect.promise(() => fs.writeFile(path.join(tmp, "literal.bin "), new Uint8Array([0, 1, 2, 3])));
         const originalIndex = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
         const originalObjects = yield* Effect.promise(snapshotObjects);
 
         const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
         expect(patch).toContain("diff --git a/literal file.txt  b/literal file.txt ");
         expect(patch).toContain("+alpha\n+beta\n");
-        expect(patch).toContain("Binary files /dev/null and b/literal.bin differ");
+        expect(patch).toContain("Binary files /dev/null and b/literal.bin  differ");
         expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
           additions: 2,
           deletions: 0,
           fileCount: 2,
         });
+
+        const executablePath = path.join(tmp, "literal-script.sh ");
+        yield* writeTextFile(executablePath, "#!/bin/sh\ntrue\n");
+        if (supportsPosixPermissions()) yield* Effect.promise(() => fs.chmod(executablePath, 0o755));
+        const executable = yield* core.readWorkingTreePatch(tmp, "literal-script.sh ");
+        expect(executable.patch).toContain(
+          supportsPosixPermissions() ? "new file mode 100755" : "new file mode 100644",
+        );
+        expect(executable.patch).toContain("+++ b/literal-script.sh \t\n");
 
         const large = "large literal content\n".repeat(60_000);
         expect(Buffer.byteLength(large)).toBeGreaterThan(1_000_000);
@@ -3344,7 +3354,7 @@ it.layer(TestLayer)("git integration", (it) => {
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        yield* writeTextFile(path.join(tmp, "literal.txt"), "untracked\n");
+        yield* writeTextFile(path.join(tmp, "literal.txt "), "untracked\n");
         const realGitCore = yield* GitCore;
         const ownedDirectories = new Set<string>();
         const failure = new GitCommandError({
@@ -3369,7 +3379,129 @@ it.layer(TestLayer)("git integration", (it) => {
         if (result._tag === "Failure") expect(result.failure).toBe(failure);
         expect(ownedDirectories.size).toBeGreaterThan(0);
         for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
-        expect(yield* readTextFile(path.join(tmp, "literal.txt"))).toBe("untracked\n");
+        expect(yield* readTextFile(path.join(tmp, "literal.txt "))).toBe("untracked\n");
+      }),
+    );
+
+    for (const replacement of ["regular file", "symbolic link"] as const) {
+      it.effect("refuses a trailing-space fallback replaced by a " + replacement, () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const target = path.join(tmp, "literal.txt ");
+          const preserved = path.join(tmp, "original.txt");
+          const foreign = path.join(tmp, "foreign.txt");
+          yield* writeTextFile(target, "original contents\n");
+          yield* writeTextFile(foreign, "different file contents\n");
+          const actual = yield* Effect.promise(() =>
+            vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+          );
+          const handles: Array<Awaited<ReturnType<typeof fs.open>>> = [];
+          let armed = false;
+          let swapped = false;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              vi.mocked(fs.lstat).mockImplementation(actual.lstat);
+              vi.mocked(fs.open).mockImplementation(actual.open);
+            }),
+          );
+          vi.mocked(fs.lstat).mockImplementation(async (file, options) => {
+            const result = await actual.lstat(file, options);
+            if (file === target && armed && !swapped) {
+              swapped = true;
+              await actual.rename(target, preserved);
+              if (replacement === "regular file") await actual.rename(foreign, target);
+              else await actual.symlink(foreign, target, "file");
+            }
+            return result;
+          });
+          vi.mocked(fs.open).mockImplementation(async (file, flags, mode) => {
+            const handle = await actual.open(file, flags, mode);
+            if (file === target) {
+              vi.spyOn(handle, "read");
+              handles.push(handle);
+            }
+            return handle;
+          });
+          const realGitCore = yield* GitCore;
+          const fallbackCommands: string[] = [];
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
+            if (input.operation.endsWith(".untrackedPatch")) {
+              armed = true;
+              return Effect.succeed({
+                code: 1, stdout: "", stderr: "error: Could not access literal path",
+              });
+            }
+            return realGitCore.execute(input);
+          });
+
+          const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "literal.txt "));
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") {
+            expect(result.failure).toMatchObject({
+              operation: "GitCore.readWorkingTreePatch.untrackedPatch",
+              detail: "error: Could not access literal path",
+            });
+          }
+          expect(swapped).toBe(true);
+          expect(fallbackCommands).toEqual([]);
+          for (const handle of handles) {
+            expect(handle.read).not.toHaveBeenCalled();
+            yield* Effect.promise(async () => {
+              await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+            });
+          }
+          expect(yield* readTextFile(preserved)).toBe("original contents\n");
+          expect(yield* readTextFile(target)).toBe("different file contents\n");
+          if (replacement === "symbolic link") {
+            expect(yield* Effect.promise(() => actual.lstat(target).then((entry) => entry.isSymbolicLink()))).toBe(true);
+          }
+        }),
+      );
+    }
+
+    it.effect("keeps an over-cap trailing-space read failure without opening or indexing the file", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const target = path.join(tmp, "oversize.txt ");
+        yield* writeTextFile(target, "oversized snapshot\n");
+        const bytes = 8 * 1024 * 1024 + 1;
+        yield* Effect.promise(() => fs.truncate(target, bytes));
+        const actual = yield* Effect.promise(() =>
+          vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+        );
+        let opens = 0;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => { vi.mocked(fs.open).mockImplementation(actual.open); }),
+        );
+        vi.mocked(fs.open).mockImplementation((file, flags, mode) => {
+          if (file === target) opens += 1;
+          return actual.open(file, flags, mode);
+        });
+        const realGitCore = yield* GitCore;
+        const fallbackCommands: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
+          if (input.operation.endsWith(".untrackedPatch")) {
+            return Effect.succeed({
+              code: 1, stdout: "", stderr: "error: Could not access literal path",
+            });
+          }
+          return realGitCore.execute(input);
+        });
+        const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "oversize.txt "));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            operation: "GitCore.readWorkingTreePatch.untrackedPatch",
+            detail: "error: Could not access literal path",
+          });
+        }
+        expect(opens).toBe(0);
+        expect(fallbackCommands).toEqual([]);
+        expect(yield* Effect.promise(() => actual.stat(target).then((entry) => entry.size))).toBe(bytes);
       }),
     );
 

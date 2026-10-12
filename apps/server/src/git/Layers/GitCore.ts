@@ -23,7 +23,7 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants as nodeFsConstants, createReadStream, type Stats } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as nodePath from "node:path";
@@ -140,6 +140,7 @@ const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
   uncommitted: true,
 };
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
+const MAX_UNTRACKED_FALLBACK_BYTES = 8 * 1024 * 1024;
 const BLAME_LINE_TIMEOUT_MS = 10_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
@@ -1742,8 +1743,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         // A clean porcelain result already determines the empty working-tree summary.
-        const numstatOutputs = yield* (hasWorkingTreeChanges
-          ? Effect.all(
+        const numstatOutputs: readonly [string, string] | null = hasWorkingTreeChanges
+          ? yield* Effect.all(
               [
                 runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
                   "diff",
@@ -1758,9 +1759,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 ]),
               ],
               { concurrency: "unbounded" },
-            )
-          : Effect.succeed(["", ""] as const)
-        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+            ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)))
+          : ["", ""];
         if (numstatOutputs === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
         }
@@ -1950,6 +1950,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       if (
         failed.code !== 1 ||
         failed.stdout.length > 0 ||
+        !filePath.endsWith(" ") ||
         !isWorkspaceRelativePathSafe(filePath) ||
         filePath.includes("\0")
       ) {
@@ -1958,11 +1959,69 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       return Effect.scoped(
         Effect.gen(function* () {
           const physicalPath = nodePath.join(cwd, filePath);
-          const stat = yield* Effect.tryPromise(() => nodeFs.lstat(physicalPath)).pipe(
+          // This fallback is deliberately capped. Larger or unstable inputs keep
+          // the original Git error instead of silently omitting file contents.
+          const snapshot = yield* Effect.tryPromise(async () => {
+            const initial = await nodeFs.lstat(physicalPath);
+            if (
+              !initial.isFile() ||
+              !Number.isSafeInteger(initial.size) ||
+              initial.size < 0 ||
+              initial.size > MAX_UNTRACKED_FALLBACK_BYTES
+            ) {
+              return null;
+            }
+            const handle = await nodeFs.open(
+              physicalPath,
+              nodeFsConstants.O_RDONLY |
+                (nodeFsConstants.O_NOFOLLOW ?? 0) |
+                (nodeFsConstants.O_NONBLOCK ?? 0),
+            );
+            try {
+              const sameFile = (left: Stats, right: Stats) =>
+                left.dev === right.dev &&
+                left.ino === right.ino &&
+                left.mode === right.mode &&
+                left.size === right.size &&
+                left.mtimeMs === right.mtimeMs &&
+                left.ctimeMs === right.ctimeMs;
+              const opened = await handle.stat();
+              if (!opened.isFile() || !sameFile(initial, opened)) return null;
+              // File identity and size are checked before allocating or reading.
+              const contents = Buffer.alloc(opened.size);
+              let offset = 0;
+              while (offset < contents.length) {
+                const result = await handle.read(
+                  contents,
+                  offset,
+                  Math.min(64 * 1024, contents.length - offset),
+                  offset,
+                );
+                if (result.bytesRead === 0) return null;
+                offset += result.bytesRead;
+              }
+              const tail = await handle.read(Buffer.alloc(1), 0, 1, opened.size);
+              const finalHandle = await handle.stat();
+              const finalPath = await nodeFs.lstat(physicalPath);
+              if (
+                tail.bytesRead !== 0 ||
+                !finalPath.isFile() ||
+                !sameFile(opened, finalHandle) ||
+                !sameFile(opened, finalPath)
+              ) {
+                return null;
+              }
+              return { contents, mode: opened.mode };
+            } finally {
+              await handle.close();
+            }
+          }).pipe(
+            // Native descriptor operations cannot be cancelled. Settle every
+            // bounded read and the owned close before scope cleanup can proceed.
+            Effect.uninterruptible,
             Effect.catch(() => Effect.succeed(null)),
           );
-          // Keep missing, unreadable, directory and symbolic-link failures intact.
-          if (!stat?.isFile()) return failed;
+          if (snapshot === null) return failed;
           const directory = yield* fileSystem.makeTempDirectoryScoped({
             prefix: "synara-untracked-content-",
           });
@@ -1970,11 +2029,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           const empty = nodePath.join(directory, "empty");
           const objects = nodePath.join(directory, "objects");
           yield* fileSystem.makeDirectory(objects);
-          // copyFile cannot be aborted. Finish this owned copy before scope cleanup
-          // may remove its destination; all Git commands below remain interruptible.
           const copied = yield* Effect.tryPromise(() =>
-            nodeFs.copyFile(physicalPath, content),
+            nodeFs.writeFile(content, snapshot.contents, { flag: "wx" }),
           ).pipe(
+            // This write owns only the capped snapshot. Await its actual
+            // settlement before the scoped directory can be removed.
             Effect.uninterruptible,
             Effect.as(true),
             Effect.catch(() => Effect.succeed(false)),
@@ -2002,7 +2061,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             );
           const object = yield* hashObject(["hash-object", "-w", "--no-filters", "--", content]);
           const emptyTree = yield* hashObject(["hash-object", "-w", "-t", "tree", "--", empty]);
-          const mode = (stat.mode & 0o111) === 0 ? "100644" : "100755";
+          const mode = (snapshot.mode & 0o111) === 0 ? "100644" : "100755";
           const indexOptions = [
             "-c", "core.protectNTFS=false",
             "-c", "core.splitIndex=false",
