@@ -26,9 +26,12 @@ const SNAPSHOT_ERROR_MARKER = "@error";
 // provider child that was originally captured.
 // This owned child needs only the system CIM module. Avoid inherited module
 // roots that can stall command discovery before the bounded query starts.
+// Import the known manifest directly so a cold worker need not discover the
+// CIM command by scanning every system module before its first request.
 const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = [System.IO.Path]::Combine($PSHOME, 'Modules')
+Import-Module -Name ([System.IO.Path]::Combine($PSHOME, 'Modules', 'CimCmdlets', 'CimCmdlets.psd1')) -ErrorAction Stop
 while (($request = [Console]::In.ReadLine()) -ne $null) {
   try {
     [Console]::Out.WriteLine('${SNAPSHOT_START_MARKER}')
