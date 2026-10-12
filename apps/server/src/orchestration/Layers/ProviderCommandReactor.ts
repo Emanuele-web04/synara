@@ -6643,10 +6643,9 @@ const make = Effect.gen(function* () {
             assistantMessageId: payload.retryFrom.assistantMessageId,
             assistantMessageText: sourceAssistant?.text ?? "",
             assistantMessageCreatedAt: sourceAssistant?.createdAt ?? payload.createdAt,
-            sourceMetrics: deriveRetryAttemptMetrics(
-              originalThread.activities,
-              payload.retryFrom.turnId,
-            ),
+            sourceMetrics: {
+              ...deriveRetryAttemptMetrics(originalThread.activities, payload.retryFrom.turnId),
+            },
             checkpointTurnCount: payload.retryFrom.checkpointTurnCount,
             checkpointRef: payload.retryFrom.checkpointRef,
             restoreCheckpointRef: workspaceRestorePlan.checkpointRef,

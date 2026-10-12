@@ -21,9 +21,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function safeTokens(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function safeNumber(value: unknown): number | undefined {
