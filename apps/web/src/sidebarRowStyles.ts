@@ -43,6 +43,18 @@ export const SIDEBAR_PROJECT_NAME_CLASS_NAME = [
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
 ].join(" ");
 
+/**
+ * A control that takes over a header row's leading glyph slot (the project pin, a hub's
+ * thread disclosure). Pair it with `sidebarHoverRevealHideClassName("project-header")` on
+ * the resting glyph so the two swap in place.
+ */
+export const SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME =
+  "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
+
+/** Keeps a leading-slot action hidden until its `group/project-header` row is hovered or focused. */
+export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
+  "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
+
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 /** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
 export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";

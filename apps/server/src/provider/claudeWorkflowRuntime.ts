@@ -231,10 +231,11 @@ export function claudeWorkflowRuntimeSnapshots(
 // Reads complete lines appended past `offset`. Only whole lines are consumed
 // ('\n' is a single byte in UTF-8, so scanning bytes is safe); the trailing
 // partial line stays unconsumed until a later tick.
-const readAppendedLines = (
+export const readAppendedLines = (
   fileSystem: FileSystem.FileSystem,
   path: string,
   offset: number,
+  maxFileBytes: number = MAX_CLAUDE_WORKFLOW_FILE_BYTES,
 ): Effect.Effect<{ lines: Array<string>; nextOffset: number; skipped: boolean } | undefined> =>
   Effect.gen(function* () {
     const info = yield* fileSystem.stat(path);
@@ -242,7 +243,7 @@ const readAppendedLines = (
     if (!Number.isFinite(size) || size <= offset) {
       return undefined;
     }
-    if (size > MAX_CLAUDE_WORKFLOW_FILE_BYTES) {
+    if (size > maxFileBytes) {
       return { lines: [], nextOffset: offset, skipped: true };
     }
     const file = yield* fileSystem.open(path);

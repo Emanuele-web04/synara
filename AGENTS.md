@@ -31,6 +31,9 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Transcript and UI safeguards
 
+- UI changes require explicit user authorization. This includes changes to layout, styling, typography, visible text, controls, navigation, animations, and user-facing interaction behavior on any surface. A general request to fix, refactor, or improve something does not authorize incidental UI changes.
+- If a task needs a UI change that the user has not explicitly requested or approved, notify the user of the proposed visible or interaction change and why it is needed, then wait for authorization before implementing that part. Continue independent work within the authorized scope. An explicit UI request authorizes that scope; do not ask again unless the scope expands.
+- Before committing, pushing, or opening/updating a PR, review the diff for UI changes and exclude any that lack explicit authorization. Tests, screenshots, and passing checks do not substitute for authorization. Report authorized UI changes clearly in the completion summary and PR description.
 - Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
@@ -49,6 +52,8 @@ For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client 
 Write replies and completion reports as a TL;DR: the result first, then only what the reader needs to act. Prefer dense information over prose: use tables for measurements, comparisons, and per-case results, and short bullets for findings and open decisions. Cut narration of steps taken, restated requests, and closing recaps. Keep failures, unverified behavior, and required decisions; shorten the wording, never the facts.
 
 ## Verification and completion
+
+Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 
 Use the smallest relevant checks while iterating. For code changes, finish with `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and affected Vitest tests. Use `bun run test`, never `bun test`, which selects a different runner. Cross-package or lifecycle changes warrant the broader repository test suite.
 

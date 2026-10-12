@@ -93,6 +93,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Release idle provider processes after a timeout in minutes to free memory. 0 never auto-stop server default resume session process RAM",
   },
   {
+    id: "general:thread-tabs",
+    section: "general",
+    title: "Thread tabs",
+    keywords:
+      "Show open threads as tabs in the chat header. Turn off to show only the current thread's title. horizontal tabs strip header chat title",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",
@@ -138,6 +145,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Open by default",
     keywords:
       "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
+  },
+  {
+    id: "general:environment-subagents",
+    section: "general",
+    title: "Subagents",
+    keywords:
+      "Show a compact summary of the chat's subagents in the Environment panel and open the full list in the right dock. agents roster lineage running done stop background",
   },
   {
     id: "general:environment-usage",
@@ -439,6 +453,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Include fork upstreams",
     keywords:
       "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
+  },
+  {
+    id: "behavior:diff-layout",
+    section: "behavior",
+    title: "Diff layout",
+    keywords: "Default stacked split review panel side by side unified layout per thread",
   },
   {
     id: "behavior:diff-line-wrapping",

@@ -25,6 +25,12 @@ Confirm:
 
 Do not diagnose the primary checkout when the task actually owns a managed worktree.
 
+## Slow branch or worktree creation
+
+Synara serializes local Git mutations across linked worktrees of the same repository. Automatic publication after the first-turn branch rename runs outside that queue, so a slow remote or authentication timeout does not hold up other local branch or worktree creation. The thread shows the renamed local branch before publication finishes; a publication failure leaves that local branch intact and is recorded in the server log.
+
+If creation remains slow, check the checkout size, local changes and `.worktreeinclude` files being copied, and any configured worktree setup script. These are separate from remote publication.
+
 ## Large commits and pushes
 
 Commit and push actions stream Git output and keep only a bounded preview for commit-message generation and diagnostic logs. Reaching those preview limits does not shorten the committed files or stop the push. Large file selections are passed through a temporary path list rather than command-line arguments.

@@ -8,6 +8,7 @@ import {
   type HubWorkRecord,
   type OrchestrationCommand,
   type OrchestrationThreadShell,
+  type RuntimeMode,
   type SynaraCreateThreadsInput,
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
@@ -97,7 +98,10 @@ function work(workId: string): HubWorkRecord {
   };
 }
 
-const makeFixture = Effect.fn(function* (scenario: string) {
+const makeFixture = Effect.fn(function* (
+  scenario: string,
+  runtimeMode: RuntimeMode = "approval-required",
+) {
   const workId = `${WORK_ID}:${scenario}`;
   const operationRepository = yield* AgentGatewayOperationRepository;
   const hubWork = yield* HubWorkRepository;
@@ -155,7 +159,7 @@ const makeFixture = Effect.fn(function* (scenario: string) {
     git: {} as GitCoreShape,
     serverConfig: { worktreesDir: "/tmp/hub-saga-worktrees" } as ServerConfigShape,
     loadProviderAvailabilities: Effect.succeed(new Map()),
-    requireThreadShell: () => Effect.succeed(caller),
+    requireThreadShell: () => Effect.succeed({ ...caller, runtimeMode }),
   });
   const context: GatewayCreationContext = {
     kind: "hub-work",
@@ -225,6 +229,58 @@ const layer = it.layer(
 );
 
 layer("Hub work creation saga", (it) => {
+  for (const { target, explicit, expected } of [
+    { target: TARGET, explicit: undefined, expected: "auto" },
+    { target: TARGET, explicit: "approval-required", expected: "approval-required" },
+    {
+      target: { provider: "devin", model: TARGET.model },
+      explicit: undefined,
+      expected: "approval-required",
+    },
+    {
+      target: { provider: "claudeAgent", model: TARGET.model },
+      explicit: undefined,
+      expected: "approval-required",
+    },
+  ] as const) {
+    it.effect(
+      `uses ${expected} for ${target.provider} Hub workers with ${explicit ?? "inherited Auto"}`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeFixture(`mode-${target.provider}-${explicit}`, "auto");
+          const result = yield* fixture.handler(
+            {
+              ...INPUT,
+              threads: [
+                { ...INPUT.threads[0]!, target, ...(explicit ? { runtimeMode: explicit } : {}) },
+              ],
+            },
+            { ...fixture.context, inheritedRuntimeMode: "auto" } as GatewayCreationContext,
+          );
+          assert.notEqual(result.isError, true);
+          const create = fixture.commands.find((command) => command.type === "thread.create");
+          const start = fixture.commands.find((command) => command.type === "thread.turn.start");
+          assert.equal(create?.runtimeMode, expected);
+          assert.equal(start?.runtimeMode, expected);
+        }),
+    );
+  }
+
+  it.effect("keeps approval-required as the default outside Hub work for an Auto caller", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture("non-hub-mode", "auto");
+      const result = yield* fixture.handler(INPUT, {
+        kind: "provider-session",
+        callerThreadId: CALLER_ID,
+        callerTurnId: "ordinary-turn",
+        assertAuthority: () => Effect.void,
+      });
+      assert.notEqual(result.isError, true);
+      const create = fixture.commands.find((command) => command.type === "thread.create");
+      assert.equal(create?.runtimeMode, "approval-required");
+    }),
+  );
+
   it.effect(
     "creates from a durable Hub task without a provider turn and replays the committed worker link",
     () =>

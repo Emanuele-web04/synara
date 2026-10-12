@@ -17,6 +17,7 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -49,9 +50,11 @@ import {
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  hasServerReceivedSentMessage,
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveBlockedComposerSendReason,
   resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -3136,5 +3139,77 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
+  });
+});
+
+describe("blocked composer sends", () => {
+  it("reports a send refused while another send owns the thread", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("send-in-flight");
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("session-starting");
+  });
+
+  it("stays silent when nothing blocks the send or there is nothing to send", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: false,
+        hasComposerContent: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: false,
+        hasComposerContent: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("explains every blocked send instead of doing nothing", () => {
+    for (const reason of ["send-in-flight", "session-starting", "no-project"] as const) {
+      const copy = buildBlockedComposerSendToastCopy(reason);
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.description.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("hasServerReceivedSentMessage", () => {
+  const messageId = MessageId.makeUnsafe("sent-message");
+
+  it("detects a user message the server already recorded", () => {
+    expect(
+      hasServerReceivedSentMessage(
+        {
+          messages: [
+            {
+              id: messageId,
+              role: "user",
+              text: "Reply with ok",
+              createdAt: "2026-10-09T20:00:00.000Z",
+              streaming: false,
+            },
+          ],
+        },
+        messageId,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats a missing thread or message as not received", () => {
+    expect(hasServerReceivedSentMessage(undefined, messageId)).toBe(false);
+    expect(hasServerReceivedSentMessage({ messages: [] }, messageId)).toBe(false);
   });
 });
