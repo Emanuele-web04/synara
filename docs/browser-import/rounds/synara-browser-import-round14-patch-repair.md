@@ -16,7 +16,8 @@ Repaired the BetterWright 2.7.3 patch hunks that prevented clean dependency inst
 - Desktop, web, and contracts native TypeScript checks: passed. Web/contracts emitted existing Effect suggestion diagnostics.
 - Repository `bun run fmt:check`: passed (4,644 files).
 - `git diff --check upstream/main...HEAD`: passed after representing the three nested blank context lines as blank-line replacements; the dependency patch still applies cleanly.
-- Linux Round 7 on `4d86dd375`: clean install passed but all imports failed because the worker could not parse; the 12k exact error code was unreachable. This is the reason for regenerating the worker hunk. No current-head Linux runtime retest has completed yet.
+- Linux Round 7 on `4d86dd375`: clean install passed but all imports failed because the worker could not parse; the 12k exact error code was unreachable. This is why the worker hunk was regenerated.
+- Linux Round 8 on `3d0beae5b`: clean frozen install and worker syntax passed; Chrome Person 1 imported 1 cookie through IPC. The 12,001-cookie profile returned `{code:"target_capacity"}`. Report evidence identifies Chromium's safe target-partition cookie capacity as the cause (not the source reader/size cap); the UI maps it to a clear capacity message and says existing target cookies were preserved. This round verified the IPC result; the matrix's remaining UI rows are still open.
 
 ## Cross-platform report review
 
@@ -25,7 +26,7 @@ Repaired the BetterWright 2.7.3 patch hunks that prevented clean dependency inst
 
 ## Remaining blockers
 
-- The large-profile Linux transfer failure has not been diagnosed from runtime logs or retested with the repaired patch.
+- The 12,001-cookie case is now diagnosed and reported truthfully as target capacity; the test intentionally still fails at the product's safe Chromium capacity.
 - Existing-user announcement still fails to appear in Linux's real install.
 - Windows Chrome/Edge v20 App-Bound cookies remain unreadable; recovery injection is disabled.
 - Password import remains macOS-only; the objective's Windows/Linux support is unmet.
