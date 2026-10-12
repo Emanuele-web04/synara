@@ -23,7 +23,6 @@ import {
   CodeReviewIcon,
   FoldersIcon,
   HomeIcon,
-  HubActiveIcon,
   HubIcon,
   InboxIcon,
   TasksIcon,
@@ -85,7 +84,7 @@ export function railProjectGlyphs(
 /** A rail item whose glyph has no solid twin: the same icon at rest and while active. */
 const sameGlyphs = (glyph: RailGlyph): AppRailGlyphs => ({ idle: glyph, active: glyph });
 
-/** Hugeicons rail items. Only Hubs ship a solid active glyph; the rest match at rest and active. */
+/** Hugeicons rail items: the same stroke glyph at rest and active. */
 type HugeiconRailItemId =
   | "home"
   | "inbox"
@@ -101,8 +100,8 @@ const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
   automations: sameGlyphs(ClockIcon),
   tasks: sameGlyphs(TasksIcon),
   spaces: sameGlyphs(FoldersIcon),
-  // Hubs (stored id "studio"): Hugeicons circles, with their own solid active glyph.
-  studio: { idle: HubIcon, active: HubActiveIcon },
+  // Hubs (stored id "studio"): the Hugeicons `dashboard-circle` circles.
+  studio: sameGlyphs(HubIcon),
 };
 
 /** Central glyphs matching the Codex rail for the remaining fixed rail items. */

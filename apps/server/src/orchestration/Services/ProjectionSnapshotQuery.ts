@@ -14,7 +14,6 @@ import type {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadMessageWindow,
   OrchestrationThread,
   OrchestrationThreadShell,
   CheckpointRef,
@@ -234,17 +233,22 @@ export interface ProjectionSnapshotQueryShape {
 
   /**
    * Read a single active thread shell row by id.
+   * Runtime reconciliation can opt into the latest projected message timestamp
+   * as its activity clock without changing the persisted sidebar shell.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
+    options?: { readonly includeLatestMessageActivity?: boolean },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
    * Read several active thread shells in one round of queries. Ids without an
    * active thread are simply absent from the result.
+   * Reconciliation can include the in-flight message activity in the same batch.
    */
   readonly getThreadShellsByIds: (
     threadIds: ReadonlyArray<ThreadId>,
+    options?: { readonly includeLatestMessageActivity?: boolean },
   ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
@@ -299,7 +303,6 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadDetailSnapshotById: (
     threadId: ThreadId,
-    messageWindow?: OrchestrationThreadMessageWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

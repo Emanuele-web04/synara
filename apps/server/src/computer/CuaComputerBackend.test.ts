@@ -1756,6 +1756,7 @@ describe("Cua native boundary", () => {
       kind: "permission-required",
       missing: ["screenRecording"],
       bundleId: "com.synara.test",
+      buildSignature: "unknown",
     });
     expect(availability.kind === "permission-required" && availability.message).not.toContain(
       "Accessibility",
@@ -3566,16 +3567,6 @@ describe("Cua native boundary", () => {
 });
 
 describe("Cua hardening", () => {
-  it("reports a stable build signature on the backend and its availability", async () => {
-    const f = fixture();
-    expect(f.backend.buildSignature()).toBe("unknown");
-    expect(f.backend.buildSignature()).toBe(f.backend.buildSignature());
-    f.denyPermissions();
-    const availability = await f.backend.availability();
-    expect(availability.kind === "permission-required" && availability.buildSignature).toBe(
-      "unknown",
-    );
-  });
   it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
     const f = fixture();
     f.actionResult({
