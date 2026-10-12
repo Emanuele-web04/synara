@@ -32,7 +32,12 @@ import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return { ...actual, symlink: vi.fn(actual.symlink), lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
+  return {
+    ...actual,
+    symlink: vi.fn(actual.symlink),
+    lstat: vi.fn(actual.lstat),
+    open: vi.fn(actual.open),
+  };
 });
 
 // ── Helpers ──
@@ -3286,7 +3291,11 @@ it.layer(TestLayer)("git integration", (it) => {
             input.operation.endsWith(".untrackedNumstat")
           ) {
             // Model the observed native Git path-open failure; all fallback commands are real.
-            return Effect.succeed({ code: 1, stdout: "", stderr: "error: Could not access literal path" });
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access literal path",
+            });
           }
           return realGitCore.execute(input);
         });
@@ -3294,14 +3303,18 @@ it.layer(TestLayer)("git integration", (it) => {
           const objects = path.join(tmp, ".git", "objects");
           const files: Array<{ path: string; sha256: string }> = [];
           const visit = async (relative: string): Promise<void> => {
-            for (const entry of await fs.readdir(path.join(objects, relative), { withFileTypes: true })) {
+            for (const entry of await fs.readdir(path.join(objects, relative), {
+              withFileTypes: true,
+            })) {
               const name = path.join(relative, entry.name);
               if (entry.isDirectory()) await visit(name);
               else {
                 expect(entry.isFile()).toBe(true);
                 files.push({
                   path: name,
-                  sha256: createHash("sha256").update(await fs.readFile(path.join(objects, name))).digest("hex"),
+                  sha256: createHash("sha256")
+                    .update(await fs.readFile(path.join(objects, name)))
+                    .digest("hex"),
                 });
               }
             }
@@ -3310,8 +3323,12 @@ it.layer(TestLayer)("git integration", (it) => {
           return files.sort((left, right) => left.path.localeCompare(right.path));
         };
         yield* writeTextFile(path.join(tmp, "literal file.txt "), "alpha\nbeta\n");
-        yield* Effect.promise(() => fs.writeFile(path.join(tmp, "literal.bin "), new Uint8Array([0, 1, 2, 3])));
-        const originalIndex = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
+        yield* Effect.promise(() =>
+          fs.writeFile(path.join(tmp, "literal.bin "), new Uint8Array([0, 1, 2, 3])),
+        );
+        const originalIndex = yield* Effect.promise(() =>
+          fs.readFile(path.join(tmp, ".git", "index")),
+        );
         const originalObjects = yield* Effect.promise(snapshotObjects);
 
         const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
@@ -3326,7 +3343,8 @@ it.layer(TestLayer)("git integration", (it) => {
 
         const executablePath = path.join(tmp, "literal-script.sh ");
         yield* writeTextFile(executablePath, "#!/bin/sh\ntrue\n");
-        if (supportsPosixPermissions()) yield* Effect.promise(() => fs.chmod(executablePath, 0o755));
+        if (supportsPosixPermissions())
+          yield* Effect.promise(() => fs.chmod(executablePath, 0o755));
         const executable = yield* core.readWorkingTreePatch(tmp, "literal-script.sh ");
         expect(executable.patch).toContain(
           supportsPosixPermissions() ? "new file mode 100755" : "new file mode 100644",
@@ -3343,7 +3361,9 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(Buffer.byteLength(bounded.patch)).toBeLessThanOrEqual(1_000_000);
         expect(yield* readTextFile(path.join(tmp, "large literal.txt "))).toBe(large);
         expect(yield* readTextFile(path.join(tmp, "literal file.txt "))).toBe("alpha\nbeta\n");
-        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")))).toEqual(originalIndex);
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")))).toEqual(
+          originalIndex,
+        );
         expect(yield* Effect.promise(snapshotObjects)).toEqual(originalObjects);
         expect(ownedDirectories.size).toBeGreaterThan(0);
         for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
@@ -3368,7 +3388,11 @@ it.layer(TestLayer)("git integration", (it) => {
             ownedDirectories.add(path.dirname(input.env.GIT_OBJECT_DIRECTORY));
           }
           if (input.operation.endsWith(".untrackedPatch")) {
-            return Effect.succeed({ code: 1, stdout: "", stderr: "error: Could not access literal path" });
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access literal path",
+            });
           }
           if (input.operation.endsWith(".literalIndexDiff")) return Effect.fail(failure);
           return realGitCore.execute(input);
@@ -3430,7 +3454,9 @@ it.layer(TestLayer)("git integration", (it) => {
             if (input.operation.endsWith(".untrackedPatch")) {
               armed = true;
               return Effect.succeed({
-                code: 1, stdout: "", stderr: "error: Could not access literal path",
+                code: 1,
+                stdout: "",
+                stderr: "error: Could not access literal path",
               });
             }
             return realGitCore.execute(input);
@@ -3455,54 +3481,66 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(yield* readTextFile(preserved)).toBe("original contents\n");
           expect(yield* readTextFile(target)).toBe("different file contents\n");
           if (replacement === "symbolic link") {
-            expect(yield* Effect.promise(() => actual.lstat(target).then((entry) => entry.isSymbolicLink()))).toBe(true);
+            expect(
+              yield* Effect.promise(() =>
+                actual.lstat(target).then((entry) => entry.isSymbolicLink()),
+              ),
+            ).toBe(true);
           }
         }),
       );
     }
 
-    it.effect("keeps an over-cap trailing-space read failure without opening or indexing the file", () =>
-      Effect.gen(function* () {
-        const tmp = yield* makeTmpDir();
-        yield* initRepoWithCommit(tmp);
-        const target = path.join(tmp, "oversize.txt ");
-        yield* writeTextFile(target, "oversized snapshot\n");
-        const bytes = 8 * 1024 * 1024 + 1;
-        yield* Effect.promise(() => fs.truncate(target, bytes));
-        const actual = yield* Effect.promise(() =>
-          vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
-        );
-        let opens = 0;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => { vi.mocked(fs.open).mockImplementation(actual.open); }),
-        );
-        vi.mocked(fs.open).mockImplementation((file, flags, mode) => {
-          if (file === target) opens += 1;
-          return actual.open(file, flags, mode);
-        });
-        const realGitCore = yield* GitCore;
-        const fallbackCommands: string[] = [];
-        const core = yield* makeIsolatedGitCore((input) => {
-          if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
-          if (input.operation.endsWith(".untrackedPatch")) {
-            return Effect.succeed({
-              code: 1, stdout: "", stderr: "error: Could not access literal path",
+    it.effect(
+      "keeps an over-cap trailing-space read failure without opening or indexing the file",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const target = path.join(tmp, "oversize.txt ");
+          yield* writeTextFile(target, "oversized snapshot\n");
+          const bytes = 8 * 1024 * 1024 + 1;
+          yield* Effect.promise(() => fs.truncate(target, bytes));
+          const actual = yield* Effect.promise(() =>
+            vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+          );
+          let opens = 0;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              vi.mocked(fs.open).mockImplementation(actual.open);
+            }),
+          );
+          vi.mocked(fs.open).mockImplementation((file, flags, mode) => {
+            if (file === target) opens += 1;
+            return actual.open(file, flags, mode);
+          });
+          const realGitCore = yield* GitCore;
+          const fallbackCommands: string[] = [];
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
+            if (input.operation.endsWith(".untrackedPatch")) {
+              return Effect.succeed({
+                code: 1,
+                stdout: "",
+                stderr: "error: Could not access literal path",
+              });
+            }
+            return realGitCore.execute(input);
+          });
+          const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "oversize.txt "));
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") {
+            expect(result.failure).toMatchObject({
+              operation: "GitCore.readWorkingTreePatch.untrackedPatch",
+              detail: "error: Could not access literal path",
             });
           }
-          return realGitCore.execute(input);
-        });
-        const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "oversize.txt "));
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({
-            operation: "GitCore.readWorkingTreePatch.untrackedPatch",
-            detail: "error: Could not access literal path",
-          });
-        }
-        expect(opens).toBe(0);
-        expect(fallbackCommands).toEqual([]);
-        expect(yield* Effect.promise(() => actual.stat(target).then((entry) => entry.size))).toBe(bytes);
-      }),
+          expect(opens).toBe(0);
+          expect(fallbackCommands).toEqual([]);
+          expect(yield* Effect.promise(() => actual.stat(target).then((entry) => entry.size))).toBe(
+            bytes,
+          );
+        }),
     );
 
     it.effect("reads branch as the aggregate diff while preserving focused scopes", () =>

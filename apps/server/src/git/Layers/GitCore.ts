@@ -1678,18 +1678,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        const configuredPrBaseBranch = options.includeRepositoryMetadata && branch
-          ? yield* runGitStdout(
-              "GitCore.statusDetails.configuredPrBaseBranch",
-              cwd,
-              ["config", "--get", `branch.${branch}.gh-merge-base`],
-              true,
-            ).pipe(
-              Effect.map((stdout) => stdout.trim()),
-              Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
-              Effect.catch(() => Effect.succeed(null)),
-            )
-          : null;
+        const configuredPrBaseBranch =
+          options.includeRepositoryMetadata && branch
+            ? yield* runGitStdout(
+                "GitCore.statusDetails.configuredPrBaseBranch",
+                cwd,
+                ["config", "--get", `branch.${branch}.gh-merge-base`],
+                true,
+              ).pipe(
+                Effect.map((stdout) => stdout.trim()),
+                Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
+                Effect.catch(() => Effect.succeed(null)),
+              )
+            : null;
 
         if (!upstreamRef && branch) {
           aheadCount = yield* computeAheadCountAgainstBase(cwd, branch).pipe(
@@ -1704,9 +1705,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         // safe default on failure so it never breaks the status read. `resolvePrimaryRemoteName`
         // returns "origin" only when that remote exists, so it doubles as the origin check.
         const primaryRemoteName = options.includeRepositoryMetadata
-          ? yield* resolvePrimaryRemoteName(cwd).pipe(
-              Effect.catch(() => Effect.succeed(null)),
-            )
+          ? yield* resolvePrimaryRemoteName(cwd).pipe(Effect.catch(() => Effect.succeed(null)))
           : null;
         const defaultBranchName =
           primaryRemoteName === null
@@ -2055,7 +2054,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(object)
                   ? Effect.succeed(object)
                   : Effect.fail(
-                      createGitCommandError(operation, cwd, args, "Git returned an invalid object id."),
+                      createGitCommandError(
+                        operation,
+                        cwd,
+                        args,
+                        "Git returned an invalid object id.",
+                      ),
                     );
               }),
             );
@@ -2063,26 +2067,45 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           const emptyTree = yield* hashObject(["hash-object", "-w", "-t", "tree", "--", empty]);
           const mode = (snapshot.mode & 0o111) === 0 ? "100644" : "100755";
           const indexOptions = [
-            "-c", "core.protectNTFS=false",
-            "-c", "core.splitIndex=false",
-            "-c", "core.fsmonitor=false",
+            "-c",
+            "core.protectNTFS=false",
+            "-c",
+            "core.splitIndex=false",
+            "-c",
+            "core.fsmonitor=false",
           ];
           yield* executeGit(
             `${operation}.literalIndex`,
             cwd,
-            [...indexOptions, "update-index", "--add", "--cacheinfo", `${mode},${object},${filePath}`],
+            [
+              ...indexOptions,
+              "update-index",
+              "--add",
+              "--cacheinfo",
+              `${mode},${object},${filePath}`,
+            ],
             { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
           );
           // Real Git owns path quoting, binary detection, mode and patch rendering.
           // Both its index and object writes stay inside this owned directory.
-          const outputArgs = format === "patch"
-            ? ["--patch", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"]
-            : ["--numstat", "-z"];
+          const outputArgs =
+            format === "patch"
+              ? ["--patch", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"]
+              : ["--numstat", "-z"];
           return yield* executeGit(
             `${operation}.literalIndexDiff`,
             cwd,
-            [...indexOptions, "diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv",
-              ...outputArgs, emptyTree, "--"],
+            [
+              ...indexOptions,
+              "diff",
+              "--cached",
+              "--no-renames",
+              "--no-ext-diff",
+              "--no-textconv",
+              ...outputArgs,
+              emptyTree,
+              "--",
+            ],
             { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, ...capture },
           );
         }),
