@@ -65,13 +65,19 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
       for (const [projectId, summary] of current.summariesByProjectId) {
         const incoming = next.get(projectId);
         const newerRevision = incoming !== undefined && summary.revision > incoming.revision;
-        const changedDuringRequest =
-          requestBaseline !== undefined && requestBaseline.get(projectId) !== summary;
-        // A list request can finish after a stream patch. Keep that newer row,
-        // including one created while the request's older snapshot was loading.
+        const baseline = requestBaseline?.get(projectId);
+        const changedDuringRequest = requestBaseline !== undefined && baseline !== summary;
+        const metadataChangedDuringRequest =
+          changedDuringRequest &&
+          (baseline === undefined ||
+            (Object.keys({ ...baseline, ...summary }) as (keyof ProjectAgentSummary)[]).some(
+              (key) => key !== "memberThreadIds" && baseline[key] !== summary[key],
+            ));
+        // A member-only patch must not replace fresh list status. Keep newer metadata,
+        // including a row created while the request's older snapshot was loading.
         if (
           newerRevision ||
-          (changedDuringRequest && (!incoming || incoming.revision <= summary.revision))
+          (metadataChangedDuringRequest && (!incoming || incoming.revision <= summary.revision))
         ) {
           next.set(projectId, summary);
           // A Hub created during the request has no member list yet.

@@ -21,7 +21,10 @@ vi.mock("~/nativeApi", () => ({
   }),
 }));
 
-import { useProjectAgentSummariesStore } from "./useProjectAgentSummaries";
+import {
+  loadProjectAgentSummaries,
+  useProjectAgentSummariesStore,
+} from "./useProjectAgentSummaries";
 
 const groupId = ProjectId.makeUnsafe("project-group-1");
 const repoId = ProjectId.makeUnsafe("project-repo-1");
@@ -330,7 +333,7 @@ describe("useProjectAgentSummaries store", () => {
 
   it.each([1, 2])(
     "keeps a patched worker when an in-flight list returns revision %i",
-    (revision) => {
+    async (revision) => {
       vi.useFakeTimers();
       try {
         useProjectAgentSummariesStore
@@ -353,6 +356,8 @@ describe("useProjectAgentSummaries store", () => {
             ?.memberThreadIds,
         ).toEqual([coordinatorThreadId, memberThreadId]);
       } finally {
+        // Run the debounced re-list here so its timer does not outlive this test.
+        await vi.advanceTimersByTimeAsync(500);
         vi.useRealTimers();
       }
     },
@@ -360,6 +365,50 @@ describe("useProjectAgentSummaries store", () => {
 });
 
 describe("list membership race regressions", () => {
+  it("keeps list status and added members when only members change during the request", async () => {
+    vi.useFakeTimers();
+    let resolveResponse!: (result: { summaries: ProjectAgentSummary[] }) => void;
+    const response = new Promise<{ summaries: ProjectAgentSummary[] }>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const incoming = makeSummary({
+      coordinatorStatus: "running",
+      needsYouThreadIds: [coordinatorThreadId],
+      instructionsConfigured: true,
+      memberThreadIds: [coordinatorThreadId],
+    });
+    let pending: Promise<void> | undefined;
+    try {
+      const state = () => useProjectAgentSummariesStore.getState();
+      state().setSummaries([
+        makeSummary({
+          needsYouThreadIds: [],
+          instructionsConfigured: false,
+          memberThreadIds: [coordinatorThreadId],
+        }),
+      ]);
+      listSummaries.mockReturnValueOnce(response);
+      pending = loadProjectAgentSummaries();
+      state().applyEvent({
+        type: "thread-index-upserted",
+        projectId: groupId,
+        threads: [makeIndexRow()],
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(listSummaries).toHaveBeenCalledTimes(1);
+      resolveResponse({ summaries: [incoming] });
+      await pending;
+      expect(state().summariesByProjectId.get(groupId)).toEqual({
+        ...incoming,
+        memberThreadIds: [coordinatorThreadId, memberThreadId],
+      });
+    } finally {
+      resolveResponse({ summaries: [incoming] });
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts the initial members after a config event races the request", () => {
     const state = () => useProjectAgentSummariesStore.getState();
     const requestBaseline = state().summariesByProjectId;
