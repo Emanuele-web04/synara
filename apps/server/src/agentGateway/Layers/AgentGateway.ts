@@ -126,6 +126,9 @@ import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { makeAgentGatewayUsageTools } from "../usageTools.ts";
+import { makeAgentGatewayTodoTools } from "../todoTools.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
+import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -181,6 +184,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const projectAgentService = yield* ProjectAgentService;
+  const todoService = yield* TodoService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -1618,6 +1622,16 @@ export const makeAgentGateway = Effect.gen(function* () {
     },
   });
 
+  const todoTools = makeAgentGatewayTodoTools({
+    todos: todoService,
+    snapshotQuery,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
+    requireThreadShell,
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1633,6 +1647,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...automationTools,
     ...browserTools,
     ...kanbanTools,
+    // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.
+    ...(isServerBetaFeatureEnabled("tasks") ? todoTools : []),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({
           manager: deviceService.manager,
@@ -1651,7 +1667,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         })
       : []),
     ...computerBrowserTools,
-    // Group tools are Beta-only: Stable does not offer them to agents at all.
+    // Offer Hub tools only when the authoritative shared feature policy enables them.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
   ];
 

@@ -25,7 +25,9 @@ import {
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
+import { orderedActivities } from "./workLog";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
+import { textSegmentsCoverText } from "./messageTextSegments";
 import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
@@ -232,7 +234,8 @@ export function threadTurnStatesEqual(
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
-    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan)
+    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan) &&
+    left.pendingTurnStartMessageId === right.pendingTurnStartMessageId
   );
 }
 
@@ -825,8 +828,19 @@ function mergeReadModelMessagesWithLiveHotPath(
     }
 
     changed = true;
+    // Segments must spell the text they ship with: the snapshot's describe its
+    // own (shorter) text, so keep whichever side still covers the retained text.
+    const { textSegments: _incomingTextSegments, ...incomingMessageWithoutSegments } =
+      incomingMessage;
+    const retainedTextSegments = [incomingMessage.textSegments, previousMessage.textSegments].find(
+      (segments) =>
+        segments !== undefined &&
+        segments.length > 0 &&
+        textSegmentsCoverText(segments, previousMessage.text),
+    );
     mergedById.set(incomingMessage.id, {
-      ...incomingMessage,
+      ...incomingMessageWithoutSegments,
+      ...(retainedTextSegments !== undefined ? { textSegments: retainedTextSegments } : {}),
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
@@ -1224,6 +1238,7 @@ function normalizeTurnDiffSummaries(
     const files = normalizeTurnDiffFiles(checkpoint.files, existing?.files);
     if (
       existing &&
+      existing.startedAt === (checkpoint.startedAt ?? existing.startedAt) &&
       existing.completedAt === checkpoint.completedAt &&
       existing.status === checkpoint.status &&
       existing.assistantMessageId === (checkpoint.assistantMessageId ?? undefined) &&
@@ -1233,8 +1248,10 @@ function normalizeTurnDiffSummaries(
     ) {
       return existing;
     }
+    const startedAt = checkpoint.startedAt ?? existing?.startedAt;
     return {
       turnId: checkpoint.turnId,
+      ...(startedAt ? { startedAt } : {}),
       completedAt: checkpoint.completedAt,
       status: checkpoint.status,
       assistantMessageId: checkpoint.assistantMessageId ?? undefined,
@@ -1369,7 +1386,9 @@ export function withOrchestrationEventSequence(
   // Match the read-model projection: runtime journal activity sequences and
   // orchestration envelope sequences are different counters. Overwriting the
   // former only on live updates reorders snapshot history into the new turn.
-  return { ...activity, sequence: activity.sequence ?? sequence };
+  return activity.sequence !== undefined
+    ? activity
+    : { ...activity, sequence, sequenceSource: "orchestration" };
 }
 
 /**
@@ -1394,6 +1413,50 @@ function resolveTurnAlignedDropCount(
   return dropCount >= activities.length ? minimumDropCount : dropCount;
 }
 
+// Task state outlives the transcript window. Keep its latest patches rather than
+// letting progress-only updates erase ownership, launch identity, or completion.
+function retainTaskActivityIds(
+  activities: readonly Thread["activities"][number][],
+  retainedIds: Set<string>,
+): void {
+  const latest = new Map<string, Thread["activities"][number]>();
+  // Use the same ordering as task-state consumers, including sequence and
+  // terminal-event ties, so trimming cannot resurrect completed work.
+  for (const activity of orderedActivities(activities)) {
+    if (activity.kind === "turn.tasks.updated") {
+      latest.set("task-list", activity);
+      continue;
+    }
+    const payload = asActivityRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      latest.set("background-notice", activity);
+      continue;
+    }
+    if (typeof payload?.taskId !== "string") continue;
+    if (activity.kind === "task.started") {
+      retainedIds.add(activity.id);
+      continue;
+    }
+    if (
+      activity.kind !== "task.updated" &&
+      activity.kind !== "task.progress" &&
+      activity.kind !== "task.completed"
+    )
+      continue;
+    if (activity.kind !== "task.progress") {
+      latest.set(JSON.stringify([payload.taskId, "lifecycle"]), activity);
+    }
+    for (const field of Object.keys(payload)) {
+      if (field !== "taskId")
+        latest.set(JSON.stringify([payload.taskId, "field", field]), activity);
+    }
+  }
+  for (const activity of latest.values()) retainedIds.add(activity.id);
+}
+
 export function capThreadActivities<TActivity extends Thread["activities"][number]>(
   activities: readonly TActivity[],
 ): TActivity[] {
@@ -1406,6 +1469,7 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   );
   const tail = activities.slice(dropCount);
   const retainedIds = new Set(tail.map((activity) => activity.id));
+  retainTaskActivityIds(activities, retainedIds);
   const retainedRequests = new Map(
     pendingInteractionsFromActivities(activities).map((request) => [request.key, request]),
   );
@@ -1419,7 +1483,8 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
       retainedRequests.set(identity.key, identity);
     }
   }
-  if (retainedRequests.size === 0) return tail;
+  if (retainedRequests.size === 0)
+    return activities.filter((activity) => retainedIds.has(activity.id));
   const oldestRetainedRequestAt = new Map<string, string>();
   for (const request of retainedRequests.values()) {
     const key = `${request.interactionKind}:${request.requestId}`;
@@ -1600,6 +1665,7 @@ function activitiesEqual(
     deepEqualJson(left.payload, right.payload) &&
     left.turnId === right.turnId &&
     left.sequence === right.sequence &&
+    left.sequenceSource === right.sequenceSource &&
     left.createdAt === right.createdAt
   );
 }
@@ -1847,6 +1913,10 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
+  // Snapshots carry no pending request. Preserve known clears as well as live
+  // claims; native compaction explicitly clears the server's pending request.
+  const pendingTurnStartMessageId =
+    claudeCacheReview?.status === "compacting" ? null : previous?.pendingTurnStartMessageId;
 
   if (
     previous &&
@@ -1869,6 +1939,7 @@ export function normalizeThreadFromReadModel(
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
+    previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
     previous.lastVisitedAt === lastVisitedAt &&
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
@@ -1935,6 +2006,7 @@ export function normalizeThreadFromReadModel(
     isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
+    ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
     lastVisitedAt,
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
@@ -2145,6 +2217,12 @@ export function normalizeThreadShellSnapshot(
       ...(latestTurn?.sourceProposedPlan
         ? { pendingSourceProposedPlan: latestTurn.sourceProposedPlan }
         : {}),
+      // Keep known clears when shell snapshots replace the normalized turn state.
+      ...(claudeCacheReview?.status === "compacting"
+        ? { pendingTurnStartMessageId: null }
+        : previous?.pendingTurnStartMessageId !== undefined
+          ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
+          : {}),
     },
   };
 }

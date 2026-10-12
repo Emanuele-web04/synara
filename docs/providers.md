@@ -41,6 +41,31 @@ with bounded concurrency. A command receipt confirms durable acceptance; provide
 continues in the background. After restart, Synara resumes from the settled event prefix and
 the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
 provider calls. A task waiting on a slow provider operation does not hold another task's lane.
+Recovery also isolates persisted child commands whose owning task is missing or deleted. It
+does not create a replacement provider session or resend those commands. Undispatched work is
+blocked, ambiguous delivery results keep their uncertainty, and a surviving child is marked
+with an error while unrelated tasks remain usable. Persisted Claude compaction reviews with an
+unavailable owner remain held for reconciliation; startup skips their provider recovery instead
+of failing or resending the held message.
+
+Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
+contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
+32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
+metadata ends the batch. Tools, reasoning, terminal events and errors flush preceding text
+immediately. Native interruption and session teardown begin before waiting for text persistence.
+Session teardown and the text drain run concurrently under the old lifecycle generation;
+retirement waits for both, and a teardown failure preserves that generation and the accepted text.
+Stop, session replacement and graceful shutdown flush before retiring the text's owner.
+Unknown metadata or nonempty raw payloads retain their original events.
+
+This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each
+canonical event gets a fresh local ID and comes from an owned destructive queue. Reconnection
+and resubscription never redeliver consumed canonical IDs. Codex mints those IDs around native
+notifications; Claude mints them with each event stamp. Other adapters keep each original ID.
+A batch retains its first canonical ID and timestamp, and retries exactly the same content
+after an uncertain commit. Recovery reads the accepted journal rows with the existing ordered
+consumer cursor; a batch is never published before acceptance. Abrupt process death can lose
+text still inside the admission window, as it can lose other events not yet accepted.
 
 Checkpoint capture and undo remain ordered for tasks sharing the same physical workspace.
 Slow Git work in one workspace leaves other workspaces free to progress. Recovery preserves
@@ -161,6 +186,12 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
+model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
+selection that the runtime does not advertise requires an explicit model choice; Synara does
+not silently substitute another model or account. Concrete model selections saved by the old
+role picker retain their model, account and thinking options, including custom selectors.
+
 Claude Code may discover a model under an alias while reporting its concrete model ID separately.
 For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
@@ -229,6 +260,15 @@ turn active for recovery to retry.
 Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
 Synara owns workspace checkpoints.
 
+## Claude Monitor notifications
+
+Claude Monitor can wake a session with output batches that the SDK does not forward.
+Synara reads the bounded session-transcript tail to recover those notifications without
+splitting the assistant reply. Each notification keeps its timestamp and task identity.
+The transcript shows a compact Monitor update or terminal outcome; its output is available
+in the shared detail disclosure. Failed and stopped outcomes stay explicit. Updates do not
+mean the Monitor finished, and tool-only notifications do not enable assistant auto-follow.
+
 ## Provider sessions
 
 Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
@@ -249,6 +289,36 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+### Provider-native subagents
+
+Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
+brief, and any later message its launcher sends it on resume, opens the child thread as a
+message marked as sent by the agent. A resumed Claude subagent continues on the same child
+thread while its routing identity is retained. Claude bounds each inactive ownership cache to
+200 recent entries, keeping live work, nested launchers and unfinished task owners pinned.
+If an older identity expired, an explicit native task id on a resume recovers a child under that
+identity; the previous child thread and its recorded history remain available. Work a subagent
+starts itself (a background command, a monitor, a nested subagent) is recorded on that subagent's
+thread; the parent thread keeps only each subagent's own start,
+progress and outcome. A nested subagent's thread hangs off the task like the others and records
+the subagent that launched it as its source thread. A background subagent's final outcome
+(completed, failed or stopped) updates the call that launched it.
+
+Children are named after their description, nickname or brief, never after a provider id.
+Codex multi-agent v2 encrypts spawn briefs, so its children are named after their task name and
+open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
+parent thread when more ran.
+
+The parent transcript groups adjacent child launches from the same turn in a compact card at
+their launch position; assistant narration separates groups. Cards start collapsed and preserve
+each invocation's status, elapsed time, current step and short result. Their compact headers stay
+visible after the parent turn ends, including while background children continue working. A running card outside the viewport
+gets a floating chip that brings it back into view. Stop all stays visible on a live header;
+expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
+subagents separately; their rows start collapsed. The sidebar shows the same source-thread
+tree under the open parent, with neutral names and status dots. Child threads link back to
+their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
 Once native background work settles, it keeps the app-server process alive, unsubscribes the
@@ -323,24 +393,32 @@ the native resume cursor and incorporates native resume metadata when the runtim
 Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
 transcript file size and base64 image size are not model token counts.
 
-When Claude has more than 100,000 context tokens and available evidence indicates an expired cache,
-Synara holds the next message before delivering it to the runtime. The composer lets you continue
-with the full history, compact first when supported, or cancel that send. The held message and attachments survive reconnects and
+Like embedded Claude Code, Synara sends after a long pause without asking by default; the first
+request then re-caches the full history once. Turning on **Ask before resuming a long idle session** in
+Settings → Providers → Claude adds Claude Code's interactive resume prompt (checked against Claude Code
+2.1.296): when Claude's context is at least 100,000 tokens and its last response is at least 70 minutes
+old, whatever the cache state, Synara holds the next message a person sends before delivering it to the runtime.
+The composer uses Claude Code's wording and choices: **Resume from summary (recommended)** compacts
+first when supported, **Resume full session as-is** sends with the full history, and
+**Don't ask me again** sends as-is and turns off **Ask before resuming a long idle session** in
+Settings → Providers → Claude. **Cancel this send** keeps the message without sending it.
+Like Claude Code, which asks only in interactive sessions and never in headless or SDK runs, messages
+from agents (such as a coordinator) and automations are never held, and neither is `/compact`.
+The held message and attachments survive reconnects and
 server restarts; cancelling keeps the message in the conversation. An unresolved request blocks
 automatic queue promotion for that task, while other tasks can continue.
 Creating a hold and marking its session ready is one atomic operation: a stop, archive, deletion,
 or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
-This check also covers long pauses in an existing process and model changes on the next send.
-Selecting a different model or provider from an existing Claude conversation shows a dismissible
+This check also covers long pauses in an existing process. A model change on the next send is not
+held by itself, as in Claude Code. Selecting a different model or provider from an existing Claude conversation shows a dismissible
 tip above the composer, using the same strip as Auto-fix CI. It appears only for a pending
 selection before sending, including follow-ups during an active turn. It disappears once the
 composer accepts the message for sending or queues it, or when switching back. A blocked
 handoff keeps it available for a later send. The wording distinguishes Claude model changes
 from context transferred to another provider; it does not predict a percentage of the
 subscription allowance or require confirmation. A pending large-context review takes precedence.
-A warm observation for the previous model cannot bypass the review for a different requested model;
-checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
+Checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
 imported sessions without timing evidence remain unknown, so a warning cannot be guaranteed for
 them. The check makes no model request to keep a cache warm or measure its state.
@@ -351,7 +429,7 @@ reduce the history sent after a long pause; it also processes the existing histo
 it after the cache expires can itself consume substantial usage. Automatic compaction and the
 selected context threshold remain under the existing Claude settings.
 
-**Compact, then send** keeps the held message separate from `/compact`. Synara releases it only
+**Resume from summary** keeps the held message separate from `/compact`. Synara releases it only
 after a matching native compaction boundary and successful completion. Failure or interruption
 keeps the message on hold. If delivery is uncertain, Synara does not automatically repeat the send.
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
@@ -571,6 +649,12 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 [upstream asynchronous tool handler](https://github.com/openai/codex/blob/b0d95427c2443e90998f48065902309187564085/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
 
 ## Passive results from delegated tasks
+
+When an orchestrator needs delegated results to finish the user's request, it must keep calling
+`synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
+synthesize the results. A timeout reports progress; it is not completion. Native provider
+subagents use their provider's own completion mechanism. Neither launching work nor opting
+into passive receipts is a substitute for collecting required results before ending the turn.
 
 An authenticated agent can pass `notifyCreatorOnComplete: true` to
 `synara_create_thread`, or on individual entries in `synara_create_threads`.

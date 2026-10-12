@@ -52,7 +52,7 @@ export const FEATURE_TOUR_SLIDES: readonly FeatureTourSlide[] = [
     id: "hubs",
     title: "Give bigger work a team",
     description:
-      "Hubs bring a coordinator and worker agents together around a shared project in Synara Beta.",
+      "Hubs bring a coordinator and worker agents together around a shared project in Synara.",
     highlights: [
       "Keep shared context in the Hub Library and track delegated work.",
       "Plan Tasks in a list or Kanban board and hand them to agents.",
