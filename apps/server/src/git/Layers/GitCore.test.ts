@@ -3270,6 +3270,109 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("keeps untracked fallback patches and stats in an isolated content index", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const realGitCore = yield* GitCore;
+        const ownedDirectories = new Set<string>();
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.env?.GIT_OBJECT_DIRECTORY) {
+            ownedDirectories.add(path.dirname(input.env.GIT_OBJECT_DIRECTORY));
+          }
+          if (
+            input.operation.endsWith(".untrackedPatch") ||
+            input.operation.endsWith(".untrackedNumstat")
+          ) {
+            // Model the observed native Git path-open failure; all fallback commands are real.
+            return Effect.succeed({ code: 1, stdout: "", stderr: "error: Could not access literal path" });
+          }
+          return realGitCore.execute(input);
+        });
+        const snapshotObjects = async () => {
+          const objects = path.join(tmp, ".git", "objects");
+          const files: Array<{ path: string; sha256: string }> = [];
+          const visit = async (relative: string): Promise<void> => {
+            for (const entry of await fs.readdir(path.join(objects, relative), { withFileTypes: true })) {
+              const name = path.join(relative, entry.name);
+              if (entry.isDirectory()) await visit(name);
+              else {
+                expect(entry.isFile()).toBe(true);
+                files.push({
+                  path: name,
+                  sha256: createHash("sha256").update(await fs.readFile(path.join(objects, name))).digest("hex"),
+                });
+              }
+            }
+          };
+          await visit("");
+          return files.sort((left, right) => left.path.localeCompare(right.path));
+        };
+        yield* writeTextFile(path.join(tmp, "literal file.txt "), "alpha\nbeta\n");
+        yield* Effect.promise(() => fs.writeFile(path.join(tmp, "literal.bin"), new Uint8Array([0, 1, 2, 3])));
+        const originalIndex = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")));
+        const originalObjects = yield* Effect.promise(snapshotObjects);
+
+        const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(patch).toContain("diff --git a/literal file.txt  b/literal file.txt ");
+        expect(patch).toContain("+alpha\n+beta\n");
+        expect(patch).toContain("Binary files /dev/null and b/literal.bin differ");
+        expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
+          additions: 2,
+          deletions: 0,
+          fileCount: 2,
+        });
+
+        const large = "large literal content\n".repeat(60_000);
+        expect(Buffer.byteLength(large)).toBeGreaterThan(1_000_000);
+        yield* writeTextFile(path.join(tmp, "large literal.txt "), large);
+        const bounded = yield* core.readWorkingTreePatch(tmp, "large literal.txt ");
+        expect(bounded.patch).toContain("diff --git a/large literal.txt  b/large literal.txt ");
+        expect(bounded.patch).toContain("+large literal content");
+        expect(bounded.truncated).toBe(true);
+        expect(Buffer.byteLength(bounded.patch)).toBeLessThanOrEqual(1_000_000);
+        expect(yield* readTextFile(path.join(tmp, "large literal.txt "))).toBe(large);
+        expect(yield* readTextFile(path.join(tmp, "literal file.txt "))).toBe("alpha\nbeta\n");
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")))).toEqual(originalIndex);
+        expect(yield* Effect.promise(snapshotObjects)).toEqual(originalObjects);
+        expect(ownedDirectories.size).toBeGreaterThan(0);
+        for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
+      }),
+    );
+
+    it.effect("preserves isolated content-index failures and releases the owned files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "literal.txt"), "untracked\n");
+        const realGitCore = yield* GitCore;
+        const ownedDirectories = new Set<string>();
+        const failure = new GitCommandError({
+          operation: "GitCore.readWorkingTreePatch.untrackedPatch.literalIndexDiff",
+          command: "git diff --cached",
+          cwd: tmp,
+          detail: "controlled content-index diff failure",
+        });
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.env?.GIT_OBJECT_DIRECTORY) {
+            ownedDirectories.add(path.dirname(input.env.GIT_OBJECT_DIRECTORY));
+          }
+          if (input.operation.endsWith(".untrackedPatch")) {
+            return Effect.succeed({ code: 1, stdout: "", stderr: "error: Could not access literal path" });
+          }
+          if (input.operation.endsWith(".literalIndexDiff")) return Effect.fail(failure);
+          return realGitCore.execute(input);
+        });
+
+        const result = yield* Effect.result(core.readWorkingTreePatch(tmp));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure).toBe(failure);
+        expect(ownedDirectories.size).toBeGreaterThan(0);
+        for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "literal.txt"))).toBe("untracked\n");
+      }),
+    );
+
     it.effect("reads branch as the aggregate diff while preserving focused scopes", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

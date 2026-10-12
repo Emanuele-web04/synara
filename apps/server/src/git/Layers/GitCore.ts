@@ -1939,6 +1939,104 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         { allowNonZeroExit: true, ...(env ? { env } : {}) },
       ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
 
+    const recoverUntrackedDiffWithIndex = (
+      cwd: string,
+      operation: string,
+      filePath: string,
+      format: "patch" | "numstat",
+      failed: ExecuteGitResult,
+      capture: Pick<ExecuteGitOptions, "maxOutputBytes" | "outputMode"> = {},
+    ): Effect.Effect<ExecuteGitResult, GitCommandError> => {
+      if (
+        failed.code !== 1 ||
+        failed.stdout.length > 0 ||
+        !isWorkspaceRelativePathSafe(filePath) ||
+        filePath.includes("\0")
+      ) {
+        return Effect.succeed(failed);
+      }
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const physicalPath = nodePath.join(cwd, filePath);
+          const stat = yield* Effect.tryPromise(() => nodeFs.lstat(physicalPath)).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
+          // Keep missing, unreadable, directory and symbolic-link failures intact.
+          if (!stat?.isFile()) return failed;
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "synara-untracked-content-",
+          });
+          const content = nodePath.join(directory, "content");
+          const empty = nodePath.join(directory, "empty");
+          const objects = nodePath.join(directory, "objects");
+          yield* fileSystem.makeDirectory(objects);
+          // copyFile cannot be aborted. Finish this owned copy before scope cleanup
+          // may remove its destination; all Git commands below remain interruptible.
+          const copied = yield* Effect.tryPromise(() =>
+            nodeFs.copyFile(physicalPath, content),
+          ).pipe(
+            Effect.uninterruptible,
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          );
+          if (!copied) return failed;
+          yield* fileSystem.writeFileString(empty, "");
+          const env = {
+            GIT_INDEX_FILE: nodePath.join(directory, "index"),
+            GIT_OBJECT_DIRECTORY: objects,
+          };
+          const hashObject = (args: ReadonlyArray<string>) =>
+            executeGit(`${operation}.literalObject`, cwd, args, {
+              env,
+              timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+              maxOutputBytes: 4_096,
+            }).pipe(
+              Effect.flatMap((result) => {
+                const object = result.stdout.trim();
+                return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(object)
+                  ? Effect.succeed(object)
+                  : Effect.fail(
+                      createGitCommandError(operation, cwd, args, "Git returned an invalid object id."),
+                    );
+              }),
+            );
+          const object = yield* hashObject(["hash-object", "-w", "--no-filters", "--", content]);
+          const emptyTree = yield* hashObject(["hash-object", "-w", "-t", "tree", "--", empty]);
+          const mode = (stat.mode & 0o111) === 0 ? "100644" : "100755";
+          const indexOptions = [
+            "-c", "core.protectNTFS=false",
+            "-c", "core.splitIndex=false",
+            "-c", "core.fsmonitor=false",
+          ];
+          yield* executeGit(
+            `${operation}.literalIndex`,
+            cwd,
+            [...indexOptions, "update-index", "--add", "--cacheinfo", `${mode},${object},${filePath}`],
+            { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+          );
+          // Real Git owns path quoting, binary detection, mode and patch rendering.
+          // Both its index and object writes stay inside this owned directory.
+          const outputArgs = format === "patch"
+            ? ["--patch", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"]
+            : ["--numstat", "-z"];
+          return yield* executeGit(
+            `${operation}.literalIndexDiff`,
+            cwd,
+            [...indexOptions, "diff", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv",
+              ...outputArgs, emptyTree, "--"],
+            { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, ...capture },
+          );
+        }),
+      ).pipe(
+        Effect.mapError(
+          toGitCommandError(
+            { operation, cwd, args: ["diff", "--no-index", "--", "/dev/null", filePath] },
+            "failed to render the untracked file through an isolated content index.",
+          ),
+        ),
+      );
+    };
+
     const readUntrackedPatches = (
       cwd: string,
       operationPrefix: string,
@@ -1987,7 +2085,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
                 maxOutputBytes: remainingBytes,
                 outputMode: "truncate",
-              });
+              }).pipe(
+                Effect.flatMap((result) =>
+                  recoverUntrackedDiffWithIndex(cwd, operation, filePath, "patch", result, {
+                    maxOutputBytes: remainingBytes,
+                    outputMode: "truncate",
+                  }),
+                ),
+              );
               const stderr = result.stderr.trim();
               if (!isSuccessfulNoIndexDiff(result)) {
                 return yield* createGitCommandError(
@@ -2035,6 +2140,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 allowNonZeroExit: true,
                 timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
               }).pipe(
+                Effect.flatMap((result) =>
+                  recoverUntrackedDiffWithIndex(cwd, operation, filePath, "numstat", result),
+                ),
                 Effect.flatMap((result) => {
                   const stderr = result.stderr.trim();
                   if (isSuccessfulNoIndexDiff(result)) {
