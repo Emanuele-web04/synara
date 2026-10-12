@@ -482,10 +482,11 @@ const makeMindRepository = Effect.gen(function* () {
   const setPinnedRow = SqlSchema.findOneOption({
     Request: SetMindMemoryPinnedInput,
     Result: MindMemoryDbRow,
-    execute: ({ memoryId, pinned }) =>
+    execute: ({ memoryId, pinned, lastAccessedAt }) =>
       sql`
         UPDATE mind_memories
-        SET pinned = ${pinned ? 1 : 0}
+        SET pinned = ${pinned ? 1 : 0},
+            last_accessed_at = COALESCE(${lastAccessedAt ?? null}, last_accessed_at)
         WHERE id = ${memoryId}
         RETURNING
           id AS "memoryId",

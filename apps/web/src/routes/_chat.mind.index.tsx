@@ -533,10 +533,11 @@ function MindRouteView() {
           : prev,
       );
     },
-    onSuccess: () => {
+    onSuccess: (_data, memory) => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       // An affirmed row's weight/recall also render inside search results.
       void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
+      void queryClient.invalidateQueries({ queryKey: ["mind", "history", memory.memoryId] });
       toastManager.add({ type: "success", title: "Memory affirmed" });
     },
     onError: (error) => {
@@ -575,10 +576,11 @@ function MindRouteView() {
           : prev,
       );
     },
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
       // An edited row's text may enter or leave cached search pages.
       void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
+      void queryClient.invalidateQueries({ queryKey: ["mind", "history", input.memory.memoryId] });
       toastManager.add({ type: "success", title: "Saved" });
     },
     onError: (error) => {
@@ -609,6 +611,7 @@ function MindRouteView() {
     },
     onSuccess: (_data, input) => {
       void queryClient.invalidateQueries({ queryKey: mindQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ["mind", "history", input.memory.memoryId] });
       // A pin change reorders rows inside search results too.
       void queryClient.invalidateQueries({ queryKey: ["mind", "search"] });
       toastManager.add({

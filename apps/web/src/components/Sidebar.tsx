@@ -1430,6 +1430,7 @@ export default function Sidebar() {
     queryKey: mindListQueryKey(null),
     queryFn: () => ensureNativeApi().mind.list({}),
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
   const mindBadge = useMemo(() => {
     const count = mindListQuery.data?.count;

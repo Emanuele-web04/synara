@@ -137,6 +137,7 @@ export type ApplyMindConfirmInput = typeof ApplyMindConfirmInput.Type;
 export const SetMindMemoryPinnedInput = Schema.Struct({
   memoryId: MindMemoryId,
   pinned: Schema.Boolean,
+  lastAccessedAt: Schema.optional(IsoDateTime),
 });
 export type SetMindMemoryPinnedInput = typeof SetMindMemoryPinnedInput.Type;
 

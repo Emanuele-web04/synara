@@ -842,6 +842,7 @@ const makeMindService = Effect.gen(function* () {
           const updated = yield* repository.setPinned({
             memoryId: input.memoryId,
             pinned: input.pinned,
+            ...(row.pinned && !input.pinned ? { lastAccessedAt: nowIso } : {}),
           });
           if (Option.isNone(updated)) {
             return yield* Effect.fail(

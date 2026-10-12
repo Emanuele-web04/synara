@@ -77,6 +77,7 @@ const PROJECTS = {
   affirm: "project-mind-service-affirm",
   ui: "project-mind-service-ui",
   pinSweep: "project-mind-service-pin-sweep",
+  unpinSweep: "project-mind-service-unpin-sweep",
   xproject: "project-mind-service-xproject",
   poison: "project-mind-service-poison",
   gc: "project-mind-service-gc",
@@ -694,6 +695,47 @@ layer("MindService", (it) => {
       });
       assert.isTrue(pinned.pinned);
       assert.isTrue(Option.isSome(yield* repository.getById({ memoryId: target.memoryId })));
+    }),
+  );
+
+  it.effect("unpin restarts decay without confirming or deleting an old pinned memory", () =>
+    Effect.gen(function* () {
+      const service = yield* MindService;
+      const repository = yield* MindRepository;
+      yield* runMigrations();
+      const projectId = ProjectId.makeUnsafe(PROJECTS.unpinSweep);
+      yield* ensureProjectRow(PROJECTS.unpinSweep);
+      const now = yield* Clock.currentTimeMillis;
+      const aged = new Date(now - 46 * DAY_MS).toISOString();
+      const target = yield* seedMemory({
+        projectId,
+        textHash: "unpin-old",
+        text: "Old pinned fact",
+        peakWeight: 0.6,
+        pinned: true,
+        createdAt: aged,
+        lastAccessedAt: aged,
+      });
+      const request = {
+        memoryId: target.memoryId,
+        projectId,
+        pinned: false,
+        actor: { kind: "user" as const },
+        threadId: null,
+        turnId: "unpin-old-turn",
+      };
+      const unpinned = yield* service.setPinned(request);
+      assert.isFalse(unpinned.pinned);
+      const row = Option.getOrThrow(yield* repository.getById({ memoryId: target.memoryId }));
+      assert.strictEqual(row.lastAccessedAt, new Date(now).toISOString());
+      assert.strictEqual(row.accessCount, 0);
+      assert.strictEqual(row.peakWeight, 0.6);
+      yield* TestClock.adjust(Duration.hours(25));
+      yield* service.setPinned(request);
+      assert.strictEqual(
+        Option.getOrThrow(yield* repository.getById({ memoryId: target.memoryId })).lastAccessedAt,
+        row.lastAccessedAt,
+      );
     }),
   );
 
