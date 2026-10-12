@@ -102,6 +102,35 @@ describe("durable effort retry archive", () => {
     expect(variants.map((variant) => variant.text)).toEqual(["Attempt 1"]);
   });
 
+  it("recovers independently validated usage, time and cost on the archived variant", () => {
+    const original = receipt(1);
+    const enriched: OrchestrationThreadActivity = {
+      ...original,
+      payload: {
+        ...(original.payload as object),
+        sourceMetrics: {
+          inputTokens: 100,
+          outputTokens: 25,
+          totalTokens: 125,
+          durationMs: 2500,
+          costUsd: 0.12,
+        },
+      },
+    };
+    const variants = resolveDurableRetryEffortVariants({
+      activities: [enriched],
+      userMessageId: USER_ID,
+      userMessageText: "Fix the test",
+    });
+    expect(variants[0]?.metrics).toEqual({
+      inputTokens: 100,
+      outputTokens: 25,
+      totalTokens: 125,
+      durationMs: 2500,
+      costUsd: 0.12,
+    });
+  });
+
   it("deduplicates the server receipt with the original browser's richer label", () => {
     const durable = resolveDurableRetryEffortVariants({
       activities: [receipt(1)],

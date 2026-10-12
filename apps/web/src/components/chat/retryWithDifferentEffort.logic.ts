@@ -15,6 +15,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import type { RetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 
 import {
   buildModelSelection,
@@ -79,6 +80,7 @@ export type RetryEffortVariant = {
   readonly createdAt: string;
   readonly checkpointTurnCount: number | null;
   readonly changedFileCount: number;
+  readonly metrics?: RetryAttemptMetrics | undefined;
 };
 
 export function retryEffortDisabledReasonLabel(

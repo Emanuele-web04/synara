@@ -7,6 +7,7 @@ import {
   type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Option, Schema } from "effect";
+import { parseRetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 
 import {
   resolveEffortFromModelSelection,
@@ -82,6 +83,7 @@ export function resolveDurableRetryEffortVariants(input: {
             ? payload.checkpointTurnCount
             : null,
         changedFileCount: 0,
+        metrics: parseRetryAttemptMetrics(payload.sourceMetrics),
       },
     });
   }

@@ -6,6 +6,7 @@
 import { type MessageId, type ProviderKind, type ThreadId, type TurnId } from "@synara/contracts";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { parseRetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 
 import type { RetryEffortVariant } from "./retryWithDifferentEffort.logic";
 
@@ -62,6 +63,7 @@ function normalizeVariant(value: unknown): RetryEffortVariant | null {
     checkpointTurnCount:
       typeof value.checkpointTurnCount === "number" ? value.checkpointTurnCount : null,
     changedFileCount: typeof value.changedFileCount === "number" ? value.changedFileCount : 0,
+    metrics: parseRetryAttemptMetrics(value.metrics),
   };
 }
 

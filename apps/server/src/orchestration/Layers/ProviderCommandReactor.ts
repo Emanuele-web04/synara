@@ -7,6 +7,7 @@ import { ComputerService } from "../../computer/Services/ComputerService";
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
 import { effortRetryPreconditionViolation } from "../effortRetry.ts";
+import { deriveRetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -6642,6 +6643,10 @@ const make = Effect.gen(function* () {
             assistantMessageId: payload.retryFrom.assistantMessageId,
             assistantMessageText: sourceAssistant?.text ?? "",
             assistantMessageCreatedAt: sourceAssistant?.createdAt ?? payload.createdAt,
+            sourceMetrics: deriveRetryAttemptMetrics(
+              originalThread.activities,
+              payload.retryFrom.turnId,
+            ),
             checkpointTurnCount: payload.retryFrom.checkpointTurnCount,
             checkpointRef: payload.retryFrom.checkpointRef,
             restoreCheckpointRef: workspaceRestorePlan.checkpointRef,

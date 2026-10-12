@@ -13,6 +13,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import type { ComponentProps, ReactNode } from "react";
+import { deriveRetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 
 import type { ProviderOptions } from "../../providerModelOptions";
 import type { ChatMessage, TurnDiffSummary } from "../../types";
@@ -53,6 +54,7 @@ function buildLiveVariant(input: {
   readonly modelOptions: ProviderOptions | null | undefined;
   readonly runtimeModel?: ProviderModelDescriptor | undefined;
   readonly prompt: string;
+  readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly turnDiffSummary: TurnDiffSummary | undefined;
 }): RetryEffortVariant {
   const effort = resolveEffortFromModelSelection(
@@ -82,6 +84,7 @@ function buildLiveVariant(input: {
     createdAt: input.message.createdAt,
     checkpointTurnCount: input.turnDiffSummary?.checkpointTurnCount ?? null,
     changedFileCount: input.turnDiffSummary?.files.length ?? 0,
+    metrics: deriveRetryAttemptMetrics(input.activities, input.message.turnId),
   };
 }
 
@@ -108,6 +111,7 @@ export function AssistantRetryEffortMessageText(props: {
     modelOptions: props.context.modelOptions,
     runtimeModel: props.context.runtimeModel,
     prompt: precedingUser?.text ?? "",
+    activities: props.context.activities,
     turnDiffSummary: props.turnDiffSummary,
   });
   const displayedText = useDisplayedRetryVariantText({
@@ -143,6 +147,7 @@ export function AssistantRetryEffortCopyButton(props: {
     modelOptions: props.context.modelOptions,
     runtimeModel: props.context.runtimeModel,
     prompt: precedingUser?.text ?? "",
+    activities: props.context.activities,
     turnDiffSummary: props.turnDiffSummary,
   });
   const text = useDisplayedRetryVariantText({
@@ -194,6 +199,7 @@ export function AssistantRetryEffortFooterActions(props: {
     modelOptions: props.context.modelOptions,
     runtimeModel: props.context.runtimeModel,
     prompt: precedingUser?.text ?? "",
+    activities: props.context.activities,
     turnDiffSummary: props.turnDiffSummary,
   });
 

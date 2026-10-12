@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./effortRetryMetrics": {
+      "types": "./src/effortRetryMetrics.ts",
+      "import": "./src/effortRetryMetrics.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"

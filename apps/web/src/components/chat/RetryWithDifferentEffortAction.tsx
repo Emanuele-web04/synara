@@ -117,6 +117,9 @@ export function RetryEffortVariantPager(props: {
   const activeIndex = Math.min(group?.activeIndex ?? variants.length - 1, variants.length - 1);
   const active = variants[activeIndex];
   const effortBadge = active?.effortLabel ?? active?.effort;
+  const reportedTokens = active?.metrics?.totalTokens;
+  const durationMs = active?.metrics?.durationMs;
+  const costUsd = active?.metrics?.costUsd;
 
   return (
     <div
@@ -144,6 +147,11 @@ export function RetryEffortVariantPager(props: {
       <span aria-live="polite">
         {activeIndex + 1} / {variants.length}
         {effortBadge ? ` · ${effortBadge}` : ""}
+        {reportedTokens !== undefined
+          ? ` · ${reportedTokens.toLocaleString("en-US")} reported tokens`
+          : ""}
+        {durationMs !== undefined ? ` · ${(durationMs / 1000).toFixed(1)}s` : ""}
+        {costUsd !== undefined ? ` · ${costUsd.toFixed(4)}` : ""}
       </span>
       <MessageActionButton
         label="Next attempt"
