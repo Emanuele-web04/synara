@@ -232,7 +232,9 @@ describe("ProviderRuntimeReconcilerLive", () => {
       yield* reconciler.reconcileNow;
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
-    expect(commands.map((command) => [command.type, "threadId" in command ? command.threadId : null])).toEqual([
+    expect(
+      commands.map((command) => [command.type, "threadId" in command ? command.threadId : null]),
+    ).toEqual([
       ["thread.session.set", abandoned.id],
       ["thread.activity.append", abandoned.id],
     ]);
@@ -282,7 +284,6 @@ describe("ProviderRuntimeReconcilerLive", () => {
     const common = { updatedBefore: "2026-07-23T19:59:59.999Z", limit: 2 };
     expect(calls).toEqual([common, { ...common, after: cursor }, common, common]);
   });
-
 
   it("settles an abandoned starting session that has no active turn", async () => {
     const commands: OrchestrationCommand[] = [];

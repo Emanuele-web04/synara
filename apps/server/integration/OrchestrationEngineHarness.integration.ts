@@ -271,7 +271,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(ServerSettingsService.layerTest(options?.serverSettings)),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
@@ -298,7 +298,7 @@ export const makeOrchestrationIntegrationHarness = (
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
-          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(ServerSettingsService.layerTest(options?.serverSettings)),
           Layer.provide(
             Layer.succeed(ServerSecretStore, {
               get: () => Effect.succeed(null),
@@ -311,7 +311,7 @@ export const makeOrchestrationIntegrationHarness = (
       : makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
-          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(ServerSettingsService.layerTest(options?.serverSettings)),
           Layer.provide(
             Layer.succeed(ServerSecretStore, {
               get: () => Effect.succeed(null),
@@ -386,7 +386,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(ProviderRuntimeEventRepositoryLive),
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerSettingsService.layerTest(options?.serverSettings)),
       Layer.provideMerge(NodeServices.layer),
     );
 
