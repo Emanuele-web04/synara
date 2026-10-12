@@ -252,6 +252,215 @@ describe("DesktopBrowserManager tab switching", () => {
   });
 });
 
+describe("DesktopBrowserManager shared human and agent use", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
+  const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  function makeManager(viewCount: number) {
+    for (let index = 0; index < viewCount; index += 1) {
+      const contents = new FakeWebContents(500 + index);
+      webContentsViewConstructor.mockReturnValueOnce({
+        webContents: contents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
+      });
+    }
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      isDestroyed: () => false,
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    return manager;
+  }
+
+  it("interrupts agent work only for human actions in the same tab", () => {
+    const manager = makeManager(2);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const userTabId = manager.newTab({
+        threadId: THREAD_ID,
+        url: "https://user.example/",
+      }).activeTabId!;
+      const agentListener = vi.fn();
+      const unsubscribe = manager.subscribeAutomationHumanControl(
+        THREAD_ID,
+        agentListener,
+        agentTabId,
+      );
+      const agentEpoch = manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId);
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: userTabId });
+      manager.navigate({ threadId: THREAD_ID, tabId: userTabId, url: "https://user.example/2" });
+      expect(agentListener).not.toHaveBeenCalled();
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId)).toBe(agentEpoch);
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBeGreaterThan(agentEpoch);
+
+      manager.navigate({ threadId: THREAD_ID, tabId: agentTabId, url: "https://user.example/3" });
+      expect(agentListener).toHaveBeenCalledOnce();
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId)).toBeGreaterThan(
+        agentEpoch,
+      );
+
+      manager.close({ threadId: THREAD_ID });
+      expect(agentListener).toHaveBeenCalledTimes(2);
+      unsubscribe();
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("lets the agent keep working in its tab while the user stays on theirs", async () => {
+    const manager = makeManager(2);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const userTabId = manager.newTab({
+        threadId: THREAD_ID,
+        url: "https://user.example/",
+      }).activeTabId!;
+
+      manager.selectAutomationTab({ threadId: THREAD_ID, tabId: agentTabId });
+      manager.prepareAutomationNavigation({
+        threadId: THREAD_ID,
+        tabId: agentTabId,
+        url: "https://agent.example/next",
+      });
+      const runtime = await manager.getAutomationRuntime({
+        threadId: THREAD_ID,
+        tabId: agentTabId,
+      });
+
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(userTabId);
+      expect(runtime.tabId).toBe(agentTabId);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("opens a new agent tab instead of reusing the tab the user is working in", () => {
+    const manager = makeManager(2);
+    try {
+      const userTabId = manager.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://user.example/",
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.navigate({ threadId: THREAD_ID, tabId: userTabId, url: "https://user.example/2" });
+
+      const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+
+      expect(prepared.tabs).toHaveLength(2);
+      expect(prepared.activeTabId).not.toBe(userTabId);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("keeps an active agent runtime alive while the user opens more warm tabs", async () => {
+    vi.useFakeTimers();
+    const manager = makeManager(8);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const agent = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      const interrupted = vi.fn();
+      const release = manager.subscribeAutomationHumanControl(THREAD_ID, interrupted, agentTabId);
+      let userTabId: string | null = null;
+      for (let index = 0; index < 6; index++) {
+        await vi.advanceTimersByTimeAsync(10);
+        userTabId = manager.newTab({
+          threadId: THREAD_ID,
+          url: `https://user.example/${index}`,
+        }).activeTabId;
+      }
+
+      expect(interrupted).not.toHaveBeenCalled();
+      expect(agent.webContents.close).not.toHaveBeenCalled();
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(userTabId);
+      expect(
+        (await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId }))
+          .webContents,
+      ).toBe(agent.webContents);
+      release();
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not destroy a hidden background agent in the middle of a tool's grace period", async () => {
+    vi.useFakeTimers();
+    const manager = makeManager(3);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.newTab({ threadId: THREAD_ID, url: "https://user.example/" });
+      manager.hide({ threadId: THREAD_ID });
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      const agent = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      expect(agent.webContents.close).not.toHaveBeenCalled();
+      expect(
+        (await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId }))
+          .webContents,
+      ).toBe(agent.webContents);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renews an inactive tab's deadline when a tool claims it before suspension", async () => {
+    vi.useFakeTimers();
+    const manager = makeManager(3);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const agent = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      await vi.advanceTimersByTimeAsync(32_000);
+      manager.newTab({ threadId: THREAD_ID, url: "https://user.example/" });
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1_000);
+      manager.prepareAutomationNavigation({
+        threadId: THREAD_ID,
+        tabId: agentTabId,
+        url: "https://agent.example/next",
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      expect(agent.webContents.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(agent.webContents.close).toHaveBeenCalledOnce();
+      expect(
+        manager.getState({ threadId: THREAD_ID }).tabs.find((tab) => tab.id === agentTabId)?.status,
+      ).toBe("suspended");
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("DesktopBrowserManager automation runtime boundary", () => {
   it.each([false, true])(
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
