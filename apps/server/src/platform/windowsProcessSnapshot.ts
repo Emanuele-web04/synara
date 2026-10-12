@@ -24,8 +24,11 @@ const SNAPSHOT_ERROR_MARKER = "@error";
 // EncodedCommand leaves stdin available for the request loop. CreationDate is
 // included so delayed teardown never mistakes a reused Windows PID for the
 // provider child that was originally captured.
+// This owned child needs only the system CIM module. Avoid inherited module
+// roots that can stall command discovery before the bounded query starts.
 const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = `
 $ErrorActionPreference = 'Stop'
+$env:PSModulePath = [System.IO.Path]::Combine($PSHOME, 'Modules')
 while (($request = [Console]::In.ReadLine()) -ne $null) {
   try {
     [Console]::Out.WriteLine('${SNAPSHOT_START_MARKER}')
