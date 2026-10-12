@@ -25,6 +25,7 @@ vi.mock("~/lib/serverReactQuery", () => ({
 }));
 
 import { BrowserImportAnnouncementDialog } from "./BrowserImportAnnouncementDialog";
+import { OneTimeCoachmark } from "./OneTimeCoachmark";
 import { BROWSER_IMPORT_ANNOUNCEMENT_STORAGE_KEY } from "./useBrowserImportAnnouncement";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
@@ -47,21 +48,20 @@ beforeEach(() => {
     startupGateSettled: true,
     betaWelcomePending: false,
   });
-  useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
+  useAnnouncementSheetSlotStore.setState({ owner: null, ownerPriority: 0, handedOff: false });
 });
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
   localStorage.removeItem(BROWSER_IMPORT_ANNOUNCEMENT_STORAGE_KEY);
+  localStorage.removeItem("synara:test-coachmark");
 });
 
-async function show() {
+async function show(children = <BrowserImportAnnouncementDialog />) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
   const screen = await render(
-    <QueryClientProvider client={client}>
-      <BrowserImportAnnouncementDialog />
-    </QueryClientProvider>,
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>,
   );
   return { screen, client };
 }
@@ -163,6 +163,27 @@ it("waits for the first-run gate and remembers dismissal on this installation", 
   await show();
   await new Promise((resolve) => setTimeout(resolve, 0));
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("prioritizes the browser announcement over a passive startup coachmark", async () => {
+  useAnnouncementSheetSlotStore.setState({ startupSettled: true });
+  await show(
+    <>
+      <BrowserImportAnnouncementDialog />
+      <OneTimeCoachmark
+        storageKey="synara:test-coachmark"
+        title="Tasks"
+        description="A passive startup hint"
+        tooltip="Tasks"
+      >
+        <button type="button">Tasks</button>
+      </OneTimeCoachmark>
+    </>,
+  );
+  await expect.element(page.getByRole("button", { name: "Review browser import" })).toBeVisible();
+  expect(localStorage.getItem("synara:test-coachmark")).toBeNull();
+  await page.getByRole("button", { name: "Not now" }).click();
+  await expect.element(page.getByText("A passive startup hint")).toBeVisible();
 });
 
 it("keeps installation acknowledgments separate", async () => {

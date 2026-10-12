@@ -36,7 +36,7 @@ export function OneTimeCoachmark({
   });
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const startupSettled = useAnnouncementSheetSlotStore((state) => state.startupSettled);
-  const { open } = useAnnouncementSheetSlot(visible && startupSettled);
+  const { open } = useAnnouncementSheetSlot(visible && startupSettled, false, true, 0);
   const markSeen = () => {
     try {
       window.localStorage.setItem(storageKey, "seen");
@@ -46,12 +46,12 @@ export function OneTimeCoachmark({
   };
   useEffect(() => {
     if (!open) return;
-    try {
-      window.localStorage.setItem(storageKey, "seen");
-    } catch {
-      // Keep the hint usable when persistence is unavailable.
-    }
     const timeout = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(storageKey, "seen");
+      } catch {
+        // Keep the hint usable when persistence is unavailable.
+      }
       setVisible(false);
       setTooltipOpen(false);
     }, 8_000);
