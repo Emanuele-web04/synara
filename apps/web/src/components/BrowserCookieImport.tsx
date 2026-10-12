@@ -29,8 +29,6 @@ function importFailure(
     return "The selected profile is no longer available. Choose another profile or open the source browser first.";
   if (result.code === "reader_unavailable")
     return "The native cookie reader is unavailable. Reinstall Synara with its optional native dependencies, or sign in directly.";
-  if (result.code === "persistence_failed")
-    return "Cookies were imported, but secure storage could not save their session state for future launches. Existing sessions may have changed.";
   if (result.code === "reader_failed" && result.stage === "acquisition")
     return "The native reader could not open or acquire the source cookie store. A permission denial was not confirmed. Check that the source profile is available and Synara has access to it.";
   if (result.code === "reader_failed" && (result.stage === "parse" || result.stage === "decode"))
@@ -138,7 +136,9 @@ export function BrowserCookieImport({
         setStatus(
           result.ok
             ? `${result.imported} ${result.imported === 1 ? "cookie" : "cookies"} imported. ${result.skipped} skipped.${result.warnings.length ? " Some cookies could not be transferred; you may need to sign in again." : ""}`
-            : importFailure(result, source),
+            : result.code === "persistence_failed"
+              ? `${result.imported} ${result.imported === 1 ? "cookie was" : "cookies were"} imported; ${result.skipped} skipped. Secure storage could not save these sessions for future launches, so you may need to sign in again after restarting Synara.`
+              : importFailure(result, source),
         );
     } catch {
       if (request === generation.current)

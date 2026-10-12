@@ -239,6 +239,8 @@ export class BrowserCookieImport {
                 : process.platform === "win32"
                   ? "windows"
                   : "linux",
+            imported: result.synced,
+            skipped: result.skipped,
           };
         }
         interrupt.signal.throwIfAborted();

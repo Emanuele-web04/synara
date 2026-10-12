@@ -118,14 +118,20 @@ export type BrowserCookieImportResult =
     }
   | {
       ok: false;
+      code: "persistence_failed";
+      platform: "macos" | "windows" | "linux";
+      imported: number;
+      skipped: number;
+    }
+  | {
+      ok: false;
       code:
         | "permission_denied"
         | "reader_failed"
         | "reader_unavailable"
         | "timed_out"
         | "source_missing"
-        | "transfer_failed"
-        | "persistence_failed";
+        | "transfer_failed";
       platform: "macos" | "windows" | "linux";
       stage?: "acquisition" | "parse" | "decrypt" | "decode" | "query" | "discovery";
     };

@@ -306,6 +306,8 @@ describe("human-only cookie import", () => {
     await expect(importer.import(input)).resolves.toMatchObject({
       ok: false,
       code: "persistence_failed",
+      imported: 2,
+      skipped: 1,
     });
     expect(remember).toHaveBeenCalledWith(["example.test"]);
     expect(releaseHumanOperation).toHaveBeenCalledOnce();

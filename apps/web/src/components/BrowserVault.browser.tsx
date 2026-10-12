@@ -30,6 +30,7 @@ beforeEach(() => {
     reveal: vi.fn(async () => ({ password: "synthetic-revealed", expiresAt: Date.now() + 20_000 })),
     cookieSources: vi.fn(async () => []),
     cookieProfiles: vi.fn(async () => []),
+    inventoryChromiumProfiles: vi.fn(async () => []),
     importCookies: vi.fn(async () => ({
       ok: true as const,
       imported: 0,
@@ -177,7 +178,10 @@ describe("browser saved logins", () => {
 
   it.each([
     [{ code: "reader_failed", stage: "parse" }, "cookie-format failure"],
-    [{ code: "persistence_failed" }, "could not save their session state"],
+    [
+      { code: "persistence_failed", imported: 3, skipped: 2 },
+      "3 cookies were imported; 2 skipped. Secure storage could not save these sessions",
+    ],
   ] as const)("distinguishes reader stages and persistence failure", async (failure, message) => {
     const api = harness.api!;
     vi.mocked(api.cookieSources).mockResolvedValue([{ id: "safari", name: "Safari" }]);
