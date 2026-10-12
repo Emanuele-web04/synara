@@ -7,6 +7,7 @@
 // user moves through the tour; hero steps (welcome, done) center their content in it.
 
 import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -22,6 +23,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useTheme } from "~/hooks/useTheme";
 import { CheckIcon } from "~/lib/icons";
 import { findProviderStatus } from "~/lib/providerAvailability";
@@ -89,15 +91,25 @@ function OnboardingFlow(props: {
   const statuses = useProviderStatusesForLocalConfig();
   const providerDetection = useProviderDetection();
   const { activeTheme } = useTheme();
+  const installationKey = useQuery({
+    ...serverConfigQueryOptions(),
+    select: (config) => config.worktreesDir,
+  }).data;
 
   const goBack = () => setStep(previousOnboardingStep(step));
   const goNext = () => setStep(nextOnboardingStep(step));
 
   // Once the user reaches a setup step the first-run gate must not auto-close the dialog.
   const markEngaged = useOnboardingDialogStore((store) => store.markEngaged);
+  const markBrowserImportStepSeen = useOnboardingDialogStore(
+    (store) => store.markBrowserImportStepSeen,
+  );
   useEffect(() => {
     if (isOnboardingSetupStep(step)) markEngaged();
   }, [markEngaged, step]);
+  useEffect(() => {
+    if (step === "browser-import" && installationKey) markBrowserImportStepSeen(installationKey);
+  }, [installationKey, markBrowserImportStepSeen, step]);
 
   const providerSummary = summarizeProviderSetup(
     VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({

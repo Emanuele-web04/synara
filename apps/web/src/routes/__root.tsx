@@ -43,6 +43,7 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
+import { BrowserImportAnnouncementDialog } from "../components/BrowserImportAnnouncementDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
@@ -372,6 +373,7 @@ function RootRouteView() {
             <FeatureTourDialog />
           </AppSnapWelcomeDialog>
           <GlobalOnboardingDialog />
+          <BrowserImportAnnouncementDialog />
           <ProjectImportAnnouncementDialog />
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
