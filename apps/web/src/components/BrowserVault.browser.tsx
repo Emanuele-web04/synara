@@ -529,7 +529,6 @@ describe("browser saved logins", () => {
           <SafariAccessSetupButton />
         </>,
       );
-      await page.getByRole("button", { name: "Safari import setup" }).click();
       await page.getByRole("button", { name: "Open System Settings" }).click();
       await expect
         .element(page.getByRole("status"))

@@ -74,9 +74,11 @@ function resultMessage(result: BrowserCookieImportResult): string {
 
 export function BrowserSessionImport({
   api,
+  disabled = false,
   onBusyChange,
 }: {
   api: BrowserVaultMethods;
+  disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
 }) {
   const [browsers, setBrowsers] = useState<BrowserWithProfiles[]>([]);
@@ -146,7 +148,7 @@ export function BrowserSessionImport({
   );
 
   const run = async () => {
-    if (busy || !confirmed || selectedProfiles.length === 0) return;
+    if (busy || disabled || !confirmed || selectedProfiles.length === 0) return;
     setBusy(true);
     setCancelling(false);
     cancelRequested.current = false;
@@ -223,7 +225,7 @@ export function BrowserSessionImport({
                 <label className="flex items-center gap-2 font-medium">
                   <Checkbox
                     checked={allSelected}
-                    disabled={busy || profiles.length === 0}
+                    disabled={busy || disabled || profiles.length === 0}
                     onCheckedChange={(checked) =>
                       toggleBrowser(browser, profiles, checked === true)
                     }
@@ -250,7 +252,7 @@ export function BrowserSessionImport({
                           <label className="flex items-start gap-2">
                             <Checkbox
                               checked={selected[key] === true}
-                              disabled={busy}
+                              disabled={busy || disabled}
                               onCheckedChange={(checked) =>
                                 setSelected((current) => ({ ...current, [key]: checked === true }))
                               }
@@ -292,7 +294,7 @@ export function BrowserSessionImport({
           <Button
             size="sm"
             variant="outline"
-            disabled={busy}
+            disabled={busy || disabled}
             onClick={() => setRefreshCount((count) => count + 1)}
           >
             Refresh browser list
@@ -304,7 +306,7 @@ export function BrowserSessionImport({
           <label className="flex items-start gap-2">
             <Checkbox
               checked={confirmed}
-              disabled={busy || selectedProfiles.length === 0}
+              disabled={busy || disabled || selectedProfiles.length === 0}
               onCheckedChange={(checked) => setConfirmed(checked === true)}
             />
             <span>
@@ -329,7 +331,7 @@ export function BrowserSessionImport({
             ) : (
               <Button
                 size="sm"
-                disabled={!confirmed || selectedProfiles.length === 0}
+                disabled={disabled || !confirmed || selectedProfiles.length === 0}
                 onClick={() => void run()}
               >
                 Import selected sessions

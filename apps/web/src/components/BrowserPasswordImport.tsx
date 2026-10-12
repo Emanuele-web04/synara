@@ -2,6 +2,7 @@ import type { BrowserPasswordImportResult, BrowserVaultMethods } from "@synara/c
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import {
   getNavigatorPlatform,
   isLinuxPlatform,
@@ -42,9 +43,11 @@ function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false
 
 export function BrowserPasswordImport({
   api,
+  disabled = false,
   onBusyChange,
 }: {
   api: BrowserVaultMethods;
+  disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
 }) {
   const platform = getNavigatorPlatform();
@@ -123,7 +126,7 @@ export function BrowserPasswordImport({
   );
 
   const run = async () => {
-    if (busy || !confirmed || selectedProfiles.length === 0) return;
+    if (busy || disabled || !confirmed || selectedProfiles.length === 0) return;
     setBusy(true);
     onBusyChange?.(true);
     setStatus(null);
@@ -161,7 +164,7 @@ export function BrowserPasswordImport({
       className="mt-4 space-y-3 border-t pt-4 text-ui leading-snug"
       aria-label="Import saved passwords"
     >
-      <h3 className="font-medium text-muted-foreground">Import saved passwords</h3>
+      <h3 className="text-ui-lg font-medium">Saved passwords</h3>
       {!passwordImportSupported ? (
         <p className="text-ui-sm text-muted-foreground">
           {isLinuxPlatform(platform) || isWindowsPlatform(platform)
@@ -188,7 +191,7 @@ export function BrowserPasswordImport({
       ) : (
         <ul className="space-y-3">
           {inventory.map((browser) => (
-            <li key={browser.id} className="space-y-2">
+            <li key={browser.id} className="space-y-2 rounded-lg border p-3">
               <div className="font-medium">{browser.name}</div>
               {browser.profiles.length === 0 ? (
                 <p className="text-ui-sm text-muted-foreground">
@@ -203,12 +206,11 @@ export function BrowserPasswordImport({
                     return (
                       <li key={profile.id}>
                         <label className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={selected[id] === true}
-                            disabled={busy}
-                            onChange={(event) =>
-                              setSelected((current) => ({ ...current, [id]: event.target.checked }))
+                            disabled={busy || disabled}
+                            onCheckedChange={(checked) =>
+                              setSelected((current) => ({ ...current, [id]: checked === true }))
                             }
                           />
                           <span>
@@ -268,11 +270,10 @@ export function BrowserPasswordImport({
       {inventory.length > 0 ? (
         <>
           <label className="flex items-start gap-2">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={confirmed}
-              disabled={busy || selectedProfiles.length === 0}
-              onChange={(event) => setConfirmed(event.target.checked)}
+              disabled={busy || disabled || selectedProfiles.length === 0}
+              onCheckedChange={(checked) => setConfirmed(checked === true)}
             />
             <span>
               I authorize Synara to read saved passwords from the selected profiles and copy them
@@ -289,6 +290,7 @@ export function BrowserPasswordImport({
               size="sm"
               disabled={
                 busy ||
+                disabled ||
                 !confirmed ||
                 selectedProfiles.length === 0 ||
                 vaultStatus !== "ready" ||

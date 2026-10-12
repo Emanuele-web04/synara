@@ -37,12 +37,16 @@ export function BrowserImportPanel({
           {BROWSER_IMPORT_DESCRIPTION} Nothing is imported until you confirm each type.
         </p>
       </header>
-      <fieldset disabled={passwordsBusy}>
-        <BrowserSessionImport api={browserApi} onBusyChange={setSessionsBusy} />
-      </fieldset>
-      <fieldset disabled={sessionsBusy}>
-        <BrowserPasswordImport api={browserApi} onBusyChange={setPasswordsBusy} />
-      </fieldset>
+      <BrowserSessionImport
+        api={browserApi}
+        disabled={passwordsBusy}
+        onBusyChange={setSessionsBusy}
+      />
+      <BrowserPasswordImport
+        api={browserApi}
+        disabled={sessionsBusy}
+        onBusyChange={setPasswordsBusy}
+      />
     </section>
   );
 }

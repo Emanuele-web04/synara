@@ -83,14 +83,14 @@ describe("macOS Chromium password reader", () => {
     });
   });
 
-  it("decodes a Chromium payload with its binary 32-byte site prefix", async () => {
+  it("skips invalid password text without inventing a binary prefix to discard", async () => {
     const { database, profileId } = await makeProfile("Default");
     database
       .prepare("INSERT INTO logins VALUES (?, ?, ?, ?, ?)")
       .run(
         "https://example.test",
         "alice",
-        encryptPassword(Buffer.concat([randomBytes(32), Buffer.from("synthetic-password")])),
+        encryptPassword(Buffer.concat([Buffer.alloc(32, 0x80), Buffer.from("synthetic-password")])),
         0,
         1,
       );
@@ -103,13 +103,7 @@ describe("macOS Chromium password reader", () => {
       profileId,
       "test-safe-storage",
     );
-    expect(result.logins).toEqual([
-      {
-        origin: "https://example.test",
-        username: "alice",
-        password: "synthetic-password",
-      },
-    ]);
+    expect(result).toEqual({ logins: [], skipped: 1 });
   });
 
   it("rejects a missing profile without reading another profile", async () => {

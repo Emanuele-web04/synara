@@ -39,17 +39,7 @@ function decodePassword(encrypted: Buffer, key: Buffer): string | null {
   try {
     const decipher = createDecipheriv("aes-128-cbc", key, iv);
     plaintext = Buffer.concat([decipher.update(encrypted.subarray(3)), decipher.final()]);
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    try {
-      return decoder.decode(plaintext);
-    } catch {
-      if (plaintext.length <= 32) return null;
-      try {
-        return decoder.decode(plaintext.subarray(32));
-      } catch {
-        return null;
-      }
-    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
   } catch {
     return null;
   } finally {
