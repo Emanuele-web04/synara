@@ -599,6 +599,9 @@ export function projectEvent(
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
+            ...(payload.forkSourceMessageId
+              ? { forkSourceMessageId: payload.forkSourceMessageId }
+              : {}),
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
             sidechatContext: payload.sidechatContext,
             sidechatLastActivityAt: payload.sidechatLastActivityAt,

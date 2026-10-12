@@ -46,6 +46,11 @@ import {
   mergeWorkLogToolDetails,
   type WorkLogToolDetails,
 } from "./lib/toolCallDetails";
+import {
+  FAST_MODE_STATE_ACTIVITY_KIND,
+  fastModeNoticeFromActivity,
+  type FastModeNotice,
+} from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
@@ -75,10 +80,14 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** Set when that side requested fast mode but its session was not serving it. */
+  sourceFastModeNotice?: FastModeNotice | null;
+  targetFastModeNotice?: FastModeNotice | null;
 }
 
 export type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
+  | "fork-from-earlier-turn"
   | "fresh-session"
   | "interrupt-escalation"
   | "native-history-unavailable"
@@ -419,6 +428,7 @@ export function deriveWorkLogEntries(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
+    .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
@@ -450,8 +460,53 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+  if (handoffFastModeNotices.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const notices = handoffFastModeNotices.get(entry.id);
+      if (!entry.providerHandoff || !notices) continue;
+      // Copy rather than mutate: the handoff info is shared with the per-activity cache.
+      derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
+    }
+  }
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+}
+
+// A handoff row summarizes two sessions. Each side reads the fast-mode state its own
+// session reported: the source up to the handoff, the target from there to the next one.
+function deriveHandoffFastModeNotices(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
+  const notices = new Map<
+    string,
+    Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">
+  >();
+  let sessionNotice: FastModeNotice | null = null;
+  let openHandoffId: string | null = null;
+  for (const activity of ordered) {
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
+      sessionNotice = fastModeNoticeFromActivity(activity);
+      if (openHandoffId !== null) {
+        notices.set(openHandoffId, {
+          ...notices.get(openHandoffId),
+          targetFastModeNotice: sessionNotice,
+        });
+      }
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+      // The target never started, so the source session keeps running.
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND) {
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      openHandoffId = activity.id;
+      sessionNotice = null;
+    }
+  }
+  return notices;
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -873,6 +928,7 @@ export function parseTaskListTasks(payload: unknown): TaskListTaskSnapshot[] | n
 function isProviderContextLifecycleReason(value: unknown): value is ProviderContextLifecycleReason {
   return (
     value === "conversation-rebuilt" ||
+    value === "fork-from-earlier-turn" ||
     value === "fresh-session" ||
     value === "interrupt-escalation" ||
     value === "native-history-unavailable" ||
@@ -1356,7 +1412,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   const collapseKey =
     deriveProviderRuntimeReconciliationCollapseKey(activity, payload) ??
-    deriveToolLifecycleCollapseKey(entry);
+    deriveToolLifecycleCollapseKey(entry, hasTurnScopedProviderToolCallId(payload));
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -2115,14 +2171,29 @@ function mergeChangedFiles(
   return [...new Set(merged)];
 }
 
+// ACP providers restart their tool-call ids every turn. The server then scopes
+// the runtime item id per turn and records the raw id as `providerToolCallId`,
+// while the activity data keeps carrying that raw id as `toolCallId`.
+function hasTurnScopedProviderToolCallId(payload: Record<string, unknown> | null): boolean {
+  return typeof asRecord(payload?.data)?.providerToolCallId === "string";
+}
+
 // Keep a stable lifecycle key so providers like Claude can stream many
 // in-progress tool deltas without turning each partial update into its own row.
-function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
+// Globally unique ids merge across turns on purpose (a background command can
+// outlive the turn that started it); per-turn ids only identify a call within
+// their turn.
+function deriveToolLifecycleCollapseKey(
+  entry: DerivedWorkLogEntry,
+  turnScopedToolCallId = false,
+): string | undefined {
   if (!isRenderableToolLifecycleActivity(entry.activityKind)) {
     return undefined;
   }
   if (entry.toolCallId) {
-    return `tool:${entry.toolCallId}`;
+    return turnScopedToolCallId && entry.turnId
+      ? `tool:${entry.turnId}\u001f${entry.toolCallId}`
+      : `tool:${entry.toolCallId}`;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const itemType = entry.itemType ?? "";

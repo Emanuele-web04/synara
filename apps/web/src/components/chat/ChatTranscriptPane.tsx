@@ -308,7 +308,7 @@ export function ChatTranscriptPane({
   return (
     <div
       data-chat-transcript-pane="true"
-      aria-hidden={terminalWorkspaceTerminalTabActive}
+      inert={terminalWorkspaceTerminalTabActive}
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",

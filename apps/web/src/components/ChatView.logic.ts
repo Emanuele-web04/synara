@@ -1916,6 +1916,59 @@ export function buildExpiredTerminalContextToastCopy(
   };
 }
 
+export type BlockedComposerSendReason = "send-in-flight" | "session-starting" | "no-project";
+
+// A user send refused by a guard must say why; a silent no-op makes people send again.
+// Expected no-ops (empty prompt, held cache review, expired sidechat, voice note still
+// transcribing) keep their own UI and are not reported here.
+export function resolveBlockedComposerSendReason(input: {
+  readonly sendInFlight: boolean;
+  readonly sessionStarting: boolean;
+  /** An empty composer has nothing to send, so pressing Send again needs no notice. */
+  readonly hasComposerContent: boolean;
+}): BlockedComposerSendReason | null {
+  if (!input.hasComposerContent) return null;
+  if (input.sendInFlight) return "send-in-flight";
+  if (input.sessionStarting) return "session-starting";
+  return null;
+}
+
+export function buildBlockedComposerSendToastCopy(reason: BlockedComposerSendReason): {
+  type: "info" | "warning";
+  title: string;
+  description: string;
+} {
+  switch (reason) {
+    case "send-in-flight":
+      return {
+        type: "info",
+        title: "Still sending your last message",
+        description: "Wait for it to show in the chat before sending again.",
+      };
+    case "session-starting":
+      return {
+        type: "info",
+        title: "The session is still starting",
+        description: "Send again once it is ready. Your message stays in the composer.",
+      };
+    case "no-project":
+      return {
+        type: "warning",
+        title: "This chat has no project",
+        description: "Choose a project for this chat, then send again.",
+      };
+  }
+}
+
+// The server already holds the user message, so a later failure in the send attempt
+// must not hand the prompt back to the composer or roll back the promoted thread.
+export function hasServerReceivedSentMessage(
+  thread: Pick<Thread, "messages"> | null | undefined,
+  messageId: ChatMessage["id"],
+): boolean {
+  return thread?.messages.some((message) => message.id === messageId) ?? false;
+}
+
 export function shouldRenderTerminalWorkspace(options: {
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;

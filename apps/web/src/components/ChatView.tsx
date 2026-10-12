@@ -159,6 +159,7 @@ import {
 import {
   deriveContextWindowSelectionStatus,
   deriveComposerContextWindowLabel,
+  deriveObservedClaudeContextBudget,
   deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
@@ -308,6 +309,7 @@ import {
 } from "./chat/ComposerModelPicker";
 import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import { HubPendingApprovals } from "./chat/group/HubPendingApprovals";
 import { ComposerPendingBackgroundWorkRow } from "./chat/ComposerPendingBackgroundWorkRow";
 import {
   ComposerClaudeCacheReviewPanel,
@@ -403,6 +405,7 @@ import {
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
+import { deriveFastModeNotice } from "~/lib/fastModeState";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
 import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
 import {
@@ -1855,6 +1858,16 @@ export default function ChatView({
   const hubWorkItemsByMessageId = useMemo(
     () => hubWorkItemsBySourceMessage(hubWorkItems, activeThread?.id),
     [hubWorkItems, activeThread?.id],
+  );
+  const hubApprovalThreadIds = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...(activeGroupSummary?.memberThreadIds ?? []),
+          ...hubWorkItems.flatMap((item) => (item.workerThreadId ? [item.workerThreadId] : [])),
+        ]),
+      ].filter((id) => id !== activeThread?.id),
+    [activeGroupSummary?.memberThreadIds, hubWorkItems, activeThread?.id],
   );
   // A thread the group coordinator started names the group in its origin label,
   // so the worker reads as part of that group rather than "another thread".
@@ -4594,12 +4607,22 @@ export default function ChatView({
       appliedContextWindowSelection,
     ],
   );
+  const observedClaudeContextBudget = useMemo(
+    () => deriveObservedClaudeContextBudget(threadActivities),
+    [threadActivities],
+  );
   const composerContextWindowLabel = deriveComposerContextWindowLabel({
     provider: selectedProvider,
     model: selectedModel,
     snapshot: runtimeUsageContextWindow,
     status: contextWindowSelectionStatus,
+    observedBudget: observedClaudeContextBudget,
   });
+  // Claude reports the speed it actually serves; the selection is only a request.
+  const composerFastModeNotice = useMemo(
+    () => (selectedProvider === "claudeAgent" ? deriveFastModeNotice(threadActivities) : null),
+    [selectedProvider, threadActivities],
+  );
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -4680,6 +4703,7 @@ export default function ChatView({
       hideModelLabel={!composerFooterControlsPlan.showModelLabel}
       hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
       contextWindowLabel={composerContextWindowLabel}
+      fastModeNotice={composerFastModeNotice}
       effortControl={settings.composerEffortSlider ? "slider" : "menu"}
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
@@ -5946,6 +5970,14 @@ export default function ChatView({
                   card floating just above the composer (padding gives the measured gap),
                   instead of a banner fused into the composer surface. An approval takes
                   precedence and suppresses the question card while one is active. */}
+            {isCoordinatorConversation && activeThread ? (
+              <HubPendingApprovals
+                threadIds={hubApprovalThreadIds}
+                hubProjectId={activeThread.projectId}
+                coordinatorThreadId={activeThread.id}
+                onOpenThread={onNavigateToThread}
+              />
+            ) : null}
             {activePendingApproval ? (
               <div className="pb-2">
                 <ComposerPendingApprovalPanel
@@ -6482,7 +6514,9 @@ export default function ChatView({
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
-            aria-hidden={terminalWorkspaceTerminalTabActive}
+            // `inert`, not aria-hidden: hiding a subtree that still holds focus (the composer
+            // or the terminal) is blocked by the browser; inert also releases that focus.
+            inert={terminalWorkspaceTerminalTabActive}
             className={cn(
               "flex min-h-0 min-w-0 flex-1 flex-col",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
@@ -6514,6 +6548,13 @@ export default function ChatView({
                     <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2
                       data-testid="empty-landing-heading"
+                      // A combobox contributes its (empty) value, not its text, to the
+                      // heading's name, which read as "What should we do in ?".
+                      aria-label={
+                        isEmptyChatLanding
+                          ? undefined
+                          : `What should we do in ${activeProjectDisplayName ?? "this folder"}?`
+                      }
                       className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
                       {isEmptyChatLanding ? (
@@ -6782,7 +6823,7 @@ export default function ChatView({
 
           {terminalWorkspaceOpen ? (
             <div
-              aria-hidden={!terminalWorkspaceTerminalTabActive}
+              inert={!terminalWorkspaceTerminalTabActive}
               className={cn(
                 "absolute inset-0 min-h-0 min-w-0 transition-all duration-200 ease-out",
                 terminalWorkspaceTerminalTabActive

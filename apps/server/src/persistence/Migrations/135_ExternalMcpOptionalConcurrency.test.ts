@@ -6,12 +6,12 @@ import { expect } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("133_ExternalMcpOptionalConcurrency", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("135_ExternalMcpOptionalConcurrency", (it) => {
   it.effect("preserves existing limits, credentials and child rows while allowing no limit", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`PRAGMA foreign_keys = ON`;
-      yield* runMigrations({ toMigrationInclusive: 132 });
+      yield* runMigrations({ toMigrationInclusive: 134 });
       yield* sql`
         INSERT INTO external_mcp_integrations (
           integration_id, name, client_kind, audience, credential_hash, capabilities_json,
@@ -64,7 +64,7 @@ it.layer(NodeSqliteClient.layerMemory())("133_ExternalMcpOptionalConcurrency", (
         "external_mcp_rate_windows",
       ];
       const before = yield* Effect.forEach(tables, (table) => sql.unsafe(`SELECT * FROM ${table}`));
-      yield* runMigrations({ toMigrationInclusive: 133 });
+      yield* runMigrations({ toMigrationInclusive: 135 });
       const after = yield* Effect.forEach(tables, (table) => sql.unsafe(`SELECT * FROM ${table}`));
       expect(after).toEqual(before);
       expect(yield* sql`PRAGMA foreign_key_check`).toEqual([]);
@@ -79,7 +79,7 @@ it.layer(NodeSqliteClient.layerMemory())("133_ExternalMcpOptionalConcurrency", (
           ))._tag,
         ).toBe("Failure");
       }
-      expect(yield* runMigrations({ toMigrationInclusive: 133 })).toEqual([]);
+      expect(yield* runMigrations({ toMigrationInclusive: 135 })).toEqual([]);
     }),
   );
 });

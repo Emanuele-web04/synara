@@ -72,7 +72,6 @@ describe("providerModelsQueryOptions", () => {
       vi.fn().mockRejectedValue(new Error("Cursor CLI is not installed or not on PATH")),
     );
     const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
-    expect(options.retry).toBe(0);
 
     const queryClient = new QueryClient();
     await expect(queryClient.fetchQuery(options)).rejects.toThrow(
@@ -80,6 +79,49 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
+  });
+
+  it.each(["cursor", "droid", "codex", "claudeAgent", "pi"] as const)(
+    "does not multiply exhausted transport capacity retries for %s",
+    async (provider) => {
+      const capacity = Object.assign(
+        new Error("WebSocket expensive-read request capacity exceeded."),
+        {
+          code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      );
+      const listModels = mockListModels(vi.fn().mockRejectedValue(capacity));
+      const client = new QueryClient();
+      const options = { ...providerModelsQueryOptions({ provider }), retryDelay: 0 };
+      const previous = {
+        models: [{ slug: "auto", name: "Auto" }],
+        source: "runtime",
+        cached: false,
+      };
+      client.setQueryData(options.queryKey, previous);
+      await expect(client.fetchQuery({ ...options, staleTime: 0 })).rejects.toBe(capacity);
+      expect(listModels).toHaveBeenCalledTimes(1);
+      expect(client.getQueryData(options.queryKey)).toEqual(previous);
+      client.clear();
+    },
+  );
+
+  it.each([
+    ["cursor", 1],
+    ["droid", 3],
+    ["codex", 4],
+  ] as const)("preserves ordinary discovery attempts for %s", async (provider, attempts) => {
+    const listModels = mockListModels(
+      vi.fn().mockRejectedValue(new Error("Discovery unavailable")),
+    );
+    const client = new QueryClient();
+    await expect(
+      client.fetchQuery({ ...providerModelsQueryOptions({ provider }), retryDelay: 0 }),
+    ).rejects.toThrow("Discovery unavailable");
+    expect(listModels).toHaveBeenCalledTimes(attempts);
+    client.clear();
   });
 
   it("serializes different provider catalogs before they reach native admission", async () => {
