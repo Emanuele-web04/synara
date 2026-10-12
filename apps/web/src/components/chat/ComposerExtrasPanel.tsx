@@ -73,6 +73,7 @@ export function ComposerExtrasPanel(props: {
   onInsertGoal: () => void;
   onClose: () => void;
   onAttachWorkItems?: (() => void) | undefined;
+  workItemsDisabledHint?: string | undefined;
   panelId: string;
 }) {
   const inputId = useId();
@@ -128,12 +129,14 @@ export function ComposerExtrasPanel(props: {
                 icon: <PaperclipIcon className={GLYPH} />,
                 title: "Files and folders",
               },
-              ...(props.onAttachWorkItems
+              ...(props.onAttachWorkItems || props.workItemsDisabledHint
                 ? [
                     {
                       id: "extras:work-items",
                       icon: <ListTodoIcon className={GLYPH} />,
                       title: "Issue or pull request",
+                      disabled: !props.onAttachWorkItems,
+                      hint: props.workItemsDisabledHint,
                     },
                   ]
                 : []),

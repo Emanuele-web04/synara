@@ -1,3 +1,4 @@
+import * as NodePath from "node:path";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -473,6 +474,17 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
 }
 
 /** Keeps the two worktree RPCs behind the same project eligibility check. */
+export function resolveNormalizedWorkItemCwd(
+  rawCwd: string,
+  paths: Pick<typeof NodePath, "parse" | "resolve" | "isAbsolute" | "normalize"> = NodePath,
+): string | null {
+  const root = paths.parse(rawCwd).root;
+  const stripped = rawCwd.replace(/[\\/]+$/, "");
+  const candidate = root && stripped === root.replace(/[\\/]+$/, "") ? root : stripped || rawCwd;
+  const resolved = paths.resolve(candidate);
+  return paths.isAbsolute(candidate) && resolved === paths.normalize(candidate) ? resolved : null;
+}
+
 export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
   readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
   readonly getActiveProjectByWorkspaceRoot: (
@@ -1310,11 +1322,8 @@ const makeWsRpcHandlersLayer = () =>
       // or null when the path fails validation.
       const resolveValidatedWorkItemCwd = (rawCwd: string) =>
         Effect.gen(function* () {
-          const candidateCwd = rawCwd.replace(/[\\/]+$/, "") || rawCwd;
-          const resolvedCwd = path.resolve(candidateCwd);
-          if (!path.isAbsolute(candidateCwd) || resolvedCwd !== path.normalize(candidateCwd)) {
-            return null;
-          }
+          const resolvedCwd = resolveNormalizedWorkItemCwd(rawCwd, path);
+          if (resolvedCwd === null) return null;
           const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
             Effect.map((info) => info.type === "Directory"),
             Effect.orElseSucceed(() => false),

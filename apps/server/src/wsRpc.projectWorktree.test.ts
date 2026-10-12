@@ -4,7 +4,7 @@ import path from "node:path";
 import { OrchestrationProject } from "@synara/contracts";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { makeProjectWorktreeGuard } from "./wsRpc";
+import { makeProjectWorktreeGuard, resolveNormalizedWorkItemCwd } from "./wsRpc";
 
 const project = (root: string, additionalFolders: string[]) =>
   Schema.decodeUnknownSync(OrchestrationProject)({
@@ -95,4 +95,14 @@ describe("project worktree admission", () => {
       expect(mutated).toBe(true);
     },
   );
+});
+
+it.each(["C:\\", "C:/", "C:\\\\", "\\\\server\\share\\"])(
+  "preserves Windows filesystem root cwd %s",
+  (cwd) => {
+    expect(resolveNormalizedWorkItemCwd(cwd, path.win32)).toBe(path.win32.resolve(cwd));
+  },
+);
+it("rejects drive-relative work item cwd paths", () => {
+  expect(resolveNormalizedWorkItemCwd("C:", path.win32)).toBeNull();
 });

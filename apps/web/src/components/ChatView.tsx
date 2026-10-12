@@ -2268,7 +2268,7 @@ export default function ChatView({
   const canAttachWorkItems =
     workItemsAvailable &&
     threadWorkspaceCwd !== null &&
-    workItemsAvailability.data?.status !== "no-repository";
+    workItemsAvailability.data?.status === "ready";
   const threadArtifactWorkspaceRoot = resolveThreadArtifactWorkspaceRoot({
     isGroupContainer,
     projectCwd: activeProject?.cwd ?? null,
@@ -6243,6 +6243,17 @@ export default function ChatView({
                       <ComposerExtrasPanel
                         onAttachWorkItems={
                           canAttachWorkItems ? () => setWorkItemPickerOpen(true) : undefined
+                        }
+                        workItemsDisabledHint={
+                          workItemsAvailable &&
+                          threadWorkspaceCwd !== null &&
+                          !canAttachWorkItems &&
+                          workItemsAvailability.data?.status !== "no-repository"
+                            ? (workItemsAvailability.data?.hint ??
+                              (workItemsAvailability.data
+                                ? "GitHub CLI is unavailable."
+                                : "Checking GitHub CLI…"))
+                            : undefined
                         }
                         panelId={COMPOSER_EXTRAS_PANEL_ID}
                         interactionMode={interactionMode}

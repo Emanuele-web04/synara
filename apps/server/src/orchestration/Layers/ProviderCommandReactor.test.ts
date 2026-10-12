@@ -3316,10 +3316,11 @@ describe("ProviderCommandReactor", () => {
     });
 
     it("keeps an operator retried slow cache response alive beyond the command deadline", async () => {
+      const commandDeadline = Duration.seconds(1);
       const { harness, startClaudeCompaction } = await createCompactionHarness(
         undefined,
         false,
-        Duration.millis(100),
+        commandDeadline,
       );
       const review = await sendHeldMessage(harness);
       startClaudeCompaction.mockImplementationOnce(() =>
@@ -3351,7 +3352,7 @@ describe("ProviderCommandReactor", () => {
       );
       try {
         await waitFor(() => startClaudeCompaction.mock.calls.length === 2);
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, Duration.toMillis(commandDeadline) * 2));
         expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
         const threadId = ThreadId.makeUnsafe("thread-during-retried-compaction");
         await Effect.runPromise(
