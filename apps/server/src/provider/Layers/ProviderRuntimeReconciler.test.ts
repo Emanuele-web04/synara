@@ -203,12 +203,14 @@ describe("ProviderRuntimeReconcilerLive", () => {
       commands,
       firstPageIds: [first.id, second.id],
       liveSessions: [
-        ...[first, second].map((thread): ProviderSession => ({
-          ...readyProviderSession(),
-          threadId: thread.id,
-          status: "running",
-          activeTurnId: thread.latestTurn!.turnId,
-        })),
+        ...[first, second].map(
+          (thread): ProviderSession => ({
+            ...readyProviderSession(),
+            threadId: thread.id,
+            status: "running",
+            activeTurnId: thread.latestTurn!.turnId,
+          }),
+        ),
         { ...readyProviderSession(), threadId: abandoned.id },
       ],
       page: (input) =>
@@ -261,9 +263,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       snapshot: { ...snapshot, threads: [thread] },
       commands,
       firstPageIds: [THREAD_ID],
-      liveSessions: [
-        { ...readyProviderSession(), status: "running", activeTurnId: TURN_ID },
-      ],
+      liveSessions: [{ ...readyProviderSession(), status: "running", activeTurnId: TURN_ID }],
       page: (input) =>
         Effect.sync(() => {
           calls.push(input);
