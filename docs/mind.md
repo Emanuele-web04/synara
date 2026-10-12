@@ -13,3 +13,5 @@ The sidebar and rail expose Mind with shared list-cache counts. Search is full-t
 The scoring constants and some guidance are adapted from Da7-Tech/mind. ATTRIBUTION.md carries the complete MIT notice and is copied into packaged desktop resources. This includes the notice independently of the separate attribution PR.
 
 Tests cover cross-project isolation, retries, atomic receipts, caps, digest boundaries, rejected secrets, projection rebuilds, concurrent pruning, FTS outages, owner admission, and navigation. Live provider behavior and signed macOS packaging require separate smoke testing; proactive recall is guidance, not a guarantee that every model will follow it.
+
+Remember replay receipts are retained even after a memory is forgotten or swept, so retrying an old turn cannot resurrect deleted text. Other old receipts may be collected when a journal row proves the operation.

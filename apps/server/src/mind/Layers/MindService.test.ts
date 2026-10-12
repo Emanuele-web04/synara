@@ -918,54 +918,62 @@ layer("MindService", (it) => {
     }),
   );
 
-  it.effect("receipt GC keeps only journal-proven rows and retries still replay", () =>
-    Effect.gen(function* () {
-      const service = yield* MindService;
-      const repository = yield* MindRepository;
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      const projectId = ProjectId.makeUnsafe(PROJECTS.gc);
-      yield* ensureProjectRow(PROJECTS.gc);
+  it.effect(
+    "receipt GC retains remember markers after forgetting and retries do not resurrect text",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* MindService;
+        const repository = yield* MindRepository;
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const projectId = ProjectId.makeUnsafe(PROJECTS.gc);
+        yield* ensureProjectRow(PROJECTS.gc);
 
-      const text = "GC retention probe fact";
-      const first = yield* service.remember(
-        rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
-      );
-      // An orphan receipt with no journal row must survive GC no matter its age.
-      const oldIso = new Date((yield* Clock.currentTimeMillis) - 40 * DAY_MS).toISOString();
-      yield* sql`
+        const text = "GC retention probe fact";
+        const first = yield* service.remember(
+          rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
+        );
+        // An orphan receipt with no journal row must survive GC no matter its age.
+        const oldIso = new Date((yield* Clock.currentTimeMillis) - 40 * DAY_MS).toISOString();
+        yield* sql`
         INSERT INTO mind_operation_receipts (project_id, operation_id, op, result_json, created_at)
         VALUES (${projectId}, 'orphan-op', 'remember', '{"memoryId":"memory-ghost","created":true}', ${oldIso})
       `;
-      // Age the real receipt past the 30d retention edge.
-      yield* sql`UPDATE mind_operation_receipts SET created_at = ${oldIso} WHERE project_id = ${projectId} AND operation_id != 'orphan-op'`;
+        // Age the real receipt past the 30d retention edge.
+        yield* sql`UPDATE mind_operation_receipts SET created_at = ${oldIso} WHERE project_id = ${projectId} AND operation_id != 'orphan-op'`;
 
-      // Push past the 24h sweep interval and trigger hygiene with a fresh write.
-      yield* TestClock.adjust(Duration.hours(25));
-      yield* service.remember(
-        rememberRequest(projectId, "GC sweep trigger fact", { turnId: "turn-gc-2" }),
-      );
+        // Push past the 24h sweep interval and trigger hygiene with a fresh write.
+        yield* TestClock.adjust(Duration.hours(25));
+        yield* service.remember(
+          rememberRequest(projectId, "GC sweep trigger fact", { turnId: "turn-gc-2" }),
+        );
 
-      const remaining = (yield* sql<{
-        readonly operation_id: string;
-      }>`SELECT operation_id FROM mind_operation_receipts WHERE project_id = ${projectId}`).map(
-        (row) => row.operation_id,
-      );
-      assert.isTrue(remaining.includes("orphan-op"));
-      assert.isFalse(
-        remaining.some((operationId) => operationId.startsWith("remember:turn-gc-1:")),
-      );
-      assert.lengthOf(remaining, 2);
+        const remaining = (yield* sql<{
+          readonly operation_id: string;
+        }>`SELECT operation_id FROM mind_operation_receipts WHERE project_id = ${projectId}`).map(
+          (row) => row.operation_id,
+        );
+        assert.isTrue(remaining.includes("orphan-op"));
+        assert.isTrue(
+          remaining.some((operationId) => operationId.startsWith("remember:turn-gc-1:")),
+        );
+        assert.lengthOf(remaining, 3);
 
-      // The GC'd receipt replays from the journal: no double bump, no second row.
-      const replay = yield* service.remember(
-        rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
-      );
-      assert.strictEqual(replay.replayed, true);
-      assert.strictEqual(replay.memoryId, first.memoryId);
-      const row = Option.getOrThrow(yield* repository.getById({ memoryId: first.memoryId }));
-      assert.strictEqual(row.accessCount, 0);
-    }),
+        // Forgetting cannot invalidate the original turn's replay marker.
+        yield* service.forget({
+          memoryId: first.memoryId,
+          projectId,
+          actor: { kind: "user" },
+          threadId: null,
+          turnId: null,
+        });
+        const replay = yield* service.remember(
+          rememberRequest(projectId, text, { turnId: "turn-gc-1" }),
+        );
+        assert.strictEqual(replay.replayed, true);
+        assert.strictEqual(replay.memoryId, first.memoryId);
+        assert.isTrue(Option.isNone(yield* repository.getById({ memoryId: first.memoryId })));
+      }),
   );
 
   it.effect("the sweep deletes at most 100 memories per run and resumes next interval", () =>

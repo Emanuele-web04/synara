@@ -982,6 +982,7 @@ const makeMindRepository = Effect.gen(function* () {
           FROM mind_operation_receipts AS r
           WHERE r.project_id = ${projectId}
             AND r.created_at < ${olderThanIso}
+            AND r.op != 'remember'
             AND EXISTS (
               SELECT 1
               FROM mind_journal AS j

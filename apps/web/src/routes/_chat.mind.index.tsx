@@ -95,6 +95,7 @@ function MindListRow({
   memory,
   projectName,
   onAffirm,
+  affirmPending,
   onTogglePinned,
   onDelete,
   onSaveEdit,
@@ -102,6 +103,7 @@ function MindListRow({
   readonly memory: MindMemory;
   readonly projectName: string;
   readonly onAffirm: () => void;
+  readonly affirmPending: boolean;
   readonly onTogglePinned: () => void;
   readonly onDelete: () => void;
   readonly onSaveEdit: (input: { readonly text: string; readonly type: MindMemoryType }) => void;
@@ -247,6 +249,7 @@ function MindListRow({
             type="button"
             aria-label="Still true"
             title="Still true"
+            disabled={affirmPending}
             onClick={onAffirm}
             className="shrink-0 self-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
           >
@@ -717,6 +720,10 @@ function MindRouteView() {
                   key={memory.memoryId}
                   memory={memory}
                   projectName={projectNamesById.get(memory.projectId) ?? "Unknown project"}
+                  affirmPending={
+                    affirmMutation.isPending &&
+                    affirmMutation.variables?.memoryId === memory.memoryId
+                  }
                   onAffirm={() => affirmMutation.mutate(memory)}
                   onTogglePinned={() =>
                     setPinnedMutation.mutate({ memory, pinned: !memory.pinned })
@@ -768,7 +775,7 @@ function MindRouteView() {
                 variant="ghost"
                 aria-label="Refresh"
                 title="Refresh"
-                onClick={() => void mindQuery.refetch()}
+                onClick={() => void (debouncedSearch ? searchQuery : mindQuery).refetch()}
               >
                 <CentralIcon name="arrow-rotate-clockwise" className="size-4" />
               </Button>

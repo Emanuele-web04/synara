@@ -400,7 +400,8 @@ export interface MindRepositoryShape {
    * older than `olderThanIso`, but only when a journal row for the same
    * `(project, memory, op)` exists — the journal is the replay fallback, so a
    * retry after GC still replays instead of re-applying. Returns the deleted
-   * count. Receipts without a proving journal row are always kept.
+   * count. Remember receipts always survive: deleted memories cannot be
+   * recovered from the live-row journal fallback. Other receipts without a proving journal row are kept.
    */
   readonly pruneReceipts: (
     input: PruneMindReceiptsInput,

@@ -75,7 +75,7 @@ const DAY_MS = 86_400_000;
 const PRUNE_SWEEP_INTERVAL_MS = DAY_MS;
 /** Per-run bound: one sweep deletes at most 100 memories; the rest resume next interval. */
 const SWEEP_MAX_DELETES = 100;
-/** Operation receipts younger than this are always kept; older ones need a proving journal row. */
+/** Remember receipts are permanent replay markers; other old receipts need a proving journal row. */
 const RECEIPT_RETENTION_MS = 30 * DAY_MS;
 /** Query-recall default matches the contracts' 8-item result cap. */
 const RECALL_DEFAULT_LIMIT = 8;
