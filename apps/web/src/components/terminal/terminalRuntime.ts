@@ -42,6 +42,7 @@ import {
   getTerminalFontFamily,
   getTerminalFontSizePx,
   getTerminalFontWeight,
+  getTerminalMinimumContrastRatio,
   isTerminalBackgroundTranslucent,
   terminalThemeFromApp,
   writeSystemMessage,
@@ -498,6 +499,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   const nextFontSize = getTerminalFontSizePx();
   const nextFontWeight = getTerminalFontWeight();
   const nextBoldFontWeight = getTerminalBoldFontWeight();
+  const nextMinimumContrastRatio = getTerminalMinimumContrastRatio();
   const nextFontKey = JSON.stringify({
     fontFamily: nextFontFamily,
     fontSize: nextFontSize,
@@ -512,6 +514,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
     cursorStyle: TERMINAL_CURSOR_STYLE,
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
+    minimumContrastRatio: nextMinimumContrastRatio,
     theme: nextTheme,
   });
   const previousAppearanceKey = (entry.wrapper.dataset.themeKey ?? "") as string;
@@ -524,6 +527,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   const terminalOptions = entry.terminal.options as SynaraTerminalOptions;
   terminalOptions.allowTransparency = isTerminalBackgroundTranslucent(nextTheme);
   terminalOptions.theme = nextTheme;
+  terminalOptions.minimumContrastRatio = nextMinimumContrastRatio;
   terminalOptions.fontFamily = nextFontFamily;
   terminalOptions.fontSize = nextFontSize;
   terminalOptions.fontWeight = nextFontWeight;
@@ -788,6 +792,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     scrollback: 5_000,
     fontFamily: getTerminalFontFamily(),
     theme,
+    minimumContrastRatio: getTerminalMinimumContrastRatio(),
     allowProposedApi: true,
     customGlyphs: true,
     macOptionIsMeta: false,

@@ -5,6 +5,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationThread,
+  type RuntimeMode,
   type SynaraCreateThreadsInput,
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
@@ -88,6 +89,8 @@ function harness(name: string) {
       null,
     );
     const calls: SynaraCreateThreadsInput[] = [];
+    const inheritedModes: Array<RuntimeMode | undefined> = [];
+    let runtimeMode: RuntimeMode = "approval-required";
     const messages = [source];
     let denyTarget = false;
     let failCreation = false;
@@ -117,8 +120,7 @@ function harness(name: string) {
         notifyWorkItemChanged: () => Effect.void,
       } as unknown as ProjectAgentServiceShape,
       snapshotQuery: {
-        getThreadShellById: () =>
-          Effect.succeed(Option.some({ id: coordinator, runtimeMode: "approval-required" })),
+        getThreadShellById: () => Effect.succeed(Option.some({ id: coordinator, runtimeMode })),
         getThreadDetailById: () =>
           Effect.succeed(
             Option.some({ id: coordinator, messages } as unknown as OrchestrationThread),
@@ -136,6 +138,9 @@ function harness(name: string) {
         Effect.gen(function* () {
           yield* creationContext.assertAuthority();
           calls.push(input);
+          inheritedModes.push(
+            creationContext.kind === "hub-work" ? creationContext.inheritedRuntimeMode : undefined,
+          );
           if (failWithPendingCleanup) {
             cleanupPending = true;
             return mcpToolResultError("Cleanup remains pending");
@@ -166,6 +171,10 @@ function harness(name: string) {
       projectAgentRepository,
       projectId,
       calls,
+      inheritedModes,
+      setRuntimeMode: (mode: RuntimeMode) => {
+        runtimeMode = mode;
+      },
       input,
       denyTarget: () => {
         denyTarget = true;
@@ -187,6 +196,53 @@ function harness(name: string) {
 }
 
 tests("Hub work gateway integration", (it) => {
+  for (const count of [1, 2]) {
+    it.effect(
+      `snapshots Auto approval for ${count === 1 ? "single" : "batch and queued"} work`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* harness(`approval-inheritance-${count}`);
+          h.setRuntimeMode("auto");
+          const result = yield* h.gateway.submit(
+            { ...h.input, threads: h.input.threads.slice(0, count) },
+            h.context,
+          );
+          assert.notEqual(result?.isError, true);
+          const records = yield* h.repository.list(h.projectId);
+          assert.equal(records.length, count);
+          for (const record of records) {
+            assert.equal(record.creationSpec.inheritedRuntimeMode, "auto");
+            assert.equal(record.creationSpec.runtimeMode, undefined);
+          }
+          h.setRuntimeMode("full-access");
+          yield* h.recreate().tick;
+          assert.deepEqual(h.inheritedModes, ["auto"]);
+          if (count === 2) {
+            const first = (yield* h.repository.list(h.projectId)).find(
+              (record) => record.workerThreadId !== null,
+            )!;
+            yield* h.gateway.service.setState({ workItemId: first.id, state: "completed" });
+            yield* h.recreate().tick;
+            assert.deepEqual(h.inheritedModes, ["auto", "auto"]);
+          }
+        }),
+    );
+  }
+
+  it.effect("preserves an explicit approval mode instead of inheriting Auto", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("explicit-approval");
+      h.setRuntimeMode("auto");
+      yield* h.gateway.submit(
+        { ...h.input, threads: [{ ...h.input.threads[0]!, runtimeMode: "approval-required" }] },
+        h.context,
+      );
+      yield* h.gateway.tick;
+      assert.equal(h.calls[0]!.threads[0]!.runtimeMode, "approval-required");
+      assert.equal(h.inheritedModes[0], undefined);
+    }),
+  );
+
   it.effect(
     "queues above capacity, forwards canonical source, and replays across coordinator turns",
     () =>

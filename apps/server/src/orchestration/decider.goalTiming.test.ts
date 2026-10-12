@@ -122,6 +122,27 @@ async function applyEvent(
 }
 
 describe("decider thread goal timing", () => {
+  it("preserves explicit user provenance at the interrupt command/event seam", async () => {
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("user-stop"),
+          threadId: THREAD_ID,
+          requestedBy: "user",
+          createdAt,
+        },
+        readModel: await createThreadReadModel(createdAt),
+      }),
+    );
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event).toMatchObject({
+      type: "thread.turn-interrupt-requested",
+      payload: { requestedBy: "user" },
+    });
+  });
+
   it("stamps goalStartedAt when a goal first becomes active and keeps it on edits", async () => {
     const now = new Date().toISOString();
     let readModel = await createThreadReadModel(now);
