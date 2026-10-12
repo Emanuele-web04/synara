@@ -1271,6 +1271,7 @@ export const AutomationServiceLive = Layer.effect(
         // Coordinator check-ins continue the human's current chat permissions.
         // Ordinary automations retain their independently authorized saved mode.
         let runtimeMode = definition.runtimeMode;
+        let modelSelection = definition.modelSelection;
         if (definition.managedByProject && continuationThreadId !== null) {
           const thread = yield* projectionSnapshotQuery
             .getThreadShellById(continuationThreadId)
@@ -1283,6 +1284,22 @@ export const AutomationServiceLive = Layer.effect(
             );
           }
           runtimeMode = thread.value.runtimeMode;
+          const liveSelection = thread.value.modelSelection;
+          // The Claude chat has already validated Auto. Reuse that evidence only for
+          // the same model and account; keep the configured model and options.
+          if (
+            modelSelection.provider === "claudeAgent" &&
+            liveSelection.provider === "claudeAgent" &&
+            modelSelection.model === liveSelection.model &&
+            resolveModelSelectionInstanceId(modelSelection) ===
+              resolveModelSelectionInstanceId(liveSelection) &&
+            liveSelection.supportsAutoMode !== undefined
+          ) {
+            modelSelection = {
+              ...modelSelection,
+              supportsAutoMode: liveSelection.supportsAutoMode,
+            };
+          }
         }
 
         yield* validateResolvedAutomationIdentity(definition.modelSelection);
@@ -1298,7 +1315,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: definition.worktreeMode,
           acknowledgedRisks: definition.acknowledgedRisks,
         });
-        yield* validateAutoRuntimeMode({ ...definition, runtimeMode });
+        yield* validateAutoRuntimeMode({ modelSelection, runtimeMode });
         yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
           enabled: definition.enabled,
@@ -1359,6 +1376,7 @@ export const AutomationServiceLive = Layer.effect(
                     permissionSnapshot: {
                       ...run.permissionSnapshot,
                       runtimeMode,
+                      modelSelection,
                       allowedCapabilities: allowedCapabilitiesFor({ ...definition, runtimeMode }),
                     },
                   }
@@ -1408,7 +1426,7 @@ export const AutomationServiceLive = Layer.effect(
                 text: dispatchMessage,
                 attachments: [],
               },
-              modelSelection: definition.modelSelection,
+              modelSelection,
               ...(automationTurnProviderOptions
                 ? { providerOptions: automationTurnProviderOptions }
                 : {}),

@@ -648,6 +648,67 @@ layer("AutomationService", (it) => {
     );
   }
 
+  for (const { liveModel, instanceId } of [
+    { liveModel: "claude-opus-5-5", instanceId: "claudeAgent" },
+    { liveModel: "claude-sonnet-5", instanceId: "claudeAgent" },
+    { liveModel: "claude-opus-5-5", instanceId: "claude-other" },
+  ] as const) {
+    it.effect(
+      `uses live Auto capability only for the configured coordinator model and account (${liveModel}, ${instanceId})`,
+      () =>
+        Effect.gen(function* () {
+          resetHarness();
+          const service = yield* AutomationService;
+          const targetThreadId = ThreadId.makeUnsafe(`auto-check-in-${liveModel}-${instanceId}`);
+          const modelSelection = { provider: "claudeAgent", model: "claude-opus-5-5" } as const;
+          threadShell = Option.some(makeThreadShell({ id: targetThreadId, modelSelection }));
+          const definition = yield* service.createProjectManaged({
+            ...createInput("local"),
+            mode: "heartbeat",
+            targetThreadId,
+            modelSelection,
+            schedule: { type: "project-event", projectId },
+          });
+          threadShell = Option.some({
+            ...makeThreadShell({
+              id: targetThreadId,
+              modelSelection: {
+                ...modelSelection,
+                model: liveModel,
+                instanceId: instanceId as ProviderInstanceId,
+                supportsAutoMode: true,
+              },
+            }),
+            runtimeMode: "auto",
+          });
+          const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
+          if (liveModel !== modelSelection.model || instanceId !== "claudeAgent") {
+            assert.equal(result._tag, "Failure");
+            if (result._tag === "Failure")
+              assert.match(result.failure.message, /not been verified/);
+            return;
+          }
+          assert.equal(result._tag, "Success");
+          const command = dispatchedCommands.find((entry) => entry.type === "thread.turn.start");
+          if (command?.type !== "thread.turn.start")
+            assert.fail("Expected a coordinator check-in.");
+          assert.equal(command.runtimeMode, "auto");
+          assert.deepEqual(command.modelSelection, {
+            ...modelSelection,
+            instanceId: "claudeAgent",
+            supportsAutoMode: true,
+          });
+          if (result._tag === "Success") {
+            assert.deepEqual(
+              result.success.run.permissionSnapshot.modelSelection,
+              command.modelSelection,
+            );
+            yield* service.cancelRun({ runId: result.success.run.id });
+          }
+        }),
+    );
+  }
+
   it.effect("persists discovered Claude Auto targets through exact-target create and update", () =>
     Effect.gen(function* () {
       resetHarness();
