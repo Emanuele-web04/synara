@@ -9,6 +9,7 @@ const harness = vi.hoisted(() => ({ api: undefined as BrowserVaultMethods | unde
 vi.mock("~/nativeApi", () => ({ readNativeApi: () => ({ browser: { vault: harness.api } }) }));
 import { BrowserVaultButton, BrowserVaultDialog } from "./BrowserVault";
 import { BrowserCookieImport } from "./BrowserCookieImport";
+import { BrowserPasswordImport } from "./BrowserPasswordImport";
 import { SafariAccessOnboarding, SAFARI_ACCESS_STORAGE_KEY } from "./SafariAccessOnboarding";
 
 let state: BrowserVaultSnapshot;
@@ -32,6 +33,12 @@ beforeEach(() => {
     cookieProfiles: vi.fn(async () => []),
     inventoryChromiumProfiles: vi.fn(async () => []),
     importCookies: vi.fn(async () => ({
+      ok: true as const,
+      imported: 0,
+      skipped: 0,
+      warnings: [],
+    })),
+    importPasswords: vi.fn(async () => ({
       ok: true as const,
       imported: 0,
       skipped: 0,
@@ -61,6 +68,52 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("preselects an installed profile and requires explicit password import consent", async () => {
+    const api = harness.api!;
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profileStatus: "available",
+        profiles: [
+          {
+            id: "Default",
+            name: "Personal",
+            isDefault: true,
+            cookieCount: 3,
+            passwordCount: 2,
+            cookieStatus: "available",
+            passwordStatus: "available",
+          },
+        ],
+      },
+    ]);
+    vi.mocked(api.importPasswords).mockResolvedValue({
+      ok: true,
+      imported: 1,
+      skipped: 1,
+      warnings: [],
+    });
+
+    await render(<BrowserPasswordImport api={api} />);
+    const profile = page.getByRole("checkbox", { name: /Personal/ });
+    const consent = page.getByRole("checkbox", { name: /I authorize Synara/ });
+    await expect.element(profile).toBeChecked();
+    await expect
+      .element(page.getByRole("button", { name: "Import selected passwords" }))
+      .toBeDisabled();
+    await consent.click();
+    await page.getByRole("button", { name: "Import selected passwords" }).click();
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Google Chrome — Personal: 1 imported, 1 skipped.");
+    expect(api.importPasswords).toHaveBeenCalledWith({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+  });
+
   it("still reports actual permission denial after continuing past Safari setup", async () => {
     const previous = window.desktopBridge;
     const previousDecision = localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY);

@@ -424,3 +424,124 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
 +  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
    /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
+
+diff --git a/dist/src/vault.js b/dist/src/vault.js
+--- a/dist/src/vault.js
++++ b/dist/src/vault.js
+@@ -1339,7 +1339,7 @@
+         this.#trackSecret(pending.secret);
+         return pending;
+     }
+-    #newRecord(payload, target, now, category = normalizeCategory(payload?.category)) {
++    #newRecord(payload, target, now, category = normalizeCategory(payload?.category), trackSecrets = true) {
+         const username = optionalString(payload?.username, "Credential username", 1024, "");
+         const label = optionalString(payload?.label, "Credential label", 1024);
+         const matchMode = normalizeMatchMode(payload?.matchMode ?? payload?.match_mode);
+@@ -1361,7 +1361,8 @@
+             createdAt: now,
+             updatedAt: now,
+         };
+-        this.#trackSecretMaterial(record);
++        if (trackSecrets)
++            this.#trackSecretMaterial(record);
+         return record;
+     }
+     #updatedRecord(record, payload, now, { requirePassword = false } = {}) {
+@@ -2086,6 +2087,83 @@
+             }
+         });
+     }
++    /** Import owner-approved credentials without exposing them to browser workers. */
++    async ownerImportMany(entries) {
++        if (!Array.isArray(entries) || entries.length > 50_000) {
++            throw vaultError("Password import contains too many entries.", "BAD_INPUT");
++        }
++        return this.#ownerTransaction(async () => {
++            const { key, snapshot } = await this.#load();
++            try {
++                let imported = 0;
++                let skipped = 0;
++                const ids = [];
++                for (const entry of entries) {
++                    if (!isRecord(entry)) {
++                        skipped += 1;
++                        continue;
++                    }
++                    let target;
++                    try {
++                        target = normalizeHttpOrigin(entry.origin);
++                    }
++                    catch {
++                        skipped += 1;
++                        continue;
++                    }
++                    let username;
++                    let password;
++                    try {
++                        username = optionalString(entry.username, "Credential username", 1024, "");
++                        password = requiredString(entry.password, "Login password", MAX_SECRET_CHARS);
++                    }
++                    catch {
++                        skipped += 1;
++                        continue;
++                    }
++                    const identityHost = target.hostname.replace(/^www\./, "");
++                    const sameIdentity = (record) => {
++                        if (record.category && record.category !== "login")
++                            return false;
++                        if (!sameUsername(record.username, username))
++                            return false;
++                        try {
++                            return normalizeHttpOrigin(record.origin || record.creationOrigin).hostname.replace(/^www\./, "") === identityHost;
++                        }
++                        catch {
++                            return false;
++                        }
++                    };
++                    if (snapshot.records.some(sameIdentity) || snapshot.pending.some(sameIdentity) || snapshot.records.length >= MAX_RECORDS) {
++                        skipped += 1;
++                        continue;
++                    }
++                    const record = this.#newRecord({
++                        category: "login",
++                        username,
++                        password,
++                        matchMode: "exact-origin",
++                    }, target, new Date().toISOString(), "login", false);
++                    snapshot.records.push(record);
++                    ids.push(record.id);
++                    imported += 1;
++                }
++                if (imported > 0) {
++                    await persistSnapshot(this.paths, key, snapshot);
++                    await appendMutationAudit(this.paths, {
++                        at: new Date().toISOString(),
++                        action: "owner-import",
++                        category: "login",
++                        count: imported,
++                    });
++                }
++                return { imported, skipped, ids };
++            }
++            finally {
++                key.fill(0);
++            }
++        });
++    }
+     #rememberKey(key, identity) {
+         this.dispose();
+         this.#masterKey = Buffer.from(key);
+diff --git a/types/vault.d.ts b/types/vault.d.ts
+--- a/types/vault.d.ts
++++ b/types/vault.d.ts
+@@ -153,6 +153,10 @@
+   ownerConfigure(settings: VaultSettings): Promise<VaultSettings>;
+   /** Trusted capture sensor only; never expose this method to a model. */
+   ownerCapture(payload: Record<string, UntrustedValue>, origin: string): Promise<UntrustedValue>;
++  /** Trusted explicit import only; imports without replacing existing logins. */
++  ownerImportMany(
++    entries: Array<{ origin: string; username: string; password: string }>,
++  ): Promise<{ imported: number; skipped: number; ids: string[] }>;
+
+   handleRequest(
+     action:

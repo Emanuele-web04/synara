@@ -1,0 +1,113 @@
+import { createCipheriv, pbkdf2Sync } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserVault } from "./browserVault";
+import { BrowserPasswordImport } from "./browserPasswordImport";
+
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+let home: string;
+
+function encryptPassword(value: string) {
+  const key = pbkdf2Sync("test-safe-storage", "saltysalt", 1003, 16, "sha1");
+  const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+  try {
+    return Buffer.concat([Buffer.from("v10"), cipher.update(value), cipher.final()]);
+  } finally {
+    key.fill(0);
+  }
+}
+
+async function makeProfile() {
+  const profile = join(home, "Library", "Application Support", "Google", "Chrome", "Default");
+  await mkdir(profile, { recursive: true });
+  await mkdir(join(home, "Applications", "Google Chrome.app"), { recursive: true });
+  const database = new DatabaseSync(join(profile, "Login Data"));
+  database.exec(
+    "CREATE TABLE logins (origin_url TEXT, username_value TEXT, password_value BLOB, blacklisted_by_user INTEGER, date_last_used INTEGER)",
+  );
+  database
+    .prepare("INSERT INTO logins VALUES (?, ?, ?, ?, ?)")
+    .run("https://accounts.example.test/login", "alice", encryptPassword("synthetic-secret"), 0, 1);
+  database.close();
+}
+
+beforeEach(async () => {
+  Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+  home = await mkdtemp(join(tmpdir(), "synara-password-import-"));
+});
+
+afterEach(async () => {
+  Object.defineProperty(process, "platform", platform);
+  await rm(home, { recursive: true, force: true });
+});
+
+describe("browser password import", () => {
+  it("reads one selected installed Chrome profile and inserts it into the unlocked vault", async () => {
+    await makeProfile();
+    const keychain = vi.fn(async () => "test-safe-storage");
+    let received: Array<{ origin: string; username: string; password: string }> = [];
+    const importPasswords = vi.fn(
+      async (entries: Array<{ origin: string; username: string; password: string }>) => {
+        received = structuredClone(entries);
+        return { imported: 1, skipped: 0, provenanceSaved: true };
+      },
+    );
+    const vault = {
+      snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+      importPasswords,
+    } as unknown as BrowserVault;
+
+    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+
+    expect(result).toEqual({ ok: true, imported: 1, skipped: 0, warnings: [] });
+    expect(keychain).toHaveBeenCalledOnce();
+    expect(received).toEqual([
+      {
+        origin: "https://accounts.example.test",
+        username: "alice",
+        password: "synthetic-secret",
+      },
+    ]);
+  });
+
+  it("does not ask for Keychain access before the vault is unlocked", async () => {
+    await makeProfile();
+    const keychain = vi.fn(async () => "test-safe-storage");
+    const vault = {
+      snapshot: vi.fn(async () => ({ protection: { locked: true } })),
+      importPasswords: vi.fn(),
+    } as unknown as BrowserVault;
+
+    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+
+    expect(result).toEqual({ ok: false, code: "vault_locked", platform: "macos" });
+    expect(keychain).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-macOS keychain decryption before any read or prompt", async () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+    const keychain = vi.fn(async () => "test-safe-storage");
+    const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
+
+    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+
+    expect(result).toEqual({ ok: false, code: "unsupported_platform", platform: "linux" });
+    expect(keychain).not.toHaveBeenCalled();
+    expect(vault.snapshot).not.toHaveBeenCalled();
+  });
+});

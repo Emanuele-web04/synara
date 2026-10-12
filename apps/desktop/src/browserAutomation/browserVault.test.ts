@@ -75,6 +75,47 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     expect(available).not.toHaveBeenCalled();
   });
 
+  it("imports without agent access, skips duplicate identities, and never overwrites", async () => {
+    const { vault } = await fixture();
+    try {
+      await vault.configure({ agentUse: false, offerSave: false, autosave: false });
+      const first = await vault.importPasswords([
+        {
+          origin: "https://www.example.test/login",
+          username: "alice",
+          password: "first-synthetic-password",
+        },
+        {
+          origin: "https://example.test/other",
+          username: "ALICE",
+          password: "replacement-synthetic-password",
+        },
+      ]);
+      expect(first).toEqual({ imported: 1, skipped: 1, provenanceSaved: true });
+      const saved = (await vault.snapshot()).logins;
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ origin: "https://www.example.test", source: "user" });
+      expect(await vault.reveal({ id: saved[0]!.id, password: master })).toMatchObject({
+        password: "first-synthetic-password",
+      });
+
+      const again = await vault.importPasswords([
+        {
+          origin: "https://example.test",
+          username: "alice",
+          password: "different-synthetic-password",
+        },
+      ]);
+      expect(again).toEqual({ imported: 0, skipped: 1, provenanceSaved: true });
+      expect((await vault.snapshot()).logins).toHaveLength(1);
+      expect(await vault.reveal({ id: saved[0]!.id, password: master })).toMatchObject({
+        password: "first-synthetic-password",
+      });
+    } finally {
+      vault.dispose();
+    }
+  });
+
   it.each([false, true])(
     "preserves saved passwords when provenance persistence fails (update=%s)",
     async (update) => {

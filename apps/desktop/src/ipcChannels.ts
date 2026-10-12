@@ -104,6 +104,7 @@ export const DESKTOP_IPC_CHANNELS = {
       cookieProfiles: "desktop:browser-cookie-profiles",
       inventoryChromiumProfiles: "desktop:browser-inventory-chromium-profiles",
       importCookies: "desktop:browser-cookie-import",
+      importPasswords: "desktop:browser-password-import",
       changed: "desktop:browser-vault-changed",
     },
     webMcpCompatibilityPolicy: "desktop:browser-webmcp-compatibility-policy",

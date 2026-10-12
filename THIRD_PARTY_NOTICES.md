@@ -2,7 +2,7 @@
 
 ## Search browser import
 
-The macOS browser-profile discovery and pre-decryption SQLite row-counting logic in Synara's Chromium inventory is adapted from `Sources/Search/Import.swift` in Search by Office Commun, distributed in Cedar under the MIT License. This notice covers that inventory adaptation; it does not assert that the inventory contains Search's password-decryption or import-record implementation.
+The macOS browser-profile discovery, pre-decryption SQLite row-counting, and Chromium password-decryption logic in Synara's Chromium inventory and password reader are adapted from `Sources/Search/Import.swift` in Search by Office Commun, distributed in Cedar under the MIT License. This notice covers those adaptations; it does not assert that Synara contains Search's import-record implementation.
 
 Copyright (c) 2026 Office Commun
 

@@ -109,6 +109,28 @@ export const BrowserCookieImportInput = Schema.Union([
   }),
 ]);
 export type BrowserCookieImportInput = typeof BrowserCookieImportInput.Type;
+export const BrowserPasswordImportInput = Schema.Struct({
+  browser: BrowserInventorySourceId,
+  profile: Schema.String.check(Schema.isMaxLength(4096)),
+  confirmed: Schema.Literal(true),
+});
+export type BrowserPasswordImportInput = typeof BrowserPasswordImportInput.Type;
+export type BrowserPasswordImportResult =
+  | { ok: true; imported: number; skipped: number; warnings: string[] }
+  | {
+      ok: false;
+      code:
+        | "source_missing"
+        | "reader_failed"
+        | "keychain_unavailable"
+        | "permission_denied"
+        | "timed_out"
+        | "too_many_logins"
+        | "vault_locked"
+        | "vault_failed"
+        | "unsupported_platform";
+      platform: "macos" | "windows" | "linux";
+    };
 export type BrowserCookieImportResult =
   | {
       ok: true;
@@ -149,5 +171,6 @@ export interface BrowserVaultMethods {
   cookieProfiles(browser: string): Promise<Array<{ id: string; name: string }>>;
   inventoryChromiumProfiles(): Promise<typeof BrowserInventoryList.Type>;
   importCookies(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult>;
+  importPasswords(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult>;
   onChanged(listener: () => void): () => void;
 }

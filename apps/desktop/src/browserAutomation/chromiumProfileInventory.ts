@@ -66,6 +66,24 @@ export type ChromiumBrowserInventory = {
 const appSupport = (home: string) => join(home, "Library", "Application Support");
 const browserDataPath = (home: string, data: string) => join(appSupport(home), data);
 
+export async function resolveChromiumProfileFolder(
+  home: string,
+  browser: ChromiumInventorySourceId,
+  profileId: string,
+): Promise<string | null> {
+  const source = CHROMIUM_INVENTORY_SOURCES.find(({ id }) => id === browser);
+  if (!source) return null;
+  const result = await profileFolders(source, home);
+  return (
+    result.folders.find(
+      (folder) =>
+        (folder === browserDataPath(home, source.data)
+          ? source.name
+          : folder.split(/[\\/]/).at(-1)) === profileId,
+    ) ?? null
+  );
+}
+
 async function isRealFile(path: string): Promise<boolean> {
   try {
     return (await lstat(path)).isFile();

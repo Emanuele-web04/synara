@@ -2,6 +2,7 @@ import {
   BrowserCookieImportInput,
   BrowserCookieSource,
   BrowserVaultSettings,
+  BrowserPasswordImportInput,
 } from "@synara/contracts";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import { Schema } from "effect";
@@ -9,6 +10,7 @@ import type { DesktopBrowserManager } from "./browserManager";
 import type { BrowserVault } from "./browserAutomation/browserVault";
 import { BROWSER_IPC_CHANNELS } from "./ipcChannels";
 import type { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
+import type { BrowserPasswordImport } from "./browserAutomation/browserPasswordImport";
 
 const Response = Schema.Struct({ id: Schema.String, save: Schema.Boolean });
 const Password = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024));
@@ -23,6 +25,7 @@ export function registerBrowserVaultIpc(
   vault: BrowserVault,
   notify: () => void,
   cookies?: BrowserCookieImport,
+  passwords?: BrowserPasswordImport,
 ): () => void {
   const channels = BROWSER_IPC_CHANNELS.vault;
   const handle = (channel: string, action: (input: unknown) => unknown) => {
@@ -65,6 +68,10 @@ export function registerBrowserVaultIpc(
   handle(channels.importCookies, (input) =>
     requireCookies().import(Schema.decodeUnknownSync(BrowserCookieImportInput)(input)),
   );
+  handle(channels.importPasswords, (input) => {
+    if (!passwords) throw new Error("Password import is unavailable.");
+    return passwords.import(Schema.decodeUnknownSync(BrowserPasswordImportInput)(input));
+  });
   const unsubscribe = vault.onChanged(notify);
   return () => {
     unsubscribe();

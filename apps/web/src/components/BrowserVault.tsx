@@ -10,6 +10,7 @@ import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Switch } from "./ui/switch";
 import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { BrowserCookieImport, type BrowserCookieDestination } from "./BrowserCookieImport";
+import { BrowserPasswordImport } from "./BrowserPasswordImport";
 
 const OPEN_EVENT = "synara:open-browser-vault";
 
@@ -373,12 +374,17 @@ export function BrowserVaultDialog() {
                   />
                 </label>
               </section>
-              {open && destination ? (
-                <BrowserCookieImport
-                  key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
-                  api={api}
-                  destination={destination}
-                />
+              {open ? (
+                <>
+                  {destination ? (
+                    <BrowserCookieImport
+                      key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
+                      api={api}
+                      destination={destination}
+                    />
+                  ) : null}
+                  <BrowserPasswordImport api={api} />
+                </>
               ) : null}
             </>
           )}
