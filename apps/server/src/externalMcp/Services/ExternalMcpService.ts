@@ -5,6 +5,8 @@ import type {
   ExternalMcpPairResult,
   ExternalMcpRefreshPairingInput,
   ExternalMcpUpdateIntegrationInput,
+  OrchestrationCommand,
+  OrchestrationThreadShell,
 } from "@synara/contracts";
 import { Data, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -63,6 +65,21 @@ export interface ExternalMcpServiceShape {
     client: ExternalMcpVerifiedClient,
     threadId: string,
   ) => Effect.Effect<void, ExternalMcpError>;
+  readonly assertTaskWrite: (
+    client: ExternalMcpVerifiedClient,
+    threadId: string,
+  ) => Effect.Effect<
+    {
+      readonly thread: OrchestrationThreadShell;
+      readonly precondition: NonNullable<
+        Extract<
+          OrchestrationCommand,
+          { readonly type: "thread.turn.start" }
+        >["taskWritePrecondition"]
+      >;
+    },
+    ExternalMcpError
+  >;
   readonly beginAudit: (
     client: ExternalMcpVerifiedClient,
     metadata: ExternalMcpAuditMetadata,

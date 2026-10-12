@@ -1,5 +1,6 @@
 import {
   CommandId,
+  ClientOrchestrationCommand,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ProjectId,
@@ -11,7 +12,7 @@ import {
   type OrchestrationSession,
 } from "@synara/contracts";
 import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -121,6 +122,89 @@ const expectRejected = async (
 };
 
 describe("decider thread.turn.start resumePrecondition", () => {
+  it("checks external task write identity at serialized admission and strips client-supplied guards", async () => {
+    const initial = makeReadModel({ runtimeMode: "approval-required" });
+    const target = {
+      ...initial.threads[0]!,
+      creationSource: "external_mcp" as const,
+      gatewayOperationId: "owned-operation",
+      envMode: "worktree" as const,
+      worktreePath: "/work/owned",
+      workingDirectory: null,
+    };
+    const project = {
+      id: target.projectId,
+      title: "Owned",
+      workspaceRoot: "/project",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const readModel = { ...initial, threads: [target], projects: [project] };
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.makeUnsafe("external-followup"),
+      threadId: THREAD_ID,
+      message: {
+        messageId: MessageId.makeUnsafe("external-message"),
+        role: "user" as const,
+        text: "Continue",
+        attachments: [],
+      },
+      dispatchMode: "queue" as const,
+      runtimeMode: target.runtimeMode,
+      interactionMode: target.interactionMode,
+      createdAt: NOW,
+      taskWritePrecondition: {
+        projectId: target.projectId,
+        projectWorkspaceRoot: project.workspaceRoot,
+        envMode: target.envMode,
+        branch: target.branch,
+        worktreePath: target.worktreePath,
+        workingDirectory: null,
+        runtimeMode: target.runtimeMode,
+        interactionMode: target.interactionMode,
+        modelSelection: target.modelSelection,
+        sessionProviderInstanceId: null,
+        sessionRuntimeMode: null,
+        gatewayOperationId: target.gatewayOperationId,
+      },
+    };
+    expect(
+      Array.isArray(await Effect.runPromise(decideOrchestrationCommand({ command, readModel }))),
+    ).toBe(true);
+    expect(Schema.decodeUnknownSync(ClientOrchestrationCommand)(command)).not.toHaveProperty(
+      "taskWritePrecondition",
+    );
+    for (const changed of [
+      { ...target, archivedAt: NOW },
+      { ...target, projectId: ProjectId.makeUnsafe("moved-outside-grant") },
+      { ...target, worktreePath: "/work/changed" },
+      { ...target, runtimeMode: "full-access" as const },
+      { ...target, modelSelection: { ...target.modelSelection, instanceId: "codex:other" } },
+    ]) {
+      const rejected = await Effect.runPromise(
+        decideOrchestrationCommand({
+          command,
+          readModel: { ...readModel, threads: [changed] },
+        }).pipe(Effect.flip),
+      );
+      expect(rejected).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        detail: expect.stringContaining("authorized task target changed"),
+      });
+    }
+    const relocated = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command,
+        readModel: { ...readModel, projects: [{ ...project, workspaceRoot: "/moved-project" }] },
+      }).pipe(Effect.flip),
+    );
+    expect(relocated).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
+  });
+
   it("does not count an automatic startup continuation as a human send", async () => {
     const readModel = makeReadModel({ latestTurn: makeLatestTurn("interrupted") });
     const plan = planQuitResumeTurns({

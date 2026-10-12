@@ -682,6 +682,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ExternalMcpOptionalConcurrency"],
+        [136, "ExternalMcpTaskFollowups"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -769,6 +770,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
           { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
           { migration_id: 135, name: "ExternalMcpOptionalConcurrency" },
+          { migration_id: 136, name: "ExternalMcpTaskFollowups" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -936,6 +938,7 @@ agentGatewayRetentionLegacyLayer(
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ExternalMcpOptionalConcurrency"],
+          [136, "ExternalMcpTaskFollowups"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1066,6 +1069,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ExternalMcpOptionalConcurrency"],
+        [136, "ExternalMcpTaskFollowups"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1137,6 +1141,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ExternalMcpOptionalConcurrency"],
+          [136, "ExternalMcpTaskFollowups"],
         ],
       );
 
@@ -1262,6 +1267,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ExternalMcpOptionalConcurrency"],
+        [136, "ExternalMcpTaskFollowups"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1329,6 +1335,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ExternalMcpOptionalConcurrency"],
+          [136, "ExternalMcpTaskFollowups"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
