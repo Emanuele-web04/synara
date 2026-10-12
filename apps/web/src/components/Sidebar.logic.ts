@@ -1559,9 +1559,36 @@ export function partitionSidebarThreadsByProjectIds<
 }
 
 /**
+ * Whether a thread is, or may still turn out to be, a Hub member. Workers carry their
+ * linked repo's projectId, so only a hub's member list tells them from ordinary chats, and
+ * those lists arrive with the summaries list, not with the stream rows that precede it.
+ * Until then every chat in a workspace with Hubs is a candidate.
+ */
+export function mayBelongToGroup(input: {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly summariesByProjectId: ReadonlyMap<
+    ProjectId,
+    Pick<ProjectAgentSummary, "memberThreadIds">
+  >;
+  readonly membersLoaded: boolean;
+}): boolean {
+  return (
+    (input.groupProjectIds.size > 0 && !input.membersLoaded) ||
+    isGroupThreadRoute({
+      threadId: input.threadId,
+      projectId: input.projectId,
+      groupProjectIds: input.groupProjectIds,
+      summariesByProjectId: input.summariesByProjectId,
+    })
+  );
+}
+
+/**
  * Snoozed chats are listed in the Chats surface's Snoozed section, and Hubs has none, so a
- * Hub thread cannot be snoozed. That includes its workers: they carry their linked repo's
- * projectId, so only the hub's member list says they belong to it.
+ * Hub thread cannot be snoozed. That includes its workers, and any chat that may still be
+ * one: a snoozed worker would leave every list.
  */
 export function canSnoozeSidebarThread(input: {
   readonly thread: Pick<
@@ -1574,15 +1601,17 @@ export function canSnoozeSidebarThread(input: {
     Pick<ProjectAgentSummary, "memberThreadIds">
   >;
   readonly coordinatorThreadIds: ReadonlySet<string>;
+  readonly membersLoaded: boolean;
 }): boolean {
   const { thread } = input;
   return (
     !thread.parentThreadId &&
-    !isGroupThreadRoute({
+    !mayBelongToGroup({
       threadId: thread.id,
       projectId: thread.projectId,
       groupProjectIds: input.groupProjectIds,
       summariesByProjectId: input.summariesByProjectId,
+      membersLoaded: input.membersLoaded,
     }) &&
     !input.coordinatorThreadIds.has(thread.id) &&
     !isSidechatThread(thread)

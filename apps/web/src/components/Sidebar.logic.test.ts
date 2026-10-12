@@ -28,6 +28,7 @@ import {
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isHiddenProjectAgentCoordinatorThread,
+  mayBelongToGroup,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
@@ -1603,10 +1604,37 @@ describe("canSnoozeSidebarThread", () => {
       [otherHubId, { memberThreadIds: [worker.id] }],
     ]),
     coordinatorThreadIds: new Set<string>([coordinator.id]),
+    membersLoaded: true,
   };
 
   it("offers snooze for an ordinary chat, even in a repository a hub links", () => {
     expect(canSnoozeSidebarThread({ ...input, thread: ordinary })).toBe(true);
+  });
+
+  it("withholds snooze from every chat while hubs exist and their member lists have not loaded", () => {
+    // Cold start: the hub rows arrived through the stream, so they carry no member list yet.
+    const loading = {
+      ...input,
+      summariesByProjectId: new Map([
+        [hubId, {}],
+        [otherHubId, {}],
+      ]),
+      membersLoaded: false,
+    };
+    expect(canSnoozeSidebarThread({ ...loading, thread: ordinary })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...loading, thread: worker })).toBe(false);
+  });
+
+  it("offers snooze before the member lists load when the workspace has no hubs", () => {
+    expect(
+      canSnoozeSidebarThread({
+        ...input,
+        thread: ordinary,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(true);
   });
 
   it("withholds snooze from the coordinator and from a hub worker in a linked repository", () => {
@@ -1626,6 +1654,46 @@ describe("canSnoozeSidebarThread", () => {
     });
     expect(canSnoozeSidebarThread({ ...input, thread: hubChat })).toBe(false);
     expect(canSnoozeSidebarThread({ ...input, thread: child })).toBe(false);
+  });
+});
+
+describe("mayBelongToGroup", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const workerId = ThreadId.makeUnsafe("worker");
+  const ordinaryId = ThreadId.makeUnsafe("ordinary");
+  const loaded = {
+    projectId: repoId,
+    groupProjectIds: new Set([hubId]),
+    summariesByProjectId: new Map([[hubId, { memberThreadIds: [workerId] }]]),
+    membersLoaded: true,
+  };
+
+  it("tells a hub worker in a linked repository from an ordinary chat once members are known", () => {
+    expect(mayBelongToGroup({ ...loaded, threadId: workerId })).toBe(true);
+    expect(mayBelongToGroup({ ...loaded, threadId: ordinaryId })).toBe(false);
+  });
+
+  it("treats every chat as a possible member until the hub member lists load", () => {
+    const loading = {
+      ...loaded,
+      summariesByProjectId: new Map([[hubId, {}]]),
+      membersLoaded: false,
+    };
+    expect(mayBelongToGroup({ ...loading, threadId: ordinaryId })).toBe(true);
+    expect(mayBelongToGroup({ ...loading, threadId: workerId })).toBe(true);
+  });
+
+  it("needs no member lists in a workspace without hubs", () => {
+    expect(
+      mayBelongToGroup({
+        ...loaded,
+        threadId: ordinaryId,
+        groupProjectIds: new Set(),
+        summariesByProjectId: new Map(),
+        membersLoaded: false,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -393,6 +393,7 @@ import {
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
   canSnoozeSidebarThread,
+  mayBelongToGroup,
   getPinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
@@ -1723,7 +1724,8 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
-  const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
+  const { summaryFor, summariesByProjectId, coordinatorThreadIds, membersLoaded } =
+    useProjectAgentSummaries();
   // The bell and Inbox read current threads. Activity also receives snoozed rows
   // for its separate section, so badges never point at work the user set aside.
   const {
@@ -1821,8 +1823,9 @@ export default function Sidebar() {
         groupProjectIds: groupProjectIdSet,
         summariesByProjectId,
         coordinatorThreadIds,
+        membersLoaded,
       }),
-    [groupProjectIdSet, summariesByProjectId, coordinatorThreadIds],
+    [groupProjectIdSet, summariesByProjectId, coordinatorThreadIds, membersLoaded],
   );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
@@ -3367,11 +3370,12 @@ export default function Sidebar() {
       // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
         GROUPS_ON &&
-        !isGroupThreadRoute({
+        !mayBelongToGroup({
           threadId,
           projectId: thread.projectId,
           groupProjectIds: groupProjectIdSet,
           summariesByProjectId,
+          membersLoaded,
         }) &&
         !thread.parentThreadId;
       // Paused and archived groups can't run a coordinator turn, so they
@@ -3696,6 +3700,7 @@ export default function Sidebar() {
       forkThread,
       groupProjectIdSet,
       handoffThread,
+      membersLoaded,
       moveThreadToGroup,
       handleMarkThreadUnread,
       navigate,
