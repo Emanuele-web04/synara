@@ -9,14 +9,14 @@
 
 ## Verification
 
-| Check | Result |
-| --- | --- |
-| Chromium profile inventory tests | 19/19 passed, including Flatpak and Snap fixtures |
-| BrowserVault browser tests | 27/27 passed on the prior code state; current patch does not change that component |
-| `bun run fmt:check` | Passed across 4,646 files |
-| `bun run lint` | Passed; 886 warnings, 0 errors; server sync filesystem check passed |
-| `bun run typecheck` | Passed in all 7 packages; Turbo emitted a bun.lock parsing warning and existing Effect suggestions |
-| `git diff --check` | Passed |
+| Check                            | Result                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Chromium profile inventory tests | 19/19 passed, including Flatpak and Snap fixtures                                                  |
+| BrowserVault browser tests       | 27/27 passed on the prior code state; current patch does not change that component                 |
+| `bun run fmt:check`              | Passed across 4,646 files                                                                          |
+| `bun run lint`                   | Passed; 886 warnings, 0 errors; server sync filesystem check passed                                |
+| `bun run typecheck`              | Passed in all 7 packages; Turbo emitted a bun.lock parsing warning and existing Effect suggestions |
+| `git diff --check`               | Passed                                                                                             |
 
 ## Report review and remaining gaps
 
