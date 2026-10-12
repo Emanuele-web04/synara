@@ -84,6 +84,133 @@ class FakeWebContents extends EventEmitter {
   getZoomFactor = () => 1;
 }
 
+describe("DesktopBrowserManager tab switching", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
+  function makeView(id: number, url = "") {
+    let currentUrl = url;
+    const contents = Object.assign(new FakeWebContents(id), {
+      getURL: () => currentUrl,
+      loadURL: vi.fn((next: string) => {
+        currentUrl = next;
+        return Promise.resolve();
+      }),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    return { contents, view };
+  }
+
+  function makeManager() {
+    const manager = new DesktopBrowserManager();
+    const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
+    return { manager, parent };
+  }
+
+  const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  it("keeps three tabs live through quick and slow switches without reloading", async () => {
+    vi.useFakeTimers();
+    const pages = [1, 2, 3].map((index) => makeView(400 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const second = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const third = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8803/" });
+      await vi.advanceTimersByTimeAsync(0);
+      const tabIds = [first.activeTabId!, second.activeTabId!, third.activeTabId!];
+      const loadsAfterOpen = pages.map((page) => page.contents.loadURL.mock.calls.length);
+
+      for (const pauseMs of [50, 2_000, 30_000]) {
+        for (const tabId of [...tabIds, ...tabIds]) {
+          manager.selectTab({ threadId: THREAD_ID, tabId });
+          await vi.advanceTimersByTimeAsync(pauseMs);
+        }
+      }
+
+      for (const page of pages) expect(page.contents.close).not.toHaveBeenCalled();
+      expect(pages.map((page) => page.contents.loadURL.mock.calls.length)).toEqual(loadsAfterOpen);
+      expect(manager.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.status)).toEqual([
+        "live",
+        "live",
+        "live",
+      ]);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reveals the incoming page before hiding the outgoing one", () => {
+    const pages = [1, 2].map((index) => makeView(410 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const [outgoing, incoming] = pages.map((page) => page.view);
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+
+      const shown = outgoing!.setVisible.mock.invocationCallOrder.at(-1)!;
+      const hidden = incoming!.setVisible.mock.invocationCallOrder.at(-1)!;
+      expect(outgoing!.setVisible).toHaveBeenLastCalledWith(true);
+      expect(incoming!.setVisible).toHaveBeenLastCalledWith(false);
+      expect(shown).toBeLessThan(hidden);
+      expect(outgoing!.setBounds.mock.invocationCallOrder.at(-1)!).toBeLessThan(shown);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("loads an evicted agent tab when the user reopens it without a browser tool", async () => {
+    vi.useFakeTimers();
+    const agentPage = makeView(421);
+    const restoredAgentPage = makeView(422);
+    const userPages = Array.from({ length: 6 }, (_, index) => makeView(430 + index));
+    webContentsViewConstructor.mockReturnValueOnce(agentPage.view);
+    for (const page of userPages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    webContentsViewConstructor.mockReturnValueOnce(restoredAgentPage.view);
+    const { manager } = makeManager();
+    try {
+      const prepared = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+        url: "http://127.0.0.1:8801/agent",
+      });
+      const agentTabId = prepared.activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      // Let the tool grace expire, then push the agent tab past the warm limit.
+      await vi.advanceTimersByTimeAsync(32_000);
+      for (const [index] of userPages.entries()) {
+        manager.newTab({ threadId: THREAD_ID, url: `http://127.0.0.1:8802/${index}` });
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(agentPage.contents.close).toHaveBeenCalledOnce();
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: agentTabId });
+
+      expect(restoredAgentPage.contents.loadURL).toHaveBeenCalledWith(
+        "http://127.0.0.1:8801/agent",
+      );
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("DesktopBrowserManager automation runtime boundary", () => {
   it.each([false, true])(
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
@@ -293,7 +420,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         occluded: true,
       });
       manager.hide({ threadId: THREAD_ID });
-      await vi.advanceTimersByTimeAsync(30_001);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       expect(contents.close).toHaveBeenCalledOnce();
     } finally {
       manager.dispose();
