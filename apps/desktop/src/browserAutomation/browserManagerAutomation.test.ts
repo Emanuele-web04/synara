@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import * as FS from "node:fs";
+import * as Path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
 import { nativeTheme, type WebContents } from "electron";
@@ -83,6 +85,368 @@ class FakeWebContents extends EventEmitter {
   setZoomFactor = vi.fn();
   getZoomFactor = () => 1;
 }
+
+describe("DesktopBrowserManager tab switching", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
+  function makeView(id: number, url = "") {
+    let currentUrl = url;
+    const contents = Object.assign(new FakeWebContents(id), {
+      getURL: () => currentUrl,
+      loadURL: vi.fn((next: string) => {
+        currentUrl = next;
+        return Promise.resolve();
+      }),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    return { contents, view };
+  }
+
+  function makeManager() {
+    const manager = new DesktopBrowserManager();
+    const parent = { addChildView: vi.fn(), removeChildView: vi.fn() };
+    manager.setWindow({ isDestroyed: () => false, contentView: parent } as never);
+    return { manager, parent };
+  }
+
+  const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  it("restores native suspended tabs without claims and loads only the shown active tab", async () => {
+    const directory = FS.mkdtempSync(Path.join(process.cwd(), ".browser-restore-test-"));
+    const workspaceStatePath = Path.join(directory, "browser-workspaces.json");
+    const managers: DesktopBrowserManager[] = [];
+    const create = () => {
+      const manager = new DesktopBrowserManager({ workspaceStatePath });
+      managers.push(manager);
+      return manager;
+    };
+    const access = (manager: DesktopBrowserManager) =>
+      manager as unknown as {
+        automationRuntimeKeys: Set<string>;
+        states: Map<ThreadId, { tabs: Array<{ runtimeSurface: string }> }>;
+      };
+    try {
+      const original = create();
+      const first = original.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://example.test/first",
+      });
+      const agent = original.prepareAutomationTab({
+        threadId: THREAD_ID,
+        url: "https://example.test/agent",
+        reuse: false,
+      });
+      const otherThread = ThreadId.makeUnsafe("other-thread");
+      original.open({ threadId: otherThread, initialUrl: "https://example.test/other" });
+      const agentTabId = agent.activeTabId!;
+      expect(access(original).automationRuntimeKeys.size).toBe(1);
+      // Simulate an older renderer tab: no surface or automation claim may survive.
+      const state = access(original).states.get(THREAD_ID)!;
+      state.tabs[0]!.runtimeSurface = "renderer";
+      original.hide({ threadId: THREAD_ID });
+      original.dispose();
+      const savedFile = FS.readFileSync(workspaceStatePath, "utf8");
+      expect(savedFile).not.toContain("runtimeSurface");
+      expect(savedFile).not.toContain("automationRuntimeKeys");
+
+      const restored = create();
+      const snapshot = restored.getState({ threadId: THREAD_ID });
+      expect(snapshot).toMatchObject({ open: true, activeTabId: agentTabId });
+      expect(snapshot.tabs.map((tab) => tab.id)).toEqual([first.activeTabId, agentTabId]);
+      expect(
+        snapshot.tabs.every((tab) => tab.status === "suspended" && tab.runtimeSurface === "native"),
+      ).toBe(true);
+      expect(access(restored).automationRuntimeKeys.size).toBe(0);
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+      restored.setWindow({
+        isDestroyed: () => false,
+        contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      } as never);
+      restored.open({ threadId: THREAD_ID });
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+
+      const page = makeView(490);
+      webContentsViewConstructor.mockReturnValueOnce(page.view);
+      restored.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      await Promise.resolve();
+      expect(webContentsViewConstructor).toHaveBeenCalledOnce();
+      expect(page.contents.loadURL).toHaveBeenCalledWith("https://example.test/agent");
+      expect(restored.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.status)).toEqual([
+        "suspended",
+        "live",
+      ]);
+      expect(restored.getState({ threadId: otherThread }).tabs[0]!.status).toBe("suspended");
+    } finally {
+      for (const manager of managers) manager.dispose();
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("persists tab closure, hides without clearing, and forgets a closed browser", () => {
+    const directory = FS.mkdtempSync(Path.join(process.cwd(), ".browser-restore-test-"));
+    const workspaceStatePath = Path.join(directory, "browser-workspaces.json");
+    const managers: DesktopBrowserManager[] = [];
+    const create = () => {
+      const manager = new DesktopBrowserManager({ workspaceStatePath });
+      managers.push(manager);
+      return manager;
+    };
+    try {
+      const original = create();
+      const first = original.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://example.test/first",
+      });
+      const second = original.newTab({ threadId: THREAD_ID, url: "https://example.test/second" });
+      original.closeTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+      original.hide({ threadId: THREAD_ID });
+      original.dispose();
+      const restored = create();
+      expect(restored.getState({ threadId: THREAD_ID })).toMatchObject({
+        open: true,
+        activeTabId: second.activeTabId,
+        tabs: [
+          {
+            id: second.activeTabId,
+            url: "https://example.test/second",
+            status: "suspended",
+            runtimeSurface: "native",
+          },
+        ],
+      });
+      restored.close({ threadId: THREAD_ID });
+      restored.dispose();
+      const closed = create();
+      expect(closed.getState({ threadId: THREAD_ID })).toMatchObject({
+        open: false,
+        tabs: [],
+        activeTabId: null,
+      });
+      expect(closed.open({ threadId: THREAD_ID }).tabs).toMatchObject([{ url: "about:blank" }]);
+      expect(webContentsViewConstructor).not.toHaveBeenCalled();
+    } finally {
+      for (const manager of managers) manager.dispose();
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps three tabs live through quick and slow switches without reloading", async () => {
+    vi.useFakeTimers();
+    const pages = [1, 2, 3].map((index) => makeView(400 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const second = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const third = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8803/" });
+      await vi.advanceTimersByTimeAsync(0);
+      const tabIds = [first.activeTabId!, second.activeTabId!, third.activeTabId!];
+      const loadsAfterOpen = pages.map((page) => page.contents.loadURL.mock.calls.length);
+
+      for (const pauseMs of [50, 2_000, 30_000]) {
+        for (const tabId of [...tabIds, ...tabIds]) {
+          manager.selectTab({ threadId: THREAD_ID, tabId });
+          await vi.advanceTimersByTimeAsync(pauseMs);
+        }
+      }
+
+      for (const page of pages) expect(page.contents.close).not.toHaveBeenCalled();
+      expect(pages.map((page) => page.contents.loadURL.mock.calls.length)).toEqual(loadsAfterOpen);
+      expect(manager.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.status)).toEqual([
+        "live",
+        "live",
+        "live",
+      ]);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reveals the incoming page before hiding the outgoing one", () => {
+    const pages = [1, 2].map((index) => makeView(410 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    try {
+      const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+      const [outgoing, incoming] = pages.map((page) => page.view);
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+
+      const shown = outgoing!.setVisible.mock.invocationCallOrder.at(-1)!;
+      const hidden = incoming!.setVisible.mock.invocationCallOrder.at(-1)!;
+      expect(outgoing!.setVisible).toHaveBeenLastCalledWith(true);
+      expect(incoming!.setVisible).toHaveBeenLastCalledWith(false);
+      expect(shown).toBeLessThan(hidden);
+      expect(outgoing!.setBounds.mock.invocationCallOrder.at(-1)!).toBeLessThan(shown);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("loads an evicted agent tab when the user reopens it without a browser tool", async () => {
+    vi.useFakeTimers();
+    const agentPage = makeView(421);
+    const restoredAgentPage = makeView(422);
+    const userPages = Array.from({ length: 6 }, (_, index) => makeView(430 + index));
+    webContentsViewConstructor.mockReturnValueOnce(agentPage.view);
+    for (const page of userPages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    webContentsViewConstructor.mockReturnValueOnce(restoredAgentPage.view);
+    const { manager } = makeManager();
+    try {
+      const prepared = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+        url: "http://127.0.0.1:8801/agent",
+      });
+      const agentTabId = prepared.activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agentTabId });
+      // Let the tool grace expire, then push the agent tab past the warm limit.
+      await vi.advanceTimersByTimeAsync(32_000);
+      for (const [index] of userPages.entries()) {
+        manager.newTab({ threadId: THREAD_ID, url: `http://127.0.0.1:8802/${index}` });
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(agentPage.contents.close).toHaveBeenCalledOnce();
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: agentTabId });
+
+      expect(restoredAgentPage.contents.loadURL).toHaveBeenCalledWith(
+        "http://127.0.0.1:8801/agent",
+      );
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DesktopBrowserManager shared human and agent use", () => {
+  // Unused queued views would otherwise leak into the next describe's tests.
+  afterEach(() => webContentsViewConstructor.mockReset());
+
+  const bounds = { x: 0, y: 50, width: 800, height: 600 };
+
+  function makeManager(viewCount: number) {
+    for (let index = 0; index < viewCount; index += 1) {
+      const contents = new FakeWebContents(500 + index);
+      webContentsViewConstructor.mockReturnValueOnce({
+        webContents: contents,
+        setBounds: vi.fn(),
+        setVisible: vi.fn(),
+        setBorderRadius: vi.fn(),
+        setBackgroundColor: vi.fn(),
+      });
+    }
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      isDestroyed: () => false,
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    return manager;
+  }
+
+  it("interrupts agent work only for human actions in the same tab", () => {
+    const manager = makeManager(2);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const userTabId = manager.newTab({
+        threadId: THREAD_ID,
+        url: "https://user.example/",
+      }).activeTabId!;
+      const agentListener = vi.fn();
+      const unsubscribe = manager.subscribeAutomationHumanControl(
+        THREAD_ID,
+        agentListener,
+        agentTabId,
+      );
+      const agentEpoch = manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId);
+
+      manager.selectTab({ threadId: THREAD_ID, tabId: userTabId });
+      manager.navigate({ threadId: THREAD_ID, tabId: userTabId, url: "https://user.example/2" });
+      expect(agentListener).not.toHaveBeenCalled();
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId)).toBe(agentEpoch);
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBeGreaterThan(agentEpoch);
+
+      manager.navigate({ threadId: THREAD_ID, tabId: agentTabId, url: "https://user.example/3" });
+      expect(agentListener).toHaveBeenCalledOnce();
+      expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agentTabId)).toBeGreaterThan(
+        agentEpoch,
+      );
+
+      manager.close({ threadId: THREAD_ID });
+      expect(agentListener).toHaveBeenCalledTimes(2);
+      unsubscribe();
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("lets the agent keep working in its tab while the user stays on theirs", async () => {
+    const manager = makeManager(2);
+    try {
+      const agentTabId = manager.prepareAutomationTab({
+        threadId: THREAD_ID,
+        reuse: true,
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      const userTabId = manager.newTab({
+        threadId: THREAD_ID,
+        url: "https://user.example/",
+      }).activeTabId!;
+
+      manager.selectAutomationTab({ threadId: THREAD_ID, tabId: agentTabId });
+      manager.prepareAutomationNavigation({
+        threadId: THREAD_ID,
+        tabId: agentTabId,
+        url: "https://agent.example/next",
+      });
+      const runtime = await manager.getAutomationRuntime({
+        threadId: THREAD_ID,
+        tabId: agentTabId,
+      });
+
+      expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(userTabId);
+      expect(runtime.tabId).toBe(agentTabId);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("opens a new agent tab instead of reusing the tab the user is working in", () => {
+    const manager = makeManager(2);
+    try {
+      const userTabId = manager.open({
+        threadId: THREAD_ID,
+        initialUrl: "https://user.example/",
+      }).activeTabId!;
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+      manager.navigate({ threadId: THREAD_ID, tabId: userTabId, url: "https://user.example/2" });
+
+      const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+
+      expect(prepared.tabs).toHaveLength(2);
+      expect(prepared.activeTabId).not.toBe(userTabId);
+    } finally {
+      manager.dispose();
+    }
+  });
+});
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
   it.each([false, true])(
@@ -293,7 +657,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         occluded: true,
       });
       manager.hide({ threadId: THREAD_ID });
-      await vi.advanceTimersByTimeAsync(30_001);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       expect(contents.close).toHaveBeenCalledOnce();
     } finally {
       manager.dispose();
