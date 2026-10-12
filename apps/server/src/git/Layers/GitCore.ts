@@ -2441,7 +2441,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       operationPrefix: string,
       use: (
         env: NodeJS.ProcessEnv,
-        seededGitlinks: ReadonlySet<string>,
+        seededIndexPaths: ReadonlySet<string>,
       ) => Effect.Effect<A, GitCommandError>,
     ): Effect.Effect<A, GitCommandError> =>
       Effect.scoped(
@@ -2463,11 +2463,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             env,
             fallbackErrorMessage: "git read-tree failed",
           });
-          // Seed changed gitlinks from the real index so Git, rather than a
-          // /dev/null filesystem comparison, renders their mode and commit.
-          // This also works when a submodule has not been initialized.
+          // Seed gitlinks and executable-bit changes from the real index.
+          // Git must retain an explicitly staged mode when core.filemode=false;
+          // a /dev/null filesystem comparison cannot recover that information.
+          // Gitlinks also need their recorded commit when not initialized.
           const additions = yield* executeGit(
-            `${operationPrefix}.gitlinkAdditions`,
+            `${operationPrefix}.indexModeAdditions`,
             cwd,
             [
               "diff",
@@ -2481,27 +2482,31 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ],
             { env: { GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
           ).pipe(Effect.map((result) => result.stdout.split("\0")));
-          const seededGitlinks = new Set<string>();
+          const seededIndexPaths = new Set<string>();
           for (let index = 0; index + 1 < additions.length; index += 2) {
             const entry = additions[index]?.split(" ");
             const filePath = additions[index + 1];
             const objectId = entry?.[3];
-            if (entry?.[1] !== "160000" || !objectId || !filePath) continue;
+            const mode = entry?.[1];
+            const regularModeChanged =
+              (mode === "100755" && entry?.[0] !== ":100755") ||
+              (mode === "100644" && entry?.[0] === ":100755");
+            if ((mode !== "160000" && !regularModeChanged) || !objectId || !filePath) continue;
             yield* executeGit(
-              `${operationPrefix}.seedGitlink`,
+              `${operationPrefix}.seedIndexMode`,
               cwd,
               [
                 "update-index",
                 "--add",
                 "--replace",
                 "--cacheinfo",
-                `160000,${objectId},${filePath}`,
+                `${mode},${objectId},${filePath}`,
               ],
               { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
             );
-            seededGitlinks.add(filePath);
+            seededIndexPaths.add(filePath);
           }
-          return yield* use(env, seededGitlinks);
+          return yield* use(env, seededIndexPaths);
         }),
       );
 
@@ -2513,7 +2518,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       resolvedRef: string,
       env: NodeJS.ProcessEnv,
       operationPrefix: string,
-      seededGitlinks: ReadonlySet<string>,
+      seededIndexPaths: ReadonlySet<string>,
     ) =>
       Effect.gen(function* () {
         const others = yield* listUntrackedFiles(cwd, operationPrefix, env);
@@ -2534,7 +2539,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)),
         );
         return [...new Set([...others, ...trackedAdditions])].filter(
-          (filePath) => !seededGitlinks.has(filePath.replace(/\/$/, "")),
+          (filePath) => !seededIndexPaths.has(filePath.replace(/\/$/, "")),
         );
       });
 
@@ -2550,12 +2555,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           cwd,
           resolvedRef,
           "GitCore.readRefPatch",
-          (env, seededGitlinks) =>
+          (env, seededIndexPaths) =>
             Effect.gen(function* () {
               const tracked = yield* executeGit(
                 "GitCore.readRefPatch.trackedPatch",
                 cwd,
-                ["diff", "--patch", "--no-color", "--no-ext-diff", "--no-textconv", resolvedRef],
+                [
+                  "diff",
+                  "--patch",
+                  "--no-renames",
+                  "--no-color",
+                  "--no-ext-diff",
+                  "--no-textconv",
+                  resolvedRef,
+                ],
                 {
                   env,
                   timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
@@ -2568,7 +2581,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 resolvedRef,
                 env,
                 "GitCore.readRefPatch",
-                seededGitlinks,
+                seededIndexPaths,
               );
               const accumulator = makePatchAccumulator();
               appendPatchSegment(
@@ -2617,12 +2630,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               cwd,
               resolvedRef,
               "GitCore.readDiffStats",
-              (env, seededGitlinks) =>
+              (env, seededIndexPaths) =>
                 Effect.gen(function* () {
                   const tracked = yield* executeGit(
                     "GitCore.readDiffStats.tracked",
                     cwd,
-                    ["diff", "--numstat", "-z", "--no-ext-diff", resolvedRef],
+                    ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", resolvedRef],
                     { env, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS, maxOutputBytes: 10_000_000 },
                   ).pipe(Effect.map((result) => result.stdout));
                   const untracked = yield* readUntrackedNumstats(
@@ -2633,7 +2646,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                       resolvedRef,
                       env,
                       "GitCore.readDiffStats",
-                      seededGitlinks,
+                      seededIndexPaths,
                     ),
                   );
                   const totals = summarizeGitNumstatOutputs([tracked, ...untracked]);

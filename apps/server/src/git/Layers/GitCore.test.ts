@@ -616,6 +616,73 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("preserves renamed executable mode on a filemode-insensitive filesystem", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.filemode", "false"]);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.sh\n");
+        yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o644));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "old.sh"]);
+        yield* git(tmp, ["commit", "-m", "explicit executable mode"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
+        );
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "renamed.sh"]);
+        expect(
+          (yield* Effect.promise(() => fs.stat(path.join(tmp, "renamed.sh")))).mode & 0o111,
+        ).toBe(0);
+        expect(yield* git(tmp, ["ls-files", "--stage", "--", "renamed.sh"])).toMatch(/^100755 /);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("b/renamed.sh");
+        expect(patch).toContain("new file mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 5,
+          deletions: 5,
+          fileCount: 2,
+        });
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")))).toEqual(
+          indexBefore,
+        );
+      }),
+    );
+
+    it.effect("preserves staged mode-only changes on a filemode-insensitive filesystem", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.filemode", "false"]);
+        yield* writeTextFile(path.join(tmp, "script.sh"), "echo unchanged\n");
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "script.sh"), 0o644));
+        yield* git(tmp, ["add", "script.sh"]);
+        yield* git(tmp, ["commit", "-m", "non-executable source"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "script.sh"]);
+        expect(
+          (yield* Effect.promise(() => fs.stat(path.join(tmp, "script.sh")))).mode & 0o111,
+        ).toBe(0);
+        expect(yield* git(tmp, ["ls-files", "--stage", "--", "script.sh"])).toMatch(/^100755 /);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("old mode 100644");
+        expect(patch).toContain("new mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 0,
+          deletions: 0,
+          fileCount: 1,
+        });
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")))).toEqual(
+          indexBefore,
+        );
+      }),
+    );
+
     for (const initialized of [true, false]) {
       it.effect(
         `includes a new ${initialized ? "initialized" : "uninitialized"} gitlink and preserves the real index`,
