@@ -22,12 +22,14 @@ New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a sen
 including worktree preparation, it opens another draft while the original send continues.
 The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
 indicator. Its provider session starts only after the worktree is ready. If preparation fails or
-is cancelled, the task and its prompt remain available for retry.
+is cancelled, the task and its prompt remain available for retry. Pressing Send again while a
+message for the same task is still being sent shows a notice and keeps the new text in the
+composer; it is not sent twice.
 
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
-  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs (Beta), and
+  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
@@ -49,7 +51,11 @@ is cancelled, the task and its prompt remain available for retry.
   Failed — and its details show the agent's recent activity, let you approve a pending request
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
-  the view you picked.
+  the view you picked. An agent can also keep the list from a chat: ask it to note something for
+  later and it adds a to-do with `synara_create_todo`, filed under the chat's project unless the
+  to-do is unrelated to it. `synara_list_todos` reads the list and `synara_update_todo` edits a
+  to-do or marks it done. Adding a to-do starts no agent work; handing a to-do to a chat and
+  deleting it stay in the Tasks view.
 - **Kanban** — the Attention view groups chat cards into Draft, In Progress, Awaiting you,
   and Done; Classic keeps the three-column layout. Approval/input requests, failures, and
   stalled work surface in Awaiting you. Needs review requires a live-confirmed open PR in a
@@ -58,12 +64,17 @@ is cancelled, the task and its prompt remain available for retry.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
   ordinary project; local composer drafts remain client-only. Gateway draft creation uses
   the local checkout; isolated worktree callers can create a task instead. These tools do
-  not change the Tasks to-do records.
+  not change the Tasks to-do records; the `synara_*_todo` tools do.
 - **Inbox** (Stable and Beta) — chats needing attention, running and finished work, review
   requests, and the day’s agent recap, starting at 4am. Inbox also shows today’s due and overdue
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
+  summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
+  where finished subagents stay one click away after the strip hides. In split view, the list
+  stays beside the chat in its pane when opening a child or returning to its parent. Failed
+  Stop or background requests report an error so the run is not mistaken for stopped.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
@@ -89,6 +100,18 @@ native confirmation. With an open window and running chats, the quit dialog list
 will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
+
+After an unexpected server shutdown, Synara automatically continues ordinary chats that
+were actively running, using their saved conversation and provider selection. The continuation
+asks the agent to verify existing operations before repeating them. Chats waiting for approval
+or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
+and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
+still apply. This starts a guarded continuation, not a replay of an in-flight tool call.
+
+To keep working on another provider account, add and sign in to it under **Settings → Providers**,
+then use **Hand off thread → Continue in a new thread** and select that account. The new thread
+carries the conversation history and uses the destination account's own credentials. A started
+thread's model picker cannot change its account in place.
 
 ## Projects
 
@@ -141,6 +164,24 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Finished work folds into a compact **Worked for** disclosure above the final answer. Expand it
+to read the tools and full narration; turning off finished-turn folding keeps the work visible.
+Active turns show **Working for** with a live duration. These labels use the chat font size and
+keep the divider below the label, without model badges or completion icons.
+**Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
+outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
+say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
+keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
+response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+
+**Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
+running, even if the provider had already finished and its final events are still arriving.
+Output that arrives after a turn ended is added to its message without marking it as streaming
+again. An assistant item that ends without any text does not add an empty response row.
+
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores
@@ -149,11 +190,21 @@ older servers retain their existing error handling. If recovery reaches a server
 Synara reports that delivery is still unknown; reconnect to an updated server and check the conversation
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
+Recovery snapshots include the last projected rollback or revert, so messages removed while a
+client was disconnected do not reappear. Ordinary refreshes still preserve newer streamed text.
 
 Thread runtime errors appear above the transcript. Use **Show details** to read the full error
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
+
+Messages queued above the composer while a turn runs are sent one by one after it completes.
+If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
+stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+**Edit** moves the next queued message back into the composer. Sending a new message
+yourself goes first, and the queue resumes once that turn completes. The pause is per
+thread and survives a reload. A message already shown in the conversation was accepted by
+the server rather than queued here, and the server still sends it after a Stop.
 
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
@@ -334,6 +385,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
 
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;

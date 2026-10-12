@@ -1268,6 +1268,40 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
+        // Coordinator check-ins continue the human's current chat permissions.
+        // Ordinary automations retain their independently authorized saved mode.
+        let runtimeMode = definition.runtimeMode;
+        let modelSelection = definition.modelSelection;
+        if (definition.managedByProject && continuationThreadId !== null) {
+          const thread = yield* projectionSnapshotQuery
+            .getThreadShellById(continuationThreadId)
+            .pipe(Effect.mapError(toServiceError("Failed to load coordinator access mode.")));
+          if (Option.isNone(thread) || thread.value.projectId !== definition.projectId) {
+            return yield* Effect.fail(
+              new AutomationServiceError({
+                message: "Coordinator thread was not found in the automation project.",
+              }),
+            );
+          }
+          runtimeMode = thread.value.runtimeMode;
+          const liveSelection = thread.value.modelSelection;
+          // The Claude chat has already validated Auto. Reuse that evidence only for
+          // the same model and account; keep the configured model and options.
+          if (
+            modelSelection.provider === "claudeAgent" &&
+            liveSelection.provider === "claudeAgent" &&
+            modelSelection.model === liveSelection.model &&
+            resolveModelSelectionInstanceId(modelSelection) ===
+              resolveModelSelectionInstanceId(liveSelection) &&
+            liveSelection.supportsAutoMode !== undefined
+          ) {
+            modelSelection = {
+              ...modelSelection,
+              supportsAutoMode: liveSelection.supportsAutoMode,
+            };
+          }
+        }
+
         yield* validateResolvedAutomationIdentity(definition.modelSelection);
 
         // Enforce the gate at dispatch, not just create/update, so an enabled automation that
@@ -1281,7 +1315,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: definition.worktreeMode,
           acknowledgedRisks: definition.acknowledgedRisks,
         });
-        yield* validateAutoRuntimeMode(definition);
+        yield* validateAutoRuntimeMode({ modelSelection, runtimeMode });
         yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
           enabled: definition.enabled,
@@ -1337,6 +1371,16 @@ export const AutomationServiceLive = Layer.effect(
               threadCreateCommandId,
               turnStartCommandId,
               startedAt: now,
+              ...(definition.managedByProject && continuationThreadId !== null
+                ? {
+                    permissionSnapshot: {
+                      ...run.permissionSnapshot,
+                      runtimeMode,
+                      modelSelection,
+                      allowedCapabilities: allowedCapabilitiesFor({ ...definition, runtimeMode }),
+                    },
+                  }
+                : {}),
             })
             .pipe(
               Effect.mapError(toServiceError("Failed to update automation run.")),
@@ -1382,13 +1426,13 @@ export const AutomationServiceLive = Layer.effect(
                 text: dispatchMessage,
                 attachments: [],
               },
-              modelSelection: definition.modelSelection,
+              modelSelection,
               ...(automationTurnProviderOptions
                 ? { providerOptions: automationTurnProviderOptions }
                 : {}),
               dispatchMode: "queue",
               dispatchOrigin: "automation",
-              runtimeMode: definition.runtimeMode,
+              runtimeMode,
               interactionMode: definition.interactionMode,
               createdAt: now,
             })

@@ -881,8 +881,21 @@ const make = Effect.gen(function* () {
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
 
+    // The in-memory marker covers the normal turn.started path. Read the
+    // projection as well so a reactor restart between turn start and completion
+    // retains the provider-independent workspace classification.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    const pendingTurnStart = Option.isNone(persistedTurn)
+      ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId: thread.id })
+      : Option.none();
     const workspaceInitializedDuringTurn =
-      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
+      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId ||
+      (Option.isSome(persistedTurn) && persistedTurn.value.startedWithoutGitWorkspace === true) ||
+      (Option.isSome(pendingTurnStart) &&
+        pendingTurnStart.value.startedWithoutGitWorkspace === true);
     turnsStartedWithoutGitWorkspace.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
@@ -1130,6 +1143,37 @@ const make = Effect.gen(function* () {
       pendingMessageStartByThread.set(event.payload.threadId, event.payload.messageId);
     });
 
+  const rememberPendingWorkspaceInitialization = Effect.fnUntraced(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) {
+    const thread = yield* getThreadDetail(event.payload.threadId);
+    if (!thread) return;
+    const project = yield* getProjectShell(thread.projectId);
+    if (!project) return;
+    const workspace = yield* resolveCheckpointWorkspace({
+      threadId: thread.id,
+      thread,
+      project,
+    });
+    if (!workspace || workspace.isGitRepository) return;
+
+    // The projector commits the request before publishing it. A lagging reactor
+    // may see an already-promoted turn or a newer pending request, so mark only
+    // the row owned by this message without replacing the pending slot.
+    yield* projectionTurnRepository.markStartedWithoutGitWorkspace({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+    });
+    yield* Effect.logDebug(
+      "checkpoint turn start marked workspace as not yet initialized as a git repository",
+      {
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        cwd: workspace.cwd,
+      },
+    );
+  });
+
   const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<OrchestrationEvent, { type: "thread.checkpoint-revert-requested" }>,
     sessionThreadId: ThreadId,
@@ -1224,6 +1268,42 @@ const make = Effect.gen(function* () {
           event.payload.scope === "files"
             ? "No git workspace is available for file Undo."
             : "No git workspace is available for this thread's checkpoints.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    // A thread lease protects this conversation, but other threads can still
+    // edit the same checkout. Check them while holding the workspace lease,
+    // before either Undo scope changes files or the provider conversation.
+    const checkpointWorkspaceIdentity =
+      yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(checkpointCwd);
+    for (const peer of commandReadModel.threads) {
+      if (relevantThreadIds.includes(peer.id)) continue;
+      const providerThread = yield* resolveProviderSessionThread(projectionSnapshotQuery, peer.id);
+      const peerSession = providerSessions.find(
+        (session) => session.threadId === (providerThread?.id ?? peer.id),
+      );
+      const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: peer.id,
+      });
+      if (
+        !threadHasInFlightTurn(peer) &&
+        !providerSessionHasInFlightTurn(peerSession) &&
+        !(Option.isSome(pendingStart) && peer.session?.status !== "error")
+      )
+        continue;
+      const peerCwd =
+        peerSession?.cwd ??
+        resolveThreadWorkspaceCwd({ thread: peer, projects: commandReadModel.projects });
+      if (!peerCwd) continue;
+      const peerIdentity = yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd);
+      if (peerIdentity !== checkpointWorkspaceIdentity) continue;
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Another thread is working in this workspace. Stop its active turn before undoing changes.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -1705,6 +1785,7 @@ const make = Effect.gen(function* () {
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     if (event.type === "thread.turn-start-requested") {
       yield* rememberPendingMessageStart(event);
+      yield* rememberPendingWorkspaceInitialization(event);
       return;
     }
 

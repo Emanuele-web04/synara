@@ -121,6 +121,8 @@ export interface TurnDiffFileChange {
 
 export interface TurnDiffSummary {
   turnId: TurnId;
+  /** When the provider started the turn (absent on older snapshots). */
+  startedAt?: string | undefined;
   completedAt: string;
   status?: string | undefined;
   files: TurnDiffFileChange[];
@@ -239,6 +241,8 @@ export interface Thread extends ThreadWorkspaceState {
   goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  /** Pending request; null means consumed/cancelled, undefined means not observed. */
+  pendingTurnStartMessageId?: MessageId | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
@@ -324,6 +328,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  pendingTurnStartMessageId?: MessageId | null;
 }
 
 export interface SidebarThreadSummary {
@@ -351,6 +356,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  /** For a nested subagent, the subagent thread that launched it. */
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -384,6 +391,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  runtimeMode?: RuntimeMode;
   providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;

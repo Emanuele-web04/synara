@@ -85,20 +85,28 @@ describe("makeProviderModelDiscoveryCache", () => {
       source: "opencode-cli",
       cached: false,
     };
+    const refreshGate = Deferred.makeUnsafe<void>();
     let calls = 0;
-    const discover = Effect.sync(() => {
+    const discover = Effect.gen(function* () {
       calls += 1;
-      return calls === 1 ? CATALOG : refreshed;
+      if (calls === 1) return CATALOG;
+      yield* Deferred.await(refreshGate);
+      return refreshed;
     });
 
     await Effect.runPromise(cache.lookup(KEY, discover));
     clock.advance(5_000);
     const stale = await Effect.runPromise(cache.lookup(KEY, discover));
-    await flush();
-    const afterRefresh = await Effect.runPromise(cache.lookup(KEY, discover));
 
     expect(stale.models).toEqual(CATALOG.models);
     expect(stale.cached).toBe(true);
+    // The stale read must finish while discovery is still blocked. Wait for
+    // its detached start, then join completion rather than assuming a timer
+    // tick has also committed the refreshed catalog on a busy runner.
+    await expect.poll(() => calls).toBe(2);
+    Deferred.doneUnsafe(refreshGate, Effect.void);
+    await Effect.runPromise(cache.lookup(KEY, discover, "if-stale"));
+    const afterRefresh = await Effect.runPromise(cache.lookup(KEY, discover));
     expect(afterRefresh.models).toEqual(refreshed.models);
     expect(calls).toBe(2);
   });

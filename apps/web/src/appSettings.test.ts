@@ -50,6 +50,7 @@ import {
   resolveFollowUpDispatchMode,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
+  revealHubsRailItemOnce,
   serverSettingsToAppSettings,
 } from "./appSettings";
 
@@ -1845,6 +1846,40 @@ describe("provider-indexed custom model settings", () => {
         isDefault: false,
       }),
     ).toEqual(["custom/codex-model"]);
+  });
+});
+
+function memoryStorage(entries: Record<string, string>): Storage {
+  const map = new Map(Object.entries(entries));
+  return {
+    get length() {
+      return map.size;
+    },
+    clear: () => map.clear(),
+    getItem: (key) => map.get(key) ?? null,
+    key: (index) => [...map.keys()][index] ?? null,
+    removeItem: (key) => void map.delete(key),
+    setItem: (key, value) => void map.set(key, value),
+  };
+}
+const readHidden = (storage: Storage) =>
+  JSON.parse(storage.getItem("synara:app-settings:v1") ?? "{}").hiddenRailItems;
+
+describe("revealHubsRailItemOnce", () => {
+  it("shows Hubs saved under the old hidden default once, then keeps a later hide", () => {
+    const storage = memoryStorage({
+      "synara:app-settings:v1": JSON.stringify({ hiddenRailItems: ["studio", "kanban"] }),
+    });
+
+    revealHubsRailItemOnce(storage);
+    expect(readHidden(storage)).toEqual(["kanban"]);
+
+    storage.setItem(
+      "synara:app-settings:v1",
+      JSON.stringify({ hiddenRailItems: ["kanban", "studio"] }),
+    );
+    revealHubsRailItemOnce(storage);
+    expect(readHidden(storage)).toEqual(["kanban", "studio"]);
   });
 });
 

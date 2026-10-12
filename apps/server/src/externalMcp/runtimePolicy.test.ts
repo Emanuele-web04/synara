@@ -18,6 +18,18 @@ describe("external MCP runtime policy", () => {
     ).toThrow();
   });
 
+  it("preserves an explicitly selected provider instance", () => {
+    const parsed = Schema.decodeUnknownSync(ExternalMcpCreateTaskInput)({
+      requestId: "instance-selection",
+      projectId: "project-instance-selection",
+      provider: "codex",
+      instanceId: "codex_work",
+      model: "gpt-5.5",
+      prompt: "use the configured work account",
+    });
+    expect(parsed.instanceId).toBe("codex_work");
+  });
+
   it("defaults creation to a managed worktree and approval-required execution", () => {
     expect(resolveExternalMcpRuntimePolicy({ capabilities: new Set(["tasks:create"]) })).toEqual({
       environment: "worktree",

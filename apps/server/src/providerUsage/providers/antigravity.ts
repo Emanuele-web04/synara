@@ -230,7 +230,7 @@ async function refreshGeminiCreds(
     bodyFormat: "form",
   });
   if (!refreshed.ok) {
-    return refreshed.status && refreshed.status >= 400 && refreshed.status < 500 ? "dead" : null;
+    return refreshed.status === 400 && refreshed.errorCode === "invalid_grant" ? "dead" : null;
   }
   const nextRecord = applyRefreshedTokens(creds, refreshed);
   await writeJsonFileAtomic(creds.path, nextRecord);
@@ -281,14 +281,12 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
       }
       return needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE);
     }
-    if (credsNeedRefresh(creds, ctx.nowMs)) {
-      try {
-        const refreshed = await refreshGeminiCreds(creds, ctx);
-        if (refreshed === "dead") {
-          return needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE);
-        }
-        if (refreshed) creds = refreshed;
-      } catch {
+    if (creds.refreshToken && credsNeedRefresh(creds, ctx.nowMs)) {
+      const refreshed = await refreshGeminiCreds(creds, ctx).catch(() => null);
+      if (refreshed === "dead") {
+        return needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE);
+      }
+      if (!refreshed) {
         return errorSnapshot(
           "antigravity",
           ctx.nowMs,
@@ -296,8 +294,10 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
           "Could not refresh the Antigravity Google login.",
         );
       }
+      creds = refreshed;
     }
 
+    let planName: string | undefined;
     try {
       const loadResult = await fetchJson({
         service: "provider-usage-antigravity",
@@ -325,38 +325,47 @@ export const antigravityUsageFetcher: ProviderUsageFetcher = {
         );
       }
 
+      planName = antigravityPlanName(loadResult.json);
       const assist = asRecord(loadResult.json);
       const projectId =
         asString(assist?.cloudaicompanionProject) ??
         ctx.env.GOOGLE_CLOUD_PROJECT?.trim() ??
         ctx.env.GOOGLE_CLOUD_PROJECT_ID?.trim();
-      let quotaJson: unknown;
-      try {
-        const quotaResult = await fetchJson({
-          service: "provider-usage-antigravity",
-          url: QUOTA_URL,
-          allowedOrigins: [CLOUD_CODE_ORIGIN],
-          method: "POST",
-          headers: googleHeaders(creds.accessToken),
-          body: projectId ? { project: projectId } : {},
-        });
-        if (quotaResult.ok) quotaJson = quotaResult.json;
-      } catch {
-        quotaJson = undefined;
+      const quotaResult = await fetchJson({
+        service: "provider-usage-antigravity",
+        url: QUOTA_URL,
+        allowedOrigins: [CLOUD_CODE_ORIGIN],
+        method: "POST",
+        headers: googleHeaders(creds.accessToken),
+        body: projectId ? { project: projectId } : {},
+      });
+      if (!quotaResult.ok) {
+        const snapshot = isAuthFailureStatus(quotaResult.status)
+          ? needsAuthSnapshot("antigravity", ctx.nowMs, SOURCE)
+          : errorSnapshot(
+              "antigravity",
+              ctx.nowMs,
+              SOURCE,
+              `Antigravity quota request failed (${quotaResult.status}).`,
+            );
+        return { ...snapshot, ...(planName ? { planName } : {}) };
       }
 
       return parseAntigravityQuota({
         loadAssist: loadResult.json,
-        quota: quotaJson,
+        quota: quotaResult.json,
         nowMs: ctx.nowMs,
       });
     } catch {
-      return errorSnapshot(
-        "antigravity",
-        ctx.nowMs,
-        SOURCE,
-        "Could not reach Google Code Assist usage.",
-      );
+      return {
+        ...errorSnapshot(
+          "antigravity",
+          ctx.nowMs,
+          SOURCE,
+          "Could not reach Google Code Assist usage.",
+        ),
+        ...(planName ? { planName } : {}),
+      };
     }
   },
 };

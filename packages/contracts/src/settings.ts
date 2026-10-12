@@ -63,6 +63,10 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   // Claude Code keeps Artifact publishing (and `/design`, `/slides`) off for
   // Agent SDK sessions unless the host opts in.
   enableArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  // Off by default: embedded (SDK) Claude Code never asks before resuming a
+  // large session after a long pause. When on, Synara asks the way Claude
+  // Code's interactive resume prompt does.
+  confirmColdCacheResume: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
 
@@ -242,6 +246,7 @@ export const ServerSettingsPatch = Schema.Struct({
           homePath: Schema.optionalKey(StringSetting),
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
           enableArtifacts: Schema.optionalKey(Schema.Boolean),
+          confirmColdCacheResume: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       cursor: Schema.optionalKey(

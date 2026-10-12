@@ -87,6 +87,35 @@ function hasCompletedServerSettingsMigration(): boolean {
   return globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1";
 }
 
+// Hubs ("studio") used to start hidden in the rail, and saved settings still carry that
+// default. The first launch after it became a default item shows it once; hiding it again
+// from Customize afterwards sticks.
+const HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY = "synara:hubs-rail-default:v1";
+
+/**
+ * Rewrites the stored settings once, before the app renders: every `useAppSettings` mount
+ * normalizes its own copy of the stored value, so a reveal applied by one of them would be
+ * written back over by the others.
+ */
+export function revealHubsRailItemOnce(storage: Storage | undefined = globalThis.localStorage) {
+  try {
+    if (!storage || storage.getItem(HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY) === "1") return;
+    storage.setItem(HUBS_RAIL_DEFAULT_MIGRATION_STORAGE_KEY, "1");
+    const raw = storage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const stored: unknown = JSON.parse(raw);
+    if (typeof stored !== "object" || stored === null || !("hiddenRailItems" in stored)) return;
+    const hidden = stored.hiddenRailItems;
+    if (!Array.isArray(hidden) || !hidden.includes("studio")) return;
+    storage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ ...stored, hiddenRailItems: hidden.filter((id) => id !== "studio") }),
+    );
+  } catch {
+    // Unreadable storage keeps the saved rail as it is.
+  }
+}
+
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
@@ -344,6 +373,7 @@ const PersistedHiddenModels = Schema.Array(
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
+  claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => false)),
   // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -383,6 +413,9 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   anchorSentMessagesToTop: Schema.Boolean.pipe(withDefaults(() => true)),
+  // When false, the desktop chat header shows the plain thread title instead of the
+  // open-thread tab strip.
+  showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -473,6 +506,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentSubagents: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
@@ -1537,6 +1571,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
+    claudeConfirmColdCacheResume: settings.providers.claudeAgent.confirmColdCacheResume,
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
@@ -1773,6 +1808,7 @@ export function appSettingsPatchToServerSettingsPatch(
   if (
     hasOwn(patch, "claudeBinaryPath") ||
     hasOwn(patch, "claudeEnableArtifacts") ||
+    hasOwn(patch, "claudeConfirmColdCacheResume") ||
     hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "customClaudeModels")
   ) {
@@ -1780,6 +1816,9 @@ export function appSettingsPatchToServerSettingsPatch(
       ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "claudeEnableArtifacts")
         ? { enableArtifacts: Boolean(patch.claudeEnableArtifacts) }
+        : {}),
+      ...(hasOwn(patch, "claudeConfirmColdCacheResume")
+        ? { confirmColdCacheResume: Boolean(patch.claudeConfirmColdCacheResume) }
         : {}),
       ...(hasOwn(patch, "claudeHomePath") ? { homePath: patch.claudeHomePath ?? "" } : {}),
       ...(hasOwn(patch, "customClaudeModels")
