@@ -394,14 +394,17 @@ function buildContextWindowActivityPayload(
   // Stamp the emitting provider so token stats can attribute usage to the
   // provider that actually processed the turn, not the thread's persisted
   // model selection (which can drift, e.g. across future per-turn providers).
+  const providerThreadId = event.providerRefs?.providerThreadId;
+  const usageSessionId =
+    providerThreadId === undefined
+      ? undefined
+      : event.provider === "cursor" || event.provider === "codex"
+        ? providerThreadId
+        : `${providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`;
   return toActivityPayload({
     ...usage,
     provider: event.provider,
-    ...(event.providerRefs?.providerThreadId
-      ? {
-          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
-        }
-      : {}),
+    ...(usageSessionId !== undefined ? { usageSessionId } : {}),
   });
 }
 
@@ -490,6 +493,21 @@ function buildConfiguredContextWindowPayload(
     maxTokens,
     ...(configuredWindow ? { contextWindow: configuredWindow } : {}),
   });
+}
+
+// Claude Code reports whether fast mode actually serves requests; the requested
+// option alone cannot tell the composer that the account refused it.
+function buildFastModeStatePayload(event: ProviderRuntimeEvent): ActivityPayload | undefined {
+  if (event.type !== "session.configured") {
+    return undefined;
+  }
+  const config = asObject(event.payload.config);
+  const state = asString(config?.fast_mode_state);
+  if (state !== "on" && state !== "off" && state !== "cooldown") {
+    return undefined;
+  }
+  const disabledReason = asString(config?.fast_mode_disabled_reason);
+  return toActivityPayload({ state, ...(disabledReason ? { disabledReason } : {}) });
 }
 
 export function runtimePayloadRecord(
@@ -662,7 +680,9 @@ export function projectProviderRuntimeActivities(
   // Claude previews are coalesced by ingestion; other providers publish their
   // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (((event.provider === "codex" || event.provider === "antigravity") &&
+    (((event.provider === "codex" ||
+      event.provider === "antigravity" ||
+      event.provider === "opencode") &&
       event.type === "item.completed") ||
       (event.provider === "claudeAgent" &&
         (event.type === "item.updated" || event.type === "item.completed"))) &&
@@ -697,21 +717,36 @@ export function projectProviderRuntimeActivities(
   switch (event.type) {
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
-      if (!payload) {
-        return [];
-      }
-
+      const fastModePayload = buildFastModeStatePayload(event);
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "context-window.configured",
-          summary: "Context window configured",
-          payload,
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        ...(payload
+          ? [
+              {
+                id: event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "context-window.configured",
+                summary: "Context window configured",
+                payload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
+        ...(fastModePayload
+          ? [
+              {
+                id: payload ? EventId.makeUnsafe(`${event.eventId}:fast-mode`) : event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "fast-mode.state",
+                summary: "Fast mode state reported",
+                payload: fastModePayload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
       ];
     }
 

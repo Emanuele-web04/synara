@@ -94,6 +94,12 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  /**
+   * True when `forkThread` honors `throughTurnId`. Other adapters never see a
+   * cutoff: ProviderService skips their native fork so the fork is rebuilt
+   * from its imported transcript instead of carrying later source turns.
+   */
+  readonly supportsForkThroughTurn?: boolean;
   /** True when `turn.diff.updated.payload.unifiedDiff` contains a parseable live patch. */
   readonly supportsLiveTurnDiffPatch?: boolean;
 }

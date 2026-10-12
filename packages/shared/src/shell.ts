@@ -163,11 +163,21 @@ function envCaptureEnd(name: string): string {
   return `__SYNARA_ENV_${name}_END__`;
 }
 
-function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
+function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>, nushell: boolean): string {
   return names
     .map((name) => {
       if (!SHELL_ENV_NAME_PATTERN.test(name)) {
         throw new Error(`Unsupported environment variable name: ${name}`);
+      }
+
+      if (nushell) {
+        // External printenv applies Nu's ENV_CONVERSIONS (notably its list-valued
+        // PATH). complete tolerates an unset variable without POSIX `||` syntax.
+        return [
+          `print '${envCaptureStart(name)}'`,
+          `do { ^printenv ${name} } | complete | get stdout | print --no-newline`,
+          `print '${envCaptureEnd(name)}'`,
+        ].join("; ");
       }
 
       return [
@@ -215,7 +225,10 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
     return {};
   }
 
-  const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
+  const nushell = /(?:^|[\\/])nu(?:\.exe)?$/i.test(shell);
+  const command = buildEnvironmentCaptureCommand(names, nushell);
+  const args = nushell ? ["--login", "--interactive", "--commands", command] : ["-ilc", command];
+  const output = execFile(shell, args, {
     encoding: "utf8",
     timeout: 5000,
     windowsHide: true,

@@ -25,6 +25,7 @@ import {
   isPendingInteractionResponseClaimable,
 } from "@synara/shared/pendingInteractions";
 
+import { advanceMessageTextSegments } from "./messageTextSegments";
 import { isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
@@ -41,6 +42,7 @@ import {
   normalizeTurnDiffFiles,
   providerReferenceArraysEqual,
   resolveCreateBranchFlowCompletedMerge,
+  textSegmentArraysEqual,
   withOrchestrationEventSequence,
 } from "./storeNormalization";
 import {
@@ -611,6 +613,10 @@ function describeStreamText(text: string): {
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
+  segmentBoundary: {
+    readonly segmentStartedAt: string | undefined;
+    readonly segmentSequence: number;
+  },
 ): ChatMessage | null {
   let nextText: string;
   if (
@@ -671,9 +677,26 @@ function mergeStreamingMessage(
       ? incomingMessage.startsNewTurn
       : existingMessage.startsNewTurn;
   const nextSource = incomingMessage.source ?? existingMessage.source;
+  // Segments from a mid-stream snapshot must follow the deltas that land after
+  // it, or a settled reply renders only the text the snapshot had.
+  const advancedTextSegments = advanceMessageTextSegments(existingMessage.textSegments, {
+    streaming: incomingMessage.streaming,
+    deltaText: incomingMessage.text,
+    nextText,
+    segmentStartedAt: segmentBoundary.segmentStartedAt,
+    segmentSequence: segmentBoundary.segmentSequence,
+    updatedAt: nextUpdatedAt,
+  });
+  const nextTextSegments = textSegmentArraysEqual(
+    existingMessage.textSegments,
+    advancedTextSegments,
+  )
+    ? existingMessage.textSegments
+    : advancedTextSegments;
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.textSegments === nextTextSegments &&
     existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
@@ -690,9 +713,12 @@ function mergeStreamingMessage(
     return null;
   }
 
+  const { textSegments: _previousTextSegments, ...existingMessageWithoutSegments } =
+    existingMessage;
   return {
-    ...existingMessage,
+    ...existingMessageWithoutSegments,
     text: nextText,
+    ...(nextTextSegments !== undefined ? { textSegments: nextTextSegments } : {}),
     updatedAt: nextUpdatedAt,
     ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
@@ -744,7 +770,10 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
   let messages = thread.messages;
 
   if (existingMessage) {
-    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage);
+    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage, {
+      segmentStartedAt: payload.segmentStartedAt,
+      segmentSequence: payload.segmentSequence ?? event.sequence,
+    });
     if (mergedMessage !== null) {
       // Only the affected slot is replaced; every other message stays reference-identical.
       messages = thread.messages.with(existingIndex, mergedMessage);
