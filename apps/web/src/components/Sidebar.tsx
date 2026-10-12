@@ -5704,7 +5704,7 @@ export default function Sidebar() {
     // in place instead of sliding left. Focus is read from the group because the
     // name container itself is not focusable — the row's button is.
     const projectToolbarReserveClassName =
-      "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
+      "group-hover/project-header:pr-[4.75rem] project-header-focus:pr-[4.75rem]";
     // Configured display name only — folder identity lives in the hover card (#1000).
     const projectRowLabel = resolveSidebarProjectRowLabel(project);
 

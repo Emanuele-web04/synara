@@ -150,11 +150,12 @@ import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0132 from "./Migrations/132_ExternalMcpTurnCapacityRecovery.ts";
 import Migration0133 from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
-import Migration0135 from "./Migrations/135_Mind.ts";
-import Migration0136 from "./Migrations/136_MindRuntimeIntegrity.ts";
-import Migration0137 from "./Migrations/137_MindTextRevisions.ts";
-import Migration0138 from "./Migrations/138_MindProfiles.ts";
-import Migration0139 from "./Migrations/139_MindProjectionDecoupling.ts";
+import Migration0135 from "./Migrations/135_ProjectionMessageTurnActivityIndex.ts";
+import Migration0136 from "./Migrations/136_Mind.ts";
+import Migration0137 from "./Migrations/137_MindRuntimeIntegrity.ts";
+import Migration0138 from "./Migrations/138_MindTextRevisions.ts";
+import Migration0139 from "./Migrations/139_MindProfiles.ts";
+import Migration0140 from "./Migrations/140_MindProjectionDecoupling.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -305,11 +306,12 @@ export const migrationEntries = [
   [132, "ExternalMcpTurnCapacityRecovery", Migration0132],
   [133, "ProjectionTurnsWorkspaceInitialization", Migration0133],
   [134, "ProjectionThreadsForkSourceMessage", Migration0134],
-  [135, "Mind", Migration0135],
-  [136, "MindRuntimeIntegrity", Migration0136],
-  [137, "MindTextRevisions", Migration0137],
-  [138, "MindProfiles", Migration0138],
-  [139, "MindProjectionDecoupling", Migration0139],
+  [135, "ProjectionMessageTurnActivityIndex", Migration0135],
+  [136, "Mind", Migration0136],
+  [137, "MindRuntimeIntegrity", Migration0137],
+  [138, "MindTextRevisions", Migration0138],
+  [139, "MindProfiles", Migration0139],
+  [140, "MindProjectionDecoupling", Migration0140],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -13,6 +13,7 @@ import {
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
@@ -3018,10 +3019,33 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtime_payload_json = excluded.runtime_payload_json
       `;
 
-      const candidates = yield* snapshotQuery.listStaleInFlightThreadIds({
-        updatedBefore: "2026-07-23T09:00:00.000Z",
-        limit: 10,
-      });
+      const verifyTurnSeeks: Statement.Transformer = (statement) =>
+        Effect.gen(function* () {
+          const [query, parameters] = statement.compile();
+          if (!query.includes("projection_thread_messages")) return statement;
+          const plan = yield* sql
+            .unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, parameters)
+            .pipe(Effect.provideService(Statement.CurrentTransformer, undefined), Effect.orDie);
+          // The five-second sweep must seek active turns, not scan every old
+          // message in each thread. This checks the real migrated SQLite plan.
+          const messageReads = plan.filter((row) => /\bmessages\b/.test(row.detail));
+          assert.isAbove(messageReads.length, 0);
+          assert.isTrue(
+            messageReads.every(
+              (row) =>
+                row.detail.includes("COVERING INDEX") &&
+                row.detail.includes("thread_id=? AND turn_id=?"),
+            ),
+            JSON.stringify(messageReads),
+          );
+          return statement;
+        });
+      const candidates = yield* snapshotQuery
+        .listStaleInFlightThreadIds({
+          updatedBefore: "2026-07-23T09:00:00.000Z",
+          limit: 10,
+        })
+        .pipe(Effect.provideService(Statement.CurrentTransformer, verifyTurnSeeks));
 
       // Candidacy covers every thread whose projection still claims an active
       // lifecycle past the staleness cutoff, including starting/running sessions
@@ -3078,10 +3102,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         limit: 10,
       });
       assert.equal(bindingOnlyCandidates.includes(bindingOnlyThreadId), false);
-      const activityBatch = yield* snapshotQuery.getThreadShellsByIds(
-        [bindingOnlyThreadId, bindingOnlyThreadId, ThreadId.makeUnsafe("missing-runtime-thread")],
-        { includeLatestMessageActivity: true },
-      );
+      const activityBatch = yield* snapshotQuery
+        .getThreadShellsByIds(
+          [bindingOnlyThreadId, bindingOnlyThreadId, ThreadId.makeUnsafe("missing-runtime-thread")],
+          { includeLatestMessageActivity: true },
+        )
+        .pipe(Effect.provideService(Statement.CurrentTransformer, verifyTurnSeeks));
       assert.equal(activityBatch.length, 1);
       assert.equal(activityBatch[0]?.updatedAt, "2026-07-23T09:30:00.000Z");
       const storedBatch = yield* snapshotQuery.getThreadShellsByIds([bindingOnlyThreadId]);

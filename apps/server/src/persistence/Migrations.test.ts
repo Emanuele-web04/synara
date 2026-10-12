@@ -681,11 +681,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "Mind"],
-        [136, "MindRuntimeIntegrity"],
-        [137, "MindTextRevisions"],
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "Mind"],
+        [137, "MindRuntimeIntegrity"],
+        [138, "MindTextRevisions"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -772,11 +773,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
           { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
           { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
-          { migration_id: 135, name: "Mind" },
-          { migration_id: 136, name: "MindRuntimeIntegrity" },
-          { migration_id: 137, name: "MindTextRevisions" },
-          { migration_id: 138, name: "MindProfiles" },
-          { migration_id: 139, name: "MindProjectionDecoupling" },
+          { migration_id: 135, name: "ProjectionMessageTurnActivityIndex" },
+          { migration_id: 136, name: "Mind" },
+          { migration_id: 137, name: "MindRuntimeIntegrity" },
+          { migration_id: 138, name: "MindTextRevisions" },
+          { migration_id: 139, name: "MindProfiles" },
+          { migration_id: 140, name: "MindProjectionDecoupling" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -943,11 +945,12 @@ agentGatewayRetentionLegacyLayer(
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "Mind"],
-          [136, "MindRuntimeIntegrity"],
-          [137, "MindTextRevisions"],
-          [138, "MindProfiles"],
-          [139, "MindProjectionDecoupling"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "Mind"],
+          [137, "MindRuntimeIntegrity"],
+          [138, "MindTextRevisions"],
+          [139, "MindProfiles"],
+          [140, "MindProjectionDecoupling"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1077,11 +1080,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "Mind"],
-        [136, "MindRuntimeIntegrity"],
-        [137, "MindTextRevisions"],
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "Mind"],
+        [137, "MindRuntimeIntegrity"],
+        [138, "MindTextRevisions"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1152,11 +1156,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "Mind"],
-          [136, "MindRuntimeIntegrity"],
-          [137, "MindTextRevisions"],
-          [138, "MindProfiles"],
-          [139, "MindProjectionDecoupling"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "Mind"],
+          [137, "MindRuntimeIntegrity"],
+          [138, "MindTextRevisions"],
+          [139, "MindProfiles"],
+          [140, "MindProjectionDecoupling"],
         ],
       );
 
@@ -1281,11 +1286,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "Mind"],
-        [136, "MindRuntimeIntegrity"],
-        [137, "MindTextRevisions"],
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "Mind"],
+        [137, "MindRuntimeIntegrity"],
+        [138, "MindTextRevisions"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1352,11 +1358,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "Mind"],
-          [136, "MindRuntimeIntegrity"],
-          [137, "MindTextRevisions"],
-          [138, "MindProfiles"],
-          [139, "MindProjectionDecoupling"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "Mind"],
+          [137, "MindRuntimeIntegrity"],
+          [138, "MindTextRevisions"],
+          [139, "MindProfiles"],
+          [140, "MindProjectionDecoupling"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1658,14 +1665,14 @@ mindMigrationLayer("Mind migration", (it) => {
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 134 });
+        yield* runMigrations({ toMigrationInclusive: 135 });
         const executed = yield* runMigrations();
         assert.deepStrictEqual(executed, [
-          [135, "Mind"],
-          [136, "MindRuntimeIntegrity"],
-          [137, "MindTextRevisions"],
-          [138, "MindProfiles"],
-          [139, "MindProjectionDecoupling"],
+          [136, "Mind"],
+          [137, "MindRuntimeIntegrity"],
+          [138, "MindTextRevisions"],
+          [139, "MindProfiles"],
+          [140, "MindProjectionDecoupling"],
         ]);
 
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at) VALUES ('m1', 'p1', 'delete me', 'semantic', 'hash', 0.6, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
@@ -1695,7 +1702,7 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 135 });
+        yield* runMigrations({ toMigrationInclusive: 136 });
         yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES ('p1', 'One', '/one', '{}', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`;
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id, source_provider) VALUES ('agent', 'p1', 'agent memory', 'semantic', 'agent-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-1', 'codex')`;
         yield* sql`INSERT INTO mind_memories (id, project_id, text, type, text_hash, peak_weight, created_at, last_accessed_at, source_thread_id) VALUES ('partial', 'p1', 'partial memory', 'semantic', 'partial-hash', 0.5, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'thread-2')`;
@@ -1703,10 +1710,10 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
 
         const executed = yield* runMigrations();
         assert.deepStrictEqual(executed, [
-          [136, "MindRuntimeIntegrity"],
-          [137, "MindTextRevisions"],
-          [138, "MindProfiles"],
-          [139, "MindProjectionDecoupling"],
+          [137, "MindRuntimeIntegrity"],
+          [138, "MindTextRevisions"],
+          [139, "MindProfiles"],
+          [140, "MindProjectionDecoupling"],
         ]);
         const rows = yield* sql<{
           readonly id: string;
@@ -1777,15 +1784,15 @@ mindRuntimeIntegrityLayer("Mind runtime integrity migration", (it) => {
 const mindTextRevisionsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 mindTextRevisionsLayer("Mind text revisions migration", (it) => {
-  it.effect("applies 137 on a fresh database and reruns idempotently", () =>
+  it.effect("applies 138 on a fresh database and reruns idempotently", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 136 });
+      yield* runMigrations({ toMigrationInclusive: 137 });
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
-        [137, "MindTextRevisions"],
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [138, "MindTextRevisions"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       const columns = yield* sql<{ readonly name: string }>`
@@ -1823,11 +1830,11 @@ mindProfileLayer("Mind profiles migration", (it) => {
   it.effect("applies 138 on a fresh database and reruns idempotently", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 137 });
+      yield* runMigrations({ toMigrationInclusive: 138 });
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       // Profiles are decoupled from the projection: deleting the project row
@@ -1858,7 +1865,7 @@ mindDecouplingLayer("Mind projection decoupling migration", (it) => {
   it.effect("139 rebuilds cascade-coupled tables from earlier heads, preserving rows", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 137 });
+      yield* runMigrations({ toMigrationInclusive: 138 });
 
       // Simulate a database migrated by an earlier head of this branch, where
       // both tables still reference projection_projects ON DELETE CASCADE.
@@ -1883,8 +1890,8 @@ mindDecouplingLayer("Mind projection decoupling migration", (it) => {
 
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
-        [138, "MindProfiles"],
-        [139, "MindProjectionDecoupling"],
+        [139, "MindProfiles"],
+        [140, "MindProjectionDecoupling"],
       ]);
 
       const profileFks = yield* sql<{ readonly referenced: string }>`

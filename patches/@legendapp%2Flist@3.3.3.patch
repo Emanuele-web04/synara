@@ -1,7 +1,55 @@
 diff --git a/react.js b/react.js
 --- a/react.js
 +++ b/react.js
-@@ -1392,7 +1392,7 @@
+@@ -1145,7 +1145,7 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+   const {
+     sizes,
+     averageSizes,
+-    props: { estimatedItemSize, getItemType },
++    props: { estimatedItemSize, getEstimatedItemSize, getItemType },
+     scrollingTo
+   } = state;
+   const sizeKnown = state.sizesKnown.get(key);
+@@ -1165,6 +1165,17 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     return size;
+   }
+   const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++  // A per-item estimate beats the shared average: rows of one type can differ by an
++  // order of magnitude, and every wrong guess above the viewport is later paid as a
++  // scroll-anchor correction. Measurement still replaces it like any estimate.
++  if (getEstimatedItemSize) {
++    const estimatedSize = getEstimatedItemSize(data, index, itemType);
++    if (estimatedSize !== void 0 && estimatedSize > 0) {
++      size = roundSize(estimatedSize) + ctx.scrollAxisGap;
++      setSize(ctx, key, size, notifyTotalSize);
++      return size;
++    }
++  }
+   if (useAverageSize && !scrollingTo) {
+     const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
+     if (averageSizeForType !== void 0) {
+@@ -1299,6 +1310,8 @@ function doScrollTo(ctx, params) {
+   const contentSize = isHorizontal ? getContentSize(ctx) : void 0;
+   const left = isHorizontal ? toNativeHorizontalOffset(state, offset, contentSize) : 0;
+   const top = isHorizontal ? 0 : offset;
++  // Read before scrolling: afterwards the scroller is at the target either way.
++  const nativeWasAtTarget = !isAnimated && !!((_a3 = state.scrollingTo) == null ? void 0 : _a3.isInitialScroll) && isNativeScrollAtOffset(ctx, offset);
+   scroller.scrollTo({ animated: isAnimated, x: left, y: top });
+   if (isAnimated) {
+     const target = (_b = (_a3 = scroller.getScrollEventTarget) == null ? void 0 : _a3.call(scroller)) != null ? _b : null;
+@@ -1312,6 +1325,11 @@ function doScrollTo(ctx, params) {
+     setTimeout(() => {
+       finishScrollTo(ctx);
+     }, 100);
++    // An instant initial scroll to where the scroller already is emits no scroll event, so
++    // nothing checks completion before that 100ms fallback and the list stays hidden.
++    if (nativeWasAtTarget) {
++      checkFinishedScroll(ctx);
++    }
+   }
+ }
+ function listenForScrollEnd(ctx, params) {
+@@ -1392,7 +1410,7 @@ function doMaintainScrollAtEnd(ctx) {
        const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
        state.maintainingScrollAtEnd = pendingState;
        requestAnimationFrame(() => {
@@ -10,7 +58,7 @@ diff --git a/react.js b/react.js
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -2934,6 +2934,24 @@
+@@ -2934,6 +2952,24 @@ function getCurrentTargetOffset(ctx, scrollingTo) {
    const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
    return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
  }
@@ -35,7 +83,7 @@ diff --git a/react.js b/react.js
  function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const { state } = ctx;
    const scroll = state.scrollPending;
-@@ -2946,7 +2964,7 @@
+@@ -2946,7 +2982,7 @@ function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
    return {
      clampedTargetOffset,
@@ -44,7 +92,67 @@ diff --git a/react.js b/react.js
    };
  }
  function checkFinishedScrollFrame(ctx) {
-@@ -4072,7 +4090,8 @@
+@@ -2957,12 +2993,58 @@ function checkFinishedScrollFrame(ctx) {
+   const { state } = ctx;
+   state.animFrameCheckFinishedScroll = void 0;
+   const completionState = getResolvedScrollCompletionState(ctx, scrollingTo);
+-  if (completionState.isAtResolvedTarget && hasScrollCompletionOwnership(state, {
++  if (!completionState.isAtResolvedTarget) {
++    return;
++  }
++  if (hasScrollCompletionOwnership(state, {
+     clampedTargetOffset: completionState.clampedTargetOffset,
+     scrollingTo
+   })) {
+     finishScrollTo(ctx);
++  } else if (isInstantInitialScrollAlreadyApplied(ctx, scrollingTo, completionState.clampedTargetOffset)) {
++    // A target past the native end leaves `state.scroll` ahead of the scroller; settle on
++    // the native offset so later position adjustments start from where the list really is.
++    syncInitialScrollOffset(state, getNativeScrollOffset(ctx));
++    finishScrollTo(ctx);
++  }
++}
++// When every item size is already known, the list mounts at its initial target and the
++// instant scroll moves nothing, so no scroll event ever grants ownership and the list
++// would stay hidden until the 100ms finishScrollTo fallback. The native position being
++// at the target is the arrival the scroll event would have reported.
++function isInstantInitialScrollAlreadyApplied(ctx, scrollingTo, clampedTargetOffset) {
++  if (!scrollingTo.isInitialScroll || scrollingTo.animated) {
++    return false;
++  }
++  return Math.abs(ctx.state.scroll - clampedTargetOffset) <= 1 && isNativeScrollAtOffset(ctx, clampedTargetOffset);
++}
++// The native scroller is at `offset`, or pinned at its end when `offset` lies past what it
++// can reach (an end-aligned target includes footer and bottom padding). Either way an
++// instant scroll there moves nothing and emits no scroll event. The end only counts once
++// the scroller holds the content the list laid out: an unsized scroller is "at its end" too.
++function getScrollableElement(ctx) {
++  var _a3, _b;
++  const node = (_b = (_a3 = ctx.state.refScroller.current) == null ? void 0 : _a3.getScrollableNode) == null ? void 0 : _b.call(_a3);
++  return node && typeof node.scrollTop === "number" ? node : void 0;
++}
++function getNativeScrollOffset(ctx) {
++  const node = getScrollableElement(ctx);
++  return ctx.state.props.horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
++}
++function isNativeScrollAtOffset(ctx, offset) {
++  const state = ctx.state;
++  const node = getScrollableElement(ctx);
++  if (!node) {
++    return false;
++  }
++  const horizontal = !!state.props.horizontal;
++  const nativeOffset = getNativeScrollOffset(ctx);
++  if (Math.abs(nativeOffset - offset) <= 1) {
++    return true;
+   }
++  const nativeContentSize = horizontal ? node.scrollWidth : node.scrollHeight;
++  const maxNativeOffset = nativeContentSize - (horizontal ? node.clientWidth : node.clientHeight);
++  return offset > nativeOffset && maxNativeOffset - nativeOffset <= 1 && nativeContentSize >= getContentSize(ctx) - 1;
+ }
+ function scrollToFallbackOffset(ctx, offset) {
+   var _a3;
+@@ -4072,7 +4154,8 @@ function trackVisibleRange(range, i, top, size, scroll, scrollBottom) {
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];
@@ -54,10 +162,74 @@ diff --git a/react.js b/react.js
    if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
      for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
        const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);
+@@ -7582,6 +7665,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     estimatedItemSize = 100,
+     estimatedListSize,
+     extraData,
++    getEstimatedItemSize,
+     getFixedItemSize,
+     getItemType,
+     horizontal,
+@@ -7839,6 +7923,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     dataVersion,
+     drawDistance,
+     estimatedItemSize,
++    getEstimatedItemSize: useWrapIfItem(getEstimatedItemSize),
+     getFixedItemSize: useWrapIfItem(getFixedItemSize),
+     getItemType: useWrapIfItem(getItemType),
+     horizontal: !!horizontal,
 diff --git a/react.mjs b/react.mjs
 --- a/react.mjs
 +++ b/react.mjs
-@@ -1371,7 +1371,7 @@
+@@ -1124,7 +1124,7 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+   const {
+     sizes,
+     averageSizes,
+-    props: { estimatedItemSize, getItemType },
++    props: { estimatedItemSize, getEstimatedItemSize, getItemType },
+     scrollingTo
+   } = state;
+   const sizeKnown = state.sizesKnown.get(key);
+@@ -1144,6 +1144,17 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+     return size;
+   }
+   const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
++  // A per-item estimate beats the shared average: rows of one type can differ by an
++  // order of magnitude, and every wrong guess above the viewport is later paid as a
++  // scroll-anchor correction. Measurement still replaces it like any estimate.
++  if (getEstimatedItemSize) {
++    const estimatedSize = getEstimatedItemSize(data, index, itemType);
++    if (estimatedSize !== void 0 && estimatedSize > 0) {
++      size = roundSize(estimatedSize) + ctx.scrollAxisGap;
++      setSize(ctx, key, size, notifyTotalSize);
++      return size;
++    }
++  }
+   if (useAverageSize && !scrollingTo) {
+     const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
+     if (averageSizeForType !== void 0) {
+@@ -1278,6 +1289,8 @@ function doScrollTo(ctx, params) {
+   const contentSize = isHorizontal ? getContentSize(ctx) : void 0;
+   const left = isHorizontal ? toNativeHorizontalOffset(state, offset, contentSize) : 0;
+   const top = isHorizontal ? 0 : offset;
++  // Read before scrolling: afterwards the scroller is at the target either way.
++  const nativeWasAtTarget = !isAnimated && !!((_a3 = state.scrollingTo) == null ? void 0 : _a3.isInitialScroll) && isNativeScrollAtOffset(ctx, offset);
+   scroller.scrollTo({ animated: isAnimated, x: left, y: top });
+   if (isAnimated) {
+     const target = (_b = (_a3 = scroller.getScrollEventTarget) == null ? void 0 : _a3.call(scroller)) != null ? _b : null;
+@@ -1291,6 +1304,11 @@ function doScrollTo(ctx, params) {
+     setTimeout(() => {
+       finishScrollTo(ctx);
+     }, 100);
++    // An instant initial scroll to where the scroller already is emits no scroll event, so
++    // nothing checks completion before that 100ms fallback and the list stays hidden.
++    if (nativeWasAtTarget) {
++      checkFinishedScroll(ctx);
++    }
+   }
+ }
+ function listenForScrollEnd(ctx, params) {
+@@ -1371,7 +1389,7 @@ function doMaintainScrollAtEnd(ctx) {
        const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
        state.maintainingScrollAtEnd = pendingState;
        requestAnimationFrame(() => {
@@ -66,7 +238,7 @@ diff --git a/react.mjs b/react.mjs
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -2913,6 +2913,24 @@
+@@ -2913,6 +2931,24 @@ function getCurrentTargetOffset(ctx, scrollingTo) {
    const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
    return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
  }
@@ -91,7 +263,7 @@ diff --git a/react.mjs b/react.mjs
  function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const { state } = ctx;
    const scroll = state.scrollPending;
-@@ -2925,7 +2943,7 @@
+@@ -2925,7 +2961,7 @@ function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
    return {
      clampedTargetOffset,
@@ -100,7 +272,67 @@ diff --git a/react.mjs b/react.mjs
    };
  }
  function checkFinishedScrollFrame(ctx) {
-@@ -4051,7 +4069,8 @@
+@@ -2936,12 +2972,58 @@ function checkFinishedScrollFrame(ctx) {
+   const { state } = ctx;
+   state.animFrameCheckFinishedScroll = void 0;
+   const completionState = getResolvedScrollCompletionState(ctx, scrollingTo);
+-  if (completionState.isAtResolvedTarget && hasScrollCompletionOwnership(state, {
++  if (!completionState.isAtResolvedTarget) {
++    return;
++  }
++  if (hasScrollCompletionOwnership(state, {
+     clampedTargetOffset: completionState.clampedTargetOffset,
+     scrollingTo
+   })) {
+     finishScrollTo(ctx);
++  } else if (isInstantInitialScrollAlreadyApplied(ctx, scrollingTo, completionState.clampedTargetOffset)) {
++    // A target past the native end leaves `state.scroll` ahead of the scroller; settle on
++    // the native offset so later position adjustments start from where the list really is.
++    syncInitialScrollOffset(state, getNativeScrollOffset(ctx));
++    finishScrollTo(ctx);
++  }
++}
++// When every item size is already known, the list mounts at its initial target and the
++// instant scroll moves nothing, so no scroll event ever grants ownership and the list
++// would stay hidden until the 100ms finishScrollTo fallback. The native position being
++// at the target is the arrival the scroll event would have reported.
++function isInstantInitialScrollAlreadyApplied(ctx, scrollingTo, clampedTargetOffset) {
++  if (!scrollingTo.isInitialScroll || scrollingTo.animated) {
++    return false;
++  }
++  return Math.abs(ctx.state.scroll - clampedTargetOffset) <= 1 && isNativeScrollAtOffset(ctx, clampedTargetOffset);
++}
++// The native scroller is at `offset`, or pinned at its end when `offset` lies past what it
++// can reach (an end-aligned target includes footer and bottom padding). Either way an
++// instant scroll there moves nothing and emits no scroll event. The end only counts once
++// the scroller holds the content the list laid out: an unsized scroller is "at its end" too.
++function getScrollableElement(ctx) {
++  var _a3, _b;
++  const node = (_b = (_a3 = ctx.state.refScroller.current) == null ? void 0 : _a3.getScrollableNode) == null ? void 0 : _b.call(_a3);
++  return node && typeof node.scrollTop === "number" ? node : void 0;
++}
++function getNativeScrollOffset(ctx) {
++  const node = getScrollableElement(ctx);
++  return ctx.state.props.horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
++}
++function isNativeScrollAtOffset(ctx, offset) {
++  const state = ctx.state;
++  const node = getScrollableElement(ctx);
++  if (!node) {
++    return false;
++  }
++  const horizontal = !!state.props.horizontal;
++  const nativeOffset = getNativeScrollOffset(ctx);
++  if (Math.abs(nativeOffset - offset) <= 1) {
++    return true;
+   }
++  const nativeContentSize = horizontal ? node.scrollWidth : node.scrollHeight;
++  const maxNativeOffset = nativeContentSize - (horizontal ? node.clientWidth : node.clientHeight);
++  return offset > nativeOffset && maxNativeOffset - nativeOffset <= 1 && nativeContentSize >= getContentSize(ctx) - 1;
+ }
+ function scrollToFallbackOffset(ctx, offset) {
+   var _a3;
+@@ -4051,7 +4133,8 @@ function trackVisibleRange(range, i, top, size, scroll, scrollBottom) {
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];
@@ -110,3 +342,34 @@ diff --git a/react.mjs b/react.mjs
    if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
      for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
        const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);
+@@ -7561,6 +7644,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     estimatedItemSize = 100,
+     estimatedListSize,
+     extraData,
++    getEstimatedItemSize,
+     getFixedItemSize,
+     getItemType,
+     horizontal,
+@@ -7818,6 +7902,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+     dataVersion,
+     drawDistance,
+     estimatedItemSize,
++    getEstimatedItemSize: useWrapIfItem(getEstimatedItemSize),
+     getFixedItemSize: useWrapIfItem(getFixedItemSize),
+     getItemType: useWrapIfItem(getItemType),
+     horizontal: !!horizontal,
+diff --git a/react.d.ts b/react.d.ts
+--- a/react.d.ts
++++ b/react.d.ts
+@@ -222,6 +222,11 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
+      * In case items always have a fixed size, you can provide a function to return it.
+      */
+     getFixedItemSize?: (item: ItemT, index: number, type: TItemType) => number | undefined;
++    /**
++     * Per-item size estimate for items that have not been measured yet. Takes precedence
++     * over the per-type average; measurement replaces it like any other estimate.
++     */
++    getEstimatedItemSize?: (item: ItemT, index: number, type: TItemType) => number | undefined;
+     /**
+      * Returns a stable item type used for pooling and size estimation.
+      */

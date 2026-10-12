@@ -68,7 +68,7 @@ import type { SidebarThreadSortOrder } from "../appSettings";
 // The hub row's hover toolbar holds two actions (pin, settings); only the truncating
 // name yields to it, so the trailing status fades in place instead of sliding.
 const HUB_ROW_TOOLBAR_RESERVE_CLASS_NAME =
-  "group-hover/project-header:pr-[3.25rem] group-has-[:focus-visible]/project-header:pr-[3.25rem]";
+  "group-hover/project-header:pr-[3.25rem] project-header-focus:pr-[3.25rem]";
 
 // Rename fires once per project per session; the effect re-runs on every snapshot
 // while the server has not yet echoed the new title. `inFlight` only dedupes the

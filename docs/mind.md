@@ -6,7 +6,7 @@ Each project holds up to 500 memories of at most 500 characters. Recall returns 
 
 Confirmation reinforces weight and slows decay; only pinning prevents decay. A lazy sweep removes at most 100 eligible old, weak memories per project per run. Eligibility is rechecked inside the deletion transaction, preserving concurrent pins and confirmations. Cleanup failure cannot turn an already committed mutation into a failed response.
 
-Writes, operation receipts, and audit records commit together. Audit and revision rows retain hashes and operation metadata, not historical memory text. Durable Mind tables deliberately do not cascade from projection tables: rebuilding the application projection must not erase memory or profiles. The five migrations append after the existing released lineage, currently at IDs 135–139.
+Writes, operation receipts, and audit records commit together. Audit and revision rows retain hashes and operation metadata, not historical memory text. Durable Mind tables deliberately do not cascade from projection tables: rebuilding the application projection must not erase memory or profiles. The five migrations append after the existing released lineage, currently at IDs 136–140.
 
 The sidebar and rail expose Mind with shared list-cache counts. Search is full-text over memory text, not project names. Both the global list and search return bounded pages with the true total count. Storage failures remain errors rather than empty search results.
 
