@@ -65,6 +65,27 @@ export type ChromiumBrowserInventory = {
 
 const appSupport = (home: string) => join(home, "Library", "Application Support");
 const browserDataPath = (home: string, data: string) => join(appSupport(home), data);
+const linuxDataPaths: Partial<Record<ChromiumInventorySourceId, string[]>> = {
+  chrome: [".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"],
+  "chrome-beta": [".config/google-chrome-beta"],
+  "chrome-dev": [".config/google-chrome-unstable"],
+  edge: [".config/microsoft-edge", ".var/app/com.microsoft.Edge/config/microsoft-edge"],
+  brave: [
+    ".config/BraveSoftware/Brave-Browser",
+    ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+    "snap/brave/common/.config/BraveSoftware/Brave-Browser",
+    "snap/brave/current/.config/BraveSoftware/Brave-Browser",
+  ],
+  vivaldi: [".config/vivaldi"],
+  opera: [".config/opera", "snap/opera/common/.config/opera", "snap/opera/current/.config/opera"],
+  "opera-gx": [".config/opera-gx"],
+  chromium: [
+    ".config/chromium",
+    ".var/app/org.chromium.Chromium/config/chromium",
+    "snap/chromium/common/.config/chromium",
+    "snap/chromium/current/.config/chromium",
+  ],
+};
 
 export async function resolveChromiumProfileFolder(
   home: string,
@@ -120,8 +141,8 @@ async function installed(
 async function profileFolders(
   source: (typeof CHROMIUM_INVENTORY_SOURCES)[number],
   home: string,
+  root = browserDataPath(home, source.data),
 ): Promise<{ folders: string[]; status: "available" | "no_profiles" | "unavailable" }> {
-  const root = browserDataPath(home, source.data);
   let rootIsDirectory: boolean;
   try {
     rootIsDirectory = (await lstat(root)).isDirectory();
@@ -178,6 +199,17 @@ async function profileFolders(
     folders: sorted,
     status: inaccessible ? "unavailable" : sorted.length > 0 ? "available" : "no_profiles",
   };
+}
+
+async function resolveLinuxDataRoot(
+  home: string,
+  browser: ChromiumInventorySourceId,
+): Promise<string | null> {
+  for (const candidate of linuxDataPaths[browser] ?? []) {
+    const root = join(home, candidate);
+    if (await isRealDirectory(root)) return root;
+  }
+  return null;
 }
 
 async function hasProfileStore(folder: string) {
@@ -263,10 +295,16 @@ export async function listChromiumProfileInventory(
   home = homedir(),
   applicationRoots = ["/Applications", join(home, "Applications")],
 ): Promise<ChromiumBrowserInventory[]> {
-  if (process.platform !== "darwin") return [];
+  if (process.platform !== "darwin" && process.platform !== "linux") return [];
   const inventory: ChromiumBrowserInventory[] = [];
   for (const source of CHROMIUM_INVENTORY_SOURCES) {
-    const appInstalled = await installed(source, applicationRoots);
+    const root =
+      process.platform === "linux"
+        ? await resolveLinuxDataRoot(home, source.id)
+        : browserDataPath(home, source.data);
+    if (!root) continue;
+    const appInstalled =
+      process.platform === "linux" ? true : await installed(source, applicationRoots);
     if (appInstalled === false) continue;
     if (appInstalled === null) {
       inventory.push({
@@ -277,8 +315,7 @@ export async function listChromiumProfileInventory(
       });
       continue;
     }
-    const root = browserDataPath(home, source.data);
-    const discovery = await profileFolders(source, home);
+    const discovery = await profileFolders(source, home, root);
     const localState = await readLocalState(root);
     const profiles = discovery.folders.map((folder) => {
       const id = folder === root ? source.name : folder.slice(root.length + 1);

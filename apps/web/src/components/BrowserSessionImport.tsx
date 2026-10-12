@@ -100,7 +100,7 @@ export function BrowserSessionImport({
     setConfirmed(false);
     void Promise.all([api.cookieSources(), api.inventoryChromiumProfiles().catch(() => [])])
       .then(async ([sources, nextInventory]) => {
-        const discovered = await Promise.all(
+        const inspected = await Promise.all(
           sources.map(async (browser) => {
             try {
               return { browser, profiles: await api.cookieProfiles(browser.id), error: false };
@@ -109,6 +109,7 @@ export function BrowserSessionImport({
             }
           }),
         );
+        const discovered = inspected.filter(({ profiles, error }) => error || profiles.length > 0);
         if (!active) return;
         setInventory(nextInventory);
         setBrowsers(discovered);

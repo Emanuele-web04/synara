@@ -81,6 +81,23 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("hides runtime catalog sources that have no local profiles", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([
+      { id: "chrome", name: "Google Chrome" },
+      { id: "brave", name: "Brave" },
+    ]);
+    vi.mocked(api.cookieProfiles).mockImplementation(async (browser) =>
+      browser === "chrome" ? [{ id: "Default", name: "Personal" }] : [],
+    );
+
+    await render(<BrowserImportPanel api={api} />);
+
+    await expect.element(page.getByText("Google Chrome")).toBeVisible();
+    await expect.element(page.getByText("Brave")).not.toBeInTheDocument();
+    await expect.element(page.getByText("No profiles found.")).not.toBeInTheDocument();
+  });
+
   it("clears consent on refresh without reselecting profiles the user unchecked", async () => {
     const api = harness.api!;
     vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);

@@ -18,6 +18,23 @@ function dataRoot(data: string) {
   return join(home, "Library", "Application Support", data);
 }
 
+async function installLinuxProfile(rootPath: string) {
+  const root = join(home, rootPath);
+  const profile = join(root, "Default");
+  await makeCookies(join(profile, "Network", "Cookies"), 3);
+  const logins = new DatabaseSync(join(profile, "Login Data"));
+  logins.exec(
+    "CREATE TABLE logins (blacklisted_by_user INTEGER, password_value BLOB); INSERT INTO logins VALUES (0, X'01'), (1, X'02'), (0, X'')",
+  );
+  logins.close();
+  await writeFile(
+    join(root, "Local State"),
+    JSON.stringify({
+      profile: { info_cache: { Default: { name: "Work" } }, last_used: "Default" },
+    }),
+  );
+}
+
 async function install(source: (typeof CHROMIUM_INVENTORY_SOURCES)[number]) {
   await mkdir(join(home, "Applications", source.app), { recursive: true });
   const root = dataRoot(source.data);
@@ -307,5 +324,59 @@ describe("macOS Chromium profile inventory", () => {
     await install(CHROMIUM_INVENTORY_SOURCES[0]);
     Object.defineProperty(process, "platform", { ...platform, value });
     expect(await scan()).toEqual([]);
+  });
+});
+
+describe("Linux Chromium profile inventory", () => {
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  });
+
+  it.each([
+    ["Chrome", ".config/google-chrome", "chrome"],
+    ["Edge", ".var/app/com.microsoft.Edge/config/microsoft-edge", "edge"],
+    ["Brave", "snap/brave/current/.config/BraveSoftware/Brave-Browser", "brave"],
+    ["Chromium", "snap/chromium/current/.config/chromium", "chromium"],
+    ["Opera", ".config/opera", "opera"],
+    ["Vivaldi", ".config/vivaldi", "vivaldi"],
+  ])("counts %s cookie and password rows without decrypting", async (_name, root, id) => {
+    await installLinuxProfile(root);
+
+    const inventory = await scan();
+    expect(Schema.decodeUnknownSync(BrowserInventoryList)(inventory)).toEqual(inventory);
+    expect(inventory.map(({ id: browser }) => browser)).toEqual([id]);
+    expect(inventory[0]?.profiles).toEqual([
+      {
+        id: "Default",
+        name: "Work",
+        isDefault: true,
+        cookieCount: 3,
+        passwordCount: 1,
+        cookieStatus: "available",
+        passwordStatus: "available",
+      },
+    ]);
+  });
+
+  it("prefers a Flatpak profile root when it is the installed Chrome data store", async () => {
+    await installLinuxProfile(".var/app/com.google.Chrome/config/google-chrome");
+    expect(await scan()).toMatchObject([
+      {
+        id: "chrome",
+        profileStatus: "available",
+        profiles: [{ cookieCount: 3, passwordCount: 1 }],
+      },
+    ]);
+  });
+
+  it("discovers a Snap common profile root", async () => {
+    await installLinuxProfile("snap/chromium/common/.config/chromium");
+    expect(await scan()).toMatchObject([
+      {
+        id: "chromium",
+        profileStatus: "available",
+        profiles: [{ cookieCount: 3, passwordCount: 1 }],
+      },
+    ]);
   });
 });
