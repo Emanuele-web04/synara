@@ -539,6 +539,7 @@ describe("human-only cookie import", () => {
     [{ cookieReaderCode: "timed_out" }, "timed_out"],
     [{ cookieReaderCode: "reader_unavailable" }, "reader_unavailable"],
     [{ cookieReaderCode: "source_too_large" }, "source_too_large"],
+    [{ cookieReaderCode: "resource_exhausted" }, "source_too_large"],
     [{ cookieSyncFailureCode: "redaction_capacity" }, "redaction_capacity"],
     [{ cookieSyncFailureCode: "target_capacity" }, "target_capacity"],
     [{ cookieSyncFailureCode: "target_eviction" }, "target_eviction"],

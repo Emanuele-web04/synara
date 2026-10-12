@@ -381,7 +381,7 @@ diff --git a/dist/src/client.js b/dist/src/client.js
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
 --- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
-@@ -1 +1,2 @@
+@@ -1,1 +1,2 @@
 +import { isChromiumCookieSource, listChromiumCookieSources, listChromiumProfiles, readChromiumCookieSnapshot } from "./chromium-cookie-source.js";
  import { isIP } from "node:net";
 @@ -431,3 +432,4 @@
@@ -533,7 +533,7 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
          return record;
      }
      #updatedRecord(record, payload, now, { requirePassword = false } = {}) {
-@@ -2086,6 +2087,83 @@
+@@ -2086,6 +2087,87 @@
              }
          });
      }
@@ -548,7 +548,21 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
 +                let imported = 0;
 +                let skipped = 0;
 +                const ids = [];
-+                for (const entry of entries) {
++                const identities = new Set();
++                for (const records of [snapshot.records, snapshot.pending]) {
++                    for (const record of records) {
++                        if (record.category && record.category !== "login") continue;
++                        try {
++                            const host = normalizeHttpOrigin(record.origin || record.creationOrigin).hostname.replace(/^www\./, "");
++                            identities.add(JSON.stringify([host, String(record.username || "").toLocaleLowerCase()]));
++                        } catch {}
++                    }
++                }
++                for (const [index, entry] of entries.entries()) {
++                    if (snapshot.records.length >= MAX_RECORDS) {
++                        skipped += entries.length - index;
++                        break;
++                    }
 +                    if (!isRecord(entry)) {
 +                        skipped += 1;
 +                        continue;
@@ -572,19 +586,8 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
 +                        continue;
 +                    }
 +                    const identityHost = target.hostname.replace(/^www\./, "");
-+                    const sameIdentity = (record) => {
-+                        if (record.category && record.category !== "login")
-+                            return false;
-+                        if (!sameUsername(record.username, username))
-+                            return false;
-+                        try {
-+                            return normalizeHttpOrigin(record.origin || record.creationOrigin).hostname.replace(/^www\./, "") === identityHost;
-+                        }
-+                        catch {
-+                            return false;
-+                        }
-+                    };
-+                    if (snapshot.records.some(sameIdentity) || snapshot.pending.some(sameIdentity) || snapshot.records.length >= MAX_RECORDS) {
++                    const identity = JSON.stringify([identityHost, username.toLocaleLowerCase()]);
++                    if (identities.has(identity)) {
 +                        skipped += 1;
 +                        continue;
 +                    }
@@ -595,6 +598,7 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
 +                        matchMode: "exact-origin",
 +                    }, target, new Date().toISOString(), "login", false);
 +                    snapshot.records.push(record);
++                    identities.add(identity);
 +                    ids.push(record.id);
 +                    imported += 1;
 +                }

@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { lstat, open, readdir } from "node:fs/promises";
+import { lstat, open, opendir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -167,13 +167,15 @@ async function profileFolders(
   }
 
   const folders: string[] = [];
-  let entries;
+  const entries = [];
   try {
-    entries = await readdir(root, { withFileTypes: true });
+    for await (const entry of await opendir(root)) {
+      if (entries.length === MAX_SOURCE_ENTRIES) return { folders: [], status: "unavailable" };
+      entries.push(entry);
+    }
   } catch {
     return { folders: [], status: "unavailable" };
   }
-  if (entries.length > MAX_SOURCE_ENTRIES) return { folders: [], status: "unavailable" };
   let inaccessible = false;
   for (const entry of entries) {
     if (

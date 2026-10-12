@@ -116,6 +116,24 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     }
   });
 
+  it("bounds a maximum-size distinct password import at vault capacity", async () => {
+    const { vault } = await fixture();
+    try {
+      const entries = Array.from({ length: 50_000 }, (_, index) => ({
+        origin: `https://site-${index}.example.test`,
+        username: "owner",
+        password: "synthetic-password",
+      }));
+      const result = await vault.importPasswords(entries);
+      expect(result).toMatchObject({ imported: 4096, skipped: 50_000 - 4096 });
+      expect((await vault.snapshot()).logins).toHaveLength(4096);
+      const duplicate = await vault.importPasswords(entries);
+      expect(duplicate).toMatchObject({ imported: 0, skipped: 50_000 });
+    } finally {
+      vault.dispose();
+    }
+  });
+
   it.each([false, true])(
     "preserves saved passwords when provenance persistence fails (update=%s)",
     async (update) => {

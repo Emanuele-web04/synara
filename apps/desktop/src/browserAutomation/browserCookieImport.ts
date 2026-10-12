@@ -254,7 +254,11 @@ export class BrowserCookieImport {
           const transferCode = result.cookieSyncFailureCode;
           let code: Extract<BrowserCookieImportResult, { ok: false }>["code"];
           if (result.cookiePermissionDenied) code = "permission_denied";
-          else if (result.cookieReaderCode === "source_too_large") code = "source_too_large";
+          else if (
+            result.cookieReaderCode === "source_too_large" ||
+            result.cookieReaderCode === "resource_exhausted"
+          )
+            code = "source_too_large";
           else if (
             transferCode === "redaction_capacity" ||
             transferCode === "target_capacity" ||
