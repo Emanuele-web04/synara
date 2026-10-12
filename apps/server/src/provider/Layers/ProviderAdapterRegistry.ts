@@ -8,7 +8,7 @@
  * @module ProviderAdapterRegistryLive
  */
 import type { ProviderInstanceId, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
-import { deriveProviderInstances } from "@synara/shared/providerInstances";
+import { deriveProviderInstances, resolveProviderInstance } from "@synara/shared/providerInstances";
 import { Effect, Layer, Stream } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
@@ -27,8 +27,10 @@ import {
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { CursorAdapter } from "../Services/CursorAdapter.ts";
+import { ClineAdapter } from "../Services/ClineAdapter.ts";
 import { DevinAdapter } from "../Services/DevinAdapter.ts";
 import { DroidAdapter } from "../Services/DroidAdapter.ts";
+import { ExternalAgentAdapter } from "../Services/ExternalAgentAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
@@ -215,12 +217,14 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* ClaudeAdapter,
             yield* CursorAdapter,
             yield* DevinAdapter,
+            yield* ClineAdapter,
             yield* AntigravityAdapter,
             yield* GrokAdapter,
             yield* DroidAdapter,
             yield* OpenCodeAdapter,
             yield* OmpAdapter,
             yield* PiAdapter,
+            yield* ExternalAgentAdapter,
           ];
 
     for (const adapter of adapters) {
@@ -255,9 +259,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
     ) =>
       serverSettings.getSettings.pipe(
         Effect.flatMap((settings) => {
-          const instance = deriveProviderInstances(settings).find(
-            (candidate) => candidate.instanceId === instanceId,
-          );
+          const instance = resolveProviderInstance(settings, { instanceId });
           if (!instance || (!instance.enabled && options?.allowDisabled !== true)) {
             return Effect.fail(new ProviderUnsupportedError({ provider: instanceId }));
           }
@@ -275,7 +277,8 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
         Effect.map((settings) =>
           deriveProviderInstances(settings)
             .filter((instance) => instance.enabled && byProvider.has(instance.driver))
-            .map((instance) => instance.instanceId),
+            .map((instance) => instance.instanceId)
+            .concat(byProvider.has("external") ? ["external"] : []),
         ),
         Effect.catch(() => Effect.succeed([] as ReadonlyArray<ProviderInstanceId>)),
       );

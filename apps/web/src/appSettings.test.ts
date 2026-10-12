@@ -39,6 +39,7 @@ import {
   mergeProviderInstanceConfigPatch,
   mergeProviderStartOptions,
   normalizeChatFontSizePx,
+  normalizeProviderRuntimeIdleStopMinutes,
   normalizeInitialStoredAppSettingsForServerMigration,
   normalizeStoredAppSettings,
   normalizeTerminalFontFamily,
@@ -52,6 +53,41 @@ import {
   revealHubsRailItemOnce,
   serverSettingsToAppSettings,
 } from "./appSettings";
+
+describe("idle agent timeout settings", () => {
+  it("inherits the server default until a local preference is explicitly saved", () => {
+    const settings = Schema.decodeSync(AppSettingsSchema)({});
+    expect(settings.providerRuntimeIdleStopMinutes).toBeNull();
+    expect(buildInitialServerSettingsMigrationPatch(settings)).not.toHaveProperty(
+      "providerRuntimeIdleStopMinutes",
+    );
+    expect(
+      buildInitialServerSettingsMigrationPatch({ ...settings, providerRuntimeIdleStopMinutes: 0 }),
+    ).toMatchObject({ providerRuntimeIdleStopMinutes: 0 });
+    expect(
+      serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW).providerRuntimeIdleStopMinutes,
+    ).toBeNull();
+  });
+
+  it("keeps explicit zero and nullable reset distinct through the server mapping", () => {
+    for (const minutes of [null, 0, 5]) {
+      expect(
+        appSettingsPatchToServerSettingsPatch({ providerRuntimeIdleStopMinutes: minutes }),
+      ).toEqual({
+        providerRuntimeIdleStopMinutes: minutes,
+      });
+      expect(
+        serverSettingsToAppSettings({
+          ...DEFAULT_SERVER_SETTINGS_VIEW,
+          providerRuntimeIdleStopMinutes: minutes,
+        }).providerRuntimeIdleStopMinutes,
+      ).toBe(minutes);
+    }
+    expect(normalizeProviderRuntimeIdleStopMinutes(1.6)).toBe(2);
+    expect(normalizeProviderRuntimeIdleStopMinutes(-1)).toBe(0);
+    expect(normalizeProviderRuntimeIdleStopMinutes(1_500)).toBe(1_440);
+  });
+});
 
 describe("provider process priority settings", () => {
   it("defaults on and forwards explicit opt-out and reset to the server", () => {
@@ -85,6 +121,36 @@ describe("source control writing settings", () => {
     expect(appSettingsPatchToServerSettingsPatch({ sourceControlCustomInstructions: "" })).toEqual({
       sourceControlCustomInstructions: "",
     });
+  });
+});
+
+describe("same-thread handoff preference", () => {
+  it("stays off for fresh installs and upgrades without resetting other preferences", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).enableSameThreadHandoffs).toBe(false);
+    const upgraded = normalizeStoredAppSettings(
+      Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+        JSON.stringify({ anchorSentMessagesToTop: false, chatFontSizePx: 15 }),
+      ),
+    );
+    expect(upgraded).toMatchObject({
+      enableSameThreadHandoffs: false,
+      anchorSentMessagesToTop: false,
+      chatFontSizePx: 15,
+    });
+  });
+
+  it("persists an explicit opt-in and opt-out as a local UI preference", () => {
+    const defaults = AppSettingsSchema.makeUnsafe({});
+    const enabled = applyLocalAppSettingsPatch(defaults, { enableSameThreadHandoffs: true });
+    const restored = normalizeStoredAppSettings(
+      Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(JSON.stringify(enabled)),
+    );
+    expect(restored.enableSameThreadHandoffs).toBe(true);
+    expect(appSettingsPatchToServerSettingsPatch({ enableSameThreadHandoffs: true })).toEqual({});
+    expect(
+      applyLocalAppSettingsPatch(restored, { enableSameThreadHandoffs: false })
+        .enableSameThreadHandoffs,
+    ).toBe(false);
   });
 });
 
@@ -203,6 +269,15 @@ describe("server-backed provider enablement", () => {
     );
 
     expect(patch.providers).toBeUndefined();
+  });
+
+  it("maps Codex launch args into the server provider patch", () => {
+    const patch = appSettingsPatchToServerSettingsPatch({
+      codexLaunchArgs: '-c model_provider="apitoken"',
+    });
+    expect(patch.providers?.codex).toEqual({
+      launchArgs: '-c model_provider="apitoken"',
+    });
   });
 
   it("invalidates discovery for initial and changed streamed provider settings", () => {
@@ -390,6 +465,8 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          cline: [],
+          external: [],
         },
         "galapagos-alpha",
       ),
@@ -411,6 +488,8 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          cline: [],
+          external: [],
         },
         "",
       ),
@@ -640,6 +719,7 @@ describe("normalizeStoredAppSettings", () => {
       droidBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
+      clineBinaryPath: "",
       ompBinaryPath: "",
       ompAgentDir: "",
     });
@@ -689,6 +769,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "/usr/local/bin/claude",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
+        codexLaunchArgs: "",
         codexAccounts: [],
         selectedCodexAccountId: "default",
         cursorApiEndpoint: "http://localhost:3000",
@@ -702,6 +783,7 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -734,6 +816,7 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
+        codexLaunchArgs: "",
         codexAccounts: [],
         selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
@@ -747,10 +830,42 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
     ).toBeUndefined();
+  });
+
+  it("includes Codex launch args without requiring a custom binary", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
+        codexLaunchArgs: '-c model_provider="apitoken"',
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        ompAgentDir: "",
+        clineBinaryPath: "",
+        ompBinaryPath: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        devinBinaryPath: "",
+      }),
+    ).toEqual({
+      codex: {
+        launchArgs: '-c model_provider="apitoken"',
+      },
+    });
   });
 
   it("resolves the selected Codex account into provider start options", () => {
@@ -768,6 +883,7 @@ describe("getProviderStartOptions", () => {
           },
         ],
         selectedCodexAccountId: "work",
+        codexLaunchArgs: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
@@ -779,6 +895,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -818,6 +935,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
         },
@@ -857,6 +975,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
         },
@@ -892,6 +1011,7 @@ describe("getProviderStartOptions", () => {
           openCodeServerUrl: "",
           piAgentDir: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
           providerInstances: {
@@ -942,6 +1062,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
         providerInstances: {
@@ -977,6 +1098,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
         providerInstances: {
@@ -1019,6 +1141,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -1069,6 +1192,7 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        clineBinaryPath: "",
         ompBinaryPath: "",
         ompAgentDir: "",
       }),
@@ -1460,6 +1584,7 @@ describe("provider instance configuration", () => {
           openCodeExperimentalWebSockets: false,
           openCodeServerUrl: "",
           piBinaryPath: "",
+          clineBinaryPath: "",
           ompBinaryPath: "",
           ompAgentDir: "",
           piAgentDir: "",
@@ -1557,7 +1682,9 @@ describe("provider-indexed custom model settings", () => {
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customClineModels: [],
     customOmpModels: [],
+    customExternalModels: [],
   } as const;
 
   it("stores default-instance custom models in the provider instance map", () => {
@@ -1740,6 +1867,8 @@ describe("provider-indexed custom model settings", () => {
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
+      cline: [],
+      external: [],
     });
   });
 
@@ -2093,7 +2222,9 @@ describe("AppSettingsSchema", () => {
       customDroidModels: [],
       customOpenCodeModels: [],
       customPiModels: [],
+      customClineModels: [],
       customOmpModels: [],
+      customExternalModels: [],
     });
   });
 
@@ -2133,4 +2264,16 @@ describe("keepAwakeMode mapping", () => {
       appSettingsPatchToServerSettingsPatch({ enableAssistantStreaming: true }),
     ).not.toHaveProperty("keepAwakeMode");
   });
+});
+
+it("keeps escaped trailing spaces in Codex launch options", () => {
+  const launchArgs = "--value trailing\\ ";
+  expect(
+    getProviderStartOptions({ ...AppSettingsSchema.makeUnsafe({}), codexLaunchArgs: launchArgs })
+      ?.codex?.launchArgs,
+  ).toBe(launchArgs);
+  expect(
+    appSettingsPatchToServerSettingsPatch({ codexLaunchArgs: launchArgs }).providers?.codex
+      ?.launchArgs,
+  ).toBe(launchArgs);
 });

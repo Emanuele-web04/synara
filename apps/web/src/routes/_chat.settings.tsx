@@ -5,9 +5,11 @@
 
 import {
   type DesktopAudioInputDevice,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type SidechatExpiry,
+  type ThreadTitleRefreshMode,
 } from "@synara/contracts";
 import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
@@ -38,6 +40,7 @@ import {
   MIN_TERMINAL_FONT_SIZE_PX,
   defaultDesktopAppIconForFlavor,
   normalizeChatFontSizePx,
+  normalizeProviderRuntimeIdleStopMinutes,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   isGitTextGenerationSettingsDirty,
@@ -205,6 +208,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const TITLE_REFRESH_MODE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "suggested", label: "Suggested" },
+  { value: "automatic", label: "Automatic" },
+] as const satisfies ReadonlyArray<{ value: ThreadTitleRefreshMode; label: string }>;
 
 const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "1h", label: "1 hour" },
@@ -502,6 +511,7 @@ function SettingsRouteView() {
       ? ["Font smoothing"]
       : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
+    ...(settings.titleRefreshMode !== defaults.titleRefreshMode ? ["Thread titles"] : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
       ? ["Activity toasts"]
       : []),
@@ -515,10 +525,16 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes
+      ? ["Stop idle agent processes"]
+      : []),
     ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
       ? ["Fold finished turns"]
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
+    ...(settings.enableSameThreadHandoffs !== defaults.enableSameThreadHandoffs
+      ? ["Continue handoffs here"]
+      : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["Message trail sound"]
       : []),
@@ -774,6 +790,48 @@ function SettingsRouteView() {
           resetLabel: "thread tabs",
           ariaLabel: "Show open threads as tabs in the chat header",
         })}
+
+        <SettingsRow
+          title="Stop idle agent processes after"
+          description="Release idle agent processes to free memory; the next message resumes the session. Use 0 to keep them running, or leave empty for the server default."
+          resetAction={
+            settings.providerRuntimeIdleStopMinutes !== defaults.providerRuntimeIdleStopMinutes ? (
+              <SettingResetButton
+                label="idle agent stop"
+                onClick={() =>
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes: defaults.providerRuntimeIdleStopMinutes,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <Input
+                type="number"
+                size="sm"
+                min={0}
+                max={MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES}
+                step={1}
+                inputMode="numeric"
+                variant="soft"
+                className="w-full text-right sm:w-28"
+                placeholder="Default"
+                value={settings.providerRuntimeIdleStopMinutes ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value.trim();
+                  updateSettings({
+                    providerRuntimeIdleStopMinutes:
+                      value === "" ? null : normalizeProviderRuntimeIdleStopMinutes(Number(value)),
+                  });
+                }}
+                aria-label="Stop idle agent processes after minutes"
+              />
+              <span className="text-ui leading-snug text-muted-foreground">minutes</span>
+            </div>
+          }
+        />
 
         <SettingsRow
           title="Welcome tour"
@@ -1386,7 +1444,7 @@ function SettingsRouteView() {
       <SettingsSection title="Conversation">
         <SettingsRow
           title="Follow-up behavior"
-          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl/Cmd+Enter uses the opposite behavior for one message."
+          description="Choose whether messages sent during an active turn wait in the queue or steer the current run. For a new message, Ctrl/Cmd+Enter uses the opposite behavior once. With an empty composer and queued messages, it always steers the first queued message."
           resetAction={
             settings.followUpBehavior !== defaults.followUpBehavior ? (
               <SettingResetButton
@@ -1465,6 +1523,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "enableSameThreadHandoffs",
+          title: "Continue handoffs here",
+          description:
+            'Add "Continue here" to the Hand off menu to start another provider with a bounded recap in this conversation. "New conversation" stays available. This does not change the model picker.',
+          resetLabel: "continue handoffs here",
+          ariaLabel: "Allow handoffs to continue in this conversation",
         })}
 
         {renderBooleanSettingRow({
@@ -1606,6 +1673,30 @@ function SettingsRouteView() {
           }
         />
 
+        <SettingsRow
+          title="Thread titles"
+          description="Refresh stale thread titles as conversations evolve. Suggested previews a candidate first; automatic applies it. Manual renames always win. Off by default."
+          resetAction={
+            settings.titleRefreshMode !== defaults.titleRefreshMode ? (
+              <SettingResetButton
+                label="thread title refresh"
+                onClick={() =>
+                  updateSettings({
+                    titleRefreshMode: defaults.titleRefreshMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.titleRefreshMode}
+              onValueChange={(value) => updateSettings({ titleRefreshMode: value })}
+              ariaLabel="Thread title refresh"
+              options={TITLE_REFRESH_MODE_OPTIONS}
+            />
+          }
+        />
         {renderBooleanSettingRow({
           settingKey: "showPullRequestDiffColors",
           title: "Pull request diff colors",

@@ -198,7 +198,7 @@ import {
   ProviderListSkillsInput,
   ProviderSkillsCatalogInput,
 } from "./providerDiscovery";
-import { ProviderCompactThreadInput } from "./provider";
+import { ProviderCompactThreadInput, ProviderStopSessionInput } from "./provider";
 import {
   PullRequestActionInput,
   PullRequestCommentInput,
@@ -220,6 +220,14 @@ import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
+import {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceRecordInput,
+  RuntimeTurnFeedbackInput,
+} from "./capabilityEvidence";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -314,6 +322,22 @@ export const WS_METHODS = {
   serverCreateExternalMcpIntegration: "server.createExternalMcpIntegration",
   serverRevokeExternalMcpIntegration: "server.revokeExternalMcpIntegration",
   serverRefreshExternalMcpPairing: "server.refreshExternalMcpPairing",
+  capabilityEvidenceRecord: "capabilityEvidence.record",
+  capabilityEvidenceQuery: "capabilityEvidence.query",
+  capabilityEvidenceInvalidate: "capabilityEvidence.invalidate",
+  capabilityEvidenceDemote: "capabilityEvidence.demote",
+  capabilityEvidenceBadge: "capabilityEvidence.badge",
+  runtimeTurnFeedbackRecord: "runtimeTurnFeedback.record",
+  serverListExternalAgentProfiles: "server.listExternalAgentProfiles",
+  serverGetExternalAgentProfile: "server.getExternalAgentProfile",
+  serverCreateExternalAgentProfile: "server.createExternalAgentProfile",
+  serverUpdateExternalAgentProfile: "server.updateExternalAgentProfile",
+  serverTombstoneExternalAgentProfile: "server.tombstoneExternalAgentProfile",
+  serverListConnectionCandidates: "server.listConnectionCandidates",
+  serverResolveConnectionPlan: "server.resolveConnectionPlan",
+  serverQuarantineExternalAgentProfile: "server.quarantineExternalAgentProfile",
+  serverUnquarantineExternalAgentProfile: "server.unquarantineExternalAgentProfile",
+  serverRecertifyExternalAgentProfile: "server.recertifyExternalAgentProfile",
   serverListWorktrees: "server.listWorktrees",
   serverListLocalServers: "server.listLocalServers",
   serverStopLocalServer: "server.stopLocalServer",
@@ -344,6 +368,7 @@ export const WS_METHODS = {
   // Provider discovery
   providerGetComposerCapabilities: "provider.getComposerCapabilities",
   providerCompactThread: "provider.compactThread",
+  providerStopIdleRuntimeSession: "provider.stopIdleRuntimeSession",
   providerListCommands: "provider.listCommands",
   providerListSkills: "provider.listSkills",
   providerListSkillsCatalog: "provider.listSkillsCatalog",
@@ -596,6 +621,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverCreateExternalMcpIntegration, ExternalMcpCreateIntegrationInput),
   tagRequestBody(WS_METHODS.serverRevokeExternalMcpIntegration, ExternalMcpRevokeIntegrationInput),
   tagRequestBody(WS_METHODS.serverRefreshExternalMcpPairing, ExternalMcpRefreshPairingInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceRecord, CapabilityEvidenceRecordInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceQuery, CapabilityEvidenceQuery),
+  tagRequestBody(WS_METHODS.capabilityEvidenceInvalidate, CapabilityEvidenceInvalidateInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceDemote, CapabilityEvidenceDemoteInput),
+  tagRequestBody(WS_METHODS.capabilityEvidenceBadge, CapabilityEvidenceBadge),
+  tagRequestBody(WS_METHODS.runtimeTurnFeedbackRecord, RuntimeTurnFeedbackInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListLocalServers, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
@@ -617,6 +648,7 @@ const WebSocketRequestBody = Schema.Union([
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
   tagRequestBody(WS_METHODS.providerCompactThread, ProviderCompactThreadInput),
+  tagRequestBody(WS_METHODS.providerStopIdleRuntimeSession, ProviderStopSessionInput),
   tagRequestBody(WS_METHODS.providerListCommands, ProviderListCommandsInput),
   tagRequestBody(WS_METHODS.providerListSkills, ProviderListSkillsInput),
   tagRequestBody(WS_METHODS.providerListSkillsCatalog, ProviderSkillsCatalogInput),

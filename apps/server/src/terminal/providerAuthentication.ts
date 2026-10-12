@@ -32,6 +32,8 @@ export function prepareProviderAuthenticationSettings(input: {
   const instance = deriveProviderInstances(input.settings).find(
     (candidate) => candidate.instanceId === input.instanceId,
   );
+  if (instance?.driver === "external")
+    throw new Error("External agent authentication is managed by its profile.");
   if (!instance?.enabled) throw new Error("This provider account is missing or disabled.");
   if (instance.driver === "opencode" && instance.config.serverUrl) {
     throw new Error(
@@ -107,6 +109,8 @@ export async function resolveProviderAuthenticationLaunch(input: {
   const instance = deriveProviderInstances(input.settings).find(
     (candidate) => candidate.instanceId === input.instanceId,
   );
+  if (instance?.driver === "external")
+    throw new Error("External agent authentication is managed by its profile.");
   if (!instance?.enabled) throw new Error("This provider account is missing or disabled.");
   const profile = (
     await deriveManagedTerminalProfiles({

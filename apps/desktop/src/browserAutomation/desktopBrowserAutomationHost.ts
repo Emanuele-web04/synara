@@ -394,17 +394,22 @@ export class DesktopBrowserAutomationHost {
     const unsubscribeHumanControl =
       request.name === "browser_status" || request.name === "browser_tabs"
         ? undefined
-        : this.browserManager.subscribeAutomationHumanControl(request.threadId, () => {
-            interruptByHuman(
-              new BrowserAutomationHostError({
-                code: "BrowserInterruptedByHuman",
-                retryable: true,
-                phase: "runtime",
-                effectMayHaveCommitted: !definition.annotations.readOnlyHint,
-                ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
-              }),
-            );
-          });
+        : this.browserManager.subscribeAutomationHumanControl(
+            request.threadId,
+            () => {
+              interruptByHuman(
+                new BrowserAutomationHostError({
+                  code: "BrowserInterruptedByHuman",
+                  retryable: true,
+                  phase: "runtime",
+                  effectMayHaveCommitted: !definition.annotations.readOnlyHint,
+                  ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
+                }),
+              );
+            },
+            // Input in another tab is the user's own work, not a reason to stop.
+            requestedTabId ?? undefined,
+          );
 
     const run = (): Promise<unknown> => {
       const operation = (async () => {
@@ -679,7 +684,7 @@ export class DesktopBrowserAutomationHost {
     interrupt: (error: BrowserAutomationHostError) => void,
     action: () => Promise<T> | T,
   ): Promise<T> {
-    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId);
+    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId, tabId);
     const humanError = new BrowserAutomationHostError({
       code: "BrowserInterruptedByHuman",
       retryable: true,
@@ -690,19 +695,19 @@ export class DesktopBrowserAutomationHost {
     try {
       if (
         this.browserManager.isHumanBrowserOperationActive() ||
-        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+        this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch
       ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       const result = await action();
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       return result;
     } catch (error) {
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       if (signal.aborted) throw abortReason(signal);
@@ -1160,7 +1165,10 @@ export class DesktopBrowserAutomationHost {
           }
         : result;
     const state = this.browserManager.getState({ threadId: affinity.threadId });
-    const openedTabId = execution.openedTabId ?? state.activeTabId;
+    // A human may create/select a new tab during this action without changing
+    // the agent tab's epoch. Only its source-runtime window-open correlation
+    // proves that a new page belongs to the agent.
+    const openedTabId = execution.openedTabId;
     if (
       !openedTabId ||
       openedTabId === targetTabId ||
@@ -1168,9 +1176,8 @@ export class DesktopBrowserAutomationHost {
     ) {
       return reconciledResult;
     }
-    // BrowserManager changes activeTabId without advancing the human epoch only
-    // for a new tab created inside the short-lived agent gesture lease. Adopt
-    // it after the human guard has successfully reconciled.
+    // The gesture lease has committed this reserved tab and the human guard
+    // has reconciled before session affinity is updated.
     affinity.tabId = openedTabId;
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }

@@ -261,6 +261,140 @@ describe("DesktopBrowserAutomationHost", () => {
     await host.dispose();
   });
 
+  it.each([false, true])(
+    "does not adopt a human's new tab while an agent batch is running (OAuth popup: %s)",
+    async (oauthPopup) => {
+      const { manager, raw } = createManager();
+      const host = new DesktopBrowserAutomationHost(manager);
+      const started = deferred<void>();
+      const settled = deferred<unknown>();
+      let observeOpen!: (event: unknown) => void;
+      raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
+        observeOpen = listener;
+        return () => undefined;
+      });
+      vi.mocked(runBetterwright)
+        .mockReset()
+        .mockImplementation(() => {
+          started.resolve();
+          return settled.promise;
+        });
+      const sessionId = `parallel-human-tab-${oauthPopup}`;
+      const operation = host.executeTool({
+        sessionId,
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_run",
+        arguments: { tabId: TAB_ID, code: "return {done: true}" },
+      });
+      try {
+        await started.promise;
+        // The public manager's human newTab operation adds/selects a page
+        // without advancing the agent tab's epoch or emitting an agent open.
+        const state = raw.getState();
+        state.tabs.push({
+          ...state.tabs[0]!,
+          id: OPENED_TAB_ID,
+          url: "https://user.example/new",
+          lastCommittedUrl: "https://user.example/new",
+        });
+        state.activeTabId = OPENED_TAB_ID;
+        if (oauthPopup) {
+          observeOpen({
+            kind: "popup",
+            threadId: THREAD_ID,
+            sourceTabId: TAB_ID,
+            openedTabId: null,
+          });
+        }
+        settled.resolve({ done: true });
+        const result = await operation;
+        expect(result).toMatchObject({ tabId: TAB_ID, value: { done: true } });
+        expect(result).not.toHaveProperty("openedTabId");
+        if (oauthPopup) {
+          expect(result).toMatchObject({ humanActionRequired: { kind: "oauth_popup" } });
+        }
+        await expect(
+          host.executeTool({
+            sessionId,
+            provider: "codex",
+            threadId: THREAD_ID,
+            name: "browser_tabs",
+            arguments: {},
+          }),
+        ).resolves.toMatchObject({ assignedTabId: TAB_ID, activeTabId: OPENED_TAB_ID });
+      } finally {
+        settled.resolve(null);
+        await host.dispose();
+      }
+    },
+  );
+
+  it("adopts the agent-correlated tab after its window-open lease commits it", async () => {
+    const { manager, raw } = createManager();
+    const host = new DesktopBrowserAutomationHost(manager);
+    const started = deferred<void>();
+    const settled = deferred<unknown>();
+    let observeOpen!: (event: unknown) => void;
+    const release = vi.fn(() => {
+      const state = raw.getState();
+      state.tabs.push({ ...state.tabs[0]!, id: OPENED_TAB_ID });
+      state.activeTabId = OPENED_TAB_ID;
+      return undefined;
+    });
+    raw.trackAutomationWindowOpen.mockImplementation((_input, listener) => {
+      observeOpen = listener;
+      return release;
+    });
+    vi.mocked(runBetterwright)
+      .mockReset()
+      .mockImplementation(() => {
+        started.resolve();
+        return settled.promise;
+      });
+    const sessionId = "parallel-agent-open";
+    const operation = host.executeTool({
+      sessionId,
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_run",
+      arguments: { tabId: TAB_ID, code: "return {clicked: true}" },
+    });
+    try {
+      await started.promise;
+      observeOpen({
+        kind: "tab",
+        threadId: THREAD_ID,
+        sourceTabId: TAB_ID,
+        openedTabId: OPENED_TAB_ID,
+      });
+      expect(raw.getState().tabs).toHaveLength(1);
+      settled.resolve({ clicked: true });
+      await expect(operation).resolves.toMatchObject({
+        tabId: TAB_ID,
+        openedTabId: OPENED_TAB_ID,
+        value: { clicked: true },
+      });
+      expect(release).toHaveBeenCalledOnce();
+      expect(raw.trackAutomationWindowOpen).toHaveBeenCalledWith(
+        { threadId: THREAD_ID, tabId: TAB_ID },
+        expect.any(Function),
+      );
+      await expect(
+        host.executeTool({
+          sessionId,
+          provider: "codex",
+          threadId: THREAD_ID,
+          name: "browser_tabs",
+          arguments: {},
+        }),
+      ).resolves.toMatchObject({ assignedTabId: OPENED_TAB_ID });
+    } finally {
+      settled.resolve(null);
+      await host.dispose();
+    }
+  });
+
   it("sanitizes Betterwright failures and rejects unbounded batch results", async () => {
     const { manager } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);

@@ -339,7 +339,8 @@ import {
   MAX_MICROPHONE_ID_LENGTH,
 } from "./audioLevelMonitor";
 import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
-import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
+import { FLOATING_BROWSER_CHROME_PARTITION } from "@synara/shared/browserSession";
+import { hardenIsolatedWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
   APP_SNAP_SETTINGS_PANE_URLS,
@@ -589,6 +590,7 @@ let unreadBackgroundNotificationCount = 0;
 const desktopNotificationRetainer = createDesktopNotificationRetainer<Notification>();
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+const floatingChromePreload = Path.join(__dirname, "floatingBrowserChromePreload.js");
 const browserOsKeyStore = {
   available: async () => {
     await app.whenReady();
@@ -604,6 +606,7 @@ const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), brow
 let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
 const browserManager = new DesktopBrowserManager({
+  workspaceStatePath: Path.join(STATE_DIR, "browser-workspaces.json"),
   onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
   onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
@@ -1885,6 +1888,14 @@ async function checkForUpdatesFromMenu(): Promise<void> {
   }
 }
 
+function syncAlwaysOnTopMenuItem(window: BrowserWindow | null = mainWindow): void {
+  const menuItem = Menu.getApplicationMenu()?.getMenuItemById("always-on-top");
+  if (!menuItem) return;
+  const liveWindow = window && !window.isDestroyed() ? window : null;
+  menuItem.enabled = liveWindow !== null;
+  menuItem.checked = liveWindow?.isAlwaysOnTop() ?? false;
+}
+
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
@@ -1985,6 +1996,17 @@ function configureApplicationMenu(): void {
         { type: "separator" },
         ...zoomMenuItems,
         { type: "separator" },
+        {
+          id: "always-on-top",
+          label: "Always on Top",
+          type: "checkbox",
+          enabled: false,
+          click: () => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            mainWindow.setAlwaysOnTop(!mainWindow.isAlwaysOnTop());
+            syncAlwaysOnTopMenuItem();
+          },
+        },
         { role: "togglefullscreen" },
       ],
     },
@@ -2007,6 +2029,7 @@ function configureApplicationMenu(): void {
   );
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  syncAlwaysOnTopMenuItem();
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -5654,6 +5677,8 @@ function createWindow(): BrowserWindow {
     },
   });
   browserManager.setWindow(window);
+  syncAlwaysOnTopMenuItem(window);
+  window.on("always-on-top-changed", () => syncAlwaysOnTopMenuItem(window));
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
@@ -5663,9 +5688,24 @@ function createWindow(): BrowserWindow {
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
+    if (partition === FLOATING_BROWSER_CHROME_PARTITION) {
+      if (
+        !hardenIsolatedWebviewPreferences({
+          partition,
+          expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
+          preloadPath: floatingChromePreload,
+          webPreferences,
+        })
+      ) {
+        event.preventDefault();
+        return;
+      }
+      webPreferences.backgroundThrottling = false;
+      return;
+    }
     if (
       partition === undefined ||
-      !hardenBrowserAnnotationWebviewPreferences({
+      !hardenIsolatedWebviewPreferences({
         partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationGuestPreload,
@@ -5809,6 +5849,7 @@ function createWindow(): BrowserWindow {
     runningChatsQuitGuard.cancelPending();
     if (mainWindow === window) {
       mainWindow = null;
+      syncAlwaysOnTopMenuItem();
     }
     browserManager.setWindow(null);
   });

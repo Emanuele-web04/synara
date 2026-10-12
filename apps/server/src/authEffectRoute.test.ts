@@ -38,6 +38,7 @@ import {
   AUTH_JSON_BODY_MAX_BYTES,
   authEffectRouteLayer,
   binaryUploadEffectRouteLayer,
+  resolvePairingBaseUrl,
 } from "./http";
 import {
   ProviderAdapterRegistry,
@@ -229,6 +230,70 @@ function mutationRequest(input: {
 }
 
 describe("authEffectRouteLayer", () => {
+  it("chooses the configured public origin or a concrete reachable bind address for pairing", () => {
+    expect(
+      resolvePairingBaseUrl({
+        publicUrl: new URL("https://synara.example.test/"),
+        host: "192.168.1.10",
+        port: 3773,
+      }),
+    ).toBe("https://synara.example.test");
+    expect(resolvePairingBaseUrl({ publicUrl: undefined, host: "192.168.1.10", port: 3773 })).toBe(
+      "http://192.168.1.10:3773",
+    );
+    expect(resolvePairingBaseUrl({ publicUrl: undefined, host: "fd00::10", port: 3773 })).toBe(
+      "http://[fd00::10]:3773",
+    );
+    for (const host of [undefined, "localhost", "127.0.0.1", "0.0.0.0", "::", "::1"]) {
+      expect(resolvePairingBaseUrl({ publicUrl: undefined, host, port: 3773 })).toBeUndefined();
+    }
+  });
+
+  it("includes the configured pairing origin only after authenticating an owner", async () => {
+    const sideEffects = { count: 0 };
+    const config = {
+      host: "0.0.0.0",
+      port: 3773,
+      publicUrl: new URL("https://synara.example.test/"),
+    } as ServerConfigShape;
+    await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
+      const response = await fetch(
+        `${serverOrigin}/api/auth/pairing-token`,
+        mutationRequest({ origin: "https://synara.example.test", credential: "cookie" }),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        credential: "PAIRINGTOKEN",
+        pairingBaseUrl: "https://synara.example.test",
+      });
+      expect(sideEffects.count).toBe(1);
+    });
+  });
+
+  it("refuses pairing credentials for clients even with a trusted origin", async () => {
+    const sideEffects = { count: 0 };
+    const serverAuth = makeServerAuth(sideEffects);
+    const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;
+    await withAuthEffectServer(
+      config,
+      {
+        ...serverAuth,
+        authenticateHttpRequest: (request) =>
+          serverAuth
+            .authenticateHttpRequest(request)
+            .pipe(Effect.map((session) => ({ ...session, role: "client" as const }))),
+      },
+      async (serverOrigin) => {
+        const response = await fetch(
+          `${serverOrigin}/api/auth/pairing-token`,
+          mutationRequest({ origin: serverOrigin, credential: "cookie" }),
+        );
+        expect(response.status).toBe(403);
+        expect(sideEffects.count).toBe(0);
+      },
+    );
+  });
+
   it("rejects declared and chunked oversized bootstrap JSON before auth exchange", async () => {
     const sideEffects = { count: 0 };
     const config = { host: "127.0.0.1", publicUrl: undefined } as ServerConfigShape;

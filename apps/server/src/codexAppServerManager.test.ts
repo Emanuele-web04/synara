@@ -7070,3 +7070,45 @@ describe("collab child routing after the parent turn ends", () => {
     expect(harness.context.collabReceiverParents.has("child_provider_0")).toBe(false);
   });
 });
+
+it.each(["start", "fork"] as const)(
+  "passes raw configured launch args to the %s spawn boundary",
+  async (operation) => {
+    const fake = createSyntheticCodexAppServer();
+    const spawn = vi.spyOn(fake, "spawnAppServer").mockImplementation(() => {
+      throw new Error("launch argument boundary captured");
+    });
+    const { manager } = createSyntheticCodexManager(fake);
+    const launchArgs = "--value trailing\\ ";
+    const threadId = asThreadId(`raw-launch-${operation}`);
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-launch-args-"));
+    try {
+      const result =
+        operation === "start"
+          ? manager.startSession({
+              threadId,
+              provider: "codex",
+              agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+              cwd,
+              runtimeMode: "full-access",
+              providerOptions: { codex: { launchArgs } },
+            })
+          : manager.forkThread({
+              sourceThreadId: asThreadId("source-launch"),
+              sourceResumeCursor: { threadId: "native-source-launch" },
+              threadId,
+              lifecycleGeneration: "launch-fixture",
+              expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
+              cwd,
+              runtimeMode: "full-access",
+              providerOptions: { codex: { launchArgs } },
+            });
+      await expect(result).rejects.toThrow("launch argument boundary captured");
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ launchArgs, env: {}, cwd }));
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);

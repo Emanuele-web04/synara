@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
   OrchestrationCommand,
   OrchestrationEvent,
@@ -40,6 +42,7 @@ import { Effect } from "effect";
 import { computerActivationMetadata } from "../computer/computerActivation.ts";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { effortRetryPreconditionViolation } from "./effortRetry.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
@@ -962,7 +965,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.workspaceRoot !== undefined ||
         command.defaultModelSelection !== undefined ||
         command.scripts !== undefined ||
-        command.isPinned !== undefined;
+        command.isPinned !== undefined ||
+        command.titleRefreshMode !== undefined;
       const isLegacyHomeChatContainer = isLegacyHomeChatContainerRow({
         projectTitle: existingProject.title,
         projectWorkspaceRoot: existingProject.workspaceRoot,
@@ -1085,6 +1089,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.titleRefreshMode !== undefined
+            ? { titleRefreshMode: command.titleRefreshMode }
+            : {}),
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
@@ -1665,6 +1672,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.manualTitlePinned !== undefined
+            ? { manualTitlePinned: command.manualTitlePinned }
+            : {}),
+          ...(command.titleRefreshMode !== undefined
+            ? { titleRefreshMode: command.titleRefreshMode }
+            : {}),
+          ...(command.pendingSuggestedTitle !== undefined
+            ? { pendingSuggestedTitle: command.pendingSuggestedTitle }
+            : {}),
           ...(command.isSettled !== undefined
             ? { settledAt: command.isSettled ? occurredAt : null }
             : {}),
@@ -1861,6 +1877,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      if (command.taskWritePrecondition !== undefined) {
+        const expected = command.taskWritePrecondition;
+        const project = readModel.projects.find((entry) => entry.id === targetThread.projectId);
+        const actual = {
+          projectId: targetThread.projectId,
+          projectWorkspaceRoot: project?.workspaceRoot,
+          envMode: targetThread.envMode ?? "local",
+          branch: targetThread.branch,
+          worktreePath: targetThread.worktreePath,
+          workingDirectory: targetThread.workingDirectory ?? null,
+          runtimeMode: targetThread.runtimeMode,
+          interactionMode: targetThread.interactionMode,
+          modelSelection: targetThread.modelSelection,
+          sessionProviderInstanceId: targetThread.session?.providerInstanceId ?? null,
+          sessionRuntimeMode: targetThread.session?.runtimeMode ?? null,
+          gatewayOperationId: targetThread.gatewayOperationId,
+        };
+        if (
+          targetThread.archivedAt != null ||
+          targetThread.creationSource !== "external_mcp" ||
+          !project ||
+          project.deletedAt !== null ||
+          !isDeepStrictEqual(actual, expected)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "The authorized task target changed or was archived. Read the task before retrying with a new requestId.",
+          });
+        }
+      }
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
@@ -2571,6 +2618,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, thread);
+      if (command.retryFrom) {
+        const detail = effortRetryPreconditionViolation(thread, {
+          ...command,
+          retryFrom: command.retryFrom,
+        });
+        if (detail) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail,
+          });
+        }
+      }
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2608,6 +2667,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: command.text,
           rollbackTurnCount: editTarget.rollbackTurnCount,
           removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
+          ...(command.retryFrom !== undefined ? { retryFrom: command.retryFrom } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),

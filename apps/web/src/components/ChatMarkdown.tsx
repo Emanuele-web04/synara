@@ -26,6 +26,7 @@ import React, {
   type CSSProperties,
   Suspense,
   isValidElement,
+  lazy,
   memo,
   use,
   useDeferredValue,
@@ -111,6 +112,7 @@ const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
 const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
+const LazyMermaidDiagram = lazy(() => import("./MermaidDiagram"));
 
 function isExternalHttpHref(href: string | undefined): href is string {
   return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
@@ -164,6 +166,8 @@ interface ChatMarkdownProps {
    * (skills, mentions, agents, bare links) render as the shared chips.
    */
   variant?: "assistant" | "user";
+  /** Visual tone for supporting transcript/work prose; does not change assistant/user parsing. */
+  tone?: "default" | "subtle" | "process";
   /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
   /**
@@ -967,7 +971,7 @@ function MarkdownCodeBlock({
   direction?: "ltr" | undefined;
 }) {
   const [copied, setCopied] = useState(false);
-  const [wrap, setWrap] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = () => {
     void copyTextToClipboard(code)
@@ -1166,6 +1170,7 @@ interface MarkdownRenderContextValue {
   knownAbsoluteFilePaths: string[] | undefined;
   diffThemeName: DiffThemeName;
   isStreaming: boolean;
+  findQuery: string;
   isUserVariant: boolean;
   usesAutomaticBlockDirection: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
@@ -1328,7 +1333,7 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming, usesAutomaticBlockDirection } =
+    const { sourceText, diffThemeName, isStreaming, findQuery, usesAutomaticBlockDirection } =
       useContext(MarkdownRenderContext)!;
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
@@ -1359,13 +1364,21 @@ const MARKDOWN_COMPONENTS: Components = {
         ) : (
           <CodeHighlightErrorBoundary fallback={highlightedFallback}>
             <Suspense fallback={highlightedFallback}>
-              <SuspenseShikiCodeBlock
-                language={fence.language}
-                code={code}
-                themeName={diffThemeName}
-                isStreaming={isStreaming}
-                sourceOffset={sourceOffset}
-              />
+              {fence.language === "mermaid" && !isStreaming && !findQuery.trim() ? (
+                <LazyMermaidDiagram
+                  code={code}
+                  theme={diffThemeName === "github-dark" ? "dark" : "light"}
+                  fallback={highlightedFallback}
+                />
+              ) : (
+                <SuspenseShikiCodeBlock
+                  language={fence.language}
+                  code={code}
+                  themeName={diffThemeName}
+                  isStreaming={isStreaming}
+                  sourceOffset={sourceOffset}
+                />
+              )}
             </Suspense>
           </CodeHighlightErrorBoundary>
         )}
@@ -1553,6 +1566,7 @@ function ChatMarkdown({
   onTaskToggle,
   knownAbsoluteFilePaths: knownAbsoluteFilePathsProp,
   variant: variantProp,
+  tone: toneProp,
   mentionReferences,
   terminalContexts,
   onOpenThread,
@@ -1564,6 +1578,7 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const tone = toneProp ?? "default";
   const directionMode = directionModeProp ?? "off";
   const usesAutomaticBlockDirection = directionMode === "auto-blocks";
   const parseHtml = parseHtmlProp ?? false;
@@ -1652,6 +1667,7 @@ function ChatMarkdown({
       knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
+      findQuery,
       isUserVariant,
       usesAutomaticBlockDirection,
       mentionReferences,
@@ -1667,6 +1683,7 @@ function ChatMarkdown({
       knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
+      findQuery,
       isUserVariant,
       usesAutomaticBlockDirection,
       mentionReferences,
@@ -1682,7 +1699,7 @@ function ChatMarkdown({
   return (
     <div
       ref={rootRef}
-      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}${tone === "subtle" ? "chat-markdown--subtle " : tone === "process" ? "chat-markdown--process " : ""}w-full min-w-0 ${className} text-foreground`}
       {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
       style={style}
     >

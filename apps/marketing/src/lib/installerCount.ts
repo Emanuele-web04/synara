@@ -8,10 +8,9 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 
 import storedInstallerDownloads from "@/data/installer-downloads.json";
+import { isInstallerAsset } from "./release-assets";
 
 const RELEASES_API_URL = "https://api.github.com/repos/Emanuele-web04/synara/releases?per_page=100";
-
-const INSTALLER_FILE_PATTERN = /\.(dmg|exe|AppImage)$/i;
 
 type GitHubReleaseAsset = {
   download_count?: number;
@@ -37,7 +36,7 @@ export function countInstallerDownloads(releases: GitHubRelease[]): number {
   return releases.reduce((total, release) => {
     const releaseTotal =
       release.assets?.reduce((assetTotal, asset) => {
-        if (!asset.name || !INSTALLER_FILE_PATTERN.test(asset.name)) {
+        if (!isInstallerAsset(asset.name)) {
           return assetTotal;
         }
 

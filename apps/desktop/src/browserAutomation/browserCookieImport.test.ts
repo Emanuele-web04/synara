@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   closeBrowser: vi.fn(),
   closeConnection: vi.fn(),
   connect: vi.fn(),
+  exec: vi.fn(),
   constructedOptions: { current: undefined as unknown },
 }));
 vi.mock("betterwright", () => ({
@@ -41,6 +42,10 @@ vi.mock("betterwright", () => ({
   },
 }));
 vi.mock("./betterwrightConnection", () => ({ openBetterwrightConnection: mocks.connect }));
+vi.mock("@synara/shared/processRuntime", async (original) => ({
+  ...(await original<typeof import("@synara/shared/processRuntime")>()),
+  execProcessFile: mocks.exec,
+}));
 import { BrowserCookieImport } from "./browserCookieImport";
 
 const input = {
@@ -136,6 +141,90 @@ describe("human-only cookie import", () => {
     expect(mocks.closeConnection).toHaveBeenCalledWith(false);
     expect(mocks.closeBrowser).toHaveBeenCalled();
     expect(contents.listenerCount("did-start-navigation")).toBe(0);
+  });
+
+  it.each([
+    ["helium", "Helium", "Helium Storage Key"],
+    ["aside", "Aside", "Aside Safe Storage"],
+    ["dia", "Dia", "Dia Safe Storage"],
+  ])(
+    "uses only %s's owned Keychain item and preserves import scope",
+    async (browser, account, service) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { ...descriptor, value: "darwin" });
+      try {
+        mocks.exec.mockImplementation((_file, _args, _options, callback) =>
+          callback(null, "synthetic-key\n"),
+        );
+        mocks.sync.mockImplementation(async () => {
+          const options = mocks.constructedOptions.current as {
+            chromiumKeychainPassword(browser: string, timeoutMs: number): Promise<string>;
+          };
+          expect(await options.chromiumKeychainPassword(browser, 30_000)).toBe("synthetic-key");
+          await expect(
+            options.chromiumKeychainPassword(browser === "helium" ? "aside" : "helium", 30_000),
+          ).rejects.toThrow("Unsupported cookie source");
+          await expect(options.chromiumKeychainPassword("__proto__", 30_000)).rejects.toThrow(
+            "Unsupported cookie source",
+          );
+          return { ok: true, synced: 1, skipped: 0, cookieImportDomains: ["example.test"] };
+        });
+        const { importer } = fixture();
+        expect(
+          (
+            await importer.import({
+              ...input,
+              browser: browser as "helium" | "aside" | "arc" | "dia",
+            })
+          ).ok,
+        ).toBe(true);
+        expect(mocks.exec).toHaveBeenCalledExactlyOnceWith(
+          "/usr/bin/security",
+          ["find-generic-password", "-w", "-a", account, "-s", service],
+          expect.objectContaining({
+            timeout: 15_000,
+            maxBuffer: 4096,
+            signal: expect.any(AbortSignal),
+            killSignal: "SIGKILL",
+          }),
+          expect.any(Function),
+        );
+        expect(mocks.sync).toHaveBeenCalledWith(
+          expect.objectContaining({ domains: ["example.test"], windowsAppBound: "disabled" }),
+        );
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+    },
+  );
+
+  it("cancels owned Keychain acquisition on navigation and exposes no helper output", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...descriptor, value: "darwin" });
+    try {
+      const { importer, contents, releaseHumanOperation } = fixture();
+      mocks.exec.mockImplementation((_file, _args, options, callback) => {
+        contents.emit("did-start-navigation", {}, "https://other.test", false, true);
+        expect(options.signal.aborted).toBe(true);
+        callback(new Error("synthetic-private-diagnostic"), "synthetic-private-key");
+      });
+      mocks.sync.mockImplementation(async () => {
+        const options = mocks.constructedOptions.current as {
+          chromiumKeychainPassword(browser: string, timeoutMs: number): Promise<string>;
+        };
+        await options.chromiumKeychainPassword("helium", 30_000);
+        throw new Error("Import must not proceed after cancellation.");
+      });
+      const failure = await importer
+        .import({ ...input, browser: "helium" })
+        .catch((error: Error) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).not.toMatch(/synthetic-private/);
+      expect(mocks.closeConnection).toHaveBeenCalledWith(true);
+      expect(releaseHumanOperation).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
   });
 
   it("rejects other origins, profile paths and unsupported sources before extraction", async () => {

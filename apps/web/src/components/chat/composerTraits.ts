@@ -4,6 +4,7 @@
 // Depends on: shared model capability helpers and provider model option types.
 
 import {
+  type DevinModelOptions,
   type ProviderOptionDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
@@ -17,6 +18,7 @@ import {
 } from "@synara/shared/model";
 
 import { buildProviderOptionPatch, type ProviderOptions } from "../../providerModelOptions";
+import { devinPairingStatusLabel, getDevinPairingModel } from "./devinFusionPairing";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
@@ -163,6 +165,20 @@ export function getComposerTraitSelection(
   const ultrathinkPromptControlled =
     promptInjectedValues.length > 0 && isClaudeUltrathinkPrompt(prompt);
 
+  // Pairing families (Devin Fusion) replace the generic effort/speed controls:
+  // each variant already encodes lead + effort + fast + sidekick, so the only
+  // faithful control is picking the concrete variant UID itself.
+  const pairing = getDevinPairingModel(provider, runtimeModel);
+  const pinnedVariantUid =
+    trimOrNull((modelOptions as DevinModelOptions | null | undefined)?.modelVariant) ?? null;
+  const pairingVariantUid =
+    pairing !== null && pinnedVariantUid !== null
+      ? (pairing.variants.find((variant) => variant.uid === pinnedVariantUid)?.uid ?? null)
+      : null;
+  const pairingLabel = pairing
+    ? (devinPairingStatusLabel(pairing, modelOptions) ?? "Default")
+    : null;
+
   return {
     caps,
     descriptors,
@@ -180,6 +196,9 @@ export function getComposerTraitSelection(
     contextWindow,
     defaultContextWindow,
     ultrathinkPromptControlled,
+    pairing,
+    pairingLabel,
+    pairingVariantUid,
   };
 }
 
@@ -191,9 +210,12 @@ export type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection
 export function resolveComposerTraitStatusLabel(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
-    "effort" | "effortLevels" | "thinkingEnabled" | "ultrathinkPromptControlled"
+    "effort" | "effortLevels" | "thinkingEnabled" | "ultrathinkPromptControlled" | "pairingLabel"
   >,
 ): string | null {
+  if (selection.pairingLabel) {
+    return selection.pairingLabel;
+  }
   if (selection.ultrathinkPromptControlled) {
     return "Ultrathink";
   }
@@ -230,7 +252,12 @@ export function showsComposerFastModeBadge(
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
-    "caps" | "effortLevels" | "thinkingEnabled" | "contextWindowOptions" | "fastModeDescriptor"
+    | "caps"
+    | "effortLevels"
+    | "thinkingEnabled"
+    | "contextWindowOptions"
+    | "fastModeDescriptor"
+    | "pairing"
   >,
   options?: {
     includeFastMode?: boolean;
@@ -240,6 +267,7 @@ export function hasVisibleComposerTraitControls(
 ): boolean {
   return (
     ((options?.includeEffort ?? true) && selection.effortLevels.length > 0) ||
+    selection.pairing != null ||
     selection.thinkingEnabled !== null ||
     selection.contextWindowOptions.length > 1 ||
     ((options?.includeFastMode ?? true) && supportsComposerFastModeControl(selection))

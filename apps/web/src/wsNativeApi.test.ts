@@ -5,6 +5,7 @@
 
 import {
   ApprovalRequestId,
+  DEFAULT_SERVER_SETTINGS,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -304,6 +305,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        titleRefresh: DEFAULT_SERVER_SETTINGS.titleRefresh,
         keepAwakeMode: "off",
         lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",
@@ -318,6 +320,7 @@ describe("wsNativeApi", () => {
             enabled: true,
             binaryPath: "codex",
             homePath: "",
+            launchArgs: "",
             selectedAccountId: "default",
             accounts: [],
             customModels: [],
@@ -333,6 +336,7 @@ describe("wsNativeApi", () => {
           },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
+          cline: { enabled: true, binaryPath: "cline", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },

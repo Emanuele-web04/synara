@@ -87,7 +87,7 @@ export function useComposerSlashCommands(input: {
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
   providerCommandDiscoveryCwd: string | null;
   selectedProvider: ProviderKind;
-  currentProviderModelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  currentProviderModelOptions: ProviderModelOptions[Exclude<ProviderKind, "external">] | undefined;
   selectedModelSelection: ModelSelection;
   environmentMode: string | null;
   runtimeMode: RuntimeMode;
@@ -102,7 +102,7 @@ export function useComposerSlashCommands(input: {
   setComposerDraftProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
-    nextProviderOptions: ProviderModelOptions[ProviderKind],
+    nextProviderOptions: ProviderModelOptions[Exclude<ProviderKind, "external">],
     options?: { persistSticky?: boolean },
   ) => void;
   editorActions: {
@@ -438,6 +438,18 @@ export function useComposerSlashCommands(input: {
           type: "info",
           title: "Newer thread title kept",
           description: "The generated title was discarded because the title changed.",
+        });
+      } else if (outcome.status === "suggested") {
+        toastManager.add({
+          type: "success",
+          title: "Title suggestion ready",
+          description: outcome.title,
+        });
+      } else if (outcome.status === "pinned") {
+        toastManager.add({
+          type: "info",
+          title: "Manual title kept",
+          description: "Unpin the title or request a refresh to change it.",
         });
       } else if (outcome.status === "unavailable") {
         toastManager.add({ type: "warning", title: "Rename is unavailable" });

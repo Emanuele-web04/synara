@@ -3,7 +3,12 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
+} from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -57,10 +62,12 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
   return {
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
+    titleRefresh: DEFAULT_SERVER_SETTINGS.titleRefresh,
     keepAwakeMode: "off",
     lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
+
     githubInboxIncludeUpstreams: false,
     sidechatExpiry: "1h",
     sourceControlWritingStyle: "repository",
@@ -71,6 +78,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         ...provider,
         binaryPath: "codex",
         homePath: "",
+        launchArgs: "",
         selectedAccountId: "default",
         accounts: [],
       },
@@ -84,6 +92,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
+      cline: { ...provider, binaryPath: "cline" },
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },

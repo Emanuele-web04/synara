@@ -363,6 +363,8 @@ export function providerComposerCapabilitiesQueryOptions(
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider, keyInstanceId),
     queryFn: async () => {
+      if (provider === "external")
+        throw new Error("External agents use profile-scoped capabilities.");
       const api = ensureNativeApi();
       return api.provider.getComposerCapabilities({
         provider,
@@ -389,6 +391,8 @@ export function providerSkillsQueryOptions(input: {
       input.instanceId ?? null,
     ),
     queryFn: async () => {
+      if (input.provider === "external")
+        throw new Error("External agents use profile-scoped discovery.");
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Skill discovery is unavailable.");
@@ -401,7 +405,7 @@ export function providerSkillsQueryOptions(input: {
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null,
+    enabled: input.provider !== "external" && (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
     placeholderData: (previous) => previous ?? EMPTY_SKILLS_RESULT,
   });
@@ -453,6 +457,8 @@ export function providerCommandsQueryOptions(input: {
       input.instanceId ?? null,
     ),
     queryFn: async () => {
+      if (input.provider === "external")
+        throw new Error("External agents use profile-scoped discovery.");
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Command discovery is unavailable.");
@@ -470,7 +476,7 @@ export function providerCommandsQueryOptions(input: {
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null,
+    enabled: input.provider !== "external" && (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
     // Keeps the menu populated while refetching. `artifacts` is dropped because the
     // previous entry can belong to another Claude thread, whose session may have a
@@ -533,6 +539,8 @@ export function providerModelsQueryOptions(input: {
         signal,
         input.priority ?? "background",
         async () => {
+          if (input.provider === "external")
+            throw new Error("External agents use profile-scoped discovery.");
           const api = ensureNativeApi();
           const result = await api.provider.listModels({
             provider: input.provider,
@@ -550,7 +558,7 @@ export function providerModelsQueryOptions(input: {
           return requireDiscoveredModels(input.provider, result, previous);
         },
       ),
-    enabled: input.enabled ?? true,
+    enabled: input.provider !== "external" && (input.enabled ?? true),
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
@@ -623,6 +631,8 @@ export function providerAgentsQueryOptions(input: {
       input.cwd ?? null,
     ),
     queryFn: async () => {
+      if (input.provider === "external")
+        throw new Error("External agents use profile-scoped discovery.");
       const api = ensureNativeApi();
       return api.provider.listAgents({
         provider: input.provider,
@@ -631,7 +641,7 @@ export function providerAgentsQueryOptions(input: {
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
-    enabled: input.enabled ?? true,
+    enabled: input.provider !== "external" && (input.enabled ?? true),
     // Claude can answer "pending" while its SDK fills the agent inventory in
     // the background. Retry that temporary result while the picker is observed;
     // only completed catalogs should keep the longer freshness window.
@@ -657,6 +667,8 @@ export function providerPluginsQueryOptions(input: {
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
+      if (input.provider === "external")
+        throw new Error("External agents use profile-scoped discovery.");
       return api.provider.listPlugins({
         provider: input.provider,
         ...(input.instanceId ? { instanceId: input.instanceId } : {}),
@@ -664,7 +676,7 @@ export function providerPluginsQueryOptions(input: {
         ...(input.threadId ? { threadId: input.threadId } : {}),
       });
     },
-    enabled: input.enabled ?? true,
+    enabled: input.provider !== "external" && (input.enabled ?? true),
     staleTime: 30_000,
     placeholderData: (previous) => previous ?? EMPTY_PLUGINS_RESULT,
   });

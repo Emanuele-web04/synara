@@ -105,16 +105,17 @@ function isolateMalformedModelDescriptors(input: {
 
 const PROVIDER_DISCOVERY_OPTION_KEYS = {
   codex: ["binaryPath", "homePath", "shadowHomePath", "accountId", "environment"],
-  claudeAgent: ["binaryPath", "homePath", "environment"],
+  claudeAgent: ["binaryPath", "homePath", "environment", "customModels"],
   cursor: ["binaryPath", "apiEndpoint", "environment"],
   devin: ["binaryPath", "environment"],
+  cline: ["binaryPath", "environment"],
   antigravity: ["binaryPath", "environment"],
   grok: ["binaryPath", "environment"],
   droid: ["binaryPath", "environment"],
   opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],
   omp: ["binaryPath", "agentDir", "environment"],
-} as const satisfies Record<ProviderKind, readonly string[]>;
+} as const satisfies Record<Exclude<ProviderKind, "external">, readonly string[]>;
 
 const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
@@ -189,7 +190,10 @@ const make = Effect.gen(function* () {
     providerOptions: ProviderStartOptions | undefined,
     replaceProviderOptions: boolean,
   ): T => {
+    if (parsed.provider === "external") return parsed;
     const base = { ...parsed } as Record<string, unknown>;
+    // Even the default instance must not trust a caller-supplied custom list.
+    if (parsed.provider === "claudeAgent") delete base.customModels;
     if (replaceProviderOptions) {
       for (const key of PROVIDER_DISCOVERY_OPTION_KEYS[parsed.provider]) {
         delete base[key];

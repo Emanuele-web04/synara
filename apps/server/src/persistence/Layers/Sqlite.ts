@@ -150,7 +150,7 @@ const makeSetup = ({
           cause instanceof MigrationSchemaTooNewError && dbPath
             ? Effect.promise(() =>
                 createMigrationSchemaTooNewStartupBlockError(dbPath, cause),
-              ).pipe(Effect.flatMap(Effect.fail))
+              ).pipe(Effect.uninterruptible, Effect.flatMap(Effect.fail))
             : Effect.fail(cause),
         ),
       );

@@ -87,6 +87,7 @@ describe("external MCP overview", () => {
     ).toEqual([
       "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
       "Create work with synara_create_task.",
+      "Continue a task this integration created with synara_send_task_message, using a stable requestId; wait on its returned runId.",
       "Follow permitted work with synara_wait_for_task.",
       "Read permitted task results with synara_read_task.",
     ]);

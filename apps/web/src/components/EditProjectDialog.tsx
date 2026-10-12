@@ -3,7 +3,8 @@
 // Layer: UI component
 // Exports: EditProjectDialog, EditProjectValue
 
-import { useEffect, useId, useRef, useState } from "react";
+import type { ProjectId } from "@synara/contracts";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME } from "./CreateGitHubProjectFields";
@@ -29,21 +30,23 @@ export interface EditProjectValue {
 
 export interface EditProjectDialogProps {
   open: boolean;
-  cwd: string;
+  projectId?: ProjectId | null | undefined;
   /** Placeholder for the name field: what the project is called with no local name. */
   folderName: string;
   initialValue: EditProjectValue;
   onOpenChange: (open: boolean) => void;
   onSave: (value: EditProjectValue) => void;
+  belowField?: ReactNode | undefined;
 }
 
 export function EditProjectDialog({
   open,
-  cwd,
+  projectId,
   folderName,
   initialValue,
   onOpenChange,
   onSave,
+  belowField,
 }: EditProjectDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -54,11 +57,12 @@ export function EditProjectDialog({
         {/* Field state lives below DialogPopup, which unmounts its children after the close
             transition, so each open seeds a fresh draft from initialValue. */}
         <EditProjectForm
-          cwd={cwd}
+          projectId={projectId}
           folderName={folderName}
           initialValue={initialValue}
           onOpenChange={onOpenChange}
           onSave={onSave}
+          belowField={belowField}
         />
       </DialogPopup>
     </Dialog>
@@ -66,11 +70,12 @@ export function EditProjectDialog({
 }
 
 function EditProjectForm({
-  cwd,
+  projectId,
   folderName,
   initialValue,
   onOpenChange,
   onSave,
+  belowField,
 }: Omit<EditProjectDialogProps, "open">) {
   const [name, setName] = useState(initialValue.name);
   const [appearance, setAppearance] = useState(initialValue.appearance);
@@ -125,7 +130,11 @@ function EditProjectForm({
                   }
                 >
                   <span className="relative flex size-4 items-center justify-center">
-                    <ProjectSidebarIcon cwd={cwd} expanded={false} appearance={appearance} />
+                    <ProjectSidebarIcon
+                      projectId={projectId}
+                      expanded={false}
+                      appearance={appearance}
+                    />
                   </span>
                 </PopoverTrigger>
               </InputGroupAddon>
@@ -155,6 +164,7 @@ function EditProjectForm({
             />
           </PopoverPopup>
         </Popover>
+        {belowField}
       </DialogPanel>
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>

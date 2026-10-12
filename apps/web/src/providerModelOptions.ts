@@ -20,6 +20,8 @@ import {
   type DroidModelSelection,
   type DevinModelOptions,
   type DevinModelSelection,
+  type ClineModelOptions,
+  type ClineModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
@@ -415,6 +417,7 @@ export function buildNextProviderOptions(
   modelOptions: ProviderOptions | null | undefined,
   patch: Record<string, unknown>,
 ): ProviderOptions {
+  if (provider === "cline") return {};
   if (provider === "codex") {
     return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
   }
@@ -471,6 +474,11 @@ export function buildProviderOptionPatch(
   optionId: string,
   value: string | boolean,
 ): Record<string, unknown> {
+  // Auto is a composer choice to clear an override, not a Claude API effort.
+  // Clear it before persisting draft options through the Claude effort schema.
+  if (provider === "claudeAgent" && optionId === "effort" && value === "auto") {
+    return { effort: undefined };
+  }
   return { [optionId]: value };
 }
 
@@ -523,6 +531,11 @@ export function buildModelSelection(
   options?: PiModelOptions | null | undefined,
   metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "cline",
+  model: string,
+  options?: ClineModelOptions | null | undefined,
+): ClineModelSelection;
 export function buildModelSelection(
   provider: "devin",
   model: string,
@@ -581,6 +594,8 @@ export function buildModelSelection(
         options ? { provider, model, options: options as CursorModelOptions } : { provider, model },
         metadata,
       );
+    case "cline":
+      return attachModelSelectionMetadata({ provider, model }, metadata);
     case "devin":
       return attachModelSelectionMetadata(
         options ? { provider, model, options: options as DevinModelOptions } : { provider, model },
@@ -613,6 +628,11 @@ export function buildModelSelection(
         options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
         metadata,
       );
+    case "external":
+      // External agent selections require connector-owned profileId and revisionId
+      // references, which cannot be synthesized from a bare provider/model pair.
+      // Callers holding a stored external selection must preserve it directly.
+      throw new Error("buildModelSelection does not support the external provider");
   }
 }
 

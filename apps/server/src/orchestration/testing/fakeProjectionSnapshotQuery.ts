@@ -24,6 +24,7 @@ export function fakeProjectionSnapshotQuery(
     getCounts: unused,
     getSnapshotSequence: unused,
     listStaleInFlightThreadIds: unused,
+    listStaleInFlightThreadPage: unused,
     listManagedWorktreeThreads: unused,
     getShellSnapshot: unused,
     getActiveProjectByWorkspaceRoot: unused,

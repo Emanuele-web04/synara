@@ -150,6 +150,14 @@ import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0132 from "./Migrations/132_ExternalMcpTurnCapacityRecovery.ts";
 import Migration0133 from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
+import Migration0135 from "./Migrations/135_ExternalMcpOptionalConcurrency.ts";
+import Migration0136 from "./Migrations/136_ExternalMcpTaskFollowups.ts";
+import Migration0137 from "./Migrations/137_ExternalAgentProfiles.ts";
+import Migration0138 from "./Migrations/138_CapabilityEvidence.ts";
+import Migration0139 from "./Migrations/139_ExternalAgentLifecycle.ts";
+import Migration0141 from "./Migrations/141_ExternalAgentRevisionMembership.ts";
+import Migration0140 from "./Migrations/140_CapabilityEvidenceWithdrawal.ts";
+import Migration0142 from "./Migrations/142_ThreadTitleRefresh.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -300,6 +308,14 @@ export const migrationEntries = [
   [132, "ExternalMcpTurnCapacityRecovery", Migration0132],
   [133, "ProjectionTurnsWorkspaceInitialization", Migration0133],
   [134, "ProjectionThreadsForkSourceMessage", Migration0134],
+  [135, "ExternalMcpOptionalConcurrency", Migration0135],
+  [136, "ExternalMcpTaskFollowups", Migration0136],
+  [137, "ExternalAgentProfiles", Migration0137],
+  [138, "CapabilityEvidence", Migration0138],
+  [139, "ExternalAgentLifecycle", Migration0139],
+  [140, "CapabilityEvidenceWithdrawal", Migration0140],
+  [141, "ExternalAgentRevisionMembership", Migration0141],
+  [142, "ThreadTitleRefresh", Migration0142],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

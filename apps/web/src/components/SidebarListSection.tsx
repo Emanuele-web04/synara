@@ -48,9 +48,9 @@ export function SidebarSectionLabel({
 }
 
 /**
- * A section that folds behind its label (Pinned, Earlier, Done in Activity; the involvement
- * sections of the code review list). The rows stay mounted while folded so a reopen animates and
- * focus is not lost.
+ * A section that folds behind its label (Pinned, Earlier, Working, Done in Activity; the
+ * involvement sections of the code review list). The rows stay mounted while folded so a reopen
+ * animates and focus is not lost.
  */
 export function SidebarCollapsibleSection({
   label,
