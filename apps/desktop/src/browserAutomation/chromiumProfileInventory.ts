@@ -4,6 +4,9 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export const MAX_CHROMIUM_DATABASE_BYTES = 512 * 1024 * 1024;
+const MAX_SOURCE_ENTRIES = 256;
+
 export const CHROMIUM_INVENTORY_SOURCES = [
   { id: "chrome", name: "Google Chrome", data: "Google/Chrome", app: "Google Chrome.app" },
   {
@@ -170,6 +173,7 @@ async function profileFolders(
   } catch {
     return { folders: [], status: "unavailable" };
   }
+  if (entries.length > MAX_SOURCE_ENTRIES) return { folders: [], status: "unavailable" };
   let inaccessible = false;
   for (const entry of entries) {
     if (
@@ -221,13 +225,21 @@ async function hasProfileStore(folder: string) {
   );
 }
 
-function countRows(
+async function countRows(
   path: string,
   query: string,
-): { count: number | null; status: "available" | "unavailable" | "locked" } {
+): Promise<{ count: number | null; status: "available" | "unavailable" | "locked" }> {
   let database: DatabaseSync | undefined;
   try {
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.size > MAX_CHROMIUM_DATABASE_BYTES)
+      return { count: null, status: "unavailable" };
     database = new DatabaseSync(path, { readOnly: true, timeout: 100 });
+    database.exec("BEGIN");
+    const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
+    const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
+    if (pages.page_count * size.page_size > MAX_CHROMIUM_DATABASE_BYTES)
+      return { count: null, status: "unavailable" };
     const row = database.prepare(query).get() as { count?: number | bigint } | undefined;
     if (row?.count === undefined) return { count: null, status: "unavailable" };
     const value = Number(row.count);
@@ -344,7 +356,7 @@ export async function listChromiumProfileInventory(
         try {
           const cookies = await cookieStore(folder);
           cookie = cookies
-            ? countRows(cookies, "SELECT COUNT(*) AS count FROM cookies")
+            ? await countRows(cookies, "SELECT COUNT(*) AS count FROM cookies")
             : { count: null, status: "unavailable" };
         } catch {
           cookie = { count: null, status: "unavailable" };
@@ -353,9 +365,9 @@ export async function listChromiumProfileInventory(
         try {
           const loginStore = storePath(folder, "Login Data");
           password = (await isRealFile(loginStore))
-            ? countRows(
+            ? await countRows(
                 loginStore,
-                "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0",
+                "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0",
               )
             : { count: null, status: "unavailable" };
         } catch {

@@ -4,11 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import {
   resolveChromiumProfileFolder,
+  MAX_CHROMIUM_DATABASE_BYTES,
   type ChromiumInventorySourceId,
 } from "./chromiumProfileInventory";
 
 const MAX_PROFILE_LOGINS = 50_000;
-const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 const MAX_PASSWORD_BYTES = 16 * 1024;
 const MAX_LOGIN_TEXT_BYTES = 4096;
 
@@ -54,7 +54,7 @@ function decodePassword(encrypted: Buffer, key: Buffer): string | null {
 async function isFile(path: string): Promise<boolean> {
   try {
     const stat = await lstat(path);
-    return stat.isFile() && stat.size <= MAX_DATABASE_BYTES;
+    return stat.isFile() && stat.size <= MAX_CHROMIUM_DATABASE_BYTES;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new BrowserPasswordReadError("reader_failed");
@@ -91,7 +91,7 @@ export async function readChromiumProfilePasswords(
       database.exec("BEGIN");
       const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
       const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
-      if (pages.page_count * size.page_size > MAX_DATABASE_BYTES)
+      if (pages.page_count * size.page_size > MAX_CHROMIUM_DATABASE_BYTES)
         throw new BrowserPasswordReadError("reader_failed");
     } catch {
       throw new BrowserPasswordReadError("reader_failed");

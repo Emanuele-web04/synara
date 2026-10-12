@@ -405,3 +405,27 @@ it.each(["oversized", "symlink", "directory"])(
     expect(browser?.profiles[0]?.name).not.toBe("Work");
   },
 );
+
+it("marks an oversized password database unavailable without opening its row data", async () => {
+  const source = CHROMIUM_INVENTORY_SOURCES[0];
+  const { loginPath } = await install(source);
+  await truncate(loginPath, 512 * 1024 * 1024 + 1);
+  expect((await scan()).find(({ id }) => id === source.id)?.profiles[0]).toMatchObject({
+    passwordCount: null,
+    passwordStatus: "unavailable",
+    cookieStatus: "available",
+  });
+});
+it("bounds profile-directory discovery before inspecting stores", async () => {
+  const source = CHROMIUM_INVENTORY_SOURCES[0];
+  await install(source);
+  await Promise.all(
+    Array.from({ length: 257 }, (_, index) =>
+      mkdir(join(dataRoot(source.data), `unused-${index}`)),
+    ),
+  );
+  expect((await scan()).find(({ id }) => id === source.id)).toMatchObject({
+    profileStatus: "unavailable",
+    profiles: [],
+  });
+});
