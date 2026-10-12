@@ -80,11 +80,13 @@ export interface ProviderProcessTeardownPreparationOptions {
   readonly createWindowsTeardownObserver?: () => TeardownProcessChildrenSnapshotObserver;
 }
 
-/** Owns platform preparation from process spawn until its teardown settles. */
+/** Owns platform preparation before process spawn until its teardown settles. */
 export function prepareProviderProcessTeardown(
   options: ProviderProcessTeardownPreparationOptions = {},
+  preparationTimeoutMs?: number,
 ): {
   readonly teardownProcessTree: typeof teardownProviderProcessTree;
+  readonly waitUntilReady?: () => Promise<boolean>;
   readonly dispose: () => void;
 } {
   // Injected teardown stays isolated unless its caller also supplies an
@@ -94,17 +96,25 @@ export function prepareProviderProcessTeardown(
     process.platform === "win32" &&
     (options.teardownProcessTree === undefined ||
       options.createWindowsTeardownObserver !== undefined)
-      ? (
-          options.createWindowsTeardownObserver ??
-          createPreparedWindowsTeardownProcessSnapshotObserver
-        )()
+      ? options.createWindowsTeardownObserver
+        ? options.createWindowsTeardownObserver()
+        : createPreparedWindowsTeardownProcessSnapshotObserver(
+            preparationTimeoutMs !== undefined ? { preparationTimeoutMs } : {},
+          )
       : undefined;
   const teardown = options.teardownProcessTree ?? teardownProviderProcessTree;
+  const waitUntilReady = windowsObserver?.waitUntilReady?.bind(windowsObserver);
+  let disposed = false;
   return {
+    ...(waitUntilReady ? { waitUntilReady } : {}),
     teardownProcessTree: windowsObserver
       ? (input) => teardown(input, { windowsProcessSnapshotObserver: windowsObserver })
       : teardown,
-    dispose: () => windowsObserver?.dispose(),
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      windowsObserver?.dispose();
+    },
   };
 }
 

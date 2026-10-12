@@ -248,6 +248,119 @@ describe("Windows process snapshots", () => {
     observer.dispose();
   });
 
+  it("completes cold initialization before admission without extending subsequent snapshot probes", async () => {
+    vi.useFakeTimers();
+    const preparation = deferred<ProcessChildrenMap>();
+    const stalled = deferred<ProcessChildrenMap>();
+    const staleSnapshot = snapshot([{ ppid: 100, pid: 101, command: "before-spawn.exe" }]);
+    const freshSnapshot = snapshot([{ ppid: 100, pid: 102, command: "owned-provider.exe" }]);
+    const worker: ProcessChildrenSnapshotWorker = {
+      capture: vi
+        .fn()
+        .mockImplementationOnce(() => preparation.promise)
+        .mockResolvedValueOnce(freshSnapshot)
+        .mockImplementation(() => stalled.promise),
+      dispose: vi.fn(),
+    };
+    const createWorker = vi.fn(() => worker);
+    const observer = createPreparedWindowsTeardownProcessSnapshotObserver({
+      createWorker,
+      preparationTimeoutMs: 5_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(worker.dispose).not.toHaveBeenCalled();
+    expect(worker.capture).toHaveBeenCalledTimes(1);
+    let ready = false;
+    const prepared = observer.waitUntilReady().then((value) => {
+      ready = value;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ready).toBe(false);
+    preparation.resolve(staleSnapshot);
+    await expect(prepared).resolves.toBe(true);
+    await expect(observer.captureWithin(3_000)).resolves.toBe(freshSnapshot);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(worker.capture).toHaveBeenCalledTimes(2);
+
+    let settled = false;
+    const capture = observer.captureWithin(3_000).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(capture).resolves.toBeNull();
+    expect(worker.dispose).toHaveBeenCalledTimes(1);
+    observer.dispose();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("fails readiness at its initialization budget without publishing a late table", async () => {
+    vi.useFakeTimers();
+    const preparation = deferred<ProcessChildrenMap>();
+    const worker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn(() => preparation.promise),
+      dispose: vi.fn(),
+    };
+    const observer = createPreparedWindowsTeardownProcessSnapshotObserver({
+      createWorker: () => worker,
+      preparationTimeoutMs: 5_000,
+    });
+    let settled = false;
+    const ready = observer.waitUntilReady().then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(ready).resolves.toBe(false);
+    expect(worker.dispose).toHaveBeenCalledTimes(1);
+    preparation.resolve(new Map());
+    await expect(observer.waitUntilReady()).resolves.toBe(false);
+    observer.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not count a failed preparation as successful readiness", async () => {
+    const worker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockRejectedValue(new Error("CIM unavailable")),
+      dispose: vi.fn(),
+    };
+    const observer = createPreparedWindowsTeardownProcessSnapshotObserver({
+      createWorker: () => worker,
+      preparationTimeoutMs: 5_000,
+    });
+    await expect(observer.waitUntilReady()).resolves.toBe(false);
+    expect(worker.dispose).toHaveBeenCalledTimes(1);
+    observer.dispose();
+  });
+
+  it("cancels readiness before worker creation when disposed in the same turn", async () => {
+    vi.useFakeTimers();
+    const worker: ProcessChildrenSnapshotWorker = {
+      capture: vi.fn().mockResolvedValue(new Map()),
+      dispose: vi.fn(),
+    };
+    const createWorker = vi.fn(() => worker);
+    const observer = createPreparedWindowsTeardownProcessSnapshotObserver({
+      createWorker,
+      preparationTimeoutMs: 5_000,
+    });
+    const ready = observer.waitUntilReady();
+    observer.dispose();
+    await expect(ready).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createWorker).not.toHaveBeenCalled();
+    expect(worker.capture).not.toHaveBeenCalled();
+    expect(worker.dispose).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("counts preparation and the fresh query against the original teardown deadline", async () => {
     vi.useFakeTimers();
     const preparation = deferred<ProcessChildrenMap>();

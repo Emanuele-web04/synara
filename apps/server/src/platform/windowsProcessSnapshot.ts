@@ -62,6 +62,12 @@ export interface ProcessChildrenSnapshotObserver {
 
 export interface TeardownProcessChildrenSnapshotObserver extends ProcessChildrenSnapshotObserver {
   captureWithin(timeoutMs: number): Promise<ProcessChildrenMap | null>;
+  /** Prepared observers report a successful initial query, never process-exit evidence. */
+  waitUntilReady?(): Promise<boolean>;
+}
+
+export interface PreparedTeardownProcessChildrenSnapshotObserver extends TeardownProcessChildrenSnapshotObserver {
+  waitUntilReady(): Promise<boolean>;
 }
 
 interface PendingSnapshot {
@@ -290,8 +296,36 @@ function retryBackoffMs(failureCount: number, baseMs: number, maxMs: number): nu
   return Math.min(maxMs, baseMs * 2 ** Math.max(0, failureCount - 1));
 }
 
+const captureWithTimeout = (
+  activeWorker: ProcessChildrenSnapshotWorker,
+  timeoutMs: number,
+): Promise<ProcessChildrenMap> =>
+  new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Windows process snapshot timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+    timeout.unref?.();
+    activeWorker.capture().then(
+      (snapshot) => {
+        clearTimeout(timeout);
+        resolve(snapshot);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+
 export function createWindowsProcessSnapshotObserver(
   options: WindowsProcessSnapshotObserverOptions = {},
+): ProcessChildrenSnapshotObserver {
+  return createWindowsProcessSnapshotObserverWithInitialTimeout(options);
+}
+
+function createWindowsProcessSnapshotObserverWithInitialTimeout(
+  options: WindowsProcessSnapshotObserverOptions,
+  initialProbeTimeoutMs?: number,
 ): ProcessChildrenSnapshotObserver {
   const createWorker = options.createWorker ?? createPowerShellProcessSnapshotWorker;
   const now = options.now ?? Date.now;
@@ -304,26 +338,7 @@ export function createWindowsProcessSnapshotObserver(
   let consecutiveFailures = 0;
   let nextAttemptAt = 0;
   let disposed = false;
-
-  const captureWithTimeout = (
-    activeWorker: ProcessChildrenSnapshotWorker,
-  ): Promise<ProcessChildrenMap> =>
-    new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Windows process snapshot timed out after ${probeTimeoutMs}ms.`));
-      }, probeTimeoutMs);
-      timeout.unref?.();
-      activeWorker.capture().then(
-        (snapshot) => {
-          clearTimeout(timeout);
-          resolve(snapshot);
-        },
-        (error: unknown) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      );
-    });
+  let nextProbeTimeoutMs = initialProbeTimeoutMs ?? probeTimeoutMs;
 
   return {
     capture: () => {
@@ -335,7 +350,11 @@ export function createWindowsProcessSnapshotObserver(
           // A queued capture must not create a worker after its owner disposes.
           if (disposed) return null;
           worker ??= createWorker();
-          return captureWithTimeout(worker);
+          const timeoutMs = nextProbeTimeoutMs;
+          // Only the discarded initialization query can use the startup budget.
+          // Every subsequent query retains the ordinary three-second policy.
+          nextProbeTimeoutMs = probeTimeoutMs;
+          return captureWithTimeout(worker, timeoutMs);
         })
         .then(
           (snapshot) => {
@@ -372,12 +391,22 @@ export function createWindowsProcessSnapshotObserver(
 export function createWindowsTeardownProcessSnapshotObserver(
   options: WindowsTeardownProcessSnapshotObserverOptions = {},
 ): TeardownProcessChildrenSnapshotObserver {
+  return createWindowsTeardownProcessSnapshotObserverWithInitialTimeout(options);
+}
+
+function createWindowsTeardownProcessSnapshotObserverWithInitialTimeout(
+  options: WindowsTeardownProcessSnapshotObserverOptions,
+  initialProbeTimeoutMs?: number,
+): TeardownProcessChildrenSnapshotObserver {
   const now = options.now ?? Date.now;
-  const observer = createWindowsProcessSnapshotObserver({
-    ...options,
-    retryBackoffBaseMs: TEARDOWN_RETRY_BACKOFF_BASE_MS,
-    retryBackoffMaxMs: TEARDOWN_RETRY_BACKOFF_MAX_MS,
-  });
+  const observer = createWindowsProcessSnapshotObserverWithInitialTimeout(
+    {
+      ...options,
+      retryBackoffBaseMs: TEARDOWN_RETRY_BACKOFF_BASE_MS,
+      retryBackoffMaxMs: TEARDOWN_RETRY_BACKOFF_MAX_MS,
+    },
+    initialProbeTimeoutMs,
+  );
 
   const captureUntil = (deadline: number): Promise<ProcessChildrenMap | null> => {
     const remainingMs = deadline - now();
@@ -422,22 +451,33 @@ export function createWindowsTeardownProcessSnapshotObserver(
   };
 }
 
-/** Prepares the owned worker while its runtime is alive; preparation is never exit evidence. */
+/** Prepares the owned worker before provider admission; preparation is never exit evidence. */
 export function createPreparedWindowsTeardownProcessSnapshotObserver(
-  options: WindowsTeardownProcessSnapshotObserverOptions = {},
-): TeardownProcessChildrenSnapshotObserver {
+  options: WindowsTeardownProcessSnapshotObserverOptions & {
+    /** Charged to startup before provider creation, separate from all teardown proof windows. */
+    readonly preparationTimeoutMs?: number;
+  } = {},
+): PreparedTeardownProcessChildrenSnapshotObserver {
   const now = options.now ?? Date.now;
-  const observer = createWindowsTeardownProcessSnapshotObserver(options);
+  const observer = createWindowsTeardownProcessSnapshotObserverWithInitialTimeout(
+    options,
+    options.preparationTimeoutMs,
+  );
   let disposed = false;
   let preparationSettled = false;
   const preparationWaiters = new Set<(prepared: boolean) => void>();
+  let resolveReadiness!: (ready: boolean) => void;
+  const readiness = new Promise<boolean>((resolve) => {
+    resolveReadiness = resolve;
+  });
   // Discard this process table. Descendants may start after preparation begins,
   // so teardown must wait for it to drain before requesting a fresh snapshot.
-  const finishPreparation = () => {
+  const finishPreparation = (snapshot: ProcessChildrenMap | null) => {
     preparationSettled = true;
+    resolveReadiness(!disposed && snapshot !== null);
     for (const finish of preparationWaiters) finish(!disposed);
   };
-  void observer.capture().then(finishPreparation, finishPreparation);
+  void observer.capture().then(finishPreparation, () => finishPreparation(null));
 
   const captureWithin = async (timeoutMs: number): Promise<ProcessChildrenMap | null> => {
     if (disposed || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return null;
@@ -460,12 +500,14 @@ export function createPreparedWindowsTeardownProcessSnapshotObserver(
   };
 
   return {
+    waitUntilReady: () => readiness.then((ready) => ready && !disposed),
     capture: () => captureWithin(options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
     captureWithin,
     retryDelayMs: () => observer.retryDelayMs(),
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      resolveReadiness(false);
       for (const finish of preparationWaiters) finish(false);
       observer.dispose();
     },

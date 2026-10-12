@@ -27,6 +27,7 @@ import {
 } from "@opencode-ai/sdk/v2";
 import {
   Cause,
+  Clock,
   Data,
   Deferred,
   Effect,
@@ -1054,13 +1055,70 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         // V2 gives this name precedence over the legacy variable, including an
         // inherited value from another OpenCode instance.
         childEnv.OPENCODE_PASSWORD = serverPassword;
-        const child = yield* spawnProviderProcess(spawner, expandHomePath(input.binaryPath), args, {
-          env: childEnv,
-          ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
-          detached: false,
-          killSignal: "SIGKILL",
-          forceKillAfter: "1500 millis",
-        }).pipe(
+        const preparationStartedAt = yield* Clock.currentTimeMillis;
+        const preparedTeardown = yield* Effect.acquireRelease(
+          Effect.sync(() => prepareProviderProcessTeardown(options, timeoutMs)),
+          (prepared) => Effect.sync(() => prepared.dispose()),
+        ).pipe(Effect.provideService(Scope.Scope, runtimeScope));
+        const waitUntilReady = preparedTeardown.waitUntilReady;
+        let remainingStartupTimeoutMs = timeoutMs;
+        if (waitUntilReady) {
+          // Finish a real initial process-table query before there is a provider
+          // to own. This consumes startup time, never a teardown proof window.
+          const ready = yield* Effect.tryPromise({
+            try: () => waitUntilReady(),
+            catch: (cause) =>
+              new OpenCodeRuntimeError({
+                operation: "startOpenCodeServerProcess",
+                detail: `Failed to prepare the Windows process observer before spawning ${cliSpec.displayName}: ${openCodeRuntimeErrorDetail(cause)}`,
+                cause,
+              }),
+          }).pipe(Effect.timeoutOption(timeoutMs));
+          remainingStartupTimeoutMs =
+            timeoutMs - ((yield* Clock.currentTimeMillis) - preparationStartedAt);
+          if (Option.isNone(ready) || !ready.value || remainingStartupTimeoutMs <= 0) {
+            return yield* new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `The Windows process observer did not become ready within the ${timeoutMs}ms startup budget; ${cliSpec.displayName} was not spawned.`,
+            });
+          }
+        }
+        const child = yield* spawnProviderProcess(
+          {
+            // Own the returned native handle before cancellation can resume.
+            // Settings lookup and all provider readiness remain interruptible.
+            spawn: (command) =>
+              Effect.acquireRelease(spawner.spawn(command), (child) =>
+                Effect.tryPromise({
+                  try: async () => {
+                    try {
+                      return await teardownEffectProcessTree(
+                        child,
+                        preparedTeardown.teardownProcessTree,
+                      );
+                    } finally {
+                      preparedTeardown.dispose();
+                    }
+                  },
+                  catch: (cause) =>
+                    new OpenCodeRuntimeError({
+                      operation: "stopOpenCodeServerProcess",
+                      detail: `Failed to prove ${cliSpec.displayName} server process-tree exit: ${openCodeRuntimeErrorDetail(cause)}`,
+                      cause,
+                    }),
+                }).pipe(Effect.asVoid, Effect.orDie),
+              ),
+          },
+          expandHomePath(input.binaryPath),
+          args,
+          {
+            env: childEnv,
+            ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
+            detached: false,
+            killSignal: "SIGKILL",
+            forceKillAfter: "1500 millis",
+          },
+        ).pipe(
           Effect.provideService(Scope.Scope, runtimeScope),
           Effect.mapError((cause) => {
             const detail = openCodeRuntimeErrorDetail(cause);
@@ -1069,34 +1127,6 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
               detail: `Failed to spawn OpenCode server process: ${detail}${missingCliHint(cliSpec, detail)}`,
               cause,
             });
-          }),
-        );
-        yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            // Register ownership atomically, retain preparation through the
-            // pool idle hold, and release it only after teardown settles.
-            const preparedTeardown = prepareProviderProcessTeardown(options);
-            yield* Scope.addFinalizer(
-              runtimeScope,
-              Effect.tryPromise({
-                try: async () => {
-                  try {
-                    return await teardownEffectProcessTree(
-                      child,
-                      preparedTeardown.teardownProcessTree,
-                    );
-                  } finally {
-                    preparedTeardown.dispose();
-                  }
-                },
-                catch: (cause) =>
-                  new OpenCodeRuntimeError({
-                    operation: "stopOpenCodeServerProcess",
-                    detail: `Failed to prove ${cliSpec.displayName} server process-tree exit: ${openCodeRuntimeErrorDetail(cause)}`,
-                    cause,
-                  }),
-              }).pipe(Effect.asVoid, Effect.orDie),
-            );
           }),
         );
 
@@ -1165,7 +1195,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         );
 
         const readyExit = yield* Effect.exit(
-          Deferred.await(readyDeferred).pipe(Effect.timeoutOption(timeoutMs)),
+          Deferred.await(readyDeferred).pipe(Effect.timeoutOption(remainingStartupTimeoutMs)),
         );
 
         yield* Fiber.interrupt(stdoutFiber).pipe(Effect.ignore);
