@@ -100,7 +100,7 @@ export async function readChromiumProfilePasswords(
     try {
       const row = database
         .prepare(
-          "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND length(password_value) > 0",
+          "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0",
         )
         .get() as { count?: number | bigint } | undefined;
       count = Number(row?.count);
@@ -115,10 +115,11 @@ export async function readChromiumProfilePasswords(
     try {
       statement = database.prepare(
         `SELECT origin_url, username_value, password_value FROM logins
-         WHERE blacklisted_by_user = 0 AND length(password_value) > 0
-           AND typeof(password_value) = 'blob' AND length(password_value) <= ${MAX_PASSWORD_BYTES}
-           AND length(CAST(COALESCE(origin_url, '') AS BLOB)) <= ${MAX_LOGIN_TEXT_BYTES}
-           AND length(CAST(COALESCE(username_value, '') AS BLOB)) <= ${MAX_LOGIN_TEXT_BYTES}
+         WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0
+           AND typeof(date_last_used) IN ('integer', 'real', 'null')
+           AND typeof(password_value) = 'blob' AND octet_length(password_value) <= ${MAX_PASSWORD_BYTES}
+           AND COALESCE(octet_length(origin_url), 0) <= ${MAX_LOGIN_TEXT_BYTES}
+           AND COALESCE(octet_length(username_value), 0) <= ${MAX_LOGIN_TEXT_BYTES}
          ORDER BY date_last_used DESC, rowid DESC`,
       );
     } catch {
