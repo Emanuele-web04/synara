@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo && bun run typecheck:computer-measurement",
     "typecheck:computer-measurement": "node ../node_modules/@typescript/native/bin/tsc --project tsconfig.computer-measurement.json",
     "typecheck:native": "bun run typecheck",

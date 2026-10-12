@@ -13,6 +13,7 @@ import {
   prepareCodexHomeOverlay,
   prepareCodexHomeOverlayFromPreparedContinuationSource,
   readCodexSharedContinuationGeneration,
+  resolveCodexProcessSourceEnvironment,
   type CodexProcessEnvInput,
 } from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
@@ -23,17 +24,19 @@ function canonicalStoragePath(value: string): string {
 
 function codexContinuationInput(options: ProviderStartOptions | undefined): Pick<
   CodexProcessEnvInput,
-  "homePath" | "shadowHomePath" | "accountId"
+  "homePath" | "shadowHomePath" | "accountId" | "explicitProviderEnvironment"
 > & {
   readonly env: NodeJS.ProcessEnv;
 } {
   const codex = options?.codex;
-  return {
+  const input = {
     env: { ...process.env, ...codex?.environment },
+    ...(codex?.environment ? { explicitProviderEnvironment: codex.environment } : {}),
     ...(codex?.homePath ? { homePath: codex.homePath } : {}),
     ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
     ...(codex?.accountId ? { accountId: codex.accountId } : {}),
   };
+  return { ...input, env: resolveCodexProcessSourceEnvironment(input) };
 }
 
 const CODEX_SHARED_CONTINUATION_V1_PREFIX = "codex:shared-v1:";
