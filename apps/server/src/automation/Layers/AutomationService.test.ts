@@ -601,6 +601,53 @@ const layer = it.layer(
 );
 
 layer("AutomationService", (it) => {
+  for (const managedByProject of [true, false]) {
+    it.effect(
+      `uses ${managedByProject ? "the coordinator's current" : "the automation's saved"} access mode for check-ins`,
+      () =>
+        Effect.gen(function* () {
+          resetHarness();
+          const service = yield* AutomationService;
+          const targetThreadId = ThreadId.makeUnsafe(`mode-check-in-${managedByProject}`);
+          threadShell = Option.some({
+            ...makeThreadShell({ id: targetThreadId }),
+            runtimeMode: "approval-required",
+          });
+          const input = {
+            ...createInput("local"),
+            mode: "heartbeat" as const,
+            targetThreadId,
+            runtimeMode: "approval-required" as const,
+            schedule: managedByProject
+              ? { type: "project-event" as const, projectId }
+              : { type: "manual" as const },
+          };
+          const definition = yield* managedByProject
+            ? service.createProjectManaged(input)
+            : service.create(input);
+          // Changing the chat's mode must affect coordinator wakes, including a later downgrade.
+          for (const runtimeMode of ["full-access", "approval-required"] as const) {
+            threadShell = Option.some({ ...makeThreadShell({ id: targetThreadId }), runtimeMode });
+            const { run } = yield* service.runNow({ automationId: definition.id });
+            const expected = managedByProject ? runtimeMode : "approval-required";
+            const command = dispatchedCommands.find(
+              (entry) =>
+                entry.type === "thread.turn.start" && entry.commandId === run.turnStartCommandId,
+            );
+            assert.isDefined(command);
+            if (command?.type !== "thread.turn.start") assert.fail("Expected a check-in turn.");
+            assert.equal(command.runtimeMode, expected);
+            assert.equal(run.permissionSnapshot.runtimeMode, expected);
+            assert.equal(
+              run.permissionSnapshot.allowedCapabilities.includes("full-access"),
+              expected === "full-access",
+            );
+            yield* service.cancelRun({ runId: run.id });
+          }
+        }),
+    );
+  }
+
   it.effect("persists discovered Claude Auto targets through exact-target create and update", () =>
     Effect.gen(function* () {
       resetHarness();

@@ -1268,6 +1268,23 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
+        // Coordinator check-ins continue the human's current chat permissions.
+        // Ordinary automations retain their independently authorized saved mode.
+        let runtimeMode = definition.runtimeMode;
+        if (definition.managedByProject && continuationThreadId !== null) {
+          const thread = yield* projectionSnapshotQuery
+            .getThreadShellById(continuationThreadId)
+            .pipe(Effect.mapError(toServiceError("Failed to load coordinator access mode.")));
+          if (Option.isNone(thread) || thread.value.projectId !== definition.projectId) {
+            return yield* Effect.fail(
+              new AutomationServiceError({
+                message: "Coordinator thread was not found in the automation project.",
+              }),
+            );
+          }
+          runtimeMode = thread.value.runtimeMode;
+        }
+
         yield* validateResolvedAutomationIdentity(definition.modelSelection);
 
         // Enforce the gate at dispatch, not just create/update, so an enabled automation that
@@ -1281,7 +1298,7 @@ export const AutomationServiceLive = Layer.effect(
           worktreeMode: definition.worktreeMode,
           acknowledgedRisks: definition.acknowledgedRisks,
         });
-        yield* validateAutoRuntimeMode(definition);
+        yield* validateAutoRuntimeMode({ ...definition, runtimeMode });
         yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
           enabled: definition.enabled,
@@ -1337,6 +1354,15 @@ export const AutomationServiceLive = Layer.effect(
               threadCreateCommandId,
               turnStartCommandId,
               startedAt: now,
+              ...(definition.managedByProject && continuationThreadId !== null
+                ? {
+                    permissionSnapshot: {
+                      ...run.permissionSnapshot,
+                      runtimeMode,
+                      allowedCapabilities: allowedCapabilitiesFor({ ...definition, runtimeMode }),
+                    },
+                  }
+                : {}),
             })
             .pipe(
               Effect.mapError(toServiceError("Failed to update automation run.")),
@@ -1388,7 +1414,7 @@ export const AutomationServiceLive = Layer.effect(
                 : {}),
               dispatchMode: "queue",
               dispatchOrigin: "automation",
-              runtimeMode: definition.runtimeMode,
+              runtimeMode,
               interactionMode: definition.interactionMode,
               createdAt: now,
             })
