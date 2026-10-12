@@ -1,0 +1,3794 @@
+{
+  "checkedMain": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+  "sourceCount": 67,
+  "openSourceCount": 65,
+  "summedCompleteInvocations": {
+    "passed": 10950,
+    "failed": 18,
+    "skipped": 2145
+  },
+  "sourcePRs": [
+    {
+      "number": 1210,
+      "title": "feat: add Cline provider across backend and frontend",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "68e7c20301ee6a75a2b00c6b95c9b01d2091afd0",
+      "baseRef": "main"
+    },
+    {
+      "number": 1232,
+      "title": "feat(web): add provider model favourites and catalog navigation",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "6d990c54e3866aed6dfa52cdf1a189cb37fc0ccf",
+      "baseRef": "feat/cline-provider"
+    },
+    {
+      "number": 1238,
+      "title": "feat(web): add composer model presets",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "b5bf3af71496486e4caef42961441d9f55c45b23",
+      "baseRef": "codex/feat-model-catalog-favourites"
+    },
+    {
+      "number": 1652,
+      "title": "feat(release): publish Linux deb artifacts",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "82f099ec3ed6dc698e76dac17c93ef4354141f5e",
+      "baseRef": "main"
+    },
+    {
+      "number": 1655,
+      "title": "feat(web): add scoped file preview find",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "fdb4f6933160f7d0fd60e58c1adb811cf71e4036",
+      "baseRef": "main"
+    },
+    {
+      "number": 1656,
+      "title": "feat(web): search active project files from Cmd+K",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "184068e413a238f9aefaf61d60f78162f563dae1",
+      "baseRef": "main"
+    },
+    {
+      "number": 1716,
+      "title": "feat(projects): resolve local icons through saved project identities",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "5cbc36c4a26d9da647a164a10ea0cd922fa6e75c",
+      "baseRef": "main"
+    },
+    {
+      "number": 1717,
+      "title": "feat(handoff): add opt-in continuous handoffs and provider history",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "2ddfee8091504bf2b71687fac21fa095f2a2b544",
+      "baseRef": "main"
+    },
+    {
+      "number": 1718,
+      "title": "feat(usage): show all enabled provider accounts without request fan-out",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "c1849fdf42e0f00433aee32b36ef5c853db221d2",
+      "baseRef": "main"
+    },
+    {
+      "number": 1720,
+      "title": "feat(release): build Debian packages alongside AppImage safely",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "4dced2d4a099b4186a2275c261886dfb55f9f325",
+      "baseRef": "main"
+    },
+    {
+      "number": 1721,
+      "title": "feat(explorer): compact paths, expose Git status and extend copy actions",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "d32ecf268ca27b3960137c19cb9166f4dcd42f68",
+      "baseRef": "main"
+    },
+    {
+      "number": 1745,
+      "title": "feat(settings): restore owner device pairing with safe links",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "9a8fdbe89b65131c2f09c3654e586580f46a6807",
+      "baseRef": "main"
+    },
+    {
+      "number": 1757,
+      "title": "feat(server): stop idle agent processes safely and configure their timeout",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "b0b2ef8b17a6de233db488da527fcbac5b245dae",
+      "baseRef": "main"
+    },
+    {
+      "number": 1763,
+      "title": "feat(markdown): render Mermaid diagrams with safe source fallback",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "d6765bb7ce4bfa6d8ac3e6dbdd636af627207f81",
+      "baseRef": "main"
+    },
+    {
+      "number": 1765,
+      "title": "fix(persistence): compress pre-migration SQLite backups",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "f171b15a76845acf7f94fb2dc54c25e80fb2e89e",
+      "baseRef": "main"
+    },
+    {
+      "number": 1766,
+      "title": "feat(mcp): continue owned tasks with durable run handles",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "e2dec88fb329ed63b9227a89e5f5fd5660eb299c",
+      "baseRef": "codex/configure-external-mcp-capacity-1712"
+    },
+    {
+      "number": 1767,
+      "title": "feat(mcp): expose cached provider quotas with explicit usage access",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "5a9569f5e1b8e0142966323498d82ba838ce444c",
+      "baseRef": "main"
+    },
+    {
+      "number": 1768,
+      "title": "fix(provider): preserve external agent workspaces and quarantine failures",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "4189ae764800b9d4812acb8e9c5579349ed785c3",
+      "baseRef": "main"
+    },
+    {
+      "number": 1769,
+      "title": "feat(web): preserve and harden Markdown color customization",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "bb0a3bf275d50486dcccee4edde4b355db003f80",
+      "baseRef": "main"
+    },
+    {
+      "number": 1770,
+      "title": "fix(server): preserve workspace recovery before edit replay",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "612d518bb201884a9a5debc1369b10a8524ca561",
+      "baseRef": "main"
+    },
+    {
+      "number": 1771,
+      "title": "feat(chat): preserve guarded retry effort draft and local attempt navigation",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "ac16f58826b5498b06d67c620cbf3be38541a87d",
+      "baseRef": "codex/preserve-edit-replay-workspace"
+    },
+    {
+      "number": 1772,
+      "title": "fix: preserve automatic titles while hardening generation, policy races and hydration",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "2e8d1f8f28585ba7dc37c44caebd915c3547614f",
+      "baseRef": "main"
+    },
+    {
+      "number": 1779,
+      "title": "fix(web): qualify platform file-manager labels and errors on current main",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "aaa9a9a0fae97c15ca2ba801cceda33cd2008c23",
+      "baseRef": "main"
+    },
+    {
+      "number": 1780,
+      "title": "feat(web): qualify author-preserving Devin Fusion pairing picker",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "5727efabd7591fe22bd4042378cfc32294033ab0",
+      "baseRef": "main"
+    },
+    {
+      "number": 1783,
+      "title": "fix(browser): complete floating sidebar handoff repairs from #787",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "6a3b281e2238d42add2ba7c37bacbb1723f46577",
+      "baseRef": "main"
+    },
+    {
+      "number": 1784,
+      "title": "perf(web): qualify author-preserving sidebar memo boundaries",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "58a85235577096df64e1b8e365dbbe885acedc3e",
+      "baseRef": "main"
+    },
+    {
+      "number": 1785,
+      "title": "fix(web): qualify configured automation count in the sidebar",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "6caf40fbc824df93a7c0cf102857e426e2b0b435",
+      "baseRef": "main"
+    },
+    {
+      "number": 1786,
+      "title": "fix(chat): qualify follow-up draft preservation through promotion",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "39c05e66934c1b1bc57ca0493d191b784456a679",
+      "baseRef": "main"
+    },
+    {
+      "number": 1787,
+      "title": "feat(settings): qualify Escape navigation back Home",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "e48fdc252e17e7787baeb511eb08e1f0a7d96af7",
+      "baseRef": "main"
+    },
+    {
+      "number": 1788,
+      "title": "feat(sidebar): qualify rail section activation motion",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "546e444d27301946165569e5daeed7af98e8bbff",
+      "baseRef": "main"
+    },
+    {
+      "number": 1789,
+      "title": "feat(sidebar): qualify the folded Working activity section",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "495c5f8b3c9af27e2bacd15df51f02326f165498",
+      "baseRef": "main"
+    },
+    {
+      "number": 1790,
+      "title": "fix(browser): retain inactive tabs across switches (continuation of #1692)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "76df4e9ebb2d5a53b9e2470c86815f91beeb785d",
+      "baseRef": "main"
+    },
+    {
+      "number": 1792,
+      "title": "fix(browser): preserve parallel agent work and tab ownership (#1709)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "de6bfe4892d0178f4eecb33c95696dcfe583836e",
+      "baseRef": "codex/repair-browser-tabs-1692"
+    },
+    {
+      "number": 1793,
+      "title": "fix(browser): preserve restart tabs within the metadata byte limit (#1710)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "f6ac5c344859aeb5defe9dc10fa1b4dd51d84b07",
+      "baseRef": "codex/repair-browser-parallel-1709"
+    },
+    {
+      "number": 1795,
+      "title": "docs: retain attribution and package notices (continuation of #864)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "a6cf2fc4167640d7f3d762d7244c04b0d70e811e",
+      "baseRef": "main"
+    },
+    {
+      "number": 1797,
+      "title": "fix(opencode): complete stopped-session recovery and cleanup (#1160)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "9bd56665c4be59d80b2ebb9e73c64201593a4165",
+      "baseRef": "main"
+    },
+    {
+      "number": 1803,
+      "title": "fix(web): send the first queued message with Ctrl+Enter (continues #1206)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "6d0b84efda1b9258ef6c69e0210c1324c88253a0",
+      "baseRef": "main"
+    },
+    {
+      "number": 1804,
+      "title": "fix(server): qualify late startup grace and checkpoint lease recovery (#1158)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "e32a73c59ac4ffef6e8367406914f514610e0dbb",
+      "baseRef": "main"
+    },
+    {
+      "number": 1807,
+      "title": "fix(providers): complete Windows-safe Antigravity lifecycle (#421 continuation)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "44c8c8e93896af9d9e8d0fe91591bd6c55be61a1",
+      "baseRef": "main"
+    },
+    {
+      "number": 1812,
+      "title": "test(web): stabilize retry setup and retain cached composer checks",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "9606c2ba4bb514a2d92a863768303fb35399a452",
+      "baseRef": "main"
+    },
+    {
+      "number": 1818,
+      "title": "fix(antigravity): retain cumulative usage and own stop-hook grace",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "05468139342aec85015f85eab000bde8bbe805dd",
+      "baseRef": "main"
+    },
+    {
+      "number": 1821,
+      "title": "fix(antigravity): preserve PreInvocation and authored capture/scroll fixes",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "ab8a77a873e2443ffc9a9570cbd2919219fd41c9",
+      "baseRef": "main"
+    },
+    {
+      "number": 1823,
+      "title": "fix(linux): preserve and qualify AppImage, Deb and RPM packaging (#1367)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "d514181370aa7d673afe267948c42b85ba3f3e28",
+      "baseRef": "main"
+    },
+    {
+      "number": 1824,
+      "title": "Complete the Synara working status shimmer (#174)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "13c7484260808a8ec70b2edb7593d2f8535aa984",
+      "baseRef": "main"
+    },
+    {
+      "number": 1826,
+      "title": "Complete contextual chat typography (#175)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "09a1f71fd5bae2e37e8560542f14e80d71dc3797",
+      "baseRef": "main"
+    },
+    {
+      "number": 1827,
+      "title": "fix(web): preserve Activity grouping across sidebar remounts",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "cd63cea4dec2b51cc79be8c5480956696cf82b23",
+      "baseRef": "main"
+    },
+    {
+      "number": 1831,
+      "title": "desktop: add Always on Top on current main (continues #1504)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "ac0e7f65b6860dbc4e7c308acbc01a886238f559",
+      "baseRef": "main"
+    },
+    {
+      "number": 1832,
+      "title": "fix(web): guard global New thread with live Sidebar state",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "101a3c9653f2feeab0c7bf3dbcbe163bf01d6869",
+      "baseRef": "main"
+    },
+    {
+      "number": 1835,
+      "title": "fix(claude): preserve configured custom-model effort and draft options",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "9fb04ac2735b42efbdfd615efec723673395bab0",
+      "baseRef": "cleanup/20261011/sidebar-hydration-369"
+    },
+    {
+      "number": 1836,
+      "title": "feat(homebrew): validate and qualify the stable Synara cask (continues #1198)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "8f68d9fbcef7716887af8437337ff1b5bab69984",
+      "baseRef": "main"
+    },
+    {
+      "number": 1839,
+      "title": "fix(desktop): declare the bundled macOS 13 minimum",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "fc3cd0c5e744041108b5d9109730cba1ded9c4ee",
+      "baseRef": "main"
+    },
+    {
+      "number": 1840,
+      "title": "test(marketing): refresh the current Darwin docs baseline",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "600a2da636e4c191bebaeade3f5751f0665b39ed",
+      "baseRef": "main"
+    },
+    {
+      "number": 1841,
+      "title": "fix(web): preserve the control chosen during window activation",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "a3098848972482e13d772bd7581a6c1203650586",
+      "baseRef": "main"
+    },
+    {
+      "number": 1842,
+      "title": "fix(server): settle provider handoffs without replaying native work",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "6432694f11616ab61bd25360456f9226a9bef5de",
+      "baseRef": "main"
+    },
+    {
+      "number": 1845,
+      "title": "test(server): keep library fixture maintenance inside Git lifetime",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "99a1c00c46db38e557a29cb6c958692b0558d297",
+      "baseRef": "main"
+    },
+    {
+      "number": 1847,
+      "title": "feat(worktrees): safely link declared shared dependencies",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "1de9fa2de0db98ca7966e00fc45f53df0fdd1b6d",
+      "baseRef": "main"
+    },
+    {
+      "number": 1848,
+      "title": "fix(server): prepare Windows teardown observers while runtimes are alive",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "879dc7b2c727d781995a012c509bccd2cf7af505",
+      "baseRef": "main"
+    },
+    {
+      "number": 1851,
+      "title": "chore: preserve shared utility comment cleanup on current main (#1283)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "7f1c5b1f658033e1d1016eab4be49b7444500cd6",
+      "baseRef": "main"
+    },
+    {
+      "number": 1852,
+      "title": "style: restore formatting for the 1.0.3 release notes",
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "head": "1a9d70983750bc771e850d72a858c541bac52885",
+      "baseRef": "main"
+    },
+    {
+      "number": 1853,
+      "title": "docs: require authorization for UI changes (preserves #1850)",
+      "state": "closed",
+      "merged": true,
+      "draft": false,
+      "head": "97460697daff4d220e239437e3615fada859ee36",
+      "baseRef": "main"
+    },
+    {
+      "number": 1854,
+      "title": "fix(desktop): use Beta artwork in macOS source launchers (preserves #1849)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "4f7c61fe6f028d69ef187c9437286e7830628da4",
+      "baseRef": "main"
+    },
+    {
+      "number": 1856,
+      "title": "feat(browser): continue macOS cookie-source import integration (#1830)",
+      "state": "open",
+      "merged": false,
+      "draft": true,
+      "head": "be4186e34d1e0437ee9b3c671a9fb3652ab599de",
+      "baseRef": "main"
+    },
+    {
+      "number": 1857,
+      "title": "fix(codex): preserve image-generation provenance on current main (#1069)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "00d069ea71154ae11b87944a542bb845878b7050",
+      "baseRef": "main"
+    },
+    {
+      "number": 1858,
+      "title": "fix: preserve source ownership and prior answers in effort retries",
+      "state": "open",
+      "merged": false,
+      "draft": true,
+      "head": "0d494214cbca45e2e9660ed055d4e6a686007bda",
+      "baseRef": "main"
+    },
+    {
+      "number": 1860,
+      "title": "feat(codex): preserve configurable launch arguments across current accounts",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "638e419bc952566932bbf7cddf0b129bafc4d434",
+      "baseRef": "main"
+    },
+    {
+      "number": 1866,
+      "title": "Preserve live turn ownership and page runtime reconciliation",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "4c31e23b888e40d21868fa8325a8641b0424c517",
+      "baseRef": "main"
+    },
+    {
+      "number": 1870,
+      "title": "fix(git): preserve diff prefixes under user config (continue #1863)",
+      "state": "open",
+      "merged": false,
+      "draft": false,
+      "head": "d25d4238f516e1400346878f4d071b6bb88c1b0e",
+      "baseRef": "main"
+    }
+  ],
+  "mergeChecks": [
+    {
+      "number": 1210,
+      "head": "68e7c20301ee6a75a2b00c6b95c9b01d2091afd0",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/server/src/agentGateway/toolInput.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/modelSelectionCompatibility.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/profileStats.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/provider/Layers/ProviderHealth.test.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/provider/Layers/ProviderHealth.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/provider/skillsCatalog.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/appSettings.test.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/appSettings.ts",
+        "CONFLICT (modify/delete): apps/web/src/components/chat/ComposerModelEffortPicker.browser.tsx deleted in 1b5d327840f8b8643a83854b0e911900eba3a0d8 and modified in 68e7c20301ee6a75a2b00c6b95c9b01d2091afd0.  Version 68e7c20301ee6a75a2b00c6b95c9b01d2091afd0 of apps/web/src/components/chat/ComposerModelEffortPicker.browser.tsx left in tree.",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/chat/ProviderModelPicker.tsx",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/chat/useChatProviderModels.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/settings/ProfileSettingsPanel.tsx",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/settings/ProvidersSettingsPanel.test.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/composerDraftStore.models.test.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/hooks/useProviderModelCatalog.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/providerModelOptions.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/session-logic.test.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/storeNormalization.ts",
+        "CONFLICT (content): Merge conflict in docs/providers.md",
+        "CONFLICT (content): Merge conflict in packages/contracts/src/orchestration.ts",
+        "CONFLICT (content): Merge conflict in packages/contracts/src/providerDiscovery.ts",
+        "CONFLICT (content): Merge conflict in packages/contracts/src/settings.ts",
+        "CONFLICT (content): Merge conflict in packages/shared/src/model.ts",
+        "CONFLICT (content): Merge conflict in packages/shared/src/providerMetadata.ts",
+        "CONFLICT (content): Merge conflict in packages/shared/src/serverSettings.test.ts"
+      ]
+    },
+    {
+      "number": 1232,
+      "head": "6d990c54e3866aed6dfa52cdf1a189cb37fc0ccf",
+      "baseRef": "feat/cline-provider",
+      "actualBase": "68e7c20301ee6a75a2b00c6b95c9b01d2091afd0",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1238,
+      "head": "b5bf3af71496486e4caef42961441d9f55c45b23",
+      "baseRef": "codex/feat-model-catalog-favourites",
+      "actualBase": "6d990c54e3866aed6dfa52cdf1a189cb37fc0ccf",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1652,
+      "head": "82f099ec3ed6dc698e76dac17c93ef4354141f5e",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1655,
+      "head": "fdb4f6933160f7d0fd60e58c1adb811cf71e4036",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1656,
+      "head": "184068e413a238f9aefaf61d60f78162f563dae1",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1716,
+      "head": "5cbc36c4a26d9da647a164a10ea0cd922fa6e75c",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1717,
+      "head": "2ddfee8091504bf2b71687fac21fa095f2a2b544",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1718,
+      "head": "c1849fdf42e0f00433aee32b36ef5c853db221d2",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1720,
+      "head": "4dced2d4a099b4186a2275c261886dfb55f9f325",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1721,
+      "head": "d32ecf268ca27b3960137c19cb9166f4dcd42f68",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1745,
+      "head": "9a8fdbe89b65131c2f09c3654e586580f46a6807",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": ["CONFLICT (content): Merge conflict in packages/shared/package.json"]
+    },
+    {
+      "number": 1757,
+      "head": "b0b2ef8b17a6de233db488da527fcbac5b245dae",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/server/src/provider/Layers/ProviderService.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/settingsSearchIndex.ts"
+      ]
+    },
+    {
+      "number": 1763,
+      "head": "d6765bb7ce4bfa6d8ac3e6dbdd636af627207f81",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": ["CONFLICT (content): Merge conflict in bun.lock"]
+    },
+    {
+      "number": 1765,
+      "head": "f171b15a76845acf7f94fb2dc54c25e80fb2e89e",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1766,
+      "head": "e2dec88fb329ed63b9227a89e5f5fd5660eb299c",
+      "baseRef": "codex/configure-external-mcp-capacity-1712",
+      "actualBase": "a04bbae1a4c72805e73fd5964991f77732a95323",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Migrations.test.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Migrations.ts"
+      ]
+    },
+    {
+      "number": 1767,
+      "head": "5a9569f5e1b8e0142966323498d82ba838ce444c",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/server/src/agentGateway/Layers/AgentGateway.ts"
+      ]
+    },
+    {
+      "number": 1768,
+      "head": "4189ae764800b9d4812acb8e9c5579349ed785c3",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/server/src/orchestration/Layers/ProjectionPipeline.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Layers/ProjectionTurns.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Migrations.test.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Migrations.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Migrations/099_InvalidateProjectionThreadsCursor.test.ts",
+        "CONFLICT (content): Merge conflict in apps/server/src/persistence/Services/ProjectionTurns.ts",
+        "CONFLICT (content): Merge conflict in apps/web/src/hooks/useProviderModelCatalog.ts"
+      ]
+    },
+    {
+      "number": 1769,
+      "head": "bb0a3bf275d50486dcccee4edde4b355db003f80",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1770,
+      "head": "612d518bb201884a9a5debc1369b10a8524ca561",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1771,
+      "head": "ac16f58826b5498b06d67c620cbf3be38541a87d",
+      "baseRef": "codex/preserve-edit-replay-workspace",
+      "actualBase": "612d518bb201884a9a5debc1369b10a8524ca561",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/web/src/components/ChatView.tsx",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/chat/ChatTranscriptPane.tsx",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/chat/MessagesTimeline.tsx"
+      ]
+    },
+    {
+      "number": 1772,
+      "head": "2e8d1f8f28585ba7dc37c44caebd915c3547614f",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/marketing/tests/visual/visual.spec.ts-snapshots/docs-desktop-light-linux.png",
+        "CONFLICT (content): Merge conflict in apps/web/src/components/ChatView.browser.tsx"
+      ]
+    },
+    {
+      "number": 1779,
+      "head": "aaa9a9a0fae97c15ca2ba801cceda33cd2008c23",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1780,
+      "head": "5727efabd7591fe22bd4042378cfc32294033ab0",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 1,
+      "conflicts": [
+        "CONFLICT (content): Merge conflict in apps/web/src/components/chat/ComposerModelPicker.logic.test.ts"
+      ]
+    },
+    {
+      "number": 1783,
+      "head": "6a3b281e2238d42add2ba7c37bacbb1723f46577",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1784,
+      "head": "58a85235577096df64e1b8e365dbbe885acedc3e",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1785,
+      "head": "6caf40fbc824df93a7c0cf102857e426e2b0b435",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1786,
+      "head": "39c05e66934c1b1bc57ca0493d191b784456a679",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1787,
+      "head": "e48fdc252e17e7787baeb511eb08e1f0a7d96af7",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1788,
+      "head": "546e444d27301946165569e5daeed7af98e8bbff",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1789,
+      "head": "495c5f8b3c9af27e2bacd15df51f02326f165498",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1790,
+      "head": "76df4e9ebb2d5a53b9e2470c86815f91beeb785d",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1792,
+      "head": "de6bfe4892d0178f4eecb33c95696dcfe583836e",
+      "baseRef": "codex/repair-browser-tabs-1692",
+      "actualBase": "76df4e9ebb2d5a53b9e2470c86815f91beeb785d",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1793,
+      "head": "f6ac5c344859aeb5defe9dc10fa1b4dd51d84b07",
+      "baseRef": "codex/repair-browser-parallel-1709",
+      "actualBase": "de6bfe4892d0178f4eecb33c95696dcfe583836e",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1795,
+      "head": "a6cf2fc4167640d7f3d762d7244c04b0d70e811e",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1797,
+      "head": "9bd56665c4be59d80b2ebb9e73c64201593a4165",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1803,
+      "head": "6d0b84efda1b9258ef6c69e0210c1324c88253a0",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1804,
+      "head": "e32a73c59ac4ffef6e8367406914f514610e0dbb",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1807,
+      "head": "44c8c8e93896af9d9e8d0fe91591bd6c55be61a1",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1812,
+      "head": "9606c2ba4bb514a2d92a863768303fb35399a452",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1818,
+      "head": "05468139342aec85015f85eab000bde8bbe805dd",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1821,
+      "head": "ab8a77a873e2443ffc9a9570cbd2919219fd41c9",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1823,
+      "head": "d514181370aa7d673afe267948c42b85ba3f3e28",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1824,
+      "head": "13c7484260808a8ec70b2edb7593d2f8535aa984",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1826,
+      "head": "09a1f71fd5bae2e37e8560542f14e80d71dc3797",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1827,
+      "head": "cd63cea4dec2b51cc79be8c5480956696cf82b23",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1831,
+      "head": "ac0e7f65b6860dbc4e7c308acbc01a886238f559",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1832,
+      "head": "101a3c9653f2feeab0c7bf3dbcbe163bf01d6869",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1835,
+      "head": "9fb04ac2735b42efbdfd615efec723673395bab0",
+      "baseRef": "cleanup/20261011/sidebar-hydration-369",
+      "actualBase": "101a3c9653f2feeab0c7bf3dbcbe163bf01d6869",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1836,
+      "head": "8f68d9fbcef7716887af8437337ff1b5bab69984",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1839,
+      "head": "fc3cd0c5e744041108b5d9109730cba1ded9c4ee",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1840,
+      "head": "600a2da636e4c191bebaeade3f5751f0665b39ed",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1841,
+      "head": "a3098848972482e13d772bd7581a6c1203650586",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1842,
+      "head": "6432694f11616ab61bd25360456f9226a9bef5de",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1845,
+      "head": "99a1c00c46db38e557a29cb6c958692b0558d297",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1847,
+      "head": "1de9fa2de0db98ca7966e00fc45f53df0fdd1b6d",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1848,
+      "head": "879dc7b2c727d781995a012c509bccd2cf7af505",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1851,
+      "head": "7f1c5b1f658033e1d1016eab4be49b7444500cd6",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1854,
+      "head": "4f7c61fe6f028d69ef187c9437286e7830628da4",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1856,
+      "head": "be4186e34d1e0437ee9b3c671a9fb3652ab599de",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1857,
+      "head": "00d069ea71154ae11b87944a542bb845878b7050",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1858,
+      "head": "0d494214cbca45e2e9660ed055d4e6a686007bda",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1860,
+      "head": "638e419bc952566932bbf7cddf0b129bafc4d434",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1866,
+      "head": "4c31e23b888e40d21868fa8325a8641b0424c517",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1870,
+      "head": "d25d4238f516e1400346878f4d071b6bb88c1b0e",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    },
+    {
+      "number": 1878,
+      "head": "c73cf21639391a5ec5735000d83a8074c9ffc2a2",
+      "baseRef": "main",
+      "actualBase": "1b5d327840f8b8643a83854b0e911900eba3a0d8",
+      "exit": 0,
+      "conflicts": []
+    }
+  ],
+  "sourceHeadChecks": [
+    {
+      "number": 1210,
+      "head": "68e7c20301ee6a75a2b00c6b95c9b01d2091afd0",
+      "title": "feat: add Cline provider across backend and frontend",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.5,
+          "log": "1210-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/provider/Layers/ClineAdapter.test.ts",
+            "src/provider/Layers/ProviderAdapterRegistry.test.ts",
+            "src/provider/Layers/ProviderHealth.test.ts",
+            "src/provider/acp/ClineAcpSupport.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  122 passed (122)"],
+          "exit": 0,
+          "seconds": 14.9,
+          "log": "1210-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/appSettings.test.ts",
+            "src/clineProvider.test.tsx",
+            "src/components/settings/ProvidersSettingsPanel.test.ts",
+            "src/composerDraftStore.models.test.ts",
+            "src/lib/providerModelPrefetch.test.ts",
+            "src/providerUpdates.test.ts",
+            "src/session-logic.test.ts",
+            "src/wsNativeApi.test.ts"
+          ],
+          "summary": ["Test Files  8 passed (8)", "Tests  237 passed (237)"],
+          "exit": 0,
+          "seconds": 5.3,
+          "log": "1210-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/serverSettings.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  2 passed (2)"],
+          "exit": 0,
+          "seconds": 1.3,
+          "log": "1210-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/ComposerModelEffortPicker.browser.tsx",
+            "src/components/chat/ProviderModelPicker.browser.tsx",
+            "src/components/chat/TraitsPicker.browser.tsx"
+          ],
+          "summary": ["Test Files  3 failed (3)", "Tests  no tests"],
+          "exit": 1,
+          "seconds": 11.0,
+          "log": "1210-apps-web-browser.log",
+          "supersededBy": "1210-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/ComposerModelEffortPicker.browser.tsx",
+            "src/components/chat/ProviderModelPicker.browser.tsx",
+            "src/components/chat/TraitsPicker.browser.tsx"
+          ],
+          "exit": 0,
+          "seconds": 16.6,
+          "log": "1210-browser-retry.log",
+          "summary": ["Test Files  3 passed (3)", "Tests  50 passed (50)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": ["apps/web/src/routeTree.gen.ts"]
+    },
+    {
+      "number": 1232,
+      "head": "6d990c54e3866aed6dfa52cdf1a189cb37fc0ccf",
+      "title": "feat(web): add provider model favourites and catalog navigation",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1232-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/runtimeModelCapabilities.test.ts",
+            "src/lib/modelFavorites.test.ts",
+            "src/providerModelOptions.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  55 passed (55)"],
+          "exit": 0,
+          "seconds": 2.5,
+          "log": "1232-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/chat/ProviderModelPicker.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  34 passed (34)"],
+          "exit": 0,
+          "seconds": 13.9,
+          "log": "1232-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1238,
+      "head": "b5bf3af71496486e4caef42961441d9f55c45b23",
+      "title": "feat(web): add composer model presets",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1238-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.logic.test.ts",
+            "src/components/chat/composerModelPresetSelection.test.ts",
+            "src/lib/composerModelPresets.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  194 passed (194)"],
+          "exit": 0,
+          "seconds": 2.5,
+          "log": "1238-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/chat/ComposerModelEffortPicker.browser.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  21 passed | 145 skipped (166)"],
+          "exit": 0,
+          "seconds": 72.6,
+          "log": "1238-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1652,
+      "head": "82f099ec3ed6dc698e76dac17c93ef4354141f5e",
+      "title": "feat(release): publish Linux deb artifacts",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.5,
+          "log": "1652-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": ["src/backendShutdown.posix.integration.test.ts", "src/backendShutdown.test.ts"],
+          "summary": ["Test Files  2 passed (2)", "Tests  43 passed (43)"],
+          "exit": 0,
+          "seconds": 1.6,
+          "log": "1652-apps-desktop-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": [
+            "build-desktop-artifact-mac-config.test.ts",
+            "desktop-artifact-identity.test.ts",
+            "lib/release-artifact-checkpoint.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  57 passed (57)"],
+          "exit": 0,
+          "seconds": 1.1,
+          "log": "1652-scripts-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1655,
+      "head": "fdb4f6933160f7d0fd60e58c1adb811cf71e4036",
+      "title": "feat(web): add scoped file preview find",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1655-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/workspaceFileFind.logic.test.ts",
+            "src/keybindings.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  78 passed (78)"],
+          "exit": 0,
+          "seconds": 2.2,
+          "log": "1655-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/contracts",
+          "files": ["src/keybindings.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  8 passed (8)"],
+          "exit": 0,
+          "seconds": 0.7,
+          "log": "1655-packages-contracts-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/WorkspaceFilePreview.editing.browser.tsx",
+            "src/components/WorkspaceFilePreview.find.browser.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  32 passed (32)"],
+          "exit": 0,
+          "seconds": 25.6,
+          "log": "1655-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1656,
+      "head": "184068e413a238f9aefaf61d60f78162f563dae1",
+      "title": "feat(web): search active project files from Cmd+K",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 10.7,
+          "log": "1656-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/SidebarSearchPalette.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  15 passed (15)"],
+          "exit": 0,
+          "seconds": 11.4,
+          "log": "1656-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1716,
+      "head": "5cbc36c4a26d9da647a164a10ea0cd922fa6e75c",
+      "title": "feat(projects): resolve local icons through saved project identities",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1716-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/http.test.ts",
+            "src/imageMime.test.ts",
+            "src/project/Layers/ProjectFaviconResolver.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  97 passed (97)"],
+          "exit": 0,
+          "seconds": 3.7,
+          "log": "1716-apps-server-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/EditProjectDialog.browser.tsx",
+            "src/components/ProjectSidebarIcon.browser.tsx",
+            "src/components/ThreadHoverCardContent.browser.tsx"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  12 passed (12)"],
+          "exit": 0,
+          "seconds": 11.0,
+          "log": "1716-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1717,
+      "head": "2ddfee8091504bf2b71687fac21fa095f2a2b544",
+      "title": "feat(handoff): add opt-in continuous handoffs and provider history",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1717-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/appSettings.test.ts",
+            "src/hooks/useThreadHandoff.test.tsx",
+            "src/lib/continuousHandoffPath.test.ts",
+            "src/lib/threadHandoff.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  132 passed (132)"],
+          "exit": 0,
+          "seconds": 3.0,
+          "log": "1717-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/chat/ChatHeader.browser.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  9 passed | 209 skipped (218)"],
+          "exit": 0,
+          "seconds": 107.3,
+          "log": "1717-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1718,
+      "head": "c1849fdf42e0f00433aee32b36ef5c853db221d2",
+      "title": "feat(usage): show all enabled provider accounts without request fan-out",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1718-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/ProviderUsageMenuControl.test.tsx",
+            "src/components/chat/environment/EnvironmentUsageSection.logic.test.ts",
+            "src/hooks/useProviderUsageSummary.test.tsx"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  44 passed (44)"],
+          "exit": 0,
+          "seconds": 4.0,
+          "log": "1718-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/chat/environment/EnvironmentUsageSection.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  16 passed (16)"],
+          "exit": 0,
+          "seconds": 10.4,
+          "log": "1718-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1720,
+      "head": "4dced2d4a099b4186a2275c261886dfb55f9f325",
+      "title": "feat(release): build Debian packages alongside AppImage safely",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1720-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": [
+            "build-desktop-artifact.test.ts",
+            "lib/release-artifact-checkpoint.test.ts",
+            "lib/release-artifact-provenance.test.ts",
+            "release-linux-packaging.test.ts",
+            "verify-packaged-desktop-startup.test.ts"
+          ],
+          "summary": ["Test Files  5 passed (5)", "Tests  86 passed (86)"],
+          "exit": 0,
+          "seconds": 4.0,
+          "log": "1720-scripts-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1721,
+      "head": "d32ecf268ca27b3960137c19cb9166f4dcd42f68",
+      "title": "feat(explorer): compact paths, expose Git status and extend copy actions",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 7.5,
+          "log": "1721-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/git/Layers/GitCore.test.ts", "src/git/gitStatusParsing.test.ts"],
+          "summary": ["Test Files  2 passed (2)", "Tests  178 passed (178)"],
+          "exit": 0,
+          "seconds": 48.4,
+          "log": "1721-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/workspaceExplorer.logic.test.ts",
+            "src/lib/fileReferenceContextMenu.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  47 passed (47)"],
+          "exit": 0,
+          "seconds": 3.0,
+          "log": "1721-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/contracts",
+          "files": ["src/git.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  12 passed (12)"],
+          "exit": 0,
+          "seconds": 1.0,
+          "log": "1721-packages-contracts-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/DockExplorerPane.browser.tsx",
+            "src/components/chat/workspaceExplorer.browser.tsx"
+          ],
+          "summary": ["Test Files  1 failed | 1 passed (2)", "Tests  1 failed | 18 passed (19)"],
+          "exit": 1,
+          "seconds": 109.2,
+          "log": "1721-apps-web-browser.log"
+        },
+        {
+          "kind": "browser QA",
+          "package": "apps/web",
+          "files": ["temporary QA: same refresh assertions, click visible compacted src/ui row"],
+          "exit": 1,
+          "seconds": 101.8,
+          "log": "1721-independent-compaction-refresh-qa.log",
+          "summary": ["Test Files  1 failed (1)", "Tests  1 failed | 12 skipped (13)"]
+        },
+        {
+          "kind": "browser QA",
+          "package": "apps/web",
+          "files": [
+            "temporary QA: click compacted row by visible text, retain original refresh assertions"
+          ],
+          "exit": 1,
+          "log": "1721-refresh-visible-row-qa.log",
+          "summary": ["Test Files  1 failed (1)", "Tests  1 failed | 12 skipped (13)"]
+        }
+      ],
+      "skipped": ["apps/web/src/components/ChatView.browser.tsx"],
+      "trackedDiff": []
+    },
+    {
+      "number": 1745,
+      "head": "9a8fdbe89b65131c2f09c3654e586580f46a6807",
+      "title": "feat(settings): restore owner device pairing with safe links",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.8,
+          "log": "1745-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/authEffectRoute.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  16 passed (16)"],
+          "exit": 0,
+          "seconds": 13.0,
+          "log": "1745-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/pairingUrl.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  25 passed (25)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1745-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/settings/AdvancedSettingsPanel.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  6 passed (6)"],
+          "exit": 0,
+          "seconds": 12.5,
+          "log": "1745-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1757,
+      "head": "b0b2ef8b17a6de233db488da527fcbac5b245dae",
+      "title": "feat(server): stop idle agent processes safely and configure their timeout",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 7.0,
+          "log": "1757-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/effectServer.lifecycle.test.ts",
+            "src/localServerMonitor.test.ts",
+            "src/provider/Layers/ProviderService.test.ts",
+            "src/serverSettings.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  214 passed (214)"],
+          "exit": 0,
+          "seconds": 18.8,
+          "log": "1757-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/appSettings.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  99 passed (99)"],
+          "exit": 0,
+          "seconds": 3.0,
+          "log": "1757-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/lib/contextMenuFallback.browser.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  9 passed (9)"],
+          "exit": 0,
+          "seconds": 9.0,
+          "log": "1757-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1763,
+      "head": "d6765bb7ce4bfa6d8ac3e6dbdd636af627207f81",
+      "title": "feat(markdown): render Mermaid diagrams with safe source fallback",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.7,
+          "log": "1763-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatMarkdown.mermaid.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  4 passed (4)"],
+          "exit": 0,
+          "seconds": 14.5,
+          "log": "1763-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1765,
+      "head": "f171b15a76845acf7f94fb2dc54c25e80fb2e89e",
+      "title": "fix(persistence): compress pre-migration SQLite backups",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1765-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/persistence/MigrationBackup.test.ts",
+            "src/persistence/MigrationSchemaTooNewRecovery.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  44 passed (44)"],
+          "exit": 0,
+          "seconds": 5.2,
+          "log": "1765-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1766,
+      "head": "e2dec88fb329ed63b9227a89e5f5fd5660eb299c",
+      "title": "feat(mcp): continue owned tasks with durable run handles",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1766-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/externalMcp/Layers/ExternalMcpComputerControl.test.ts",
+            "src/externalMcp/Layers/ExternalMcpGateway.e2e.test.ts",
+            "src/externalMcp/Layers/ExternalMcpRepository.test.ts",
+            "src/externalMcp/overview.test.ts",
+            "src/externalMcp/waitForTask.test.ts",
+            "src/orchestration/Layers/ProviderCommandReactor.test.ts",
+            "src/orchestration/decider.resumePrecondition.test.ts",
+            "src/persistence/Migrations.test.ts"
+          ],
+          "summary": ["Test Files  8 passed (8)", "Tests  501 passed (501)"],
+          "exit": 0,
+          "seconds": 102.0,
+          "log": "1766-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1767,
+      "head": "5a9569f5e1b8e0142966323498d82ba838ce444c",
+      "title": "feat(mcp): expose cached provider quotas with explicit usage access",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1767-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/agentGateway/Layers/AgentGateway.test.ts",
+            "src/agentGateway/Layers/AgentGatewaySessionRegistry.test.ts",
+            "src/agentGateway/harnessPolicy.test.ts",
+            "src/agentGateway/usageTools.test.ts",
+            "src/externalMcp/Layers/ExternalMcpGateway.e2e.test.ts",
+            "src/providerUsage/agent.test.ts",
+            "src/providerUsage/agentReader.test.ts",
+            "src/providerUsage/index.test.ts"
+          ],
+          "summary": ["Test Files  8 passed (8)", "Tests  199 passed (199)"],
+          "exit": 0,
+          "seconds": 11.5,
+          "log": "1767-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/settings/externalMcpSetup.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  10 passed (10)"],
+          "exit": 0,
+          "seconds": 1.4,
+          "log": "1767-apps-web-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1768,
+      "head": "4189ae764800b9d4812acb8e9c5579349ed785c3",
+      "title": "fix(provider): preserve external agent workspaces and quarantine failures",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1768-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/capabilityEvidence/Services/CapabilityEvidenceService.test.ts",
+            "src/capabilityEvidence/Services/CapabilityPolicyEngine.test.ts",
+            "src/capabilityEvidence/Services/RuntimeTurnFeedbackClassifier.test.ts",
+            "src/discovery/AcpProbe.test.ts",
+            "src/discovery/ConnectionPlanPolicy.test.ts",
+            "src/externalAgents/AgentProfileRepository.test.ts",
+            "src/externalAgents/AgentProfileService.test.ts",
+            "src/externalAgents/ProfileLifecycleService.test.ts",
+            "src/externalAgents/agentProfileIdentity.test.ts",
+            "src/externalAgents/agentProfileTrust.test.ts",
+            "src/persistence/Migrations/133_ExternalAgentProfiles.test.ts",
+            "src/provider/Layers/ExternalAgentAdapter.test.ts",
+            "src/provider/externalProtocolSafety.test.ts",
+            "src/wsRpc.connectionPlan.test.ts"
+          ],
+          "summary": [
+            "Test Files  1 failed | 13 passed (14)",
+            "Tests  4 failed | 107 passed (111)"
+          ],
+          "exit": 1,
+          "seconds": 23.9,
+          "log": "1768-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/betaFeatures.test.ts",
+            "src/components/chat/CapabilityEvidenceBadge.test.ts",
+            "src/lib/providerAvailability.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  39 passed (39)"],
+          "exit": 0,
+          "seconds": 2.6,
+          "log": "1768-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/contracts",
+          "files": ["src/cliConnector.test.ts", "src/connectionPlan.test.ts"],
+          "summary": ["Test Files  2 passed (2)", "Tests  34 passed (34)"],
+          "exit": 0,
+          "seconds": 1.0,
+          "log": "1768-packages-contracts-unit.log"
+        }
+      ],
+      "skipped": [
+        "apps/server/integration/orchestrationEngine.integration.test.ts",
+        "apps/server/src/agentGateway/hubWorkSource.test.ts",
+        "apps/server/src/agentGateway/sessionLeaseCallSites.test.ts",
+        "apps/server/src/agentGateway/targetResolver.test.ts",
+        "apps/server/src/automation/Layers/AutomationService.test.ts",
+        "apps/server/src/capabilityEvidence/Services/RuntimeTurnFeedbackService.test.ts",
+        "apps/server/src/conformance/ConformanceHostileModes.test.ts",
+        "apps/server/src/conformance/ConformanceRunner.test.ts",
+        "apps/server/src/discovery/AcpRegistryClient.test.ts",
+        "apps/server/src/discovery/BinaryRecipeResolver.test.ts",
+        "apps/server/src/discovery/DiscoveryService.test.ts",
+        "apps/server/src/discovery/acpRegistry.test.ts",
+        "apps/server/src/orchestration/Layers/HubOutputReactor.test.ts",
+        "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts",
+        "apps/server/src/orchestration/turnStartSession.test.ts",
+        "apps/server/src/persistence/Layers/ProjectionRepositories.test.ts",
+        "apps/server/src/persistence/Migrations.test.ts",
+        "apps/server/src/persistence/Migrations/099_InvalidateProjectionThreadsCursor.test.ts",
+        "apps/server/src/persistence/Migrations/134_CapabilityEvidence.test.ts",
+        "apps/server/src/persistence/Migrations/135_ExternalAgentLifecycle.test.ts",
+        "apps/server/src/persistence/Migrations/136_CapabilityEvidenceWithdrawal.test.ts",
+        "apps/server/src/persistence/modelSelectionCompatibility.test.ts",
+        "apps/server/src/projectAgent/Layers/ProjectAgentService.test.ts",
+        "apps/server/src/provider/Layers/ExternalAgentAdapter.integration.test.ts",
+        "apps/server/src/provider/Layers/OpenCodeAdapter.test.ts",
+        "apps/server/src/provider/Layers/ProviderAdapterRegistry.test.ts",
+        "apps/server/src/provider/Layers/ProviderDiscoveryService.test.ts",
+        "apps/server/src/provider/acp/AcpAdapterSessionSupport.test.ts",
+        "apps/server/src/provider/acp/AcpSessionRuntime.test.ts",
+        "apps/server/src/provider/cli/CliConformanceVerifiers.test.ts",
+        "apps/server/src/provider/cli/CliStructuredRuntime.test.ts",
+        "apps/server/src/provider/opencodeRuntime.test.ts",
+        "apps/server/src/wsRpc.externalAgentAuthorization.test.ts",
+        "apps/web/src/appSettings.test.ts",
+        "apps/web/src/components/ChatView.browser.tsx",
+        "apps/web/src/components/chat/ComposerModelPicker.browser.tsx",
+        "apps/web/src/components/chat/ProviderModelPicker.browser.tsx",
+        "apps/web/src/components/chat/TraitsPicker.browser.tsx",
+        "apps/web/src/components/settings/ProvidersSettingsPanel.browser.tsx",
+        "apps/web/src/composerDraftStore.models.test.ts",
+        "apps/web/src/composerDraftStore.persistence.test.ts",
+        "apps/web/src/session-logic.test.ts"
+      ],
+      "trackedDiff": []
+    },
+    {
+      "number": 1769,
+      "head": "bb0a3bf275d50486dcccee4edde4b355db003f80",
+      "title": "feat(web): preserve and harden Markdown color customization",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1769-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/theme/theme.logic.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  37 passed (37)"],
+          "exit": 0,
+          "seconds": 2.3,
+          "log": "1769-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ThemePackEditor.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  6 passed (6)"],
+          "exit": 0,
+          "seconds": 15.6,
+          "log": "1769-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1770,
+      "head": "612d518bb201884a9a5debc1369b10a8524ca561",
+      "title": "fix(server): preserve workspace recovery before edit replay",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1770-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/orchestration/Layers/ProviderCommandReactor.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  450 passed (450)"],
+          "exit": 0,
+          "seconds": 99.2,
+          "log": "1770-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1771,
+      "head": "ac16f58826b5498b06d67c620cbf3be38541a87d",
+      "title": "feat(chat): preserve guarded retry effort draft and local attempt navigation",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 8.2,
+          "log": "1771-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/chat/retryWithDifferentEffort.logic.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  15 passed (15)"],
+          "exit": 0,
+          "seconds": 2.4,
+          "log": "1771-apps-web-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1772,
+      "head": "2e8d1f8f28585ba7dc37c44caebd915c3547614f",
+      "title": "fix: preserve automatic titles while hardening generation, policy races and hydration",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1772-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+            "src/orchestration/Layers/ProviderCommandReactor.test.ts",
+            "src/orchestration/projector.test.ts",
+            "src/persistence/Migrations/135_ThreadTitleRefresh.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  531 passed (531)"],
+          "exit": 0,
+          "seconds": 109.6,
+          "log": "1772-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/lib/threadRename.test.ts",
+            "src/providerUpdates.test.ts",
+            "src/storeProjection.test.ts",
+            "src/wsNativeApi.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  134 passed (134)"],
+          "exit": 0,
+          "seconds": 8.4,
+          "log": "1772-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": [
+            "src/threadTitleRefreshContext.test.ts",
+            "src/threadTitleRefreshPolicy.test.ts",
+            "src/threadTitleRefreshTrigger.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  16 passed (16)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1772-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/TitleSuggestionBanner.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  7 passed (7)"],
+          "exit": 0,
+          "seconds": 10.0,
+          "log": "1772-apps-web-browser.log"
+        }
+      ],
+      "skipped": [
+        "apps/marketing/scripts/release-feature-docs.test.mjs",
+        "apps/server/src/agentGateway/Layers/AgentGateway.test.ts",
+        "apps/server/src/agentGateway/todoTools.test.ts",
+        "apps/server/src/betaImport.test.ts",
+        "apps/server/src/codexAppServerManager.test.ts",
+        "apps/server/src/keepAwake.test.ts",
+        "apps/server/src/orchestration/Layers/CheckpointReactor.test.ts",
+        "apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts",
+        "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts",
+        "apps/server/src/orchestration/Layers/TurnCheckpointCoordinator.test.ts",
+        "apps/server/src/orchestration/Layers/messageTextChunks.test.ts",
+        "apps/server/src/orchestration/Layers/threadDetailSnapshotFence.test.ts",
+        "apps/server/src/orchestration/Layers/threadHistoryWindow.test.ts",
+        "apps/server/src/orchestration/decider.forkFromTurn.test.ts",
+        "apps/server/src/orchestration/decider.goalTiming.test.ts",
+        "apps/server/src/orchestration/forkSourceCutoff.test.ts",
+        "apps/server/src/orchestration/providerRuntimeActivityProjection.test.ts",
+        "apps/server/src/persistence/Layers/ProjectionRepositories.test.ts",
+        "apps/server/src/persistence/Migrations.test.ts",
+        "apps/server/src/persistence/Migrations/099_InvalidateProjectionThreadsCursor.test.ts",
+        "apps/server/src/profileStats.test.ts",
+        "apps/server/src/profileStatsArchive.test.ts",
+        "apps/server/src/provider/Layers/AntigravityAdapter.output.test.ts",
+        "apps/server/src/provider/Layers/AntigravityAdapter.test.ts",
+        "apps/server/src/provider/Layers/ClaudeAdapter.test.ts",
+        "apps/server/src/provider/Layers/CodexAdapter.test.ts",
+        "apps/server/src/provider/Layers/CursorAdapter.test.ts",
+        "apps/server/src/provider/Layers/OmpAdapter.live.test.ts",
+        "apps/server/src/provider/Layers/OmpAdapter.test.ts",
+        "apps/server/src/provider/Layers/ProviderDiscoveryService.test.ts",
+        "apps/server/src/provider/Layers/ProviderHealth.test.ts",
+        "apps/server/src/provider/Layers/ProviderService.test.ts",
+        "apps/server/src/provider/acp/AcpAdapterSupport.test.ts",
+        "apps/server/src/provider/acp/AcpElicitationSupport.test.ts",
+        "apps/server/src/provider/acp/AcpRuntimeModel.test.ts",
+        "apps/server/src/provider/acp/OmpAcpSupport.test.ts",
+        "apps/server/src/provider/antigravityPrintResult.test.ts",
+        "apps/server/src/provider/claudeMonitorEvents.test.ts",
+        "apps/server/src/provider/openCodeV2Client.test.ts",
+        "apps/server/src/provider/openCodeV2Messages.test.ts",
+        "apps/server/src/provider/providerModelCatalogCache.test.ts",
+        "apps/server/src/provider/providerRuntimeEventPump.test.ts",
+        "apps/server/src/providerUsage/providers/antigravity.test.ts",
+        "apps/server/src/wsSnapshotLiveStream.test.ts",
+        "apps/web/src/components/ChatMarkdown.test.tsx",
+        "apps/web/src/components/ChatView.browser.tsx",
+        "apps/web/src/components/ChatView.logic.test.ts",
+        "apps/web/src/components/DiffPanel.browser.tsx",
+        "apps/web/src/components/EventRouter.browser.tsx",
+        "apps/web/src/components/ProjectPicker.browser.tsx",
+        "apps/web/src/components/SettingsSidebarNav.test.tsx",
+        "apps/web/src/components/Sidebar.logic.test.ts",
+        "apps/web/src/components/SidebarActivityBellButton.browser.tsx",
+        "apps/web/src/components/SidebarHeaderNavigationControls.browser.tsx",
+        "apps/web/src/components/chat/BackgroundTaskRow.browser.tsx",
+        "apps/web/src/components/chat/ChatTranscriptPane.browser.tsx",
+        "apps/web/src/components/chat/ChatTranscriptPane.test.tsx",
+        "apps/web/src/components/chat/ComposerModelPicker.logic.test.ts",
+        "apps/web/src/components/chat/ComposerSubagentStrip.logic.test.ts",
+        "apps/web/src/components/chat/ComposerVoiceRecorderBar.browser.tsx",
+        "apps/web/src/components/chat/FloatingBrowserPanel.browser.tsx",
+        "apps/web/src/components/chat/ImportedHistory.browser.tsx",
+        "apps/web/src/components/chat/MessageTrail.browser.tsx",
+        "apps/web/src/components/chat/MessagesTimeline.changedFiles.browser.tsx",
+        "apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "apps/web/src/components/chat/MessagesTimeline.scroll.browser.tsx",
+        "apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "apps/web/src/components/chat/MessagesTimeline.toolDetails.browser.tsx",
+        "apps/web/src/components/chat/ProviderModelPicker.browser.tsx",
+        "apps/web/src/components/chat/SubagentRunCard.browser.tsx",
+        "apps/web/src/components/chat/SubagentRunCard.logic.test.ts",
+        "apps/web/src/components/chat/SubagentsDockPane.browser.tsx",
+        "apps/web/src/components/chat/SubagentsDockPane.test.tsx",
+        "apps/web/src/components/chat/SurfaceContentTabs.browser.tsx",
+        "apps/web/src/components/chat/TimelineWorkEntryRow.subagentProgress.test.tsx",
+        "apps/web/src/components/chat/agentActivity.logic.test.ts",
+        "apps/web/src/components/chat/backgroundTaskRow.logic.test.ts",
+        "apps/web/src/components/chat/composerGlass.browser.tsx",
+        "apps/web/src/components/chat/environment/EnvironmentSubagentsSection.logic.test.ts",
+        "apps/web/src/components/chat/environment/EnvironmentSubagentsSection.test.tsx",
+        "apps/web/src/components/chat/floatingBrowserPanel.logic.test.ts",
+        "apps/web/src/components/chat/group/HubPendingApprovals.browser.tsx",
+        "apps/web/src/components/chat/messageTrail.logic.test.ts",
+        "apps/web/src/components/chat/surfaceContentTabs.logic.test.ts",
+        "apps/web/src/components/chat/toolCallGroup.logic.test.ts",
+        "apps/web/src/components/chat/useChatPendingInteractions.browser.tsx",
+        "apps/web/src/components/chat/useChatTranscriptScroll.browser.tsx",
+        "apps/web/src/components/chat/useSubagentStripSource.test.tsx",
+        "apps/web/src/components/chat/userMessageOverflowObserver.test.ts",
+        "apps/web/src/composerDraftStore.models.test.ts",
+        "apps/web/src/composerDraftStore.persistence.test.ts",
+        "apps/web/src/diffRenderModeStore.test.ts",
+        "apps/web/src/diffRouteSearch.test.ts",
+        "apps/web/src/hooks/useClaudeContextCompaction.browser.tsx",
+        "apps/web/src/hooks/useProviderModelCatalog.browser.tsx",
+        "apps/web/src/hooks/useProviderModelCatalog.test.tsx",
+        "apps/web/src/lib/contextWindow.test.ts",
+        "apps/web/src/lib/deletedThreadClientReconciliation.test.ts",
+        "apps/web/src/lib/fastModeState.test.ts",
+        "apps/web/src/lib/providerDiscovery.capacity.browser.ts",
+        "apps/web/src/lib/providerDiscoveryReactQuery.test.ts",
+        "apps/web/src/lib/providerModelPrefetch.test.ts",
+        "apps/web/src/lib/queuedComposerDrain.test.ts",
+        "apps/web/src/lib/serverReactQuery.test.ts",
+        "apps/web/src/lib/stagedDraftNavigation.test.ts",
+        "apps/web/src/lib/subagentPresentation.test.ts",
+        "apps/web/src/lib/threadCreatePromotion.test.ts",
+        "apps/web/src/lib/threadDetailCache.browser.tsx",
+        "apps/web/src/lib/threadFork.test.ts",
+        "apps/web/src/lib/toolCallDetails.test.ts",
+        "apps/web/src/lib/toolCallLabel.test.ts",
+        "apps/web/src/orchestrationEventCoalescing.test.ts",
+        "apps/web/src/providerModelOptions.test.ts",
+        "apps/web/src/routes/-threadDetailSnapshotOrdering.test.ts",
+        "apps/web/src/storeEventReducer.test.ts",
+        "apps/web/src/storeSelectors.test.ts",
+        "apps/web/src/threadDetailResumeCursors.test.ts",
+        "apps/web/src/threadHistory.test.ts",
+        "apps/web/src/threadHistoryLoading.test.ts",
+        "apps/web/src/workLog.test.ts",
+        "apps/web/src/wsTransport.test.ts",
+        "packages/contracts/src/orchestration.test.ts",
+        "packages/contracts/src/providerDiscovery.test.ts",
+        "packages/shared/src/diagnosticsRedaction.test.ts",
+        "packages/shared/src/loginShellEnvironment.nu.test.ts",
+        "packages/shared/src/shell.nu.test.ts",
+        "packages/shared/src/threadDetailEvents.test.ts",
+        "packages/shared/src/windowsProcess.test.ts"
+      ],
+      "trackedDiff": []
+    },
+    {
+      "number": 1779,
+      "head": "aaa9a9a0fae97c15ca2ba801cceda33cd2008c23",
+      "title": "fix(web): qualify platform file-manager labels and errors on current main",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 8.4,
+          "log": "1779-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": ["src/showInFileManager.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  4 passed (4)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1779-apps-desktop-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/editorMetadata.test.ts",
+            "src/lib/fileManagerErrorToast.test.ts",
+            "src/lib/fileManagerNaming.test.ts",
+            "src/lib/fileReferenceContextMenu.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  39 passed (39)"],
+          "exit": 0,
+          "seconds": 3.3,
+          "log": "1779-apps-web-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1780,
+      "head": "5727efabd7591fe22bd4042378cfc32294033ab0",
+      "title": "feat(web): qualify author-preserving Devin Fusion pairing picker",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1780-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/provider/Layers/DevinAdapter.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  82 passed (82)"],
+          "exit": 0,
+          "seconds": 3.0,
+          "log": "1780-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/ComposerModelPicker.logic.test.ts",
+            "src/components/chat/composerTraits.test.ts",
+            "src/components/chat/devinFusionPairing.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  45 passed (45)"],
+          "exit": 0,
+          "seconds": 2.7,
+          "log": "1780-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/model.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  95 passed (95)"],
+          "exit": 0,
+          "seconds": 1.5,
+          "log": "1780-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/chat/ComposerModelPicker.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  31 passed (31)"],
+          "exit": 0,
+          "seconds": 18.4,
+          "log": "1780-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": [
+        ".github/pr-assets/fusion-picker/after.png",
+        ".github/pr-assets/fusion-picker/speed-menu.png",
+        ".github/pr-assets/fusion-picker/starred.png"
+      ]
+    },
+    {
+      "number": 1783,
+      "head": "6a3b281e2238d42add2ba7c37bacbb1723f46577",
+      "title": "fix(browser): complete floating sidebar handoff repairs from #787",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.3,
+          "log": "1783-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": [
+            "src/browserAnnotations/coordinator.test.ts",
+            "src/browserAnnotations/protocol.test.ts",
+            "src/browserAutomation/browserManagerAutomation.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  75 passed (75)"],
+          "exit": 0,
+          "seconds": 2.2,
+          "log": "1783-apps-desktop-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/BrowserPanel.logic.test.ts",
+            "src/components/chat/floatingBrowserPanel.logic.test.ts",
+            "src/components/chat/floatingBrowserRequestStore.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  51 passed (51)"],
+          "exit": 0,
+          "seconds": 2.4,
+          "log": "1783-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/chat/FloatingBrowserPanel.lifecycle.browser.tsx"],
+          "summary": [],
+          "exit": -6,
+          "seconds": 49.6,
+          "log": "1783-apps-web-browser.log",
+          "supersededBy": "1783-browser-final-single.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": ["src/components/chat/FloatingBrowserPanel.lifecycle.browser.tsx"],
+          "exit": -9,
+          "seconds": 53.3,
+          "log": "1783-browser-retry.log",
+          "summary": [],
+          "supersededBy": "1783-browser-final-single.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": ["src/components/chat/FloatingBrowserPanel.lifecycle.browser.tsx"],
+          "exit": 0,
+          "seconds": 84.9,
+          "log": "1783-browser-final-single.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  2 passed (2)"]
+        }
+      ],
+      "skipped": ["apps/web/e2e/visibleBrowserMcp.e2e.ts"],
+      "trackedDiff": []
+    },
+    {
+      "number": 1784,
+      "head": "58a85235577096df64e1b8e365dbbe885acedc3e",
+      "title": "perf(web): qualify author-preserving sidebar memo boundaries",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1784-install.log"
+        },
+        {
+          "kind": "source inspection only",
+          "files": ["apps/web/src/components/SidebarThreadRowContent.tsx"],
+          "exit": null
+        },
+        {
+          "kind": "browser QA",
+          "package": "apps/web",
+          "files": ["src/components/SidebarThreadRowContent.browser.tsx"],
+          "exit": 0,
+          "seconds": 12.4,
+          "log": "1784-supplement-browser.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  1 passed (1)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1785,
+      "head": "6caf40fbc824df93a7c0cf102857e426e2b0b435",
+      "title": "fix(web): qualify configured automation count in the sidebar",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1785-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/Sidebar.logic.test.ts",
+            "src/routes/-automations.shared.test.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  150 passed (150)"],
+          "exit": 0,
+          "seconds": 5.1,
+          "log": "1785-apps-web-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1786,
+      "head": "39c05e66934c1b1bc57ca0493d191b784456a679",
+      "title": "fix(chat): qualify follow-up draft preservation through promotion",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.8,
+          "log": "1786-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/composerDraftStore.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  30 passed (30)"],
+          "exit": 0,
+          "seconds": 2.9,
+          "log": "1786-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  1 passed | 219 skipped (220)"],
+          "exit": 0,
+          "seconds": 117.4,
+          "log": "1786-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1787,
+      "head": "e48fdc252e17e7787baeb511eb08e1f0a7d96af7",
+      "title": "feat(settings): qualify Escape navigation back Home",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1787-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/hooks/useSettingsEscapeToHome.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  4 passed (4)"],
+          "exit": 0,
+          "seconds": 7.0,
+          "log": "1787-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1788,
+      "head": "546e444d27301946165569e5daeed7af98e8bbff",
+      "title": "feat(sidebar): qualify rail section activation motion",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1788-install.log"
+        },
+        {
+          "kind": "source inspection only",
+          "files": ["apps/web/src/components/AppRail.tsx", "apps/web/src/index.css"],
+          "exit": null
+        },
+        {
+          "kind": "browser QA",
+          "package": "apps/web",
+          "files": ["temporary QA harness: real AppRail selection and CSS motion"],
+          "motion": "no-preference",
+          "exit": 0,
+          "seconds": 9.1,
+          "log": "1788-rail-no-preference.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  1 passed (1)"]
+        },
+        {
+          "kind": "browser QA",
+          "package": "apps/web",
+          "files": ["temporary QA harness: real AppRail selection and CSS motion"],
+          "motion": "reduce",
+          "exit": 0,
+          "seconds": 7.0,
+          "log": "1788-rail-reduce.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  1 passed (1)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1789,
+      "head": "495c5f8b3c9af27e2bacd15df51f02326f165498",
+      "title": "feat(sidebar): qualify the folded Working activity section",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1789-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/SidebarActivityView.logic.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  36 passed (36)"],
+          "exit": 0,
+          "seconds": 3.1,
+          "log": "1789-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/SidebarActivityView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  20 passed (20)"],
+          "exit": 0,
+          "seconds": 13.5,
+          "log": "1789-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1790,
+      "head": "76df4e9ebb2d5a53b9e2470c86815f91beeb785d",
+      "title": "fix(browser): retain inactive tabs across switches (continuation of #1692)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1790-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": ["src/browserAutomation/browserManagerAutomation.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  55 passed (55)"],
+          "exit": 0,
+          "seconds": 1.8,
+          "log": "1790-apps-desktop-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1792,
+      "head": "de6bfe4892d0178f4eecb33c95696dcfe583836e",
+      "title": "fix(browser): preserve parallel agent work and tab ownership (#1709)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1792-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": [
+            "src/browserAutomation/browserManagerAutomation.test.ts",
+            "src/browserAutomation/desktopBrowserAutomationHost.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  93 passed (93)"],
+          "exit": 0,
+          "seconds": 2.4,
+          "log": "1792-apps-desktop-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1793,
+      "head": "f6ac5c344859aeb5defe9dc10fa1b4dd51d84b07",
+      "title": "fix(browser): preserve restart tabs within the metadata byte limit (#1710)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1793-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": [
+            "src/browserAutomation/browserManagerAutomation.test.ts",
+            "src/browserWorkspacePersistence.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  80 passed (80)"],
+          "exit": 0,
+          "seconds": 2.1,
+          "log": "1793-apps-desktop-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1795,
+      "head": "a6cf2fc4167640d7f3d762d7244c04b0d70e811e",
+      "title": "docs: retain attribution and package notices (continuation of #864)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.7,
+          "log": "1795-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": ["lib/desktop-runtime-resources.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  2 passed (2)"],
+          "exit": 0,
+          "seconds": 0.8,
+          "log": "1795-scripts-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1797,
+      "head": "9bd56665c4be59d80b2ebb9e73c64201593a4165",
+      "title": "fix(opencode): complete stopped-session recovery and cleanup (#1160)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1797-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/provider/Layers/OpenCodeAdapter.test.ts",
+            "src/provider/Layers/ProviderService.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  274 passed (274)"],
+          "exit": 0,
+          "seconds": 21.9,
+          "log": "1797-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1803,
+      "head": "6d0b84efda1b9258ef6c69e0210c1324c88253a0",
+      "title": "fix(web): send the first queued message with Ctrl+Enter (continues #1206)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1803-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  5 passed | 220 skipped (225)"],
+          "exit": 0,
+          "seconds": 123.4,
+          "log": "1803-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1804,
+      "head": "e32a73c59ac4ffef6e8367406914f514610e0dbb",
+      "title": "fix(server): qualify late startup grace and checkpoint lease recovery (#1158)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1804-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/orchestration/Layers/ProviderCommandReactor.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  481 passed (481)"],
+          "exit": 0,
+          "seconds": 108.6,
+          "log": "1804-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1807,
+      "head": "44c8c8e93896af9d9e8d0fe91591bd6c55be61a1",
+      "title": "fix(providers): complete Windows-safe Antigravity lifecycle (#421 continuation)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1807-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/provider/Layers/AntigravityAdapter.output.test.ts",
+            "src/provider/Layers/AntigravityAdapter.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  162 passed | 7 skipped (169)"],
+          "exit": 0,
+          "seconds": 35.3,
+          "log": "1807-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/windowsProcess.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  26 passed | 2 skipped (28)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1807-packages-shared-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1812,
+      "head": "9606c2ba4bb514a2d92a863768303fb35399a452",
+      "title": "test(web): stabilize retry setup and retain cached composer checks",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1812-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/EventRouter.browser.tsx"
+          ],
+          "summary": [],
+          "exit": 124,
+          "seconds": 180.2,
+          "log": "1812-apps-web-browser.log",
+          "supersededBy": "1812-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/EventRouter.browser.tsx"
+          ],
+          "exit": 0,
+          "seconds": 196.6,
+          "log": "1812-browser-retry.log",
+          "summary": ["Test Files  2 passed (2)", "Tests  43 passed | 222 skipped (265)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1818,
+      "head": "05468139342aec85015f85eab000bde8bbe805dd",
+      "title": "fix(antigravity): retain cumulative usage and own stop-hook grace",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1818-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/provider/Layers/AntigravityAdapter.output.test.ts",
+            "src/provider/Layers/AntigravityAdapter.test.ts",
+            "src/provider/antigravityPrintResult.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  156 passed (156)"],
+          "exit": 0,
+          "seconds": 102.2,
+          "log": "1818-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1821,
+      "head": "ab8a77a873e2443ffc9a9570cbd2919219fd41c9",
+      "title": "fix(antigravity): preserve PreInvocation and authored capture/scroll fixes",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 7.2,
+          "log": "1821-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": ["src/appSnapManager.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  55 passed (55)"],
+          "exit": 0,
+          "seconds": 6.4,
+          "log": "1821-apps-desktop-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/provider/Layers/AntigravityAdapter.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  121 passed (121)"],
+          "exit": 0,
+          "seconds": 33.8,
+          "log": "1821-apps-server-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/chat/useChatTranscriptScroll.browser.tsx"
+          ],
+          "summary": [],
+          "exit": 124,
+          "seconds": 180.2,
+          "log": "1821-apps-web-browser.log",
+          "supersededBy": "1821-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/chat/useChatTranscriptScroll.browser.tsx"
+          ],
+          "exit": 0,
+          "seconds": 231.9,
+          "log": "1821-browser-retry.log",
+          "summary": ["Test Files  2 passed (2)", "Tests  24 passed | 209 skipped (233)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1823,
+      "head": "d514181370aa7d673afe267948c42b85ba3f3e28",
+      "title": "fix(linux): preserve and qualify AppImage, Deb and RPM packaging (#1367)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1823-install.log"
+        },
+        {
+          "kind": "node",
+          "package": "apps/marketing/scripts",
+          "files": ["release-assets.test.mjs"],
+          "summary": ["Tests 2 passed | 0 failed | 0 skipped"],
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1823-apps-marketing-scripts-node.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": [
+            "build-desktop-artifact-mac-config.test.ts",
+            "lib/linux-package-archive.test.ts",
+            "lib/release-artifact-checkpoint.test.ts",
+            "lib/release-artifact-provenance.test.ts",
+            "lib/release-build-scope.test.ts",
+            "verify-packaged-desktop-startup.test.ts"
+          ],
+          "summary": ["Test Files  6 passed (6)", "Tests  138 passed (138)"],
+          "exit": 0,
+          "seconds": 1.6,
+          "log": "1823-scripts-unit.log"
+        }
+      ],
+      "skipped": ["apps/marketing/tests/e2e/install-formats.spec.ts"],
+      "trackedDiff": []
+    },
+    {
+      "number": 1824,
+      "head": "13c7484260808a8ec70b2edb7593d2f8535aa984",
+      "title": "Complete the Synara working status shimmer (#174)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1824-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/chat/MessagesTimeline.test.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  40 passed (40)"],
+          "exit": 0,
+          "seconds": 7.0,
+          "log": "1824-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/EventRouter.browser.tsx",
+            "src/components/chat/MessagesTimeline.workingStatus.browser.tsx"
+          ],
+          "summary": [],
+          "exit": -6,
+          "seconds": 57.0,
+          "log": "1824-apps-web-browser.log",
+          "supersededBy": "1824-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": [
+            "src/components/EventRouter.browser.tsx",
+            "src/components/chat/MessagesTimeline.workingStatus.browser.tsx"
+          ],
+          "exit": 0,
+          "seconds": 191.5,
+          "log": "1824-browser-retry.log",
+          "summary": ["Test Files  2 passed (2)", "Tests  43 passed (43)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1826,
+      "head": "09a1f71fd5bae2e37e8560542f14e80d71dc3797",
+      "title": "Complete contextual chat typography (#175)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 7.6,
+          "log": "1826-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/ChatMarkdown.test.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  63 passed (63)"],
+          "exit": 0,
+          "seconds": 6.6,
+          "log": "1826-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatMarkdown.highlightLimits.browser.tsx",
+            "src/components/ChatMarkdown.streaming.browser.tsx",
+            "src/components/EventRouter.browser.tsx",
+            "src/components/chat/MessagesTimeline.scroll.browser.tsx"
+          ],
+          "summary": [],
+          "exit": -6,
+          "seconds": 55.8,
+          "log": "1826-apps-web-browser.log",
+          "supersededBy": "1826-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatMarkdown.highlightLimits.browser.tsx",
+            "src/components/ChatMarkdown.streaming.browser.tsx",
+            "src/components/EventRouter.browser.tsx",
+            "src/components/chat/MessagesTimeline.scroll.browser.tsx"
+          ],
+          "exit": 0,
+          "seconds": 193.4,
+          "log": "1826-browser-retry.log",
+          "summary": ["Test Files  4 passed (4)", "Tests  50 passed (50)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1827,
+      "head": "cd63cea4dec2b51cc79be8c5480956696cf82b23",
+      "title": "fix(web): preserve Activity grouping across sidebar remounts",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 4.5,
+          "log": "1827-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": ["src/components/Sidebar.uiState.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  7 passed (7)"],
+          "exit": 0,
+          "seconds": 2.0,
+          "log": "1827-apps-web-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/ChatView.browser.tsx",
+            "src/components/SidebarActivityView.browser.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  21 passed | 223 skipped (244)"],
+          "exit": 0,
+          "seconds": 132.3,
+          "log": "1827-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1831,
+      "head": "ac0e7f65b6860dbc4e7c308acbc01a886238f559",
+      "title": "desktop: add Always on Top on current main (continues #1504)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1831-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/EventRouter.browser.tsx"],
+          "summary": [],
+          "exit": -6,
+          "seconds": 54.7,
+          "log": "1831-apps-web-browser.log",
+          "supersededBy": "1831-browser-retry.log"
+        },
+        {
+          "kind": "browser retry",
+          "package": "apps/web",
+          "files": ["src/components/EventRouter.browser.tsx"],
+          "exit": 0,
+          "seconds": 185.1,
+          "log": "1831-browser-retry.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  41 passed (41)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1832,
+      "head": "101a3c9653f2feeab0c7bf3dbcbe163bf01d6869",
+      "title": "fix(web): guard global New thread with live Sidebar state",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1832-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  3 passed | 222 skipped (225)"],
+          "exit": 0,
+          "seconds": 121.6,
+          "log": "1832-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1835,
+      "head": "9fb04ac2735b42efbdfd615efec723673395bab0",
+      "title": "fix(claude): preserve configured custom-model effort and draft options",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1835-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/agentGateway/Layers/AgentGateway.test.ts",
+            "src/agentGateway/targetResolver.test.ts",
+            "src/orchestration/Layers/ProviderCommandReactor.test.ts",
+            "src/provider/Layers/ClaudeAdapter.test.ts",
+            "src/provider/Layers/ProviderDiscoveryService.test.ts",
+            "src/provider/Layers/ProviderService.test.ts",
+            "src/provider/claudeTokenUsage.test.ts",
+            "src/provider/providerModelDiscoveryCache.test.ts"
+          ],
+          "summary": ["Test Files  8 passed (8)", "Tests  1109 passed (1109)"],
+          "exit": 0,
+          "seconds": 127.3,
+          "log": "1835-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/composerProviderRegistry.test.tsx",
+            "src/components/chat/runtimeModelCapabilities.test.ts",
+            "src/composerDraftStore.persistence.test.ts",
+            "src/hooks/useProviderModelCatalog.test.tsx",
+            "src/providerModelOptions.test.ts"
+          ],
+          "summary": ["Test Files  5 passed (5)", "Tests  167 passed (167)"],
+          "exit": 0,
+          "seconds": 4.7,
+          "log": "1835-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/model.test.ts", "src/providerInstances.test.ts"],
+          "summary": ["Test Files  2 passed (2)", "Tests  147 passed (147)"],
+          "exit": 0,
+          "seconds": 1.5,
+          "log": "1835-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/chat/TraitsPicker.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  20 passed (20)"],
+          "exit": 0,
+          "seconds": 14.0,
+          "log": "1835-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1836,
+      "head": "8f68d9fbcef7716887af8437337ff1b5bab69984",
+      "title": "feat(homebrew): validate and qualify the stable Synara cask (continues #1198)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1836-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": ["lib/homebrew-cask.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  64 passed (64)"],
+          "exit": 0,
+          "seconds": 1.8,
+          "log": "1836-scripts-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1839,
+      "head": "fc3cd0c5e744041108b5d9109730cba1ded9c4ee",
+      "title": "fix(desktop): declare the bundled macOS 13 minimum",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1839-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "scripts",
+          "files": ["build-desktop-artifact-mac-config.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  9 passed (9)"],
+          "exit": 0,
+          "seconds": 0.8,
+          "log": "1839-scripts-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1840,
+      "head": "600a2da636e4c191bebaeade3f5751f0665b39ed",
+      "title": "test(marketing): refresh the current Darwin docs baseline",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1840-install.log"
+        },
+        {
+          "kind": "source inspection only",
+          "files": [
+            "apps/marketing/tests/visual/visual.spec.ts-snapshots/docs-desktop-light-darwin.png"
+          ],
+          "exit": null
+        },
+        {
+          "kind": "asset QA",
+          "exit": 0,
+          "files": [
+            "apps/marketing/tests/visual/visual.spec.ts-snapshots/docs-desktop-light-darwin.png"
+          ],
+          "dimensions": [1440, 2681],
+          "qualification": "PNG decode only; no native macOS golden comparison"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1841,
+      "head": "a3098848972482e13d772bd7581a6c1203650586",
+      "title": "fix(web): preserve the control chosen during window activation",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.2,
+          "log": "1841-install.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  2 passed | 220 skipped (222)"],
+          "exit": 0,
+          "seconds": 125.1,
+          "log": "1841-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1842,
+      "head": "6432694f11616ab61bd25360456f9226a9bef5de",
+      "title": "fix(server): settle provider handoffs without replaying native work",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1842-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/orchestration/Layers/ProviderCommandReactor.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  454 passed (454)"],
+          "exit": 0,
+          "seconds": 103.9,
+          "log": "1842-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1845,
+      "head": "99a1c00c46db38e557a29cb6c958692b0558d297",
+      "title": "test(server): keep library fixture maintenance inside Git lifetime",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 5.7,
+          "log": "1845-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/projectAgent/library.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  25 passed (25)"],
+          "exit": 0,
+          "seconds": 3.4,
+          "log": "1845-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1847,
+      "head": "1de9fa2de0db98ca7966e00fc45f53df0fdd1b6d",
+      "title": "feat(worktrees): safely link declared shared dependencies",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1847-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": ["src/git/Layers/GitCore.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  151 passed (151)"],
+          "exit": 0,
+          "seconds": 52.6,
+          "log": "1847-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1848,
+      "head": "879dc7b2c727d781995a012c509bccd2cf7af505",
+      "title": "fix(server): prepare Windows teardown observers while runtimes are alive",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1848-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/provider/opencodeRuntime.test.ts",
+            "src/provider/supervisedProcessTeardown.test.ts",
+            "src/terminal/windowsProcessSnapshot.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  90 passed (90)"],
+          "exit": 0,
+          "seconds": 3.2,
+          "log": "1848-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1851,
+      "head": "7f1c5b1f658033e1d1016eab4be49b7444500cd6",
+      "title": "chore: preserve shared utility comment cleanup on current main (#1283)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1851-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/text.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  10 passed (10)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1851-packages-shared-unit.log"
+        }
+      ],
+      "skipped": ["apps/web/src/components/ChatView.browser.tsx"],
+      "trackedDiff": []
+    },
+    {
+      "number": 1854,
+      "head": "4f7c61fe6f028d69ef187c9437286e7830628da4",
+      "title": "fix(desktop): use Beta artwork in macOS source launchers (preserves #1849)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1854-install.log"
+        },
+        {
+          "kind": "node",
+          "package": "apps/desktop/scripts",
+          "files": ["electron-launcher.test.mjs"],
+          "summary": ["Tests 0 passed | 1 failed | 0 skipped"],
+          "exit": 1,
+          "seconds": 0.3,
+          "log": "1854-apps-desktop-scripts-node.log",
+          "supersededBy": "1854-correct-runner.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": ["scripts/electron-launcher.test.mjs"],
+          "exit": 0,
+          "log": "1854-correct-runner.log",
+          "summary": ["Test Files  1 passed (1)", "Tests  21 passed | 1 skipped (22)"]
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1856,
+      "head": "be4186e34d1e0437ee9b3c671a9fb3652ab599de",
+      "title": "feat(browser): continue macOS cookie-source import integration (#1830)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1856-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/desktop",
+          "files": [
+            "src/browserAutomation/browserCookieImport.test.ts",
+            "src/browserAutomation/chromiumCookieSource.test.ts",
+            "src/browserVaultIpc.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  46 passed (46)"],
+          "exit": 0,
+          "seconds": 1.8,
+          "log": "1856-apps-desktop-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": [
+            "src/components/BrowserVault.browser.tsx",
+            "src/components/SafariAccessOnboarding.browser.tsx"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  27 passed (27)"],
+          "exit": 0,
+          "seconds": 21.5,
+          "log": "1856-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1857,
+      "head": "00d069ea71154ae11b87944a542bb845878b7050",
+      "title": "fix(codex): preserve image-generation provenance on current main (#1069)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1857-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/codexGeneratedImages.test.ts",
+            "src/orchestration/Layers/ProviderRuntimeIngestion.test.ts",
+            "src/provider/Layers/CodexAdapter.test.ts",
+            "src/studioGeneratedImages.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  258 passed (258)"],
+          "exit": 0,
+          "seconds": 39.5,
+          "log": "1857-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1858,
+      "head": "0d494214cbca45e2e9660ed055d4e6a686007bda",
+      "title": "fix: preserve source ownership and prior answers in effort retries",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1858-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/orchestration/Layers/ProviderCommandReactor.test.ts",
+            "src/orchestration/decider.effortRetry.test.ts"
+          ],
+          "summary": ["Test Files  2 passed (2)", "Tests  485 passed (485)"],
+          "exit": 0,
+          "seconds": 108.2,
+          "log": "1858-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/components/chat/retryEffortArchive.test.ts",
+            "src/components/chat/retryEffortVariantStore.test.ts",
+            "src/components/chat/retryWithDifferentEffort.logic.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  37 passed (37)"],
+          "exit": 0,
+          "seconds": 2.5,
+          "log": "1858-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/effortRetryMetrics.test.ts"],
+          "summary": ["Test Files  1 passed (1)", "Tests  3 passed (3)"],
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1858-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/ChatView.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  7 passed | 220 skipped (227)"],
+          "exit": 0,
+          "seconds": 125.8,
+          "log": "1858-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1860,
+      "head": "638e419bc952566932bbf7cddf0b129bafc4d434",
+      "title": "feat(codex): preserve configurable launch arguments across current accounts",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1860-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/codexAppServerManager.test.ts",
+            "src/codexProcessEnv.test.ts",
+            "src/serverSettings.test.ts"
+          ],
+          "summary": [
+            "Test Files  1 failed | 2 passed (3)",
+            "Tests  9 failed | 284 passed | 2 skipped (295)"
+          ],
+          "exit": 1,
+          "seconds": 47.1,
+          "log": "1860-apps-server-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/web",
+          "files": [
+            "src/appSettings.test.ts",
+            "src/components/settings/ProvidersSettingsPanel.test.ts",
+            "src/providerUpdates.test.ts",
+            "src/wsNativeApi.test.ts"
+          ],
+          "summary": ["Test Files  4 passed (4)", "Tests  168 passed (168)"],
+          "exit": 0,
+          "seconds": 7.2,
+          "log": "1860-apps-web-unit.log"
+        },
+        {
+          "kind": "unit",
+          "package": "packages/shared",
+          "files": ["src/providerLaunchArgs.test.ts", "src/serverSettings.test.ts"],
+          "summary": ["Test Files  2 passed (2)", "Tests  27 passed (27)"],
+          "exit": 0,
+          "seconds": 1.5,
+          "log": "1860-packages-shared-unit.log"
+        },
+        {
+          "kind": "browser",
+          "package": "apps/web",
+          "files": ["src/components/settings/ProvidersSettingsPanel.browser.tsx"],
+          "summary": ["Test Files  1 passed (1)", "Tests  21 passed (21)"],
+          "exit": 0,
+          "seconds": 18.1,
+          "log": "1860-apps-web-browser.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1866,
+      "head": "4c31e23b888e40d21868fa8325a8641b0424c517",
+      "title": "Preserve live turn ownership and page runtime reconciliation",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.6,
+          "log": "1866-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "integration/overlappingTurnLifecycle.integration.test.ts",
+            "src/agentGateway/Layers/AgentGateway.test.ts",
+            "src/automation/Layers/AutomationService.test.ts",
+            "src/orchestration/Layers/ProjectionPipeline.test.ts",
+            "src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+            "src/provider/Layers/ProviderRuntimeReconciler.test.ts",
+            "src/provider/providerRuntimeReconciliation.test.ts"
+          ],
+          "summary": ["Test Files  1 failed | 6 passed (7)", "Tests  2 failed | 373 passed (375)"],
+          "exit": 1,
+          "seconds": 38.1,
+          "log": "1866-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    },
+    {
+      "number": 1870,
+      "head": "d25d4238f516e1400346878f4d071b6bb88c1b0e",
+      "title": "fix(git): preserve diff prefixes under user config (continue #1863)",
+      "checks": [
+        {
+          "kind": "dependency install (lifecycle scripts disabled)",
+          "exit": 0,
+          "seconds": 0.1,
+          "log": "1870-install.log"
+        },
+        {
+          "kind": "unit",
+          "package": "apps/server",
+          "files": [
+            "src/checkpointing/Layers/CheckpointStore.test.ts",
+            "src/git/Layers/GitCore.test.ts",
+            "src/git/Layers/GitHubCli.test.ts"
+          ],
+          "summary": ["Test Files  3 passed (3)", "Tests  190 passed (190)"],
+          "exit": 0,
+          "seconds": 49.1,
+          "log": "1870-apps-server-unit.log"
+        }
+      ],
+      "skipped": [],
+      "trackedDiff": []
+    }
+  ]
+}
