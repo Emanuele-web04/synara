@@ -2,7 +2,8 @@
 // Purpose: React Query hook for debounced GitHub work item search.
 
 import { useQuery, queryOptions } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import {
   WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
@@ -64,21 +65,8 @@ export function useWorkItemsAvailability(cwd: string | null) {
 }
 
 export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, enabled: boolean) {
-  const [debouncedQuery, setDebouncedQuery] = useState(query);
-
-  useEffect(() => {
-    if (!enabled) {
-      setDebouncedQuery(query);
-      return;
-    }
-    const handle = setTimeout(() => setDebouncedQuery(query), WORK_ITEMS_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [query, enabled]);
-
-  const input = useMemo<WorkItemSearchInput | null>(() => {
-    if (!cwd) return null;
-    return { cwd, query: debouncedQuery, limit: 20 };
-  }, [cwd, debouncedQuery]);
+  const [debouncedQuery] = useDebouncedValue(query, { wait: WORK_ITEMS_SEARCH_DEBOUNCE_MS });
+  const input: WorkItemSearchInput | null = cwd ? { cwd, query: debouncedQuery, limit: 20 } : null;
 
   return useWorkItemsSearch(input, enabled);
 }

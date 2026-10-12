@@ -682,17 +682,11 @@ const makeWsRpcHandlersLayer = () =>
       // is actively running. Waiting here is safe because the cursor-safe
       // stream attaches its live tap before evaluating the snapshot effect, so
       // no event that commits during the wait is lost.
-      const loadThreadDetailSnapshotWithBootstrapWait = (
-        threadId: ThreadId,
-        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
-      ) =>
+      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
-              threadId,
-              messageWindow,
-            );
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -1353,7 +1347,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
-              // Groups is Beta-only: Stable refuses to create or re-kind a group.
+              // Refuse creating or re-kinding a Hub if the shared feature policy disables it.
               if (!isServerGroupsEnabled() && isGroupProjectCommand(command)) {
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
@@ -1409,7 +1403,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
+              .getThreadDetailSnapshotById(input.threadId)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
@@ -1593,10 +1587,7 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
-                input.threadId,
-                input.messageWindow,
-              ).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1644,7 +1635,6 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "replay",
                     events: item.events,
-                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever

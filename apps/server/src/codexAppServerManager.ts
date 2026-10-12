@@ -1206,10 +1206,10 @@ function codexProcessEnvInputForOptions(
     : { ...process.env };
   return {
     env: { ...inheritedEnvironment, ...explicitProviderEnvironment },
+    ...(explicitProviderEnvironment ? { explicitProviderEnvironment } : {}),
     ...(accountScoped
       ? {
           isolateProviderCredentials: true,
-          explicitProviderEnvironment: explicitProviderEnvironment ?? {},
         }
       : {}),
     ...(options?.homePath ? { homePath: options.homePath } : {}),

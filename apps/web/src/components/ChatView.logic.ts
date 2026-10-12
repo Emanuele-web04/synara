@@ -790,7 +790,7 @@ export type ThreadDetailHydration = "ready" | "loading" | "failed";
 export function resolveThreadDetailHydration(input: {
   readonly isServerThread: boolean;
   readonly hasTimelineEntries: boolean;
-  readonly detailSyncState: "synced" | "failed" | "cached" | null;
+  readonly detailSyncState: "synced" | "failed" | null;
 }): ThreadDetailHydration {
   if (!input.isServerThread || input.hasTimelineEntries || input.detailSyncState === "synced") {
     return "ready";

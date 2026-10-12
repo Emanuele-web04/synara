@@ -42,7 +42,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const dmg = config.dmg as Record<string, unknown>;
     const extendInfo = mac.extendInfo as Record<string, unknown>;
 
-    assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
+    assert.deepStrictEqual(mac.target, ["dmg"]);
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);

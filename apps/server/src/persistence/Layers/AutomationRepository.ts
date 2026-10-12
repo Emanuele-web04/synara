@@ -963,7 +963,15 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   const markRunStartedRow = SqlSchema.void({
     Request: MarkAutomationRunStartedInput,
-    execute: ({ id, threadId, messageId, threadCreateCommandId, turnStartCommandId, startedAt }) =>
+    execute: ({
+      id,
+      threadId,
+      messageId,
+      threadCreateCommandId,
+      turnStartCommandId,
+      startedAt,
+      permissionSnapshot,
+    }) =>
       sql`
         UPDATE automation_runs
         SET status = 'running',
@@ -971,6 +979,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             message_id = ${messageId},
             thread_create_command_id = ${threadCreateCommandId},
             turn_start_command_id = ${turnStartCommandId},
+            permission_snapshot_json = COALESCE(${permissionSnapshot ? JSON.stringify(permissionSnapshot) : null}, permission_snapshot_json),
             deferred_until = NULL,
             started_at = ${startedAt},
             updated_at = ${startedAt}

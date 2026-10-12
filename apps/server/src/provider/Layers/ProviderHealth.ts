@@ -1077,7 +1077,9 @@ async function makeCodexProbeEnv(
   const normalizedShadowHomePath = nonEmptyTrimmed(shadowHomePath);
   const normalizedAccountId = nonEmptyTrimmed(accountId);
   return buildCodexProcessEnv({
-    ...(environment ? { env: { ...process.env, ...environment } } : {}),
+    ...(environment
+      ? { env: { ...process.env, ...environment }, explicitProviderEnvironment: environment }
+      : {}),
     ...(normalizedHomePath ? { homePath: normalizedHomePath } : {}),
     ...(normalizedShadowHomePath ? { shadowHomePath: normalizedShadowHomePath } : {}),
     ...(normalizedAccountId ? { accountId: normalizedAccountId } : {}),

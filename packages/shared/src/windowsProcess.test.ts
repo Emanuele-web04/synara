@@ -48,7 +48,7 @@ describe("windowsProcess", () => {
     ).toBe(commandPath);
   });
 
-  it("does not search the working directory unless it is on PATH", () => {
+  it("does not implicitly search the working directory", () => {
     const workingDirectory = Path.join(root, "working");
     const pathDirectory = Path.join(root, "bin");
     mkdirSync(workingDirectory);
@@ -61,6 +61,23 @@ describe("windowsProcess", () => {
         platform: "win32",
         cwd: workingDirectory,
         env: { PATH: pathDirectory, PATHEXT: ".CMD" },
+      }),
+    ).toBe(commandPath);
+  });
+
+  it("filters the working directory even when it is explicitly first on PATH", () => {
+    const workingDirectory = Path.join(root, "working");
+    const pathDirectory = Path.join(root, "bin");
+    mkdirSync(workingDirectory);
+    mkdirSync(pathDirectory);
+    writeFileSync(Path.join(workingDirectory, "codex.EXE"), "local executable");
+    const commandPath = Path.join(pathDirectory, "codex.CMD");
+    writeFileSync(commandPath, "@echo off\r\n");
+    expect(
+      resolveWindowsCommandPath("codex", {
+        platform: "win32",
+        cwd: workingDirectory,
+        env: { PATH: `${workingDirectory};${pathDirectory}`, PATHEXT: ".EXE;.CMD" },
       }),
     ).toBe(commandPath);
   });

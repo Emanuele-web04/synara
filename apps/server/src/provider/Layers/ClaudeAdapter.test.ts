@@ -5557,6 +5557,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
     ["account_on_hold", /account is on hold/i],
+    ["verification_required", /organization verification/i],
+    ["cloud_credential_error", /cloud provider credentials/i],
   ] as const) {
     it.effect(`restarts the Claude process after ${error}`, () => {
       const harness = makeMultiQueryHarness();
@@ -13976,8 +13978,8 @@ describe("Claude cache preflight", () => {
           const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
           assert.equal(observation?.contextTokens, 120_000);
           assert.equal(
-            assessClaudeCache(observation, Date.parse(observation!.observedAt) + 1000)
-              .requiresConfirmation,
+            assessClaudeCache(observation, Date.parse(observation!.observedAt) + 1000).state ===
+              "likely-expired",
             response === "same",
           );
           const cursor = (yield* adapter.listSessions())[0]!.resumeCursor;
@@ -13989,8 +13991,8 @@ describe("Claude cache preflight", () => {
           });
           const restored = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
           assert.equal(
-            assessClaudeCache(restored, Date.parse(restored!.observedAt) + 1000)
-              .requiresConfirmation,
+            assessClaudeCache(restored, Date.parse(restored!.observedAt) + 1000).state ===
+              "likely-expired",
             response === "same",
           );
         }).pipe(
@@ -14049,7 +14051,7 @@ describe("Claude cache preflight", () => {
             );
             assert.equal(
               assessClaudeCache(claudeCacheForModel(observation, "claude-sonnet-4-6"), now)
-                .requiresConfirmation,
+                .state === "likely-expired",
               model !== undefined,
             );
             assert.deepEqual(harness.query.setModelCalls, []);
