@@ -15312,6 +15312,122 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls.length).toBe(0);
   });
 
+  it.each([false, true])(
+    "retries a goal after its held checkpoint lease frees unless the goal was paused: %s",
+    async (pauseBeforeRelease) => {
+      const coordinator = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* TurnCheckpointCoordinator;
+        }).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
+      );
+      const acquired = Effect.runSync(Deferred.make<void>());
+      const release = Effect.runSync(Deferred.make<void>());
+      const holder = Effect.runFork(
+        coordinator.withThreadLease(
+          ThreadId.makeUnsafe("thread-1"),
+          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(acquired));
+
+      try {
+        const harness = await createHarness({
+          commandEventTimeout: Duration.millis(500),
+          commandSettleGrace: Duration.zero,
+          commandLeaseAcquireTimeout: Duration.millis(40),
+          threadLease: coordinator.withThreadLease,
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-goal-lease-retry"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            goal: "Finish the remaining goal work after the checkpoint is released",
+          }),
+        );
+        await waitFor(async () =>
+          Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+        );
+        const readContinuationEvents = () =>
+          Effect.runPromise(
+            Stream.runCollect(harness.engine.readEvents(0)).pipe(
+              Effect.map((events) =>
+                Array.from(events).filter(
+                  (event) => event.type === "thread.goal-continuation-requested",
+                ),
+              ),
+            ),
+          );
+        const first = (await readContinuationEvents())[0];
+        expect(first).toBeDefined();
+        await waitFor(async () => {
+          const delivery = await Effect.runPromise(
+            harness.deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: first!.sequence,
+            }),
+          );
+          return Option.isSome(delivery) && delivery.value.state === "succeeded";
+        });
+        const blocked = await readHarnessThread(harness);
+        expect(blocked?.goalPausedAt).toBeNull();
+        expect(
+          blocked?.activities.some(
+            (activity) =>
+              activity.kind === "provider.turn.start.failed" &&
+              (activity.payload as Record<string, unknown> | null)?.settlementStatus === "retryable",
+          ),
+        ).toBe(true);
+        expect(harness.startSession).toHaveBeenCalledTimes(0);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(0);
+
+        if (pauseBeforeRelease) {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("cmd-pause-goal-before-lease-release"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              goalPaused: true,
+            }),
+          );
+          await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
+        }
+
+        Effect.runSync(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Fiber.join(holder));
+
+        if (pauseBeforeRelease) {
+          // Observe beyond two existing 500ms retry-queue intervals. The test
+          // does not advance the goal or manually dispatch a continuation.
+          await new Promise((resolve) => setTimeout(resolve, 1_100));
+          expect(harness.startSession).toHaveBeenCalledTimes(0);
+          expect(harness.sendTurn).toHaveBeenCalledTimes(0);
+          expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+        } else {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          expect(harness.startSession).toHaveBeenCalledTimes(1);
+          expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+          expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+            "Finish the remaining goal work after the checkpoint is released",
+          );
+          expect((await readHarnessThread(harness))?.goalPausedAt).toBeNull();
+          const retried = (await readContinuationEvents()).filter(
+            (event) => event.sequence > first!.sequence,
+          );
+          expect(retried.length).toBeGreaterThan(0);
+          for (const event of retried) {
+            expect(event.payload.goalStartedAt).toBe(first!.payload.goalStartedAt);
+            expect(event.payload.trigger).toBe(first!.payload.trigger);
+            expect(event.payload.sourceTurnId).toBe(first!.payload.sourceTurnId);
+          }
+        }
+      } finally {
+        Effect.runSync(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Fiber.interrupt(holder).pipe(Effect.ignore));
+      }
+    },
+  );
+
   it("surfaces a rollback blocked by a held checkpoint lease", async () => {
     const harness = await createHarness({
       commandEventTimeout: Duration.millis(500),
