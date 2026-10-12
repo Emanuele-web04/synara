@@ -35,6 +35,7 @@ describe("createProviderInstallResetPatch", () => {
       [
         "antigravityBinaryPath",
         "claudeBinaryPath",
+        "claudeConfirmColdCacheResume",
         "claudeEnableArtifacts",
         "claudeHomePath",
         "codexAccounts",

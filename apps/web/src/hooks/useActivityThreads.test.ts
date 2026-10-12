@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, type ProjectAgentSummary } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../store";
@@ -7,6 +7,7 @@ import type { SidebarThreadSummary } from "../types";
 const harness = vi.hoisted(() => ({
   state: {} as AppState,
   coordinatorIds: new Set<string>(),
+  summaries: new Map<ProjectId, Pick<ProjectAgentSummary, "memberThreadIds">>(),
 }));
 
 // Exercise the hook's real selectors and derivation without mounting unrelated UI.
@@ -28,6 +29,13 @@ vi.mock("../workspacePathsStore", () => ({
 }));
 vi.mock("../components/chat/project/useProjectAgentSummaries", () => ({
   useCoordinatorThreadIds: () => harness.coordinatorIds,
+  useProjectAgentSummariesStore: (selector: (state: unknown) => unknown) =>
+    selector({ summariesByProjectId: harness.summaries }),
+}));
+
+vi.mock("../betaFeatures", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../betaFeatures")>()),
+  GROUPS_ON: true,
 }));
 
 import { useActivityThreads } from "./useActivityThreads";
@@ -67,6 +75,7 @@ function setThreads(threads: SidebarThreadSummary[]) {
 
 beforeEach(() => {
   harness.coordinatorIds = new Set();
+  harness.summaries = new Map();
 });
 
 describe("useActivityThreads snooze visibility", () => {
@@ -99,4 +108,19 @@ describe("useActivityThreads snooze visibility", () => {
     expect(result.activityNonGroupThreads.map((thread) => thread.id)).toEqual(["returned"]);
     expect(result.visibleNonGroupThreads.map((thread) => thread.id)).toEqual(["returned"]);
   });
+});
+
+it("updates Home candidates when a repository thread becomes a hub member", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const worker = makeThread("worker");
+  const ordinary = makeThread("ordinary");
+  setThreads([worker, ordinary]);
+  harness.state.projects = [{ id: hubId, kind: "group", cwd: "/tmp/hub" }] as AppState["projects"];
+  const before = useActivityThreads({ hideAutomationRunThreads: true });
+  expect(before.visibleNonGroupThreads).toEqual([worker, ordinary]);
+  harness.summaries = new Map([[hubId, { memberThreadIds: [worker.id] }]]);
+  const after = useActivityThreads({ hideAutomationRunThreads: true });
+  expect(after.visibleNonGroupThreads).toEqual([ordinary]);
+  expect(after.activityNonGroupThreads).toEqual([ordinary]);
+  expect(after.groupThreads).toEqual([worker]);
 });
