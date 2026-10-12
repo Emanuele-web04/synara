@@ -472,12 +472,14 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +      cookieReaderStage?: string;
 +      cookieSyncFailureCode?: "redaction_capacity" | "target_capacity" | "target_eviction" | "target_failed";
 +    };
- 
+-
++
  export interface CookieSourceBrowser {
    id: string;
 @@ -122,6 +135,8 @@
  }
- 
+-
++
  export interface BetterWrightOptions {
 +  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
 +  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
@@ -601,6 +603,7 @@ diff --git a/types/vault.d.ts b/types/vault.d.ts
 +  ownerImportMany(
 +    entries: Array<{ origin: string; username: string; password: string }>,
 +  ): Promise<{ imported: number; skipped: number; ids: string[] }>;
- 
+-
++
    handleRequest(
      action:
