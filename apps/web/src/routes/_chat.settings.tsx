@@ -15,6 +15,13 @@ import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
 
 import {
   type AppSettings,
@@ -328,6 +335,11 @@ type BooleanSettingKey = {
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
+    DiffRenderModeSchema,
+  );
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
@@ -461,6 +473,7 @@ function SettingsRouteView() {
     ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
       ? ["Move sent messages to top"]
       : []),
+    ...(settings.showOpenThreadTabs !== defaults.showOpenThreadTabs ? ["Thread tabs"] : []),
     ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
       ? ["Delete worktree on archive"]
       : []),
@@ -540,6 +553,7 @@ function SettingsRouteView() {
     ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
       ? ["Keep Synara responsive"]
       : []),
+    ...(defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? ["Diff layout"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]
@@ -599,6 +613,7 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
+    setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE);
     await resetSettings();
     setResetEpoch((current) => current + 1);
   }
@@ -749,6 +764,15 @@ function SettingsRouteView() {
             "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream.",
           resetLabel: "move sent messages to top",
           ariaLabel: "Move sent messages to top",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showOpenThreadTabs",
+          title: "Thread tabs",
+          description:
+            "Show open threads as tabs in the chat header. Turn off to show only the current thread's title.",
+          resetLabel: "thread tabs",
+          ariaLabel: "Show open threads as tabs in the chat header",
         })}
 
         <SettingsRow
@@ -1514,6 +1538,31 @@ function SettingsRouteView() {
       />
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Diff layout"
+          description="Default stacked or split layout for threads without a saved choice. Each thread remembers its review-panel changes independently."
+          resetAction={
+            defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? (
+              <SettingResetButton
+                label="diff layout"
+                onClick={() => setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={defaultDiffRenderMode}
+              onValueChange={setDefaultDiffRenderMode}
+              ariaLabel="Diff layout"
+              options={
+                [
+                  { value: "stacked", label: "Stacked" },
+                  { value: "split", label: "Split" },
+                ] satisfies ReadonlyArray<{ value: DiffRenderMode; label: string }>
+              }
+            />
+          }
+        />
         <SettingsRow
           title="Open pull requests and issues"
           description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."

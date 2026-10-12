@@ -8,6 +8,7 @@ import {
   type StarredModel,
 } from "~/lib/starredModels";
 import {
+  buildProviderTabRows,
   buildStarredModelOptionsPatch,
   buildStarredTabRows,
   modelPickerShortcutRowIndex,
@@ -204,6 +205,95 @@ describe("starred Devin Fusion presets", () => {
         modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
       }),
     ).toBe(true);
+  });
+});
+
+describe("OMP picker rows", () => {
+  it("does not reinterpret another provider's opaque role: model id", () => {
+    const customOption = { slug: "role:custom", name: "Private Model", isCustom: true };
+    expect(
+      buildProviderTabRows({
+        provider: "pi",
+        instanceId: "pi_work",
+        options: [customOption],
+        query: "",
+        selectedModel: "role:custom",
+      })[0],
+    ).toMatchObject({
+      provider: "pi",
+      instanceId: "pi_work",
+      model: "role:custom",
+      selectableModel: "role:custom",
+      selected: true,
+    });
+  });
+
+  it("selects the concrete catalog model on its own account without carrying role metadata", () => {
+    const legacyOption = {
+      slug: "upstream/catalog-model",
+      name: "Catalog Model",
+      upstreamProviderId: "upstream",
+      upstreamProviderName: "Upstream",
+      role: { name: "smol", model: "different/model", thinkingLevel: "high" },
+    };
+    expect(
+      buildProviderTabRows({
+        provider: "omp",
+        instanceId: "omp_work",
+        options: [legacyOption],
+        query: "",
+        selectedModel: "role:smol",
+      }),
+    ).toEqual([
+      {
+        key: "omp_work:upstream/catalog-model",
+        provider: "omp",
+        instanceId: "omp_work",
+        model: "upstream/catalog-model",
+        selectableModel: "upstream/catalog-model",
+        name: "Catalog Model",
+        detail: null,
+        selected: false,
+        groupLabel: "Upstream",
+        preset: null,
+      },
+    ]);
+  });
+
+  it("marks stale starred role keys unavailable rather than ranking a replacement", () => {
+    const role = {
+      ...CODEX_HIGH_FAST,
+      provider: "omp" as const,
+      model: "role:smol",
+      instanceId: "omp_work",
+    };
+    const customPlaceholder = { slug: "role:smol", name: "Role Smol", isCustom: true };
+    const rows = buildStarredTabRows({
+      starredModels: [role],
+      modelOptionsFor: () => [
+        customPlaceholder,
+        { slug: "upstream/catalog-model", name: "Catalog Model" },
+      ],
+      query: "",
+      current: { ...role, instanceId: "omp_work" },
+      effortLevelsFor: () => [],
+    });
+    expect(rows[0]).toMatchObject({
+      provider: "omp",
+      instanceId: "omp_work",
+      model: "role:smol",
+      selectableModel: null,
+      detail: "Unavailable",
+      selected: false,
+    });
+    expect(
+      buildProviderTabRows({
+        provider: "omp",
+        options: [customPlaceholder],
+        query: "",
+        selectedModel: "role:smol",
+      })[0]?.selectableModel,
+    ).toBeNull();
   });
 });
 

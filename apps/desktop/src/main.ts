@@ -1,3 +1,4 @@
+import "./httpRuntime";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";

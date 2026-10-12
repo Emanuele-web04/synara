@@ -23,6 +23,7 @@ export async function interruptThreadTurn(threadId: ThreadId): Promise<void> {
   await api.orchestration
     .dispatchCommand({
       type: "thread.turn.interrupt",
+      requestedBy: "user",
       commandId: newCommandId(),
       threadId,
       createdAt: new Date().toISOString(),

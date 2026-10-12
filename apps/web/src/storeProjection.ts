@@ -362,6 +362,7 @@ function sidebarThreadSummariesEqual(
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
+    (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -413,6 +414,7 @@ function buildSidebarThreadSummary(
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
     creationSource: thread.creationSource ?? null,
+    sourceThreadId: thread.sourceThreadId ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -688,13 +690,15 @@ function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppSta
   // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
   clearThreadDetailResumeCursor(threadId);
   if (
-    state.threadDetailSyncById === undefined ||
-    !Object.hasOwn(state.threadDetailSyncById, threadId)
+    !Object.hasOwn(state.threadDetailSyncById ?? {}, threadId) &&
+    !Object.hasOwn(state.threadDetailRevisionSequenceById ?? {}, threadId)
   ) {
     return state;
   }
-  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById;
-  return { ...state, threadDetailSyncById };
+  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById ?? {};
+  const { [threadId]: _revision, ...threadDetailRevisionSequenceById } =
+    state.threadDetailRevisionSequenceById ?? {};
+  return { ...state, threadDetailSyncById, threadDetailRevisionSequenceById };
 }
 
 export function markThreadDetailSyncFailedInClientState(
@@ -1340,6 +1344,10 @@ export function syncServerShellSnapshot(
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadDetailRevisionSequenceById: retainThreadScopedRecord(
+      state.threadDetailRevisionSequenceById,
+      nextThreadIds,
+    ),
   };
 
   const threads = getThreadsFromState(normalizedState);
@@ -1377,12 +1385,14 @@ function syncServerThreadDetailWithOptions(
   options?: {
     updateSidebarSummary?: boolean;
     snapshotSequence?: number;
+    replaceHistory?: boolean;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
-  const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
-    : thread;
+  const nextThreadDetail =
+    options && !options.replaceHistory
+      ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
+      : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
@@ -1416,6 +1426,7 @@ export function syncServerThreadDetailHotPath(
   state: AppState,
   thread: ReadModelThread,
   snapshotSequence?: number,
+  historyRevisionSequence?: number,
 ): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
@@ -1423,10 +1434,29 @@ export function syncServerThreadDetailHotPath(
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, {
+  const previousRevision = state.threadDetailRevisionSequenceById?.[thread.id];
+  const next = syncServerThreadDetailWithOptions(state, thread, {
     updateSidebarSummary: false,
+    // Streaming text can legitimately be ahead of an ordinary projection. A
+    // newly observed rollback is different: preserving those rows would revive
+    // messages the server deliberately removed. Live rollback events also
+    // advance this fence, so subsequent snapshots keep newer in-flight text.
+    replaceHistory:
+      previousRevision !== undefined &&
+      historyRevisionSequence !== undefined &&
+      historyRevisionSequence !== previousRevision,
     ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
   });
+  if (historyRevisionSequence === undefined || historyRevisionSequence === previousRevision) {
+    return next;
+  }
+  return {
+    ...next,
+    threadDetailRevisionSequenceById: {
+      ...next.threadDetailRevisionSequenceById,
+      [thread.id]: historyRevisionSequence,
+    },
+  };
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1544,6 +1574,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadDetailRevisionSequenceById: retainThreadScopedRecord(
+      state.threadDetailRevisionSequenceById,
+      nextThreadIds,
+    ),
   };
   for (const thread of nextThreads) {
     // Read-model threads carry full detail (messages, activities), so they are synced by definition.
@@ -1585,6 +1619,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     normalizedState.turnDiffIdsByThreadId === state.turnDiffIdsByThreadId &&
     normalizedState.turnDiffSummaryByThreadId === state.turnDiffSummaryByThreadId &&
     normalizedState.threadDetailSyncById === state.threadDetailSyncById &&
+    normalizedState.threadDetailRevisionSequenceById === state.threadDetailRevisionSequenceById &&
     state.threadsHydrated
   ) {
     // Nothing to merge, but the snapshot is still authoritative at its own sequence. Recording it

@@ -497,9 +497,8 @@ function ProviderModelDiscoveryWarmer() {
   // provider that doesn't render instantly when the model picker opens. Warm it
   // at app startup — ahead of the picker opening — so the catalog is ready by
   // the time the user browses to OMP. The server caches that catalog globally
-  // (keyed by binary path + agent dir), so any warm primes it for every later
-  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
-  // cwd-scoped query key then only pays for the config reads on top.
+  // (keyed by account, binary path and agent dir), and the picker shares this
+  // account-global query across projects.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");
@@ -2137,7 +2136,11 @@ function EventRouter() {
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
         const stateBeforeProjectionApply = useStore.getState();
-        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence);
+        syncServerThreadDetailHotPath(
+          snapshot.thread,
+          snapshot.snapshotSequence,
+          snapshot.historyRevisionSequence,
+        );
         threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
@@ -2364,7 +2367,11 @@ function EventRouter() {
           return;
         }
         flushQueuedDomainEventsBeforeSnapshot();
-        syncServerThreadDetailHotPath(item.snapshot.thread, item.snapshot.snapshotSequence);
+        syncServerThreadDetailHotPath(
+          item.snapshot.thread,
+          item.snapshot.snapshotSequence,
+          item.snapshot.historyRevisionSequence,
+        );
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
         // fence first would leave resume bookkeeping vouching for detail that

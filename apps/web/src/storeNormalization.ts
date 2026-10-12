@@ -25,6 +25,7 @@ import {
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
+import { orderedActivities } from "./workLog";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
 import { textSegmentsCoverText } from "./messageTextSegments";
 import {
@@ -1412,6 +1413,50 @@ function resolveTurnAlignedDropCount(
   return dropCount >= activities.length ? minimumDropCount : dropCount;
 }
 
+// Task state outlives the transcript window. Keep its latest patches rather than
+// letting progress-only updates erase ownership, launch identity, or completion.
+function retainTaskActivityIds(
+  activities: readonly Thread["activities"][number][],
+  retainedIds: Set<string>,
+): void {
+  const latest = new Map<string, Thread["activities"][number]>();
+  // Use the same ordering as task-state consumers, including sequence and
+  // terminal-event ties, so trimming cannot resurrect completed work.
+  for (const activity of orderedActivities(activities)) {
+    if (activity.kind === "turn.tasks.updated") {
+      latest.set("task-list", activity);
+      continue;
+    }
+    const payload = asActivityRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      latest.set("background-notice", activity);
+      continue;
+    }
+    if (typeof payload?.taskId !== "string") continue;
+    if (activity.kind === "task.started") {
+      retainedIds.add(activity.id);
+      continue;
+    }
+    if (
+      activity.kind !== "task.updated" &&
+      activity.kind !== "task.progress" &&
+      activity.kind !== "task.completed"
+    )
+      continue;
+    if (activity.kind !== "task.progress") {
+      latest.set(JSON.stringify([payload.taskId, "lifecycle"]), activity);
+    }
+    for (const field of Object.keys(payload)) {
+      if (field !== "taskId")
+        latest.set(JSON.stringify([payload.taskId, "field", field]), activity);
+    }
+  }
+  for (const activity of latest.values()) retainedIds.add(activity.id);
+}
+
 export function capThreadActivities<TActivity extends Thread["activities"][number]>(
   activities: readonly TActivity[],
 ): TActivity[] {
@@ -1424,6 +1469,7 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   );
   const tail = activities.slice(dropCount);
   const retainedIds = new Set(tail.map((activity) => activity.id));
+  retainTaskActivityIds(activities, retainedIds);
   const retainedRequests = new Map(
     pendingInteractionsFromActivities(activities).map((request) => [request.key, request]),
   );
@@ -1437,7 +1483,8 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
       retainedRequests.set(identity.key, identity);
     }
   }
-  if (retainedRequests.size === 0) return tail;
+  if (retainedRequests.size === 0)
+    return activities.filter((activity) => retainedIds.has(activity.id));
   const oldestRetainedRequestAt = new Map<string, string>();
   for (const request of retainedRequests.values()) {
     const key = `${request.interactionKind}:${request.requestId}`;

@@ -610,6 +610,14 @@ export function resolveRequestedModeId(input: {
       interactionMode === "plan"
         ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
         : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
+          // Some Devin catalogs expose Ask Everytime instead of Code. Match the
+          // full name: the separate Ask mode must never count as approval mode.
+          (runtimeMode === "approval-required"
+            ? findModeByExactNormalizedAliases(modeState.availableModes, [
+                "ask everytime",
+                "ask every time",
+              ])
+            : undefined) ??
           findModeByWholeTokenAliases(modeState.availableModes, aliases));
 
     if (!targetMode) {

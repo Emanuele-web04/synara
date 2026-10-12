@@ -454,6 +454,7 @@ const worker = setupWorker(
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
+  requireSyncedThread?: boolean;
 }): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
   const host = createFullscreenTestHost();
 
@@ -479,6 +480,9 @@ async function mountApp(options?: {
         expect(
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
+        if (options?.requireSyncedThread) {
+          expect(useStore.getState().threadDetailSyncById?.[expectedThreadId]).toBe("synced");
+        }
       },
       // The first Chromium/MSW mount can spend more than 40 seconds compiling
       // the full desktop route graph on a cold Windows dev cache.
@@ -847,7 +851,10 @@ describe("EventRouter scoped orchestration sync", () => {
   it.each(["thread", "shell"])(
     "surfaces one %s retry rejection even while the paused notice exits",
     async (scope) => {
-      const mounted = await mountApp();
+      // Cached detail can satisfy the mount's message check before its live
+      // snapshot arrives. Confirm that snapshot before injecting an exhausted
+      // failure, otherwise recovery legitimately dismisses the paused notice.
+      const mounted = await mountApp({ requireSyncedThread: true });
       const api = createWsNativeApi();
       const subscribe = vi
         .spyOn(api.orchestration, scope === "thread" ? "subscribeThread" : "subscribeShell")

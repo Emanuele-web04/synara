@@ -356,6 +356,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  /** For a nested subagent, the subagent thread that launched it. */
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

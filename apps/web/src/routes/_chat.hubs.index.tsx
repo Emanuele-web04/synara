@@ -19,6 +19,7 @@ import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
+import { HubsEmptyState } from "../components/HubsEmptyState";
 import { resolveGroupsListEmptyState } from "../components/SidebarGroupsSurface.logic";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
@@ -147,14 +148,7 @@ function HubsIndexRouteView() {
     groupCount: groupProjectIds.size,
   });
   if (groupsEmptyState === "no-groups") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-        <p className="text-ui-lg font-medium text-foreground">No hubs yet</p>
-        <p className="text-ui text-muted-foreground">
-          Create one from the sidebar to coordinate work across repos.
-        </p>
-      </div>
-    );
+    return <HubsEmptyState />;
   }
 
   // The resolver and `handleNewGroupChat` both read the server welcome's workspace paths.
@@ -184,8 +178,7 @@ function HubsIndexRouteView() {
 }
 
 export const Route = createFileRoute("/_chat/hubs/")({
-  // Hubs are Beta-only: on Stable a /hubs link (or the old /studio redirect)
-  // lands on the home route instead.
+  // If the shared feature policy disables Hubs, direct and legacy links return home.
   beforeLoad: () => {
     if (!GROUPS_ON) {
       throw redirect({ to: "/", replace: true });

@@ -2,6 +2,7 @@ import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/con
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveSubagentTaskEnds,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
@@ -11,6 +12,35 @@ import {
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
+import { isPlainRuntimeNoticeWorkEntry } from "./components/chat/agentActivity.logic";
+
+describe("deriveSubagentTaskEnds", () => {
+  it("preserves settled invocations while a resumed task waits for its own completion", () => {
+    const firstEnd = makeActivity({
+      id: "done",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:00:08Z",
+      payload: { toolUseId: "a", status: "completed" },
+    });
+    const restart = makeActivity({
+      id: "resume",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:01:00Z",
+      payload: { toolUseId: "a" },
+    });
+    const latestEnd = makeActivity({
+      id: "failed",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:01:03Z",
+      payload: { toolUseId: "a", status: "failed" },
+    });
+    expect(deriveSubagentTaskEnds([firstEnd, restart, latestEnd]).get("a")).toEqual({
+      outcome: "failed",
+      endedAt: latestEnd.createdAt,
+      previous: { outcome: "completed", endedAt: firstEnd.createdAt },
+    });
+  });
+});
 
 describe("deriveWorkLogEntries", () => {
   it("pairs an answered question with its answers in one exchange row", () => {
@@ -570,8 +600,338 @@ describe("deriveWorkLogEntries", () => {
       taskId: "agent-1",
       taskType: "local_agent",
       description: "Server startup",
+      outcome: "finished",
     });
     expect(completion?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+  });
+
+  describe("background command rows", () => {
+    // Shapes recorded from a real Claude session: the Bash call that launches
+    // the task, the "Moved to background" notice, and the task lifecycle.
+    const launchCall = (id: string, toolUseId: string, command: string, at: string) =>
+      makeActivity({
+        id,
+        createdAt: at,
+        kind: "tool.completed",
+        summary: "Command run",
+        tone: "tool",
+        turnId: "turn-bg",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Command run",
+          detail: `Bash: ${command}`,
+          data: {
+            toolCallId: toolUseId,
+            toolName: "Bash",
+            input: { command, description: `Run ${command}`, run_in_background: true },
+          },
+        },
+      });
+    const notice = (id: string, tasks: Array<[string, string]>, at: string) =>
+      makeActivity({
+        id,
+        createdAt: at,
+        kind: "runtime.warning",
+        summary: "Moved to background",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: {
+          message: tasks.map(([, description]) => description).join(", "),
+          nativeEventType: "background_tasks_changed",
+          data: {
+            subtype: "background_tasks_changed",
+            tasks: tasks.map(([taskId, description]) => ({
+              task_id: taskId,
+              task_type: "local_bash",
+              description,
+            })),
+          },
+        },
+      });
+    const taskStarted = (taskId: string, toolUseId: string, at: string) =>
+      makeActivity({
+        id: `${taskId}-started`,
+        createdAt: at,
+        kind: "task.started",
+        summary: "local_bash task started",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: { taskId, taskType: "local_bash", toolUseId, detail: `Run ${taskId}` },
+      });
+    const taskCompleted = (taskId: string, status: string, detail: string, at: string) =>
+      makeActivity({
+        id: `${taskId}-${status}`,
+        createdAt: at,
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: { taskId, status, detail },
+      });
+    const turnCompleted = (at: string) =>
+      makeActivity({
+        id: `turn-bg-completed-${at}`,
+        createdAt: at,
+        kind: "turn.completed",
+        summary: "Turn completed",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: { state: "completed" },
+      });
+    const monitorEvent = (id: string, at: string) =>
+      makeActivity({
+        id,
+        createdAt: at,
+        kind: "runtime.warning",
+        summary: "Monitor event",
+        tone: "info",
+        turnId: "turn-bg",
+        payload: {
+          message: "CI checks: pass",
+          nativeEventType: "monitor_event",
+          data: { type: "system", subtype: "monitor_event", task_id: "monitor-ci", name: "CI" },
+        },
+      });
+    const options = { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-bg")]) };
+
+    it("replaces the launch call and notice with one running row", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch", "toolu_1", "sleep 20 && echo done", "2026-10-10T00:09:57.641Z"),
+          notice("moved", [["task-1", "Sleep 20 seconds"]], "2026-10-10T00:09:57.642Z"),
+          taskStarted("task-1", "toolu_1", "2026-10-10T00:09:57.643Z"),
+        ],
+        undefined,
+        options,
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.id).toBe("launch");
+      expect(entries[0]?.backgroundTask).toEqual({
+        taskId: "task-1",
+        taskType: "local_bash",
+        description: "Sleep 20 seconds",
+        command: "sleep 20 && echo done",
+        status: "running",
+        // The notice is the first word of the task; it starts the clock.
+        startedAt: "2026-10-10T00:09:57.642Z",
+        completedAt: null,
+        exitCode: null,
+      });
+    });
+
+    it("keeps a single task row when a running command is manually backgrounded", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch", "toolu_1", "sleep 20", "2026-10-10T00:09:57.000Z"),
+          taskStarted("task-1", "toolu_1", "2026-10-10T00:09:57.000Z"),
+          makeActivity({
+            id: "manual-background",
+            kind: "task.updated",
+            createdAt: "2026-10-10T00:10:00.000Z",
+            turnId: "turn-bg",
+            payload: { taskId: "task-1", isBackgrounded: true },
+          }),
+        ],
+        undefined,
+        options,
+      );
+      expect(entries.filter((entry) => entry.backgroundTask)).toMatchObject([
+        {
+          id: "launch",
+          backgroundTask: { taskId: "task-1", status: "running", command: "sleep 20" },
+        },
+      ]);
+    });
+
+    it("updates the same row in place when the task finishes, fails or is stopped", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch-a", "toolu_a", "sleep 4 && echo a", "2026-10-10T00:15:20.000Z"),
+          launchCall("launch-b", "toolu_b", "false", "2026-10-10T00:15:20.100Z"),
+          launchCall("launch-c", "toolu_c", "sleep 120 && echo c", "2026-10-10T00:15:20.200Z"),
+          notice(
+            "moved",
+            [
+              ["task-a", "a"],
+              ["task-b", "b"],
+              ["task-c", "c"],
+            ],
+            "2026-10-10T00:15:20.300Z",
+          ),
+          taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.301Z"),
+          taskStarted("task-b", "toolu_b", "2026-10-10T00:15:20.302Z"),
+          taskStarted("task-c", "toolu_c", "2026-10-10T00:15:20.303Z"),
+          turnCompleted("2026-10-10T00:15:20.400Z"),
+          taskCompleted(
+            "task-a",
+            "completed",
+            'Background command "a" completed (exit code 0)',
+            "2026-10-10T00:15:24.301Z",
+          ),
+          taskCompleted(
+            "task-b",
+            "failed",
+            'Background command "b" failed with exit code 1',
+            "2026-10-10T00:15:21.302Z",
+          ),
+          taskCompleted("task-c", "stopped", "c", "2026-10-10T00:16:14.403Z"),
+        ],
+        undefined,
+        options,
+      );
+      const rows = entries.filter((entry) => entry.backgroundTask);
+      expect(rows.map((entry) => entry.id)).toEqual(["launch-a", "launch-b", "launch-c"]);
+      expect(
+        rows.map((entry) => [
+          entry.backgroundTask?.status,
+          entry.backgroundTask?.exitCode,
+          entry.backgroundTask?.completedAt,
+        ]),
+      ).toEqual([
+        ["finished", 0, "2026-10-10T00:15:24.301Z"],
+        ["failed", 1, "2026-10-10T00:15:21.302Z"],
+        ["stopped", null, "2026-10-10T00:16:14.403Z"],
+      ]);
+      // No "Moved to background" notice and no launch command row remain; the
+      // completions, which arrive after the turn ended, stay only as the
+      // boundary of the response they wake.
+      expect(entries.some((entry) => entry.nativeEventType === "background_tasks_changed")).toBe(
+        false,
+      );
+      expect(
+        entries
+          .filter((entry) => entry.backgroundTaskCompletion)
+          .map((entry) => entry.backgroundTaskCompletion?.outcome),
+      ).toEqual(["failed", "finished", "stopped"]);
+    });
+
+    it("treats completions and Monitor events inside a working turn as updates, not wake-ups", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch-a", "toolu_a", "bun run dev", "2026-10-10T00:15:20.000Z"),
+          notice("moved", [["task-a", "dev server"]], "2026-10-10T00:15:20.100Z"),
+          taskStarted("task-a", "toolu_a", "2026-10-10T00:15:20.101Z"),
+          monitorEvent("monitor-mid-turn", "2026-10-10T00:15:30.000Z"),
+          // The agent stops its own server before the turn ends.
+          launchCall("stop", "toolu_stop", "kill 123", "2026-10-10T00:16:00.000Z"),
+          taskCompleted(
+            "task-a",
+            "failed",
+            'Background command "dev server" failed with exit code 143',
+            "2026-10-10T00:16:00.500Z",
+          ),
+          turnCompleted("2026-10-10T00:16:10.000Z"),
+          monitorEvent("monitor-after-turn", "2026-10-10T00:17:00.000Z"),
+        ],
+        undefined,
+        options,
+      );
+      // The task's own row still settles in place.
+      expect(entries.find((entry) => entry.id === "launch-a")?.backgroundTask).toMatchObject({
+        status: "failed",
+        exitCode: 143,
+      });
+      expect(entries.some((entry) => entry.backgroundTaskCompletion)).toBe(false);
+      expect(
+        entries
+          .filter((entry) => entry.monitorNotification)
+          .map((entry) => [entry.id, entry.monitorNotification?.midTurn ?? false]),
+      ).toEqual([
+        ["monitor-mid-turn", true],
+        ["monitor-after-turn", false],
+      ]);
+    });
+
+    it("anchors the row at the notice when the launching call is not visible", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          notice("moved", [["task-1", "Build docs"]], "2026-10-10T00:09:57.642Z"),
+          taskStarted("task-1", "toolu_hidden", "2026-10-10T00:09:57.643Z"),
+        ],
+        undefined,
+        options,
+      );
+      expect(entries.map((entry) => entry.id)).toEqual(["moved:task-1"]);
+      expect(entries[0]?.backgroundTask?.command).toBeNull();
+      expect(entries[0]?.backgroundTask?.description).toBe("Build docs");
+    });
+
+    it.each(["update-first", "notice-first", "start-last"])(
+      "keeps manually backgrounded subagents and their notice (%s)",
+      (order) => {
+        const entries = deriveWorkLogEntries(
+          [
+            launchCall("launch", "toolu_1", "sleep 20", "2026-10-10T00:09:57.641Z"),
+            notice("moved", [["task-1", "Sleep"]], "2026-10-10T00:09:57.642Z"),
+            taskStarted("task-1", "toolu_1", "2026-10-10T00:09:57.643Z"),
+            makeActivity({
+              id: "launch-agent",
+              createdAt: "2026-10-10T00:09:58.000Z",
+              kind: "tool.completed",
+              turnId: "turn-bg",
+              payload: {
+                itemType: "collab_agent_tool_call",
+                status: "completed",
+                data: {
+                  toolCallId: "toolu_agent",
+                  toolName: "Agent",
+                  receiverThreadId: "toolu_agent",
+                  nickname: "Research",
+                  agentStates: { toolu_agent: { status: "running" } },
+                },
+              },
+            }),
+            makeActivity({
+              id: "agent-started",
+              createdAt:
+                order === "start-last" ? "2026-10-10T00:10:01.000Z" : "2026-10-10T00:09:58.001Z",
+              kind: "task.started",
+              turnId: "turn-bg",
+              payload: { taskId: "agent-1", taskType: "local_agent", toolUseId: "toolu_agent" },
+            }),
+            makeActivity({
+              id: "manual-agent-background",
+              createdAt:
+                order === "notice-first" ? "2026-10-10T00:10:01.000Z" : "2026-10-10T00:09:59.000Z",
+              kind: "task.updated",
+              turnId: "turn-bg",
+              // The runtime activity projection does not repeat taskType here.
+              payload: { taskId: "agent-1", toolUseId: "toolu_agent", isBackgrounded: true },
+            }),
+            makeActivity({
+              id: "moved-agent",
+              createdAt: "2026-10-10T00:10:00.000Z",
+              kind: "runtime.warning",
+              summary: "Moved to background",
+              tone: "info",
+              turnId: "turn-bg",
+              payload: {
+                message: "Research",
+                nativeEventType: "background_tasks_changed",
+                data: {
+                  tasks: [
+                    { task_id: "task-1", task_type: "local_bash", description: "Sleep" },
+                    { task_id: "agent-1", task_type: "local_agent", description: "Research" },
+                  ],
+                },
+              },
+            }),
+          ],
+          undefined,
+          options,
+        );
+        expect(entries[1]?.subagents).toMatchObject([
+          { threadId: "toolu_agent", rawStatus: "running" },
+        ]);
+        expect(entries.map((entry) => entry.id)).toEqual(["launch", "launch-agent", "moved-agent"]);
+        expect(
+          entries
+            .filter((entry) => entry.backgroundTask)
+            .map((entry) => entry.backgroundTask?.taskId),
+        ).toEqual(["task-1"]);
+      },
+    );
   });
 
   it("keeps a stopped turn's late subagent completions in that turn", () => {
@@ -649,6 +1009,70 @@ describe("deriveWorkLogEntries", () => {
       "next-answer",
     ]);
   });
+
+  it("shows a Claude Monitor event as the row that starts the response it woke", () => {
+    const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "monitor-event",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Monitor event",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message,
+          detail: message,
+          nativeEventType: "monitor_event",
+          data: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    expect(entry).toMatchObject({
+      id: "monitor-event",
+      label: "Monitor updated",
+      detail: message,
+      nativeEventType: "monitor_event",
+      monitorNotification: { taskId: "bu336ro2k", name: "", output: message, outcome: "updated" },
+    });
+    expect(isPlainRuntimeNoticeWorkEntry(entry!)).toBe(false);
+  });
+
+  it.each(["updated", "completed", "failed", "stopped"] as const)(
+    "keeps Monitor %s state and multiline details separate from background completion",
+    (outcome) => {
+      const [entry] = deriveWorkLogEntries(
+        [
+          makeActivity({
+            kind: "runtime.warning",
+            summary: "Monitor event",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — first · second",
+              data: { task_id: "monitor-ci", name: "CI checks", output: "first\nsecond", outcome },
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entry?.label).toBe(
+        `Monitor · CI checks ${outcome === "completed" ? "finished" : outcome}`,
+      );
+      expect(entry?.monitorNotification).toEqual({
+        taskId: "monitor-ci",
+        name: "CI checks",
+        output: "first\nsecond",
+        outcome,
+      });
+      expect(entry?.backgroundTaskCompletion).toBeUndefined();
+      expect(entry?.tone).toBe(outcome === "failed" ? "error" : "info");
+    },
+  );
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
     const taskListActivity = (
@@ -808,6 +1232,12 @@ describe("deriveWorkLogEntries", () => {
 
   it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
     const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-model",
+        kind: "turn.started",
+        payload: { provider: "codex", model: "gpt-6-luna" },
+      }),
+      makeActivity({ id: "user-stop", kind: "turn.stop-requested", payload: {} }),
       makeActivity({
         id: "turn-success",
         createdAt: "2026-02-23T00:00:01.000Z",
@@ -4201,6 +4631,247 @@ describe("deriveWorkLogEntries", () => {
     expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
+  it("folds Codex wait and subagent-settled collab calls into subagent state", () => {
+    const waitPayload = (status: string) => ({
+      itemType: "collab_agent_tool_call",
+      status,
+      data: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_wait_1",
+          tool: "wait",
+          status,
+          receiverThreadIds: [],
+          agentsStates: {},
+        },
+      },
+    });
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "wait-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool started",
+        payload: waitPayload("inProgress"),
+      }),
+      makeActivity({
+        id: "wait-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: waitPayload("completed"),
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagentAction?.tool).toBe("wait");
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
+  });
+
+  it("takes a background subagent's late final state over its launch completion", () => {
+    const collabPayload = (status: string, extra: Record<string, unknown> = {}) => ({
+      itemType: "collab_agent_tool_call",
+      status,
+      title: "Subagent task",
+      data: {
+        toolCallId: "toolu_background",
+        toolName: "Agent",
+        input: { description: "Background job", run_in_background: true },
+        receiverThreadId: "toolu_background",
+        nickname: "Background job",
+        background: true,
+        ...extra,
+      },
+    });
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "bg-start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          payload: collabPayload("inProgress"),
+        }),
+        makeActivity({
+          id: "bg-launched",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          payload: collabPayload("completed"),
+        }),
+        makeActivity({
+          id: "bg-final-state",
+          createdAt: "2026-02-23T00:00:30.000Z",
+          kind: "tool.updated",
+          payload: collabPayload("completed", {
+            agentStates: { toolu_background: { status: "failed" } },
+          }),
+        }),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.subagents?.[0]?.rawStatus).toBe("failed");
+  });
+
+  it("attributes subagent task progress to its subagent", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "subagent-progress-1",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "task.progress",
+          summary: "Subagent progress",
+          tone: "info",
+          payload: {
+            taskId: "task-outer",
+            detail: "Running Sleep briefly then echo bg",
+            toolUseId: "toolu_outer",
+            subagentTitle: "Outer worker",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries[0]?.subagentProgress).toMatchObject({
+      toolUseId: "toolu_outer",
+      title: "Outer worker",
+    });
+  });
+
+  it("records a subagent's final outcome on its progress rows", () => {
+    const progress = (id: string, toolUseId: string, title: string) =>
+      makeActivity({
+        id,
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.progress",
+        summary: "Subagent progress",
+        tone: "info",
+        payload: {
+          taskId: `task-${toolUseId}`,
+          detail: "Running sleep",
+          toolUseId,
+          subagentTitle: title,
+        },
+      });
+    const activities: OrchestrationThreadActivity[] = [
+      progress("progress-stopped", "toolu_stopped", "Waiter A"),
+      progress("progress-failed", "toolu_failed", "Waiter B"),
+      progress("progress-running", "toolu_running", "Waiter C"),
+      // The launching call closed with the subagent stopped (parent interrupted).
+      makeActivity({
+        id: "launch-stopped",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "failed",
+          data: {
+            toolCallId: "toolu_stopped",
+            toolName: "Agent",
+            receiverThreadId: "toolu_stopped",
+            agentStates: { toolu_stopped: { status: "stopped" } },
+          },
+        },
+      }),
+      makeActivity({
+        id: "task-failed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.completed",
+        tone: "error",
+        payload: { taskId: "task-toolu_failed", status: "failed", toolUseId: "toolu_failed" },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
+    const outcomeOf = (id: string) =>
+      entries.find((entry) => entry.id === id)?.subagentProgress?.outcome;
+    expect(outcomeOf("progress-stopped")).toBe("stopped");
+    expect(outcomeOf("progress-failed")).toBe("failed");
+    expect(outcomeOf("progress-running")).toBeUndefined();
+
+    // SendMessage resumes the same native task/tool id in a new invocation.
+    const resumedStart = makeActivity({
+      id: "resumed-start",
+      createdAt: "2026-02-23T00:00:04.000Z",
+      turnId: TurnId.makeUnsafe("turn-resumed"),
+      kind: "task.started",
+      payload: { taskId: "task-toolu_stopped", toolUseId: "toolu_stopped" },
+    });
+    const resumedActivities = [
+      ...activities,
+      resumedStart,
+      {
+        ...progress("progress-resumed", "toolu_stopped", "Waiter A"),
+        createdAt: "2026-02-23T00:00:05.000Z",
+        turnId: TurnId.makeUnsafe("turn-resumed"),
+      },
+      // A repeated live start must not discard progress already in this run.
+      makeActivity({
+        id: "resumed-start-repeat",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        turnId: "turn-resumed",
+        kind: "task.started",
+        payload: resumedStart.payload,
+      }),
+      // The background task can keep running into another parent turn.
+      {
+        ...progress("progress-background", "toolu_stopped", "Waiter A"),
+        createdAt: "2026-02-23T00:00:07.000Z",
+        turnId: TurnId.makeUnsafe("turn-next-parent"),
+      },
+    ];
+    const runningEntries = deriveWorkLogEntries(resumedActivities, undefined);
+    expect(
+      runningEntries.find((entry) => entry.id === "progress-stopped")?.subagentProgress?.outcome,
+    ).toBe("stopped");
+    expect(
+      runningEntries.find((entry) => entry.id === "progress-resumed")?.subagentProgress?.outcome,
+    ).toBeUndefined();
+
+    const settledEntries = deriveWorkLogEntries(
+      [
+        ...resumedActivities,
+        makeActivity({
+          id: "resumed-completed",
+          createdAt: "2026-02-23T00:00:08.000Z",
+          turnId: TurnId.makeUnsafe("turn-next-parent"),
+          kind: "task.completed",
+          payload: {
+            taskId: "task-toolu_stopped",
+            toolUseId: "toolu_stopped",
+            status: "completed",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(
+      settledEntries.find((entry) => entry.id === "progress-stopped")?.subagentProgress?.outcome,
+    ).toBe("stopped");
+    for (const id of ["progress-resumed", "progress-background"]) {
+      expect(settledEntries.find((entry) => entry.id === id)?.subagentProgress?.outcome).toBe(
+        "completed",
+      );
+    }
+  });
+
+  it("keeps the native subagent cap notice visible outside rendered turns", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "native-child-overflow",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "subagent.materialization.capped",
+          summary: "Subagent limit reached: Synara shows up to 20 subagents per turn.",
+          tone: "error",
+          payload: { source: "provider_native", cap: 20 },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["native-child-overflow"]);
+  });
+
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -4491,6 +5162,86 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each(["adjacent", "reply-between", "different-outcome"] as const)(
+    "preserves Monitor wake boundaries while avoiding a duplicate terminal notice: %s",
+    (caseKind) => {
+      const work = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "move",
+            createdAt: "2026-03-17T19:12:00.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "ci", task_type: "monitor", description: "CI checks" }] },
+            },
+          }),
+          makeActivity({
+            id: "sdk-end",
+            createdAt: "2026-03-17T19:12:01.000Z",
+            kind: "task.completed",
+            tone: "info",
+            payload: { taskId: "ci", status: "completed" },
+          }),
+          makeActivity({
+            id: "monitor-end",
+            createdAt: "2026-03-17T19:12:02.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — final output",
+              data: {
+                task_id: "ci",
+                name: "CI checks",
+                output: "final output",
+                outcome: caseKind === "different-outcome" ? "failed" : "completed",
+              },
+            },
+          }),
+        ],
+        undefined,
+      );
+      const messages: ChatMessage[] =
+        caseKind === "reply-between"
+          ? [
+              {
+                id: MessageId.makeUnsafe("wake-answer"),
+                role: "assistant",
+                text: "First wake reply",
+                createdAt: "2026-03-17T19:12:01.500Z",
+                streaming: false,
+              },
+            ]
+          : [];
+      const timeline = deriveTimelineEntries(messages, [], work);
+      const terminal = timeline.filter(
+        (row) =>
+          row.kind === "work" &&
+          (row.entry.monitorNotification || row.entry.backgroundTaskCompletion),
+      );
+      expect(terminal).toHaveLength(caseKind === "adjacent" ? 1 : 2);
+      expect(terminal.at(-1)).toMatchObject({
+        kind: "work",
+        entry: {
+          monitorNotification: {
+            output: "final output",
+            outcome: caseKind === "different-outcome" ? "failed" : "completed",
+          },
+        },
+      });
+      if (caseKind === "adjacent") expect(terminal[0]?.createdAt).toBe("2026-03-17T19:12:01.000Z");
+      if (caseKind === "reply-between")
+        expect(timeline.map((row) => row.id)).toEqual([
+          "move",
+          "sdk-end",
+          "wake-answer",
+          "monitor-end",
+        ]);
+    },
+  );
+
   it.each([false, true])(
     "keeps tools and plans after repeated steering messages (later narration: %s)",
     (hasLaterNarration) => {
