@@ -392,6 +392,7 @@ import {
   deriveSidebarProjectData,
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
+  canSnoozeSidebarThread,
   getPinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
@@ -1815,11 +1816,13 @@ export default function Sidebar() {
         "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
       >,
     ) =>
-      !thread.parentThreadId &&
-      !groupProjectIdSet.has(thread.projectId) &&
-      !coordinatorThreadIds.has(thread.id) &&
-      !isSidechatThread(thread),
-    [groupProjectIdSet, coordinatorThreadIds],
+      canSnoozeSidebarThread({
+        thread,
+        groupProjectIds: groupProjectIdSet,
+        summariesByProjectId,
+        coordinatorThreadIds,
+      }),
+    [groupProjectIdSet, summariesByProjectId, coordinatorThreadIds],
   );
   const resolveThreadStatusForSidebar = useCallback(
     (thread: SidebarThreadSummary) =>
@@ -3361,9 +3364,16 @@ export default function Sidebar() {
         worktreePath: thread.worktreePath,
       });
       // Group actions only make sense for threads in ordinary (non-group)
-      // projects; group threads already belong to a group.
+      // projects; group threads, workers included, already belong to a group.
       const canUseHubActions =
-        GROUPS_ON && !groupProjectIdSet.has(thread.projectId) && !thread.parentThreadId;
+        GROUPS_ON &&
+        !isGroupThreadRoute({
+          threadId,
+          projectId: thread.projectId,
+          groupProjectIds: groupProjectIdSet,
+          summariesByProjectId,
+        }) &&
+        !thread.parentThreadId;
       // Paused and archived groups can't run a coordinator turn, so they
       // aren't move targets — the server refuses the turn either way.
       const eligibleGroups = canUseHubActions
@@ -3699,6 +3709,7 @@ export default function Sidebar() {
       sidebarThreadSummaryById,
       setThreadSnoozedUntil,
       snoozeThread,
+      summariesByProjectId,
       summaryFor,
       toggleThreadPinned,
     ],

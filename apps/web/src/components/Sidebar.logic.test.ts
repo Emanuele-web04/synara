@@ -22,6 +22,7 @@ import {
   isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
   hasUnseenCompletion,
+  canSnoozeSidebarThread,
   partitionSidebarThreadsByProjectIds,
   normalizeSidebarView,
   isLatestPinnedThreadMutation,
@@ -1579,6 +1580,52 @@ describe("normalizeSidebarView", () => {
     expect(normalizeSidebarView(null)).toBe("threads");
     expect(normalizeSidebarView(undefined)).toBe("threads");
     expect(normalizeSidebarView("bogus")).toBe("threads");
+  });
+});
+
+describe("canSnoozeSidebarThread", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const otherHubId = ProjectId.makeUnsafe("other-hub");
+  const repoId = ProjectId.makeUnsafe("repo");
+  const worker = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("worker"), projectId: repoId });
+  const ordinary = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("ordinary"),
+    projectId: repoId,
+  });
+  const coordinator = makeSidebarThreadSummary({
+    id: ThreadId.makeUnsafe("coordinator"),
+    projectId: hubId,
+  });
+  const input = {
+    groupProjectIds: new Set([hubId, otherHubId]),
+    summariesByProjectId: new Map([
+      [hubId, { memberThreadIds: [coordinator.id] }],
+      [otherHubId, { memberThreadIds: [worker.id] }],
+    ]),
+    coordinatorThreadIds: new Set<string>([coordinator.id]),
+  };
+
+  it("offers snooze for an ordinary chat, even in a repository a hub links", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: ordinary })).toBe(true);
+  });
+
+  it("withholds snooze from the coordinator and from a hub worker in a linked repository", () => {
+    expect(canSnoozeSidebarThread({ ...input, thread: coordinator })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: worker })).toBe(false);
+  });
+
+  it("withholds snooze from chats in the hub's own project and from subagents", () => {
+    const hubChat = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("hub-chat"),
+      projectId: hubId,
+    });
+    const child = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("child"),
+      projectId: repoId,
+      parentThreadId: ordinary.id,
+    });
+    expect(canSnoozeSidebarThread({ ...input, thread: hubChat })).toBe(false);
+    expect(canSnoozeSidebarThread({ ...input, thread: child })).toBe(false);
   });
 });
 
