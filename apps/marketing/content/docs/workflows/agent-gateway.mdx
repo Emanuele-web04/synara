@@ -63,7 +63,7 @@ A creation plan should specify:
 
 Hub tasks inherit the coordinator thread’s approval mode when `runtimeMode` is omitted, including **Approve for me** (Auto). The mode is saved when the Hub accepts the task and retained while it waits in the queue. An explicit `runtimeMode` takes precedence; the MCP input supports approval-required and full-access overrides.
 
-The access selector reflects the saved thread mode. A mode changed during an active turn is marked **next turn**: Synara saves it immediately and applies it when the next turn prepares the provider session. The current turn keeps its original permissions.
+The access selector reflects the saved thread mode. Synara saves mode changes immediately and applies them when the next turn prepares the provider session. Switching modes on an idle thread does not start a turn or restart its session. A mode changed during an active turn is marked **next turn**, and the current turn keeps its original permissions.
 
 Prefer a managed worktree for an independently editing child.
 

@@ -4,8 +4,8 @@ description: Track to-dos, delegate work to agents, and find conversations that 
 ---
 
 <Callout type="info" title="Stable and Beta availability">
-  Tasks is available in **Synara 1.0.1 Stable**. Hubs remain Beta-only. New 1.0.2-beta.1 behavior is
-  marked below.
+  Tasks is available in **Synara 1.0.1 Stable**. Hubs are available in **Synara 1.0.2 Stable** and
+  Beta. These 1.0.2 features are available in Stable and Beta.
 </Callout>
 
 **Inbox, Kanban, Tasks to-dos and delegation are available in Stable 1.0.1.** A to-do is something you want done; a chat is the conversation where an agent works on it.
@@ -30,14 +30,14 @@ Agents can inspect and operate durable Kanban cards through the [Agent Gateway](
 
 Inbox brings together running chats, work needing attention, review requests, and recently finished work beside a recap of your agent activity. The working day starts at **4am**. Recaps use recorded local activity and available provider-attributed usage; missing telemetry is not invented.
 
-In Beta, Inbox also shows due and overdue Tasks to-dos. Adding a task makes it due on today's calendar date; **All tasks** opens the full backlog. These to-do controls are unavailable in Stable.
+In Stable and Beta, Inbox also shows due and overdue Tasks to-dos. Adding a task makes it due on today's calendar date; **All tasks** opens the full backlog. These controls are available in Stable and Beta.
 
-In Beta, select an Inbox task to use the same editing and delegation card as Tasks. Use its attention groups to decide which approval, question, failure, or finished result to inspect next. A finished agent turn is a review opportunity, not proof the requested work is correct.
+In Stable and Beta, select an Inbox task to use the same editing and delegation card as Tasks. Use its attention groups to decide which approval, question, failure, or finished result to inspect next. A finished agent turn is a review opportunity, not proof the requested work is correct.
 
 See [Hubs](/docs/features/hubs) when several workers need shared instructions, memory, and one coordinator.
 
 ## Maintain to-dos from a chat
 
-In 1.0.2-beta.1, supported sessions can use `synara_create_todo`, `synara_list_todos` and `synara_update_todo` to maintain the same list. Ask the agent to record a task for later, set its notes, priority, calendar due date or project, mark it complete or reopen it. Creating a to-do does not create a chat or start an agent; use **Start** to delegate it.
+In 1.0.2 Stable and Beta, supported sessions can use `synara_create_todo`, `synara_list_todos` and `synara_update_todo` to maintain the same list. Ask the agent to record a task for later, set its notes, priority, calendar due date or project, mark it complete or reopen it. Creating a to-do does not create a chat or start an agent; use **Start** to delegate it.
 
 Writes require an active caller turn and the thread's write capability. A create request uses a stable `requestId` so retrying does not add a duplicate. Listing returns at most 200 items and reports truncation; list notes are previews of up to 500 characters. Selecting a to-do by ID returns its full notes. No delete tool is exposed.

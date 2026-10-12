@@ -1596,6 +1596,36 @@ describe("normalizeSidebarView", () => {
 });
 
 describe("partitionSidebarThreadsByProjectIds", () => {
+  it("keeps linked-repository hub workers out of Home restore candidates", () => {
+    const hubId = ProjectId.makeUnsafe("hub");
+    const repoId = ProjectId.makeUnsafe("repo");
+    const worker = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("worker"),
+      projectId: repoId,
+    });
+    const ordinary = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("ordinary"),
+      projectId: repoId,
+    });
+    const result = partitionSidebarThreadsByProjectIds(
+      [worker, ordinary],
+      new Set([hubId]),
+      new Map([[hubId, { memberThreadIds: [worker.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([ordinary]);
+    expect(result.groupThreads).toEqual([worker]);
+  });
+
+  it("ignores member indexes of projects outside the validated Hubs set", () => {
+    const thread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("ordinary") });
+    const result = partitionSidebarThreadsByProjectIds(
+      [thread],
+      new Set(),
+      new Map([[thread.projectId, { memberThreadIds: [thread.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([thread]);
+  });
+
   it("splits group threads (including legacy Studio rows) from the Threads surface", () => {
     const projectThread = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-project"),

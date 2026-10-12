@@ -1,7 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
-  appendCodexConfigSection,
   configHasTomlTableHeader,
   extractManagedCodexConfigSection,
   mergeShellEnvPolicyExclude,
@@ -54,17 +53,6 @@ describe("agent gateway MCP injection", () => {
     assert.include(block, `url = "${connection.url}"`);
     assert.include(block, `bearer_token_env_var = "${SYNARA_AGENT_GATEWAY_TOKEN_ENV}"`);
     assert.notInclude(block, connection.bearerToken);
-  });
-
-  it("appends the codex section once and keeps existing config intact", () => {
-    const base = '[model]\nname = "gpt-5.5"\n';
-    const section = buildCodexMcpConfigToml(connection.url);
-    const appended = appendCodexConfigSection(base, section);
-    assert.include(appended, '[model]\nname = "gpt-5.5"');
-    assert.include(appended, "[mcp_servers.synara]");
-
-    const reappended = appendCodexConfigSection(appended, section);
-    assert.equal(reappended.split("[mcp_servers.synara]").length, 2);
   });
 
   it("merges the token exclusion into a user-defined shell environment policy", () => {

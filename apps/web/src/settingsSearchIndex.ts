@@ -86,6 +86,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
   },
   {
+    id: "general:thread-tabs",
+    section: "general",
+    title: "Thread tabs",
+    keywords:
+      "Show open threads as tabs in the chat header. Turn off to show only the current thread's title. horizontal tabs strip header chat title",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",

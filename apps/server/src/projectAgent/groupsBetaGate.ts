@@ -1,8 +1,7 @@
 // FILE: groupsBetaGate.ts
-// Purpose: Keeps Groups out of Stable. On a build where the "groups" Beta-only
-//          feature is off, the project-agent service refuses every group API,
-//          stops its background work, and treats group threads as ordinary
-//          threads, so group state written by a Beta build stays inert.
+// Purpose: Applies the shared Hubs feature policy. When disabled, group APIs
+//          and background work are refused and saved group threads stay readable.
+//          Hubs is currently enabled in Stable and Beta.
 // Layer: Runtime gate (wraps ProjectAgentService; read by wsRpc and the gateway)
 // Exports: GROUPS_BETA_ONLY_MESSAGE, isServerGroupsEnabled, isGroupProjectCommand,
 //          gateProjectAgentServiceForStable
@@ -14,7 +13,7 @@ import { isServerBetaFeatureEnabled } from "../betaFeatureGate";
 import { ProjectAgentServiceError } from "./Errors";
 import type { ProjectAgentServiceShape } from "./Services/ProjectAgentService";
 
-export const GROUPS_BETA_ONLY_MESSAGE = "Hubs are available in Synara Beta.";
+export const GROUPS_BETA_ONLY_MESSAGE = "Hubs are unavailable on this host.";
 
 export const isServerGroupsEnabled = (): boolean => isServerBetaFeatureEnabled(GROUPS_BETA_FEATURE);
 
@@ -35,8 +34,8 @@ const refuse = () =>
   );
 
 /**
- * The Stable face of the project-agent service. Group APIs fail with a Beta
- * message; lists the web reads everywhere come back empty instead of failing;
+ * The disabled face of the project-agent service. Group APIs fail; lists the web
+ * reads everywhere come back empty instead of failing;
  * monitoring, wakes, and digests do nothing; and the per-turn hooks answer as
  * they do for a thread outside any group, so an existing group's threads keep
  * working as plain chats. Deleting a project still cleans up its group data.
