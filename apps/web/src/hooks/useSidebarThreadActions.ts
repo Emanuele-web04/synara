@@ -110,7 +110,7 @@ export function useSidebarThreadActions(input: {
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
-  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  /** Limits the focus fallback after snooze, Done and archive to chats reachable from the active Space. */
   readonly filterThreadsToActiveSpace?: (
     threads: readonly SidebarThreadSummary[],
   ) => readonly SidebarThreadSummary[];
@@ -308,11 +308,14 @@ export function useSidebarThreadActions(input: {
           closeNavigationInputRef.current.routeThreadId !== routeThreadId ||
             closeNavigationInputRef.current.routeSplitViewId !== routeSplitViewId,
         ),
-      sidebarTreeThreads,
+      sidebarTreeThreads: filterThreadsToActiveSpace
+        ? filterThreadsToActiveSpace(sidebarTreeThreads)
+        : sidebarTreeThreads,
       optimisticSettledStateByThreadId,
       handleNewChat,
     };
   }, [
+    filterThreadsToActiveSpace,
     routeThreadId,
     routeSplitViewId,
     sidebarTreeThreads,
