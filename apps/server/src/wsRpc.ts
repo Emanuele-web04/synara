@@ -23,6 +23,7 @@ import {
   WsDeviceRpcGroup,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
+  WsMindRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
   type DeviceEvent,
@@ -271,6 +272,7 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
+  .merge(WsMindRpcGroup)
   .middleware(WsRequestAdmissionMiddleware);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
