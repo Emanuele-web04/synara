@@ -22,6 +22,7 @@ import {
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
+import { deriveActiveTaskListState, deriveOutstandingBackgroundTaskIds } from "./session-logic";
 import { derivePendingUserInputs } from "./pendingInteractionDerivation";
 
 type ThreadActivity = Thread["activities"][number];
@@ -156,6 +157,56 @@ describe("pending interaction activity retention", () => {
       expect(derivePendingUserInputs(retained)).toHaveLength(later ? 0 : 1);
     },
   );
+});
+
+describe("durable task activity retention", () => {
+  it("preserves background ownership and task lists through incremental activity trimming", () => {
+    const turnId = TurnId.makeUnsafe("background-turn");
+    let sequence = 0;
+    const activity = (kind: string, payload: ThreadActivity["payload"]) => {
+      sequence += 1;
+      return makeActivity({
+        id: `task-retention-${sequence}`,
+        kind,
+        payload,
+        turnId,
+        sequence,
+        createdAt: new Date(Date.UTC(2026, 9, 11) + sequence * 1000).toISOString(),
+      });
+    };
+    let retained = [
+      activity("task.started", { taskId: "worker", taskType: "agent" }),
+      {
+        ...activity("task.updated", { taskId: "worker", isBackgrounded: true }),
+        id: EventId.makeUnsafe("z-background"),
+        createdAt: "2026-10-11T00:00:02.000Z",
+      },
+      activity("task.updated", { taskId: "worker", description: "Still working" }),
+      activity("turn.tasks.updated", { tasks: [{ task: "Finish work", status: "inProgress" }] }),
+    ];
+    const appendNoise = () => {
+      for (let index = 0; index < 2001; index += 1) {
+        retained = capThreadActivities([...retained, activity("tool.started", {})]);
+      }
+    };
+    appendNoise();
+    expect(deriveOutstandingBackgroundTaskIds(retained)).toEqual(["worker"]);
+    expect(deriveActiveTaskListState(retained, turnId)?.tasks).toHaveLength(1);
+    // Terminal patches and explicit empty lists must displace stale live state.
+    retained = capThreadActivities([
+      ...retained,
+      {
+        ...activity("task.completed", { taskId: "worker" }),
+        id: EventId.makeUnsafe("a-completion"),
+        createdAt: "2026-10-11T00:00:02.000Z",
+      },
+      activity("turn.tasks.updated", { tasks: [] }),
+    ]);
+    appendNoise();
+    expect(deriveOutstandingBackgroundTaskIds(retained)).toEqual([]);
+    expect(deriveActiveTaskListState(retained, turnId)).toBeNull();
+    expect(retained.filter((entry) => entry.kind === "turn.tasks.updated")).toHaveLength(1);
+  });
 });
 
 const cacheReview: PendingClaudeCacheReview = {

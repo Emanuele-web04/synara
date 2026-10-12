@@ -20,6 +20,7 @@ import {
   deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
   formatTurnHeaderLabel,
+  isPinnedBackgroundTaskEntry,
   normalizeCompactToolLabel,
   summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
@@ -1095,6 +1096,87 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
   });
 
+  it("keeps one response when a Monitor event arrives mid-turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("watching", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Watching CI",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        {
+          id: "entry-ci",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "ci",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Monitor · CI updated",
+            tone: "info",
+            monitorNotification: {
+              taskId: "ci",
+              name: "CI",
+              output: "build passed",
+              outcome: "updated",
+              midTurn: true,
+            },
+          },
+        },
+        workEntry("read", "2026-01-01T00:00:04Z", "Read file"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "CI is green.",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(collapsedSignature(messageRow(rows, "done")!)).toEqual([
+      "narration:watching",
+      "work:ci",
+      "work:read",
+    ]);
+    expect(messageRow(rows, "watching")).toBeUndefined();
+    expect(messageRow(rows, "done")?.turnHeader?.resumedBy).toBeNull();
+  });
+
+  it("pins only background tasks that outlived their turn", () => {
+    const runningTask = {
+      taskId: "task",
+      taskType: "local_bash",
+      description: "dev server",
+      command: "bun run dev",
+      status: "running" as const,
+      startedAt: "2026-01-01T00:00:00Z",
+      completedAt: null,
+      exitCode: null,
+    };
+    const plainWork: WorkLogEntry = {
+      id: "launch",
+      createdAt: "2026-01-01T00:00:00Z",
+      label: "Command run",
+      tone: "tool",
+    };
+    const turnEndedAt = "2026-01-01T00:05:00Z";
+    const pinned = (completedAt: string | null) =>
+      isPinnedBackgroundTaskEntry(
+        {
+          ...plainWork,
+          backgroundTask: completedAt
+            ? { ...runningTask, status: "stopped", completedAt }
+            : runningTask,
+        },
+        turnEndedAt,
+      );
+    expect(pinned(null)).toBe(true);
+    expect(pinned("2026-01-01T00:06:00Z")).toBe(true);
+    // The turn stopped its own server: the row folds with the turn's work.
+    expect(pinned("2026-01-01T00:04:00Z")).toBe(false);
+    expect(isPinnedBackgroundTaskEntry(plainWork, turnEndedAt)).toBe(false);
+  });
+
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
@@ -1614,7 +1696,6 @@ describe("deriveMessagesTimelineRows", () => {
           endedAt: "2026-01-01T00:00:02Z",
           outcome,
           reason: null,
-          modelChange: null,
           resumedBy: null,
         });
         expect(messageRow(rows, "queued")?.turnHeader).toBeUndefined();
@@ -1700,80 +1781,10 @@ describe("deriveMessagesTimelineRows", () => {
         endedAt: "2026-01-01T00:00:06Z",
         outcome: "completed",
         reason: null,
-        modelChange: null,
         resumedBy: null,
       });
-      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked 5.5s");
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked for 5.5s");
       expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["work:w2"]);
-    });
-
-    it("names the model only when it differs from the previous turn", () => {
-      const rows = deriveMessagesTimelineRows({
-        ...baseInput,
-        timelineEntries: threeTurns,
-        turnTimingByTurnId: timings([
-          turnActivity(
-            "m1",
-            "t1",
-            "turn.started",
-            { model: "claude-haiku-5-5", provider: "claudeAgent" },
-            "2026-01-01T00:00:00.500Z",
-          ),
-          turnActivity(
-            "m2",
-            "t2",
-            "turn.started",
-            { model: "claude-haiku-5-5", provider: "claudeAgent" },
-            "2026-01-01T00:01:00.500Z",
-          ),
-          turnActivity(
-            "m3",
-            "turn-third",
-            "turn.started",
-            { model: "gpt-6-luna", provider: "codex" },
-            "2026-01-01T00:02:00.500Z",
-          ),
-        ]),
-      });
-
-      expect(messageRow(rows, "a1")?.turnHeader?.modelChange).toBeNull();
-      expect(messageRow(rows, "a2")?.turnHeader?.modelChange).toBeNull();
-      expect(messageRow(rows, "a3")?.turnHeader?.modelChange).toEqual({
-        provider: "codex",
-        model: "gpt-6-luna",
-      });
-    });
-
-    it("falls back to Claude's reported model for turns recorded before turn.started", () => {
-      const timing = timings([
-        turnActivity(
-          "cw1",
-          "t1",
-          "context-window.updated",
-          { claudeCache: { model: "claude-haiku-5-5" } },
-          "2026-01-01T00:00:01Z",
-        ),
-        turnActivity(
-          "m2",
-          "t2",
-          "turn.started",
-          { model: "claude-opus-5-5", provider: "claudeAgent" },
-          "2026-01-01T00:01:00.500Z",
-        ),
-        // A later context report never overrides the authoritative model.
-        turnActivity(
-          "cw2",
-          "t2",
-          "context-window.updated",
-          { claudeCache: { model: "claude-haiku-5-5" } },
-          "2026-01-01T00:01:02Z",
-        ),
-      ]);
-      expect(timing.get(TurnId.makeUnsafe("t1"))?.model).toEqual({
-        provider: "claudeAgent",
-        model: "claude-haiku-5-5",
-      });
-      expect(timing.get(TurnId.makeUnsafe("t2"))?.model?.model).toBe("claude-opus-5-5");
     });
 
     it("says who ended a turn early: the user or the provider, with its reason", () => {

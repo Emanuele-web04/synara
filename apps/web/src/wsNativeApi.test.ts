@@ -330,6 +330,7 @@ describe("wsNativeApi", () => {
             homePath: "",
             launchArgs: "",
             enableArtifacts: false,
+            confirmColdCacheResume: false,
             customModels: [],
           },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },

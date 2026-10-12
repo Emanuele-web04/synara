@@ -1593,21 +1593,32 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("does not read shell env when the provider key is already present", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-existing-key-"));
+    const codexHome = path.join(tempDir, "home");
+    mkdirSync(codexHome);
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      'model_provider = "proxy"\n[model_providers.proxy]\nenv_key = "AZURE_OPENAI_API_KEY"\n',
+    );
     const readEnvironment = vi.fn();
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          SHELL: "/bin/zsh",
+          PATH: "/usr/bin",
+          CODEX_HOME: codexHome,
+          SYNARA_HOME: path.join(tempDir, "runtime"),
+          AZURE_OPENAI_API_KEY: "existing-secret",
+        },
+        platform: "darwin",
+        readEnvironment,
+      });
 
-    const env = await buildCodexProcessEnv({
-      env: {
-        SHELL: "/bin/zsh",
-        PATH: "/usr/bin",
-        CODEX_HOME: "/tmp/.codex",
-        AZURE_OPENAI_API_KEY: "existing-secret",
-      },
-      platform: "darwin",
-      readEnvironment,
-    });
-
-    expect(readEnvironment).not.toHaveBeenCalled();
-    expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+      expect(readEnvironment).not.toHaveBeenCalled();
+      expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps the private desktop browser host out of the Codex process", async () => {

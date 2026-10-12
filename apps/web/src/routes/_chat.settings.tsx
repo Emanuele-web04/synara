@@ -480,6 +480,7 @@ function SettingsRouteView() {
     ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
       ? ["Move sent messages to top"]
       : []),
+    ...(settings.showOpenThreadTabs !== defaults.showOpenThreadTabs ? ["Thread tabs"] : []),
     ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
       ? ["Delete worktree on archive"]
       : []),
@@ -771,6 +772,15 @@ function SettingsRouteView() {
             "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream.",
           resetLabel: "move sent messages to top",
           ariaLabel: "Move sent messages to top",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showOpenThreadTabs",
+          title: "Thread tabs",
+          description:
+            "Show open threads as tabs in the chat header. Turn off to show only the current thread's title.",
+          resetLabel: "thread tabs",
+          ariaLabel: "Show open threads as tabs in the chat header",
         })}
 
         <SettingsRow

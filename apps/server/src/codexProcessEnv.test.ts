@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,6 +26,7 @@ import {
   hydrateCodexProviderCredentialEnvironment,
   isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
+  mergeShellEnvPolicyExclude,
   prioritizeCodexOverlayEntries,
   readCodexSharedContinuationGeneration,
   type CodexOverlayEntryLinker,
@@ -198,6 +200,20 @@ describe("prioritizeCodexOverlayEntries", () => {
 describe("disableCodexConfigSections", () => {
   const canonicalHeader = '[plugins."computer-use@openai-bundled"]';
 
+  it("rejects an unsupported multiline plugin flag instead of corrupting its TOML", () => {
+    const source = `${canonicalHeader}\nenabled = """\ntrue\n"""\n`;
+    expect(() => disableCodexConfigSections(source, [canonicalHeader], true)).toThrow(
+      /enabled.*boolean/,
+    );
+  });
+
+  it.each(['"enabled"', "'enabled'"])("disables a quoted %s flag without duplicates", (key) => {
+    const source = `${canonicalHeader}\n${key} = true\n`;
+    expect(parseToml(disableCodexConfigSections(source, [canonicalHeader], true)).plugins).toEqual({
+      "computer-use@openai-bundled": { enabled: false },
+    });
+  });
+
   it.each([
     ["literal-quoted", "[plugins.'computer-use@openai-bundled']"],
     ["whitespace-varied", '[ plugins . "computer-use@openai-bundled" ]'],
@@ -214,6 +230,47 @@ describe("disableCodexConfigSections", () => {
     expect(result.match(/enabled = false/g)).toHaveLength(1);
     expect(result).not.toContain(canonicalHeader);
   });
+});
+
+describe("mergeShellEnvPolicyExclude", () => {
+  it.each(['"exclude"', "'exclude'", String.raw`"excl\u0075de"`])(
+    "merges a quoted %s key without duplicating it",
+    (key) => {
+      const source = `[shell_environment_policy]\n${key} = ["USER_SECRET"]\n`;
+      const merged = mergeShellEnvPolicyExclude(source, "SYNARA_AGENT_GATEWAY_TOKEN");
+      expect(parseToml(merged).shell_environment_policy).toEqual({
+        exclude: ["SYNARA_AGENT_GATEWAY_TOKEN", "USER_SECRET"],
+      });
+      expect(mergeShellEnvPolicyExclude(merged, "SYNARA_AGENT_GATEWAY_TOKEN")).toBe(merged);
+    },
+  );
+
+  it.each(['"""', "'''"])(
+    "preserves %s multiline exclusion values and ignores keys in instruction strings",
+    (delimiter) => {
+      const source = [
+        "[shell_environment_policy]",
+        `notes = ${delimiter}`,
+        'exclude = ["EXAMPLE_ONLY"]',
+        delimiter,
+        "exclude = [",
+        `${delimiter}keep "SYNARA_AGENT_GATEWAY_TOKEN" inside this larger`,
+        `pattern${delimiter},`,
+        '"USER_SECRET",',
+        "]",
+      ].join("\n");
+      const merged = mergeShellEnvPolicyExclude(source, "SYNARA_AGENT_GATEWAY_TOKEN");
+      expect(parseToml(merged).shell_environment_policy).toEqual({
+        notes: 'exclude = ["EXAMPLE_ONLY"]\n',
+        exclude: [
+          "SYNARA_AGENT_GATEWAY_TOKEN",
+          'keep "SYNARA_AGENT_GATEWAY_TOKEN" inside this larger\npattern',
+          "USER_SECRET",
+        ],
+      });
+      expect(mergeShellEnvPolicyExclude(merged, "SYNARA_AGENT_GATEWAY_TOKEN")).toBe(merged);
+    },
+  );
 });
 
 describe("buildCodexProcessEnv", () => {
@@ -572,6 +629,344 @@ describe("buildCodexProcessEnv", () => {
       expect(overlayConfig).toContain('inherit = "core"');
       expect(overlayConfig).toContain('exclude = ["SYNARA_AGENT_GATEWAY_TOKEN", "USER_SECRET"]');
       expect(readFileSync(sourceConfigPath, "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces the managed MCP endpoint inherited from another Synara overlay", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-parent-overlay-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-child-runtime-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+      "",
+      "[shell_environment_policy]",
+      'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: [
+          "[mcp_servers.synara]",
+          'url = "http://127.0.0.1:64449/mcp"',
+          'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+          "",
+          "[shell_environment_policy]",
+          'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+        ].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("drops an inherited managed block when a probe appends no section", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-parent-probe-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-child-probe-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('model = "gpt-5.6-sol"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig).not.toContain("# >>> synara managed config >>>");
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores managed marker text embedded in TOML string values", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-text-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-runtime-"));
+    const sourceConfig = [
+      'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      'guide = """',
+      "  # >>> synara managed config >>>",
+      "  keep this indented text intact",
+      "  # <<< synara managed config <<<",
+      '"""',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain(
+        'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      );
+      expect(overlayConfig).toContain("  keep this indented text intact");
+      expect(overlayConfig).toContain("  # >>> synara managed config >>>");
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unindented marker lines inside TOML multiline strings", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-multiline-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-multiline-rt-"));
+    const sourceConfig = [
+      'basic = """',
+      "# >>> synara managed config >>>",
+      "basic string content stays",
+      "# <<< synara managed config <<<",
+      '"""',
+      "literal = '''",
+      "# >>> synara managed config >>>",
+      "literal string content stays",
+      '# <<< synara managed config <<< """ still literal',
+      "'''",
+      'inline = """one""" # a comment mentioning """',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "# <<< synara managed config <<<",
+      "",
+      "[tail]",
+      'kept = "after the managed block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain("basic string content stays");
+      expect(overlayConfig).toContain("literal string content stays");
+      expect(overlayConfig).toContain('# <<< synara managed config <<< """ still literal');
+      expect(overlayConfig).toContain('kept = "after the managed block"');
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      // Two string-embedded begin markers plus the single rebuilt block.
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(3);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['"""', "'''"])(
+    "preserves complete TOML examples inside %s instructions while replacing inherited MCP config",
+    async (delimiter) => {
+      const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-toml-example-"));
+      const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-toml-example-rt-"));
+      const instructions = [
+        "# >>> synara managed config >>>",
+        "[mcp_servers.synara]",
+        'url = "https://example.test/documentation"',
+        "[shell_environment_policy]",
+        'exclude = ["EXAMPLE_ONLY"]',
+        '[plugins."browser@openai-bundled"]',
+        "enabled = true",
+        "# <<< synara managed config <<<",
+      ].join("\n");
+      const sourceConfig = [
+        'profile = "work"',
+        `instructions = ${delimiter}`,
+        instructions,
+        delimiter,
+        "# >>> synara managed config >>>",
+        "[mcp_servers.synara]",
+        'url = "http://127.0.0.1:61240/mcp"',
+        "# <<< synara managed config <<<",
+        "[profiles.work]",
+        'model = "gpt-5.6-sol"',
+        "[shell_environment_policy]",
+        'inherit = "core"',
+        `notes = ${delimiter}`,
+        'exclude = ["EXAMPLE_ONLY"]',
+        delimiter,
+        'exclude = ["USER_SECRET"]',
+      ].join("\n");
+      writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+      const original = parseToml(sourceConfig);
+
+      try {
+        const env = await buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+          platform: "win32",
+          appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:64449/mcp"),
+        });
+        const overlayConfig = readFileSync(path.join(env.CODEX_HOME!, "config.toml"), "utf8");
+        expect(overlayConfig).toContain(instructions);
+        const parsed = parseToml(overlayConfig);
+        expect(parsed.instructions).toBe(original.instructions);
+        expect(parsed.profile).toBe("work");
+        expect(parsed.profiles).toEqual(original.profiles);
+        expect(parsed.mcp_servers).toEqual({
+          synara: {
+            url: "http://127.0.0.1:64449/mcp",
+            bearer_token_env_var: "SYNARA_AGENT_GATEWAY_TOKEN",
+          },
+        });
+        expect(parsed.shell_environment_policy).toEqual({
+          inherit: "core",
+          notes: 'exclude = ["EXAMPLE_ONLY"]\n',
+          exclude: ["SYNARA_AGENT_GATEWAY_TOKEN", "USER_SECRET"],
+        });
+        expect(parsed.plugins).toMatchObject({ "browser@openai-bundled": { enabled: false } });
+        expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+      } finally {
+        rmSync(sourceHome, { recursive: true, force: true });
+        rmSync(runtimeHome, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves user tables between an unmatched begin and a later complete managed block", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-parent-"));
+    const parentRuntimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-rt-"));
+    const inheritedConfigHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-inherited-"));
+    const childRuntimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-child-"));
+    const sourceConfig = [
+      'profile = "work"',
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:60000/mcp"',
+      "[profiles.work]",
+      'model = "gpt-5.6-sol"',
+      "[user_table]",
+      'kept = "after the truncated block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const parentEnv = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: parentRuntimeHome, CODEX_HOME: sourceHome },
+        platform: "win32",
+        appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:61240/mcp"),
+      });
+      const parentConfig = readFileSync(path.join(parentEnv.CODEX_HOME!, "config.toml"), "utf8");
+      // Carry the exact inherited config into a real home. Current continuation
+      // policy independently rejects using another overlay's symlinked state.
+      writeFileSync(path.join(inheritedConfigHome, "config.toml"), parentConfig, "utf8");
+      const childEnv = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: childRuntimeHome, CODEX_HOME: inheritedConfigHome },
+        platform: "win32",
+        appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:64449/mcp"),
+      });
+      const childConfigPath = path.join(childEnv.CODEX_HOME!, "config.toml");
+      const childConfig = readFileSync(childConfigPath, "utf8");
+      const parsed = parseToml(childConfig);
+      expect(parsed.user_table).toEqual({ kept: "after the truncated block" });
+      expect(parsed.profiles).toEqual({ work: { model: "gpt-5.6-sol" } });
+      expect(parsed.profile).toBe("work");
+      expect(childConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(childConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(childConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(parentEnv.CODEX_HOME!, "config.toml"), "utf8")).toBe(
+        parentConfig,
+      );
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+      // A same-instance auth probe must recover only the complete current block.
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: childRuntimeHome, CODEX_HOME: inheritedConfigHome },
+        platform: "win32",
+      });
+      expect(readFileSync(childConfigPath, "utf8")).toBe(childConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(parentRuntimeHome, { recursive: true, force: true });
+      rmSync(inheritedConfigHome, { recursive: true, force: true });
+      rmSync(childRuntimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves config after an unmatched managed begin marker", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-truncated-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-truncated-rt-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "",
+      "[user_table]",
+      'kept = "after the truncated block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('model = "gpt-5.6-sol"');
+      expect(overlayConfig).toContain("[user_table]");
+      expect(overlayConfig).toContain('kept = "after the truncated block"');
+      // The stale endpoint is replaced by the session table, and the new
+      // block is still appended even though a begin marker already exists.
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# <<< synara managed config <<<$/gm)).toHaveLength(1);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
     } finally {
       rmSync(sourceHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
