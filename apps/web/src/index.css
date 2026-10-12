@@ -735,6 +735,12 @@ input {
   -webkit-app-region: no-drag;
 }
 
+/* Portaled menus/selects sit over drag-region chrome. */
+[data-slot="menu-positioner"],
+[data-slot="select-positioner"] {
+  -webkit-app-region: no-drag;
+}
+
 /* Chromium does not clip native app regions to scrolling ancestors. Exclude the
    visible content-tab viewport once, instead of letting offscreen chips and their
    buttons subtract rectangles from neighboring window chrome. The strip fits its

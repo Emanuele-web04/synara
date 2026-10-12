@@ -17,6 +17,8 @@ export const BROWSER_AUTOMATION_VIEWPORT_WIDTH = 1_280;
 export const BROWSER_AUTOMATION_VIEWPORT_HEIGHT = 800;
 /** Matches the environment overlay's `p-3` edge gutter. */
 export const BROWSER_FLOATING_PANEL_MARGIN_PX = 12;
+/** Isolated guest used only for floating-card chrome stacked above the page webview. */
+export const FLOATING_BROWSER_CHROME_PARTITION = "synara-floating-browser-chrome";
 
 export interface FloatingBrowserGuestLayout {
   width: number;
@@ -49,6 +51,7 @@ export function resolveFloatingBrowserGuestLayout(slot: {
 export function normalizeBrowserPageZoomFactor(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
 }
+
 
 // Dedicated auth hosts are safe popup signals. Multi-purpose hosts such as github.com need
 // path checks below so ordinary _blank links still open as tabs.

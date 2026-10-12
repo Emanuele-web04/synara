@@ -10,7 +10,8 @@ import {
 } from "../../../desktop/src/browserManager";
 import { BrowserUsePipeServer } from "../../../desktop/src/browserUsePipeServer";
 import { BROWSER_IPC_CHANNELS } from "../../../desktop/src/ipcChannels";
-import { hardenBrowserAnnotationWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";
+import { hardenIsolatedWebviewPreferences } from "../../../desktop/src/browserAnnotations/webviewSecurity";
+import { FLOATING_BROWSER_CHROME_PARTITION } from "@synara/shared/browserSession";
 import { createBrowserPanelHideScheduler } from "../../src/components/BrowserPanel.logic";
 
 const pipePath = process.env.SYNARA_BROWSER_HOST_PIPE_PATH;
@@ -19,8 +20,9 @@ const shellPath = process.env.SYNARA_E2E_SHELL_PATH;
 const threadId = process.env.SYNARA_E2E_THREAD_ID as ThreadId | undefined;
 const synaraHome = process.env.SYNARA_HOME;
 const annotationPreloadPath = process.env.SYNARA_E2E_BROWSER_ANNOTATION_PRELOAD;
+const floatingChromePreloadPath = process.env.SYNARA_E2E_FLOATING_CHROME_PRELOAD;
 
-if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath) {
+if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath || !floatingChromePreloadPath) {
   throw new Error("The visible-browser Electron fixture requires its isolated E2E environment.");
 }
 
@@ -144,9 +146,24 @@ app.whenReady().then(async () => {
   });
   browserManager.setWindow(mainWindow);
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const partition = params.partition;
+    if (partition === FLOATING_BROWSER_CHROME_PARTITION) {
+      if (
+        !hardenIsolatedWebviewPreferences({
+          partition,
+          expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
+          preloadPath: floatingChromePreloadPath,
+          webPreferences,
+        })
+      ) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (
-      !hardenBrowserAnnotationWebviewPreferences({
-        partition: params.partition,
+      partition === undefined ||
+      !hardenIsolatedWebviewPreferences({
+        partition,
         expectedPartition: BROWSER_SESSION_PARTITION,
         preloadPath: annotationPreloadPath,
         webPreferences,

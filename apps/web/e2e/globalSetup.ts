@@ -7,6 +7,7 @@ const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUT_DIR = resolve(WEB_DIR, ".playwright/electron-e2e");
 const OUTPUT_PATH = resolve(OUTPUT_DIR, "visibleBrowserMain.cjs");
 const ANNOTATION_PRELOAD_OUTPUT_PATH = resolve(OUTPUT_DIR, "browserAnnotationGuestPreload.cjs");
+const FLOATING_CHROME_PRELOAD_OUTPUT_PATH = resolve(OUTPUT_DIR, "floatingBrowserChromePreload.cjs");
 
 export default function globalSetup(): () => void {
   mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -36,7 +37,20 @@ export default function globalSetup(): () => void {
     ],
     { cwd: WEB_DIR, stdio: "inherit" },
   );
+  execFileSync(
+    "bun",
+    [
+      "build",
+      "../desktop/src/floatingBrowserChromePreload.ts",
+      "--target=node",
+      "--format=cjs",
+      `--outfile=${FLOATING_CHROME_PRELOAD_OUTPUT_PATH}`,
+      "--external=electron",
+    ],
+    { cwd: WEB_DIR, stdio: "inherit" },
+  );
   process.env.SYNARA_E2E_ELECTRON_MAIN = OUTPUT_PATH;
   process.env.SYNARA_E2E_BROWSER_ANNOTATION_PRELOAD = ANNOTATION_PRELOAD_OUTPUT_PATH;
+  process.env.SYNARA_E2E_FLOATING_CHROME_PRELOAD = FLOATING_CHROME_PRELOAD_OUTPUT_PATH;
   return () => rmSync(OUTPUT_DIR, { recursive: true, force: true });
 }
