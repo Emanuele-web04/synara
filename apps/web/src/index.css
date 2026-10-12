@@ -1,6 +1,13 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark, .dark *));
+/* Named-group `:has()` variants. Tailwind's `group-has-*` compiles to
+   `:is(:where(.group):has(…) *)`; Chrome answers any DOM insertion under that rule
+   with a whole-document style recalc, so every transcript row mounted while scrolling
+   restyled the full app. Anchoring the same condition as `:where(group):has(…) &`
+   matches the same elements with the same specificity and keeps invalidation local. */
+@custom-variant project-header-focus (:where(.group\/project-header):has(:focus-visible) &);
+@custom-variant menu-item-has-action (:where(.group\/menu-item):has([data-sidebar="menu-action"]) &);
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;

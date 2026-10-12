@@ -393,6 +393,7 @@ export function ChatTranscriptPane({
           <SubagentRunContext.Provider value={subagentRunContextValue}>
             <MessagesTimeline
               key={activeThreadId}
+              heightCacheScope={activeThreadId}
               {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentThread={subagentThread ?? null}
               historyHeader={
