@@ -859,6 +859,8 @@ export function createWsNativeApi(): NativeApi {
         }),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
+      getInlineVisual: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getInlineVisual, input),
       getFullThreadDiff: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive, threadId) =>

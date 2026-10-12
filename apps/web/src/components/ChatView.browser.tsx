@@ -1217,6 +1217,22 @@ function recordProjectCreateCommand(command: unknown): boolean {
 
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   const tag = body._tag;
+  if (tag === ORCHESTRATION_WS_METHODS.getInlineVisual) {
+    return {
+      visualId: body.visualId,
+      html: JSON.stringify({
+        blocks: [
+          {
+            type: "choices",
+            options: [
+              { label: "Visual follow up", message: "Follow up from visual" },
+              { label: "Wait" },
+            ],
+          },
+        ],
+      }),
+    };
+  }
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
@@ -1359,6 +1375,20 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   }
   return {};
 }
+
+const turnStartText = (request: (typeof wsRequests)[number]): string | null =>
+  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+  typeof request.command === "object" &&
+  request.command !== null &&
+  "type" in request.command &&
+  request.command.type === "thread.turn.start" &&
+  "message" in request.command &&
+  typeof request.command.message === "object" &&
+  request.command.message !== null &&
+  "text" in request.command.message &&
+  typeof request.command.message.text === "string"
+    ? request.command.message.text
+    : null;
 
 function installDeterministicSendNativeApi(options?: {
   rejectTurnStart?: boolean;
@@ -9414,19 +9444,7 @@ describe("ChatView transcript geometry (full app)", () => {
   describe("queue paused by Stop", () => {
     const queuedPrompt = "queued prompt held after stop";
     const stoppedTurnId = TurnId.makeUnsafe("turn-stopped-by-user");
-    const turnStartText = (request: (typeof wsRequests)[number]): string | null =>
-      request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-      typeof request.command === "object" &&
-      request.command !== null &&
-      "type" in request.command &&
-      request.command.type === "thread.turn.start" &&
-      "message" in request.command &&
-      typeof request.command.message === "object" &&
-      request.command.message !== null &&
-      "text" in request.command.message &&
-      typeof request.command.message.text === "string"
-        ? request.command.message.text
-        : null;
+
     const sentQueuedPrompt = () =>
       wsRequests.some((request) => turnStartText(request)?.includes(queuedPrompt) === true);
 
@@ -15290,5 +15308,120 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
     }
+  });
+
+  describe("inline visual choice draft ownership", () => {
+    it.each(["attachment", "empty"] as const)(
+      "keeps %s composer ownership when selecting a follow-up",
+      async (mode) => {
+        const base = createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("visual-user"),
+          targetText: "Show a visual",
+        });
+        const visualId = `vis_${(mode === "attachment" ? "a" : "b").repeat(32)}`;
+        const turnId = TurnId.makeUnsafe("visual-choice-turn");
+        const snapshot = {
+          ...base,
+          threads: base.threads.map((thread) => ({
+            ...thread,
+            latestTurn: {
+              turnId,
+              state: "completed" as const,
+              requestedAt: isoAt(150),
+              startedAt: isoAt(150),
+              completedAt: isoAt(153),
+              assistantMessageId: MessageId.makeUnsafe("visual-answer"),
+            },
+            messages: [
+              {
+                ...createUserMessage({
+                  id: MessageId.makeUnsafe("visual-user"),
+                  text: "Show a visual",
+                  offsetSeconds: 150,
+                }),
+                turnId,
+              },
+              {
+                ...createAssistantMessage({
+                  id: MessageId.makeUnsafe("visual-answer"),
+                  text: `\`\`\`synara-visual\n${visualId}\n\`\`\``,
+                  offsetSeconds: 152,
+                }),
+                turnId,
+              },
+            ],
+            activities: [
+              {
+                id: EventId.makeUnsafe("visual-choice-activity"),
+                kind: "visual.shown" as const,
+                tone: "info" as const,
+                summary: "Visual",
+                createdAt: isoAt(151),
+                turnId,
+                payload: {
+                  visualId,
+                  format: "components",
+                  title: "Follow up",
+                  height: 200,
+                  byteLength: 50,
+                  sha256: "a".repeat(64),
+                },
+              },
+            ],
+          })),
+        };
+        const restoreNativeApi = installDeterministicSendNativeApi();
+        const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+        try {
+          if (mode === "attachment") {
+            useComposerDraftStore.getState().addImages(THREAD_ID, [
+              createComposerImage({
+                id: "private-draft-image",
+                name: "private.png",
+                previewUrl: "blob:private-draft-image",
+              }),
+            ]);
+          }
+          await expect
+            .element(page.getByRole("button", { name: /Visual follow up/ }))
+            .toBeVisible();
+          const before = wsRequests.filter((request) =>
+            turnStartText(request)?.includes("Follow up from visual"),
+          ).length;
+          await page.getByRole("button", { name: /Visual follow up/ }).click();
+          if (mode === "attachment") {
+            await vi.waitFor(() =>
+              expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+                "Follow up from visual",
+              ),
+            );
+            await waitForLayout();
+            expect(
+              wsRequests.filter((request) =>
+                turnStartText(request)?.includes("Follow up from visual"),
+              ),
+            ).toHaveLength(before);
+            expect(
+              useComposerDraftStore
+                .getState()
+                .draftsByThreadId[THREAD_ID]?.images.map((image) => image.id),
+            ).toEqual(["private-draft-image"]);
+          } else {
+            await waitForLayout();
+
+            await vi.waitFor(() =>
+              expect(
+                wsRequests.filter((request) =>
+                  turnStartText(request)?.includes("Follow up from visual"),
+                ),
+              ).toHaveLength(before + 1),
+            );
+          }
+        } finally {
+          await mounted.cleanup();
+          restoreNativeApi();
+        }
+      },
+    );
   });
 });

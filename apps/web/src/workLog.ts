@@ -3,6 +3,8 @@ import {
   type ComputerBuildSignature,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
+  INLINE_VISUAL_ACTIVITY_KIND,
+  InlineVisualActivityPayload,
   isToolLifecycleItemType,
   type ModelSelection,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
@@ -13,6 +15,7 @@ import {
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { Option, Schema } from "effect";
 import {
   decodeSubagentAgentStates,
   extractSubagentIdentityHints,
@@ -52,6 +55,7 @@ import {
   type FastModeNotice,
 } from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
+import { INLINE_VISUALS_ON } from "./betaFeatures";
 
 import type { ChatMessage, ProposedPlan } from "./types";
 
@@ -191,6 +195,10 @@ export interface WorkLogEntry {
   // renders as a question/answer exchange that stays visible outside the
   // collapsed turn instead of as two bare "User input" log lines.
   userInputExchange?: ReadonlyArray<WorkLogUserInputExchangeItem>;
+  // A visual the agent published with `synara_show_visual`. Like an answered
+  // question, it renders as its own row that stays visible outside the
+  // collapsed turn; the document is fetched by id when the row mounts.
+  inlineVisual?: InlineVisualActivityPayload;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -527,7 +535,13 @@ export function deriveWorkLogEntries(
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
-    .map(toDerivedWorkLogEntry);
+    .map(toDerivedWorkLogEntry)
+    // A visual activity is only its row: drop it when the row cannot render
+    // (feature off on Stable, or a payload that does not decode).
+    .filter(
+      (entry) =>
+        entry.activityKind !== INLINE_VISUAL_ACTIVITY_KIND || entry.inlineVisual !== undefined,
+    );
   const userInputExchangeEntries = withUserInputExchanges(entries, ordered);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
@@ -1692,6 +1706,7 @@ function withUserInputExchanges(
   return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
 }
 
+const decodeInlineVisualPayload = Schema.decodeUnknownOption(InlineVisualActivityPayload);
 const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
 
 // Only provider runtime sequences order transcript rows causally; a fallback
@@ -1859,6 +1874,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const automation = extractWorkLogAutomation(payload);
     if (automation) {
       entry.automation = automation;
+    }
+  }
+  if (activity.kind === INLINE_VISUAL_ACTIVITY_KIND && INLINE_VISUALS_ON) {
+    const inlineVisual = Option.getOrUndefined(decodeInlineVisualPayload(activity.payload));
+    if (inlineVisual) {
+      entry.inlineVisual = inlineVisual;
     }
   }
   if (activity.kind === "synara.threads.created") {
