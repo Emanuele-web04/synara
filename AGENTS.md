@@ -31,6 +31,9 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Transcript and UI safeguards
 
+- UI changes require explicit user authorization. This includes changes to layout, styling, typography, visible text, controls, navigation, animations, and user-facing interaction behavior on any surface. A general request to fix, refactor, or improve something does not authorize incidental UI changes.
+- If a task needs a UI change that the user has not explicitly requested or approved, notify the user of the proposed visible or interaction change and why it is needed, then wait for authorization before implementing that part. Continue independent work within the authorized scope. An explicit UI request authorizes that scope; do not ask again unless the scope expands.
+- Before committing, pushing, or opening/updating a PR, review the diff for UI changes and exclude any that lack explicit authorization. Tests, screenshots, and passing checks do not substitute for authorization. Report authorized UI changes clearly in the completion summary and PR description.
 - Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
@@ -39,8 +42,6 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 - UI text must follow the font size the user chose in Settings. Use the `text-ui` tokens defined in the `@theme` block of [index.css](apps/web/src/index.css) and driven by [useAppTypography.ts](apps/web/src/hooks/useAppTypography.ts): `text-ui` for body copy, `text-ui-sm`/`text-ui-xs` for secondary text, `text-ui-lg` for emphasized lines and small panel titles, and `text-chat*` for transcript content. Inherit the UI font family. Do not use fixed Tailwind sizes such as `text-sm`, `text-xs`, or `text-[11px]`, or the long `text-[length:var(--app-font-size-…)]` form. Only dialog titles and large headings may use a fixed size; `apps/web/src/uiFontSize.test.ts` fails when fixed sizes are added.
 
 ## Local instance isolation
-
-An orb declares this instance in `.amp/services.yaml`: run `amp orb services ensure` and the `dev` service starts the web UI on `http://localhost:5733` with the server on `3773`, supervised so it survives Amp CLI updates and orb pause/resume. Drive it with the in-orb browser. The service has no portal on purpose: the server rejects non-loopback browser origins on the WebSocket handshake, so a portaled UI loads without data.
 
 Use a separate home directory and unused server/web ports when another Synara instance is running. Check the dev runner's dry-run output before starting an isolated instance; do not reset the user's database or reuse production state to make a test pass.
 

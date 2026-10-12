@@ -26,15 +26,15 @@ const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
 };
 
 type KeychainFailure = "permission_denied" | "timed_out" | "keychain_unavailable";
-type KeychainError = Error & { keychainFailure: KeychainFailure };
-
-function keychainError(keychainFailure: KeychainFailure): KeychainError {
-  return Object.assign(new Error("Browser Keychain access failed."), { keychainFailure });
+class KeychainError extends Error {
+  constructor(readonly keychainFailure: KeychainFailure) {
+    super("Browser Keychain access failed.");
+  }
 }
 
 function readMacKeychainSecret(browser: string): Promise<string> {
   const keychain = Object.hasOwn(KEYCHAIN_SOURCES, browser) ? KEYCHAIN_SOURCES[browser] : undefined;
-  if (!keychain) return Promise.reject(keychainError("keychain_unavailable"));
+  if (!keychain) return Promise.reject(new KeychainError("keychain_unavailable"));
   return new Promise((resolve, reject) => {
     execProcessFile(
       "/usr/bin/security",
@@ -44,7 +44,7 @@ function readMacKeychainSecret(browser: string): Promise<string> {
         if (error) {
           const message = String(error.message);
           reject(
-            keychainError(
+            new KeychainError(
               error.killed
                 ? "timed_out"
                 : /cancel+ed|interaction|auth|denied|errsec-25308/i.test(message)
@@ -56,7 +56,7 @@ function readMacKeychainSecret(browser: string): Promise<string> {
         }
         const value = stdout.replace(/\r?\n$/, "");
         if (!value) {
-          reject(keychainError("keychain_unavailable"));
+          reject(new KeychainError("keychain_unavailable"));
           return;
         }
         resolve(value);
@@ -109,8 +109,7 @@ export class BrowserPasswordImport {
     try {
       passphrase = await this.getKeychainSecret(input.browser);
     } catch (error) {
-      const failure = error as Partial<KeychainError>;
-      const code = failure.keychainFailure ?? "keychain_unavailable";
+      const code = error instanceof KeychainError ? error.keychainFailure : "keychain_unavailable";
       return { ok: false, code, platform: currentPlatform };
     }
 

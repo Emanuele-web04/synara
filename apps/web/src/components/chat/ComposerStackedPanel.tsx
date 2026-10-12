@@ -43,7 +43,6 @@ export function ComposerStackedPanel({
     <ComposerStackedHeaderFrame
       ref={ref}
       passthroughSideMargins={passthroughSideMargins}
-      data-composer-flush-panel={!detached && !borderless ? "" : undefined}
       data-composer-stacked-attached={attachedToPrevious ? "true" : undefined}
       className={cn(
         COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME,

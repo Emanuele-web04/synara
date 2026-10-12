@@ -43,7 +43,6 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
-import { BrowserImportAnnouncementDialog } from "../components/BrowserImportAnnouncementDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
@@ -368,12 +367,12 @@ function RootRouteView() {
           <QueuedComposerDrainCoordinator />
           {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
           <BetaWelcomeDialog />
-          <SafariAccessOnboarding />
-          <AppSnapWelcomeDialog>
-            <FeatureTourDialog />
-          </AppSnapWelcomeDialog>
+          <SafariAccessOnboarding startup>
+            <AppSnapWelcomeDialog>
+              <FeatureTourDialog />
+            </AppSnapWelcomeDialog>
+          </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
-          <BrowserImportAnnouncementDialog />
           <ProjectImportAnnouncementDialog />
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />

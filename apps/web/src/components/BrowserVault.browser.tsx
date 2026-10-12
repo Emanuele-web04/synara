@@ -83,6 +83,63 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("prevents a password import while signed-in sessions are importing", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Personal" }]);
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profileStatus: "available",
+        profiles: [
+          {
+            id: "Default",
+            name: "Personal",
+            isDefault: true,
+            cookieCount: 2,
+            passwordCount: 1,
+            cookieStatus: "available",
+            passwordStatus: "available",
+          },
+        ],
+      },
+    ]);
+    let finish: (() => void) | undefined;
+    vi.mocked(api.importCookies).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              ok: true,
+              imported: 2,
+              skipped: 0,
+              sessionRestore: "available",
+              browser: "chrome",
+              platform: "macos",
+              warnings: [],
+            });
+        }),
+    );
+    await render(<BrowserImportPanel api={api} />);
+    const sessionsConsent = page.getByRole("checkbox", {
+      name: /I authorize Synara and its agents/,
+    });
+    const passwordsConsent = page.getByRole("checkbox", {
+      name: /I authorize Synara to read saved passwords/,
+    });
+    await passwordsConsent.click();
+    await sessionsConsent.click();
+    const passwordImport = page.getByRole("button", { name: "Import selected passwords" });
+    await expect.element(passwordImport).toBeEnabled();
+    await page.getByRole("button", { name: "Import selected sessions" }).click();
+    await expect.element(passwordImport).toBeDisabled();
+    await expect.element(passwordsConsent).toBeDisabled();
+    expect(api.importPasswords).not.toHaveBeenCalled();
+    finish?.();
+    await expect.element(passwordImport).toBeEnabled();
+  });
+
   it("hides runtime catalog sources that have no local profiles", async () => {
     const api = harness.api!;
     vi.mocked(api.cookieSources).mockResolvedValue([

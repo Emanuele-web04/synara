@@ -1,6 +1,6 @@
 # Browser cookie import
 
-On first launch, Synara introduces cookie import for all seven macOS browsers. Safari's optional Full Disk Access setup is a separate step; Chromium imports request their own Keychain access when needed.
+The welcome tour and Settings → General let you select detected browser profiles and import signed-in sessions. On macOS, saved passwords can also be imported into the unlocked Saved Logins vault. Nothing is imported until you confirm. Safari's optional Full Disk Access setup is separate; Chromium imports request Keychain access when needed.
 
 In Synara's browser, open **Saved logins → Import browser cookies**. Choose a browser and profile, then import **this site**, or explicitly confirm **all sites in this profile**. Imported sessions are shared across Synara browser tabs and agent workflows. This imports cookies, not passwords, bookmarks, extensions, or history.
 

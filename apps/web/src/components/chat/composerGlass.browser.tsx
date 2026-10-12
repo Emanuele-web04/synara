@@ -38,21 +38,13 @@ afterEach(() => {
   }
 });
 
-function ComposerFixture({ panel = "attached" }: { panel?: "attached" | "detached" | "none" }) {
+function ComposerFixture() {
   return (
     <div data-chat-composer-slot>
       <ComposerColumnFrame>
-        <div data-composer-panels>
-          {panel !== "none" ? (
-            <ComposerStackedPanel detached={panel === "detached"} data-testid="stacked">
-              Queued follow-up
-            </ComposerStackedPanel>
-          ) : null}
-        </div>
-        <div className="chat-composer-shell">
-          <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME} data-testid="composer">
-            Draft input
-          </div>
+        <ComposerStackedPanel data-testid="stacked">Queued follow-up</ComposerStackedPanel>
+        <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME} data-testid="composer">
+          Draft input
         </div>
       </ComposerColumnFrame>
     </div>
@@ -81,32 +73,6 @@ function sidebarGlass() {
 }
 
 describe("chat composer on sidebar-only macOS glass", () => {
-  it("keeps stacked plan/task rows aligned with the composer input", async () => {
-    await render(<ComposerFixture />, { container: appRoot });
-
-    expect(surface("stacked").getBoundingClientRect().width).toBeCloseTo(
-      surface("composer").getBoundingClientRect().width,
-      1,
-    );
-    // Equal-width outer outlines keep equal radii; only inset surfaces subtract the border.
-    expect(getComputedStyle(surface("stacked")).borderTopLeftRadius).toBe(
-      getComputedStyle(surface("composer")).borderBottomLeftRadius,
-    );
-  });
-
-  it.each(["detached", "none"] as const)(
-    "keeps a rounded input when the preceding panel is %s",
-    async (panel) => {
-      await render(<ComposerFixture panel={panel} />, { container: appRoot });
-      expect(parseFloat(getComputedStyle(surface("composer")).borderTopLeftRadius)).toBeGreaterThan(
-        0,
-      );
-      expect(
-        parseFloat(getComputedStyle(surface("composer")).borderTopRightRadius),
-      ).toBeGreaterThan(0);
-    },
-  );
-
   it.each(["light", "dark"])(
     "avoids a second backdrop layer and keeps dense fills in %s mode",
     async (theme) => {

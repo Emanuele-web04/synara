@@ -90,10 +90,9 @@ it("waits for import and the feature tour before showing and remembering the Act
   expect(localStorage.getItem(activityKey)).toBeNull();
   await page.getByRole("button", { name: "Skip tour" }).click();
   await expect.element(page.getByText(coachmark)).toBeVisible();
-  expect(localStorage.getItem(activityKey)).toBeNull();
+  expect(localStorage.getItem(activityKey)).toBe("seen");
   await page.getByRole("button", { name: "Switch to activity view" }).click();
   await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
-  expect(localStorage.getItem(activityKey)).toBe("seen");
   await screen.unmount();
   screens.splice(screens.indexOf(screen), 1);
   await show();
@@ -122,10 +121,7 @@ it("shows after previously seen announcements and releases the slot when the hin
   localStorage.setItem(tourKey, JSON.stringify([installation]));
   await show();
   await expect.element(page.getByText(coachmark)).toBeVisible();
-  expect(localStorage.getItem(activityKey)).toBeNull();
-  await expect
-    .poll(() => localStorage.getItem(activityKey), { timeout: 10_000, interval: 50 })
-    .toBe("seen");
+  expect(localStorage.getItem(activityKey)).toBe("seen");
   await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
   expect(useAnnouncementSheetSlotStore.getState().owner).toBeNull();
   expect(localStorage.getItem(activityKey)).toBe("seen");

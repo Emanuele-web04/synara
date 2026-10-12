@@ -1,6 +1,6 @@
 import type { DesktopSafariAccessInfo } from "@synara/contracts";
 import { Schema } from "effect";
-import { GlobeIcon, SettingsIcon } from "~/lib/icons";
+import { SettingsIcon } from "~/lib/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { Button } from "./ui/button";
@@ -69,17 +69,15 @@ export function SafariAccessOnboarding({
   const info = useSafariAccessInfo();
   const [decision, setDecision] = useLocalStorage(SAFARI_ACCESS_STORAGE_KEY, "unseen", Decision);
   const [revisit, setRevisit] = useState(false);
-  const [safariSetup, setSafariSetup] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const wantsOpen = info?.supported === true && (revisit || (startup && decision === "unseen"));
+  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
   const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
   // Local setup and deliberate Settings revisits must not depend on the root's
   // first-run gate or wait behind an automatic announcement.
   const open = wantsOpen && (!startup || revisit || startupOpen);
-  const browserIntro = startup && !revisit && !safariSetup;
   const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
 
   useEffect(() => {
@@ -99,7 +97,6 @@ export function SafariAccessOnboarding({
     setBusy(false);
     setStatus(null);
     setRevisit(false);
-    setSafariSetup(false);
     setDecision("later");
   };
   const run = async (action: "openSettings" | "revealApp") => {
@@ -135,30 +132,21 @@ export function SafariAccessOnboarding({
         <DialogPopup showCloseButton={false} initialFocus={sheetRef} className="max-w-[400px]">
           <div ref={sheetRef} tabIndex={-1} className="min-h-0 overflow-y-auto outline-none">
             <DialogHeader className="items-center gap-3 px-6 pt-7 pb-0 text-center">
-              {browserIntro ? (
-                <GlobeIcon className="size-16 text-muted-foreground" aria-hidden />
-              ) : (
-                <img
-                  src={SAFARI_ICON_SRC}
-                  alt=""
-                  aria-hidden
-                  draggable={false}
-                  className="size-16 select-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.18)]"
-                />
-              )}
-              <DialogTitle className="mt-1">
-                {browserIntro
-                  ? "Bring your browser logins along?"
-                  : "Bring your Safari logins along?"}
-              </DialogTitle>
+              <img
+                src={SAFARI_ICON_SRC}
+                alt=""
+                aria-hidden
+                draggable={false}
+                className="size-16 select-none drop-shadow-[0_6px_14px_rgba(0,0,0,0.18)]"
+              />
+              <DialogTitle className="mt-1">Bring your Safari logins along?</DialogTitle>
               <DialogDescription className="text-balance leading-relaxed">
-                {browserIntro
-                  ? "Import signed-in sessions from Chrome, Safari, Edge, Helium, Aside, Arc, or Dia. It's optional, and nothing is copied until you choose an import."
-                  : "Synara's browser can pick up sites you're already signed into in Safari, so you don't have to log in twice. It's optional, and nothing is copied until you ask."}
+                Synara's browser can pick up sites you're already signed into in Safari, so you
+                don't have to log in twice. It's optional, and nothing is copied until you ask.
               </DialogDescription>
             </DialogHeader>
 
-            {info?.supported && !browserIntro ? (
+            {info?.supported ? (
               <ol className="mx-6 mt-5 space-y-3 text-ui leading-relaxed">
                 <Step n={1}>
                   Open <span className="font-medium text-foreground">System Settings</span> ›
@@ -189,26 +177,10 @@ export function SafariAccessOnboarding({
               </ol>
             ) : null}
 
-            {browserIntro ? (
-              <div className="mx-6 mt-5 space-y-3 text-ui leading-relaxed text-muted-foreground">
-                <p>
-                  Open a browser tab, then Saved logins → Import browser cookies. Choose this site,
-                  or explicitly allow all sites in a profile. Cookies are shared across Synara's
-                  browser tabs and agent workflows; passwords and bookmarks are not imported.
-                </p>
-                <p>
-                  Chromium browsers may ask for Keychain access. Safari requires Full Disk Access.
-                </p>
-                <Button size="sm" variant="outline" onClick={() => setSafariSetup(true)}>
-                  Safari access setup
-                </Button>
-              </div>
-            ) : (
-              <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
-                Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
-                rather not, that's fine. You can find this again under Settings › General.
-              </p>
-            )}
+            <p className="mx-6 mt-5 text-ui leading-relaxed text-muted-foreground/80">
+              Full Disk Access is a broad macOS permission that reaches beyond Safari. If you'd
+              rather not, that's fine. You can find this again under Settings › General.
+            </p>
 
             {status ? (
               <p role="status" className="mx-6 mt-3 text-ui leading-relaxed text-muted-foreground">
@@ -223,11 +195,10 @@ export function SafariAccessOnboarding({
               <Button
                 disabled={busy}
                 onClick={() => {
-                  if (browserIntro) close();
-                  else void run("openSettings");
+                  void run("openSettings");
                 }}
               >
-                {browserIntro ? "Got it" : "Open System Settings"}
+                Open System Settings
               </Button>
             </DialogFooter>
           </div>

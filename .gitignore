@@ -2,8 +2,6 @@ node_modules
 .bun
 .turbo
 .DS_Store
-.amp/portals
-.amp/in
 *.log
 *.tsbuildinfo
 apps/*/dist

@@ -28,14 +28,11 @@ interface OnboardingDialogStore {
    * started making choices in it.
    */
   engaged: boolean;
-  /** Installation whose welcome-tour run displayed the browser-import step. */
-  browserImportStepSeenForInstallation: string | null;
   open: (reason: OnboardingOpenReason) => void;
   /** Settings → "Open welcome tour". */
   openDialog: () => void;
   close: () => void;
   markEngaged: () => void;
-  markBrowserImportStepSeen: (installationKey: string) => void;
   markStartupGateSettled: () => void;
   setBetaWelcomePending: (pending: boolean) => void;
 }
@@ -46,25 +43,10 @@ export const useOnboardingDialogStore = create<OnboardingDialogStore>((set) => (
   betaWelcomePending: false,
   openReason: null,
   engaged: false,
-  browserImportStepSeenForInstallation: null,
-  open: (reason) =>
-    set({
-      isOpen: true,
-      openReason: reason,
-      engaged: false,
-      browserImportStepSeenForInstallation: null,
-    }),
-  openDialog: () =>
-    set({
-      isOpen: true,
-      openReason: "replay",
-      engaged: false,
-      browserImportStepSeenForInstallation: null,
-    }),
+  open: (reason) => set({ isOpen: true, openReason: reason, engaged: false }),
+  openDialog: () => set({ isOpen: true, openReason: "replay", engaged: false }),
   close: () => set({ isOpen: false, openReason: null, engaged: false }),
   markEngaged: () => set({ engaged: true }),
-  markBrowserImportStepSeen: (installationKey) =>
-    set({ browserImportStepSeenForInstallation: installationKey }),
   markStartupGateSettled: () => set({ startupGateSettled: true }),
   setBetaWelcomePending: (pending) => set({ betaWelcomePending: pending }),
 }));

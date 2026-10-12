@@ -18,12 +18,11 @@ import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 
 interface AnnouncementSheetSlotStore {
   owner: string | null;
-  ownerPriority: number;
   /** Startup probes and the feature tour have finished; passive hints may now claim. */
   startupSettled: boolean;
   /** True once a sheet was confirmed; no further sheet opens during this launch. */
   handedOff: boolean;
-  claim: (id: string, priority?: number, allowAfterHandOff?: boolean) => void;
+  claim: (id: string, allowAfterHandOff?: boolean) => void;
   release: (id: string) => void;
   handOff: () => void;
   settleStartup: () => void;
@@ -31,17 +30,13 @@ interface AnnouncementSheetSlotStore {
 
 export const useAnnouncementSheetSlotStore = create<AnnouncementSheetSlotStore>((set) => ({
   owner: null,
-  ownerPriority: 0,
   startupSettled: false,
   handedOff: false,
-  claim: (id, priority = 1, allowAfterHandOff = false) =>
+  claim: (id, allowAfterHandOff = false) =>
     set((state) =>
-      (state.owner === null || priority > state.ownerPriority) &&
-      (!state.handedOff || allowAfterHandOff)
-        ? { owner: id, ownerPriority: priority }
-        : state,
+      state.owner === null && (!state.handedOff || allowAfterHandOff) ? { owner: id } : state,
     ),
-  release: (id) => set((state) => (state.owner === id ? { owner: null, ownerPriority: 0 } : state)),
+  release: (id) => set((state) => (state.owner === id ? { owner: null } : state)),
   handOff: () => set({ handedOff: true }),
   settleStartup: () => set({ startupSettled: true }),
 }));
@@ -51,7 +46,6 @@ export function useAnnouncementSheetSlot(
   wantsOpen: boolean,
   allowAfterHandOff = false,
   waitForOnboarding = true,
-  priority = 1,
 ): {
   open: boolean;
   handOff: () => void;
@@ -68,9 +62,9 @@ export function useAnnouncementSheetSlot(
 
   // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
   useEffect(() => {
-    if (eligible) claim(id, priority, allowAfterHandOff);
+    if (eligible) claim(id, allowAfterHandOff);
     else release(id);
-  }, [allowAfterHandOff, claim, eligible, id, owner, priority, release]);
+  }, [allowAfterHandOff, claim, eligible, id, owner, release]);
   useEffect(() => () => release(id), [id, release]);
 
   return { open: eligible && owner === id, handOff };

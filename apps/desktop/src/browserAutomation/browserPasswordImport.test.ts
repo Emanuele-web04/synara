@@ -45,6 +45,26 @@ afterEach(async () => {
 });
 
 describe("browser password import", () => {
+  it.each([null, undefined, "unavailable"])(
+    "reports an unstructured Keychain rejection without reading or storing passwords: %s",
+    async (failure) => {
+      await makeProfile();
+      const vault = {
+        snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+        importPasswords: vi.fn(),
+      } as unknown as BrowserVault;
+      const result = await new BrowserPasswordImport(
+        vault,
+        async () => {
+          throw failure;
+        },
+        home,
+      ).import({ browser: "chrome", profile: "Default", confirmed: true });
+      expect(result).toEqual({ ok: false, code: "keychain_unavailable", platform: "macos" });
+      expect(vault.importPasswords).not.toHaveBeenCalled();
+    },
+  );
+
   it("reads one selected installed Chrome profile and inserts it into the unlocked vault", async () => {
     await makeProfile();
     const keychain = vi.fn(async () => "test-safe-storage");

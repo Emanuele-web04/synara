@@ -51,23 +51,6 @@ function Harness() {
 }
 
 describe("Safari access onboarding", () => {
-  it("keeps Safari access guidance in Settings instead of opening a separate startup sheet", async () => {
-    const screen = await render(
-      <>
-        <SafariAccessOnboarding />
-        <SafariAccessSetupButton />
-      </>,
-    );
-    try {
-      await vi.waitFor(() => expect(api.getInfo).toHaveBeenCalled());
-      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-      await page.getByRole("button", { name: "Safari import setup" }).click();
-      await expect.element(page.getByRole("dialog")).toBeVisible();
-    } finally {
-      await screen.unmount();
-    }
-  });
-
   it("opens manual setup despite a pending startup gate and an occupied slot", async () => {
     localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("later"));
     useOnboardingDialogStore.setState({ startupGateSettled: false });
@@ -122,16 +105,7 @@ describe("Safari access onboarding", () => {
     await expect.element(page.getByRole("dialog")).toBeVisible();
     await expect.element(page.getByText("Next welcome")).not.toBeInTheDocument();
     await expect.element(page.getByRole("dialog")).toHaveTextContent("It's optional");
-    for (const browser of ["Chrome", "Safari", "Edge", "Helium", "Aside", "Arc", "Dia"])
-      await expect.element(page.getByRole("dialog")).toHaveTextContent(browser);
-    await expect.element(page.getByRole("dialog")).toHaveTextContent("Saved logins");
-    await expect
-      .element(page.getByRole("button", { name: "Open System Settings" }))
-      .not.toBeInTheDocument();
-    expect(api.openSettings).not.toHaveBeenCalled();
-    await page.getByRole("button", { name: "Safari access setup" }).click();
     await expect.element(page.getByRole("dialog")).toHaveTextContent("broad macOS permission");
-    await expect.element(page.getByText("Next welcome")).not.toBeInTheDocument();
     await expect.element(page.getByRole("dialog")).toHaveTextContent("Synara (Dev)");
     await expect
       .element(page.getByRole("button", { name: "Show app in Finder" }))
@@ -140,9 +114,9 @@ describe("Safari access onboarding", () => {
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
   });
 
-  it("persists browser guidance acknowledgment across remounts and allows Safari revisits", async () => {
+  it("persists Not now across remounts and allows revisiting", async () => {
     const mounted = await render(<Harness />);
-    await page.getByRole("button", { name: "Got it", exact: true }).click();
+    await page.getByRole("button", { name: "Not now", exact: true }).click();
     await expect.element(page.getByText("Next welcome")).toBeVisible();
     expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
     await mounted.unmount();
@@ -162,7 +136,6 @@ describe("Safari access onboarding", () => {
 
   it("opening Settings is not permission approval or an acknowledged intro", async () => {
     await render(<Harness />);
-    await page.getByRole("button", { name: "Safari access setup" }).click();
     await page.getByRole("button", { name: "Open System Settings" }).click();
     await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
     expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
@@ -177,7 +150,6 @@ describe("Safari access onboarding", () => {
       if (failure === false) api.openSettings.mockResolvedValueOnce(false);
       else api.openSettings.mockRejectedValueOnce(new Error("private failure"));
       await render(<Harness />);
-      await page.getByRole("button", { name: "Safari access setup" }).click();
       await page.getByRole("button", { name: "Open System Settings" }).click();
       await expect.element(page.getByRole("status")).toHaveTextContent("Couldn't open");
       await expect.element(page.getByRole("status")).not.toHaveTextContent("private failure");
@@ -218,7 +190,6 @@ describe("Safari access onboarding", () => {
         }),
     );
     await render(<Harness />);
-    await page.getByRole("button", { name: "Safari access setup" }).click();
     await page.getByRole("button", { name: "Open System Settings" }).click();
     await page.getByRole("button", { name: "Not now" }).click();
     resolve(true);
