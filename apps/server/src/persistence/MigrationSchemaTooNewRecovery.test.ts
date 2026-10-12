@@ -2,10 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { gzipSync } from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { Effect, Fiber, Layer } from "effect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MIGRATION_RECOVERY_MAX_RESUME_ATTEMPTS,
@@ -17,8 +18,13 @@ import {
 
 import {
   inspectCompletedMigrationBackupForSchemaTooNew,
+  reclaimOrphanedMigrationArtifacts,
   restoreMarkedMigrationBackup,
 } from "./MigrationBackup.ts";
+import {
+  DatabaseLifecycleLockedError,
+  withDatabaseLifecycleLock,
+} from "./DatabaseLifecycleLock.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
 import {
@@ -26,6 +32,11 @@ import {
   createMigrationSchemaTooNewStartupBlockError,
 } from "./MigrationSchemaTooNewStartupBlock.ts";
 import { migrationEntries } from "./Migrations.ts";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const tempDirectories: Array<string> = [];
 
@@ -118,6 +129,16 @@ function generatedBackupPath(databasePath: string, suffix: string, targetVersion
   );
 }
 
+async function compressBackupFixture(backupPath: string): Promise<string> {
+  const compressedPath = `${backupPath}.gz`;
+  await fs.writeFile(compressedPath, gzipSync(await fs.readFile(backupPath), { level: 1 }), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  await fs.unlink(backupPath);
+  return compressedPath;
+}
+
 async function writeCompletedProvenance(input: {
   readonly databasePath: string;
   readonly backupPath: string;
@@ -164,6 +185,148 @@ const firstUuid = "00000000-0000-4000-8000-000000000001";
 const secondUuid = "00000000-0000-4000-8000-000000000002";
 
 describe("completed migration backup recovery", () => {
+  it("inspects and restores the exact compressed backup, reclaiming inspection partials", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = writeFutureCanonicalDatabase(databasePath);
+    const targetVersion = latestMigrationId + 1;
+    const directory = migrationBackupDirectory(databasePath);
+    await fs.mkdir(directory);
+    const plainPath = generatedBackupPath(databasePath, firstUuid, targetVersion);
+    writeTrackedDatabase(plainPath, latestMigrationId - 1);
+    const backupPath = await compressBackupFixture(plainPath);
+    const unrelatedPath = generatedBackupPath(databasePath, secondUuid, targetVersion + 1);
+    writeTrackedDatabase(unrelatedPath, targetVersion + 1);
+    await writeCompletedProvenance({ databasePath, backupPath, targetVersion });
+    await fs.writeFile(
+      path.join(directory, `.${path.basename(backupPath)}.crashed.partial`),
+      "partial",
+    );
+
+    await Effect.runPromise(reclaimOrphanedMigrationArtifacts(databasePath));
+    await expect(
+      inspectCompletedMigrationBackupForSchemaTooNew(databasePath, {
+        databaseMigrationId: targetVersion,
+        latestSupportedMigrationId: latestMigrationId,
+      }),
+    ).resolves.toMatchObject({
+      kind: "restore-available",
+      backupPath,
+      backupMigrationId: latestMigrationId - 1,
+    });
+    expect((await fs.readdir(directory)).sort()).toEqual(
+      [path.basename(backupPath), path.basename(unrelatedPath)].sort(),
+    );
+
+    await Effect.runPromise(
+      restoreMarkedMigrationBackup(databasePath, {
+        expectedBackupPath: backupPath,
+        expectedProvenancePath: migrationBackupProvenancePath(databasePath),
+      }),
+    );
+    const restored = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get(),
+      ).toMatchObject({ id: latestMigrationId - 1 });
+    } finally {
+      restored.close();
+    }
+  });
+
+  it.each(["truncated", "checksum", "invalid-sqlite"])(
+    "rejects %s gzip backups without changing the live database or recovery records",
+    async (damage) => {
+      const databasePath = await makeDatabasePath();
+      const latestMigrationId = writeFutureCanonicalDatabase(databasePath);
+      const targetVersion = latestMigrationId + 1;
+      const directory = migrationBackupDirectory(databasePath);
+      await fs.mkdir(directory);
+      const plainPath = generatedBackupPath(databasePath, firstUuid, targetVersion);
+      writeTrackedDatabase(plainPath, latestMigrationId - 1);
+      const backupPath = await compressBackupFixture(plainPath);
+      const encoded = await fs.readFile(backupPath);
+      if (damage === "checksum") encoded[encoded.length - 8]! ^= 1;
+      await fs.writeFile(
+        backupPath,
+        damage === "truncated"
+          ? encoded.subarray(0, -3)
+          : damage === "invalid-sqlite"
+            ? gzipSync("not sqlite")
+            : encoded,
+      );
+      await writeCompletedProvenance({ databasePath, backupPath, targetVersion });
+      await writeActiveRecoveryMarker({ databasePath, backupPath, targetVersion });
+      const protectedPaths = [
+        databasePath,
+        migrationBackupProvenancePath(databasePath),
+        migrationRecoveryMarkerPath(databasePath),
+      ];
+      const before = await Promise.all(protectedPaths.map((filePath) => fs.readFile(filePath)));
+
+      await expect(
+        inspectCompletedMigrationBackupForSchemaTooNew(databasePath, {
+          databaseMigrationId: targetVersion,
+          latestSupportedMigrationId: latestMigrationId,
+        }),
+      ).resolves.toEqual({ kind: "restore-unavailable", reason: "invalid-backup" });
+      await expect(Effect.runPromise(restoreMarkedMigrationBackup(databasePath))).rejects.toThrow();
+
+      expect(await Promise.all(protectedPaths.map((filePath) => fs.readFile(filePath)))).toEqual(
+        before,
+      );
+      expect(await fs.readdir(directory)).toEqual([path.basename(backupPath)]);
+      expect(
+        (await fs.readdir(path.dirname(databasePath))).filter((name) => name.endsWith(".restore")),
+      ).toEqual([]);
+    },
+  );
+
+  it("holds the lifecycle lock through interrupted compressed startup inspection and cleanup", async () => {
+    const databasePath = await makeDatabasePath();
+    const latestMigrationId = writeFutureCanonicalDatabase(databasePath);
+    const targetVersion = latestMigrationId + 1;
+    const directory = migrationBackupDirectory(databasePath);
+    await fs.mkdir(directory);
+    const plainPath = generatedBackupPath(databasePath, firstUuid, targetVersion);
+    writeTrackedDatabase(plainPath, latestMigrationId - 1);
+    const backupPath = await compressBackupFixture(plainPath);
+    await writeCompletedProvenance({ databasePath, backupPath, targetVersion });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const open = vi.mocked(fs.open);
+    open.mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      if (String(args[0]).endsWith(".partial") && String(args[0]).includes(".sqlite.gz.")) {
+        entered.resolve();
+        await release.promise;
+      }
+      return handle;
+    });
+    const startup = Effect.runFork(
+      Layer.build(
+        makeSqlitePersistenceLive(databasePath).pipe(Layer.provide(NodeServices.layer)),
+      ).pipe(Effect.scoped),
+    );
+    try {
+      await entered.promise;
+      const interruption = Effect.runPromise(Fiber.interrupt(startup));
+      await expect(
+        Effect.runPromise(withDatabaseLifecycleLock(databasePath, Effect.void)),
+      ).rejects.toBeInstanceOf(DatabaseLifecycleLockedError);
+      release.resolve();
+      await interruption;
+    } finally {
+      release.resolve();
+      await Effect.runPromise(Fiber.interrupt(startup));
+      open.mockImplementation(actual.open);
+    }
+    expect(await fs.readdir(directory)).toEqual([path.basename(backupPath)]);
+    await expect(fs.stat(`${databasePath}.lifecycle-lock`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("emits a structured block from the real persistence startup path", async () => {
     const databasePath = await makeDatabasePath();
     const latestMigrationId = writeFutureCanonicalDatabase(databasePath);

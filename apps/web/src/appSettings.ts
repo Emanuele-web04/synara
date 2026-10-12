@@ -21,11 +21,14 @@ import {
   ProviderInstanceId,
   GitHubInboxSort,
   KeepAwakeMode,
+  MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES,
+  ProviderRuntimeIdleStopMinutes,
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
   SourceControlWritingStyle,
   SourceControlCustomInstructions,
+  ThreadTitleRefreshMode,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -259,9 +262,11 @@ type CustomModelSettingsKey =
   | "customGrokModels"
   | "customDroidModels"
   | "customDevinModels"
+  | "customClineModels"
   | "customOpenCodeModels"
   | "customPiModels"
-  | "customOmpModels";
+  | "customOmpModels"
+  | "customExternalModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -277,12 +282,14 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   devin: new Set(getModelOptions("devin").map((option) => option.slug)),
+  cline: new Set(getModelOptions("cline").map((option) => option.slug)),
   antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
   omp: new Set(getModelOptions("omp").map((option) => option.slug)),
+  external: new Set(getModelOptions("external").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -303,6 +310,7 @@ const PersistedProviderKind = Schema.Literals([
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
   "antigravity",
   "gemini",
   "grok",
@@ -311,6 +319,7 @@ const PersistedProviderKind = Schema.Literals([
   "opencode",
   "pi",
   "omp",
+  "external",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,
@@ -385,6 +394,7 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  codexLaunchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexAccounts: Schema.Array(CodexAccountConfig).pipe(withDefaults(() => [])),
   selectedCodexAccountId: Schema.String.check(Schema.isMaxLength(64)).pipe(
     withDefaults(() => DEFAULT_CODEX_ACCOUNT_ID),
@@ -393,6 +403,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  clineBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
   geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
@@ -510,6 +521,12 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only opt-in for explicit Hand off → Continue here actions. Ordinary
+  // composer model selection and the existing new-conversation flow are unchanged.
+  enableSameThreadHandoffs: Schema.Boolean.pipe(withDefaults(() => false)),
+  providerRuntimeIdleStopMinutes: Schema.NullOr(ProviderRuntimeIdleStopMinutes).pipe(
+    withDefaults(() => null),
+  ),
   // Fold each finished turn's tool calls and intermediate messages behind one
   // "Worked for…" line. Off keeps every step of finished turns visible.
   collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -584,6 +601,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDevinModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customClineModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -591,6 +609,7 @@ export const AppSettingsSchema = Schema.Struct({
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOmpModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customExternalModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -598,6 +617,9 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => "repository" as const),
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
+  // Server-backed global default for opt-in automatic title refresh (#1041).
+  // Off until the user opts in; per-project/per-thread overrides win.
+  titleRefreshMode: ThreadTitleRefreshMode.pipe(withDefaults(() => "off" as const)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -697,6 +719,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "devin-model-slug",
     example: "adaptive",
   },
+  cline: {
+    provider: "cline",
+    settingsKey: "customClineModels",
+    defaultSettingsKey: "customClineModels",
+    title: "Cline",
+    description: "Save additional Cline model slugs for the picker and provider runtime.",
+    placeholder: "provider/model-id",
+    example: "adaptive",
+  },
   antigravity: {
     provider: "antigravity",
     settingsKey: "customAntigravityModels",
@@ -751,14 +782,25 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
+  external: {
+    provider: "external",
+    settingsKey: "customExternalModels",
+    defaultSettingsKey: "customExternalModels",
+    title: "External",
+    description: "Save additional External model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "partner/custom-model",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
 // Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
 // persisted config for compatibility, but do not offer an editor it cannot honor.
+// External agent profiles resolve models from their connector, so custom slugs
+// stay persistence-compatible without an editor.
 export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
-  (config) => config.provider !== "droid",
+  (config) => config.provider !== "droid" && config.provider !== "external",
 );
 
 export function normalizeCustomModelSlugs(
@@ -796,6 +838,13 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   }
 
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
+}
+
+export function normalizeProviderRuntimeIdleStopMinutes(
+  value: number | null | undefined,
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES, Math.max(0, Math.round(value)));
 }
 
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
@@ -870,7 +919,7 @@ export function resolveTerminalFontFamilyStack(value: string | null | undefined)
 }
 
 function normalizeProviderBinaryPathOverride(
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
   value: string | null | undefined,
 ): string {
   const trimmed = value?.trim() ?? "";
@@ -1093,8 +1142,8 @@ export function getProviderInstanceOptions(
     }))
     .toSorted((left, right) => {
       const providerDelta =
-        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+        (PROVIDER_INSTANCE_PROVIDER_ORDER as readonly ProviderKind[]).indexOf(left.provider) -
+        (PROVIDER_INSTANCE_PROVIDER_ORDER as readonly ProviderKind[]).indexOf(right.provider);
       if (providerDelta !== 0) {
         return providerDelta;
       }
@@ -1482,6 +1531,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     selectedCodexAccountId,
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     devinBinaryPath: normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath),
+    clineBinaryPath: normalizeProviderBinaryPathOverride("cline", settings.clineBinaryPath),
     antigravityBinaryPath: normalizeProviderBinaryPathOverride(
       "antigravity",
       settings.antigravityBinaryPath || legacyGeminiBinaryPath,
@@ -1499,12 +1549,16 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
     agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
+    providerRuntimeIdleStopMinutes: normalizeProviderRuntimeIdleStopMinutes(
+      settings.providerRuntimeIdleStopMinutes,
+    ),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customDevinModels: normalizeCustomModelSlugs(settings.customDevinModels, "devin"),
+    customClineModels: normalizeCustomModelSlugs(settings.customClineModels, "cline"),
     customAntigravityModels: normalizeCustomModelSlugs(
       [...settings.customAntigravityModels, ...(legacyCustomGeminiModels ?? [])],
       "antigravity",
@@ -1514,6 +1568,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     customOmpModels: normalizeCustomModelSlugs(settings.customOmpModels, "omp"),
+    customExternalModels: normalizeCustomModelSlugs(settings.customExternalModels, "external"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
@@ -1526,7 +1581,9 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 export function getServerDisabledProviders(
   settings: Pick<ServerSettingsView, "providers">,
 ): ProviderKind[] {
-  return DEFAULT_PROVIDER_ORDER.filter((provider) => !settings.providers[provider].enabled);
+  return DEFAULT_PROVIDER_ORDER.filter(
+    (provider) => provider !== "external" && !settings.providers[provider].enabled,
+  );
 }
 
 export function didProviderEnablementChange(
@@ -1536,7 +1593,9 @@ export function didProviderEnablementChange(
   return (
     previous === undefined ||
     DEFAULT_PROVIDER_ORDER.some(
-      (provider) => previous.providers[provider].enabled !== next.providers[provider].enabled,
+      (provider) =>
+        provider !== "external" &&
+        previous.providers[provider].enabled !== next.providers[provider].enabled,
     )
   );
 }
@@ -1560,15 +1619,18 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
+    codexLaunchArgs: settings.providers.codex.launchArgs,
     codexAccounts: settings.providers.codex.accounts,
     selectedCodexAccountId: settings.providers.codex.selectedAccountId,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     devinBinaryPath: settings.providers.devin.binaryPath,
+    clineBinaryPath: settings.providers.cline.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    providerRuntimeIdleStopMinutes: settings.providerRuntimeIdleStopMinutes ?? null,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
@@ -1587,6 +1649,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customDevinModels: settings.providers.devin.customModels,
+    customClineModels: settings.providers.cline.customModels,
     customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customDroidModels: settings.providers.droid.customModels,
@@ -1601,6 +1664,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     sourceControlWritingStyle: settings.sourceControlWritingStyle,
     sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
+    titleRefreshMode: settings.titleRefresh.mode,
   };
 }
 
@@ -1629,6 +1693,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "devinBinaryPath") ||
     hasOwn(patch, "providerInstances") ||
     hasOwn(patch, "claudeHomePath") ||
+    hasOwn(patch, "clineBinaryPath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
@@ -1674,6 +1739,7 @@ function pruneProviderPatchAgainstCurrentSettings(
   currentSettings: Pick<ServerSettingsView, "providers">,
 ): void {
   for (const provider of DEFAULT_PROVIDER_ORDER) {
+    if (provider === "external") continue;
     const providerPatch = providers[provider];
     if (!providerPatch) continue;
 
@@ -1708,6 +1774,14 @@ export function appSettingsPatchToServerSettingsPatch(
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
   if (
+    hasOwn(patch, "providerRuntimeIdleStopMinutes") &&
+    patch.providerRuntimeIdleStopMinutes !== undefined
+  ) {
+    serverPatch.providerRuntimeIdleStopMinutes = normalizeProviderRuntimeIdleStopMinutes(
+      patch.providerRuntimeIdleStopMinutes,
+    );
+  }
+  if (
     patch.keepAwakeMode === "always" ||
     patch.keepAwakeMode === "agent" ||
     patch.keepAwakeMode === "off"
@@ -1739,6 +1813,9 @@ export function appSettingsPatchToServerSettingsPatch(
   if (patch.sourceControlCustomInstructions !== undefined) {
     serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
   }
+  if (hasOwn(patch, "titleRefreshMode") && patch.titleRefreshMode !== undefined) {
+    serverPatch.titleRefresh = { mode: patch.titleRefreshMode };
+  }
   if (
     hasOwn(patch, "textGenerationModel") ||
     hasOwn(patch, "textGenerationProvider") ||
@@ -1761,6 +1838,7 @@ export function appSettingsPatchToServerSettingsPatch(
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
+    hasOwn(patch, "codexLaunchArgs") ||
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
     hasOwn(patch, "customCodexModels")
@@ -1772,6 +1850,7 @@ export function appSettingsPatchToServerSettingsPatch(
     providers.codex = {
       ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
+      ...(hasOwn(patch, "codexLaunchArgs") ? { launchArgs: patch.codexLaunchArgs ?? "" } : {}),
       ...(codexAccounts !== undefined ? { accounts: codexAccounts } : {}),
       ...(selectedCodexAccountId && isValidCodexAccountId(selectedCodexAccountId)
         ? { selectedAccountId: selectedCodexAccountId }
@@ -1820,6 +1899,14 @@ export function appSettingsPatchToServerSettingsPatch(
       ...(hasOwn(patch, "devinBinaryPath") ? { binaryPath: patch.devinBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customDevinModels")
         ? { customModels: patch.customDevinModels ?? [] }
+        : {}),
+    };
+  }
+  if (hasOwn(patch, "clineBinaryPath") || hasOwn(patch, "customClineModels")) {
+    providers.cline = {
+      ...(hasOwn(patch, "clineBinaryPath") ? { binaryPath: patch.clineBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customClineModels")
+        ? { customModels: patch.customClineModels ?? [] }
         : {}),
     };
   }
@@ -1886,6 +1973,7 @@ export function appSettingsPatchToServerSettingsPatch(
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
     for (const provider of DEFAULT_PROVIDER_ORDER) {
+      if (provider === "external") continue;
       const enabled = !disabledProviders.has(provider);
       if (currentSettings?.providers[provider].enabled === enabled) {
         continue;
@@ -1938,14 +2026,17 @@ export function buildInitialServerSettingsMigrationPatch(
     "claudeHomePath",
     "codexBinaryPath",
     "codexHomePath",
+    "codexLaunchArgs",
     "selectedCodexAccountId",
     "cursorApiEndpoint",
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "providerRuntimeIdleStopMinutes",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
     "keepAwakeMode",
+    "clineBinaryPath",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
@@ -1980,6 +2071,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "customClaudeModels",
     "customCursorModels",
     "customDevinModels",
+    "customClineModels",
     "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
@@ -2139,12 +2231,14 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
     devin: getCustomModelsForProvider(settings, "devin"),
+    cline: getCustomModelsForProvider(settings, "cline"),
     antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
     omp: getCustomModelsForProvider(settings, "omp"),
+    external: settings.customExternalModels ?? [],
   };
 }
 
@@ -2373,6 +2467,7 @@ function mergeProviderStartOptionsForApp(
       : {}),
     ...(base.pi || overlay.pi ? { pi: { ...base.pi, ...overlay.pi } } : {}),
     ...(base.omp || overlay.omp ? { omp: { ...base.omp, ...overlay.omp } } : {}),
+    ...(base.cline || overlay.cline ? { cline: { ...base.cline, ...overlay.cline } } : {}),
   };
 }
 
@@ -2380,6 +2475,7 @@ function omitProviderStartOptions(
   providerOptions: ProviderStartOptions,
   provider: ProviderKind,
 ): ProviderStartOptions {
+  if (provider === "external") return providerOptions;
   const { [provider]: _omittedProviderOptions, ...remainingProviderOptions } = providerOptions;
   void _omittedProviderOptions;
   return remainingProviderOptions as ProviderStartOptions;
@@ -2396,6 +2492,7 @@ export function getProviderStartOptions(
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "devinBinaryPath"
+    | "clineBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -2407,7 +2504,7 @@ export function getProviderStartOptions(
     | "ompAgentDir"
     | "ompBinaryPath"
   > &
-    Partial<Pick<AppSettings, "claudeHomePath" | "providerInstances">>,
+    Partial<Pick<AppSettings, "claudeHomePath" | "codexLaunchArgs" | "providerInstances">>,
   instanceId?: ProviderInstanceId | null | undefined,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
@@ -2416,6 +2513,7 @@ export function getProviderStartOptions(
   );
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const devinBinaryPath = normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath);
+  const clineBinaryPath = normalizeProviderBinaryPathOverride("cline", settings.clineBinaryPath);
   const antigravityBinaryPath = normalizeProviderBinaryPathOverride(
     "antigravity",
     settings.antigravityBinaryPath,
@@ -2427,6 +2525,7 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const codexLaunchArgs = settings.codexLaunchArgs ?? "";
   const ompBinaryPath = normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath);
   const codexLaunch = resolveCodexLaunchSettingsForInstance(settings, instanceId);
   const hasOpenCodeStartOptions = Boolean(
@@ -2437,13 +2536,15 @@ export function getProviderStartOptions(
     codexLaunch.homePath ||
     codexLaunch.shadowHomePath ||
     codexLaunch.accountId ||
-    codexLaunch.hasAdditionalAccounts
+    codexLaunch.hasAdditionalAccounts ||
+    codexLaunchArgs.trim()
       ? {
           codex: {
             ...(codexLaunch.binaryPath ? { binaryPath: codexLaunch.binaryPath } : {}),
             ...(codexLaunch.homePath ? { homePath: codexLaunch.homePath } : {}),
             ...(codexLaunch.shadowHomePath ? { shadowHomePath: codexLaunch.shadowHomePath } : {}),
             ...(codexLaunch.accountId ? { accountId: codexLaunch.accountId } : {}),
+            ...(codexLaunchArgs.trim() ? { launchArgs: codexLaunchArgs } : {}),
           },
         }
       : {}),
@@ -2467,6 +2568,13 @@ export function getProviderStartOptions(
       ? {
           devin: {
             binaryPath: devinBinaryPath,
+          },
+        }
+      : {}),
+    ...(clineBinaryPath
+      ? {
+          cline: {
+            binaryPath: clineBinaryPath,
           },
         }
       : {}),
@@ -2626,6 +2734,7 @@ export function getCustomBinaryPathForProvider(
     | "codexBinaryPath"
     | "cursorBinaryPath"
     | "devinBinaryPath"
+    | "clineBinaryPath"
     | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
@@ -2644,6 +2753,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
     case "devin":
       return normalizeProviderBinaryPathOverride(provider, settings.devinBinaryPath);
+    case "cline":
+      return normalizeProviderBinaryPathOverride(provider, settings.clineBinaryPath);
     case "antigravity":
       return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":
@@ -2656,6 +2767,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
     case "omp":
       return normalizeProviderBinaryPathOverride(provider, settings.ompBinaryPath);
+    case "external":
+      return "";
   }
 }
 
@@ -2664,6 +2777,7 @@ export function getCustomBinaryPathForProviderInstance(
   provider: ProviderKind,
   instanceId: ProviderInstanceId,
 ): string {
+  if (provider === "external") return "";
   const providerOptions = getProviderStartOptions(settings, instanceId)?.[provider];
   const binaryPath = isRecord(providerOptions) ? providerOptions.binaryPath : undefined;
   return typeof binaryPath === "string"

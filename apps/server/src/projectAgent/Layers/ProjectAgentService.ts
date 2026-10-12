@@ -2600,7 +2600,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const providerSettings = yield* serverSettingsService.getSettings.pipe(
             Effect.mapError(toServiceError("Failed to read provider settings.")),
           );
-          if (!providerSettings.providers[requestedProvider].enabled) {
+          if (
+            requestedProvider !== "external" &&
+            !providerSettings.providers[requestedProvider].enabled
+          ) {
             return yield* Effect.fail(
               fail(providerDisabledSettingsMessage(requestedProvider), "invalid"),
             );

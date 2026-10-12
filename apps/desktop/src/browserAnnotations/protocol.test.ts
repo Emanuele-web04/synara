@@ -67,6 +67,7 @@ describe("browser annotation protocol", () => {
         theme,
       }),
     ).toBe(true);
+    expect(isGuestAnnotationCommand({ version: 1, kind: "announce-ready" })).toBe(true);
     expect(
       parseBrowserAnnotationTheme({
         ...theme,
@@ -82,6 +83,11 @@ describe("browser annotation protocol", () => {
         theme: { ...theme, primary: "var(--primary)" },
       }),
     ).toBe(false);
+  });
+
+  it("accepts tokenless announce-ready before document-token validation", () => {
+    expect(isGuestAnnotationCommand({ version: 1, kind: "announce-ready" })).toBe(true);
+    expect(isGuestAnnotationCommand({ version: 1, kind: "start" })).toBe(false);
   });
 
   it("normalizes an empty optional comment to null without exposing form text", () => {

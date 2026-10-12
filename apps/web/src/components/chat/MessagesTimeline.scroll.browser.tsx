@@ -50,6 +50,15 @@ it.each([960, 430])(
     try {
       await expect.poll(() => document.querySelector("pre code")?.textContent).toContain(code);
       const transcript = document.querySelector<HTMLElement>("[data-chat-scroll-container]")!;
+      const fencedBlock = transcript.querySelector<HTMLElement>(".chat-markdown-codeblock")!;
+      const wrappedCode = fencedBlock.querySelector<HTMLElement>("pre")!;
+      expect(fencedBlock.getAttribute("data-wrap")).toBe("true");
+      await expect.poll(() => wrappedCode.clientWidth).toBeGreaterThan(0);
+      await expect
+        .poll(() => wrappedCode.scrollWidth - wrappedCode.clientWidth)
+        .toBeLessThanOrEqual(1);
+      await result.getByRole("button", { name: "Disable soft wrap", exact: true }).click();
+      expect(fencedBlock.getAttribute("data-wrap")).toBe("false");
       const codeBlock = transcript.querySelector<HTMLElement>("pre")!;
 
       // Check the rendered scroll policy: dependency inline styles can override
@@ -65,6 +74,10 @@ it.each([960, 430])(
       codeBlock.scrollLeft = 100;
       expect(codeBlock.scrollLeft).toBeGreaterThan(0);
       expect(transcript.scrollLeft).toBe(0);
+      await result.getByRole("button", { name: "Enable soft wrap", exact: true }).click();
+      expect(fencedBlock.getAttribute("data-wrap")).toBe("true");
+      await expect.poll(() => codeBlock.scrollWidth - codeBlock.clientWidth).toBeLessThanOrEqual(1);
+      expect(codeBlock.textContent).toContain(code);
     } finally {
       await result.unmount();
     }

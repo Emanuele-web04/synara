@@ -14,6 +14,7 @@ import {
   claudeSelectionRequiresRestart,
   formatModelDisplayName,
   getClaudeContextWindowSuffix,
+  getClaudeModelOptionCapabilities,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   EMPTY_MODEL_CAPABILITIES,
@@ -22,6 +23,7 @@ import {
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
+  isConfiguredCustomClaudeModel,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   resolveNewestKnownClaudeFamilyModel,
@@ -97,6 +99,22 @@ describe("resolveDevinModelVariant", () => {
         },
       }),
     ).toBe("custom-concrete-model");
+  });
+
+  it("ignores a pinned variant the selected model does not list", () => {
+    // A Fusion UID pinned earlier must not leak into another Devin model as
+    // `--model` after switching models.
+    expect(
+      resolveDevinModelVariant({
+        model: "swe-2",
+        modelVariant: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+        runtimeModel: {
+          slug: "swe-2",
+          name: "SWE-2",
+          modelVariants: [{ model: "swe-2-medium" }, { model: "swe-2-high" }],
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("returns undefined when no variant matches an all-fast matrix", () => {
@@ -604,6 +622,132 @@ describe("provider option descriptor helpers", () => {
   });
 });
 
+describe("configured Claude model controls", () => {
+  it("offers the complete explicit effort ladder with a descriptor-only native Auto default", () => {
+    const model = "my-proxy/custom-opus";
+    const caps = getClaudeModelOptionCapabilities(model, [model]);
+    expect(caps.reasoningEffortLevels.map((option) => option.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+      "ultracode",
+    ]);
+    expect(getDefaultEffort(caps)).toBeNull();
+    expect(caps).not.toHaveProperty("defaultReasoningEffort");
+    expect(caps.supportsFastMode).toBe(false);
+    expect(caps.supportsThinkingToggle).toBe(false);
+    expect(caps.contextWindowTokens).toBeUndefined();
+    expect(caps.contextWindowOptions).toEqual([]);
+    const descriptors = getProviderOptionDescriptors({ provider: "claudeAgent", caps });
+    expect(descriptors.find((descriptor) => descriptor.id === "effort")).toMatchObject({
+      type: "select",
+      currentValue: "auto",
+      promptInjectedValues: ["ultrathink"],
+      options: [
+        { id: "auto", isDefault: true },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+        { id: "ultrathink" },
+        { id: "ultracode" },
+      ],
+    });
+    expect(descriptors.find((descriptor) => descriptor.id === "autoCompactWindow")).toMatchObject({
+      currentValue: "auto",
+      options: [{ id: "auto", isDefault: true }, { id: "200k" }, { id: "1m" }],
+    });
+    expect(normalizeClaudeModelOptions(model, undefined, [model])).toBeUndefined();
+    expect(normalizeClaudeModelOptions(model, { effort: "high" }, [model])).toEqual({
+      effort: "high",
+    });
+    // Capacity callers keep the original unknown-model contract.
+    expect(getModelCapabilities("claudeAgent", model)).toBe(EMPTY_MODEL_CAPABILITIES);
+  });
+
+  it("requires exact configured membership and permits opaque claude-prefixed gateway IDs", () => {
+    for (const model of [
+      "my-proxy/custom-opus",
+      "claude-enterprise-west",
+      "claude-deployment-37",
+    ]) {
+      expect(isConfiguredCustomClaudeModel(model, ["different-instance-model"])).toBe(false);
+      expect(getClaudeModelOptionCapabilities(model)).toBe(EMPTY_MODEL_CAPABILITIES);
+      expect(isConfiguredCustomClaudeModel(` ${model} `, [` ${model} `])).toBe(true);
+      expect(isConfiguredCustomClaudeModel(model, [model.toUpperCase()])).toBe(false);
+    }
+    expect(isConfiguredCustomClaudeModel(" ", [" "])).toBe(false);
+  });
+
+  it.each([
+    "claude-opus-4-1",
+    "claude-3-opus",
+    "claude-3-5-sonnet-20241022",
+    "claude-2.1",
+    "claude-instant-1.2",
+  ])("does not grant synthetic controls to the recognizable legacy model %s", (model) => {
+    expect(isConfiguredCustomClaudeModel(model, [model])).toBe(false);
+    expect(getClaudeModelOptionCapabilities(model, [model])).toBe(
+      getModelCapabilities("claudeAgent", model),
+    );
+  });
+
+  it.each(["claude-haiku-4-5", "claude-sonnet-5", "claude-fable-6"])(
+    "preserves catalog and newer-family capability truth for %s",
+    (model) => {
+      expect(getClaudeModelOptionCapabilities(model, [model])).toBe(
+        getModelCapabilities("claudeAgent", model),
+      );
+      expect(isConfiguredCustomClaudeModel(model, [model])).toBe(false);
+    },
+  );
+
+  it("uses each resolved configuration when comparing spawn-fixed custom options", () => {
+    const model = "my-proxy/custom-opus";
+    const selection = (options?: {
+      effort?: "high" | "max";
+      autoCompactWindow?: "200k" | "1m";
+    }) => ({
+      provider: "claudeAgent" as const,
+      model,
+      ...(options ? { options } : {}),
+    });
+    const configured = { previousCustomModels: [model], nextCustomModels: [model] };
+    expect(
+      claudeSelectionRequiresRestart(selection({ effort: "high" }), selection(), configured),
+    ).toBe(false);
+    expect(
+      claudeSelectionRequiresRestart(selection(), selection({ effort: "max" }), configured),
+    ).toBe(true);
+    expect(
+      claudeSelectionRequiresRestart(selection({ effort: "max" }), selection(), configured),
+    ).toBe(true);
+    expect(
+      claudeSelectionRequiresRestart(
+        selection({ autoCompactWindow: "1m" }),
+        selection(),
+        configured,
+      ),
+    ).toBe(true);
+    expect(
+      claudeSelectionRequiresRestart(selection({ effort: "max" }), selection({ effort: "max" }), {
+        previousCustomModels: [],
+        nextCustomModels: [model],
+      }),
+    ).toBe(true);
+    expect(
+      claudeSelectionRequiresRestart(selection({ effort: "max" }), selection({ effort: "max" }), {
+        previousCustomModels: [model],
+        nextCustomModels: [],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("context window helpers", () => {
   it("separates Claude's real context capacity from its auto-compact budget", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
@@ -736,6 +880,43 @@ describe("normalizeModelDisplayName", () => {
 });
 
 describe("normalizeClaudeModelOptions", () => {
+  it("preserves explicit options for a configured proxy without inventing native defaults", () => {
+    expect(
+      normalizeClaudeModelOptions(
+        "my-proxy/custom-opus",
+        {
+          effort: "high",
+          autoCompactWindow: "1m",
+          fastMode: true,
+          thinking: false,
+        },
+        ["my-proxy/custom-opus"],
+      ),
+    ).toEqual({ effort: "high", autoCompactWindow: "1m" });
+  });
+
+  it("preserves configured proxy ultrathink for backend prompt injection", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-enterprise-west", { effort: "ultrathink" }, [
+        "claude-enterprise-west",
+      ]),
+    ).toEqual({ effort: "ultrathink" });
+  });
+
+  it("keeps unconfigured and known legacy models on their existing options", () => {
+    expect(
+      normalizeClaudeModelOptions("my-proxy/custom-opus", { effort: "high" }, []),
+    ).toBeUndefined();
+    expect(
+      normalizeClaudeModelOptions("claude-opus-4-1", { effort: "high" }, ["claude-opus-4-1"]),
+    ).toBeUndefined();
+    expect(
+      normalizeClaudeModelOptions("claude-haiku-4-5", { effort: "high", thinking: false }, [
+        "claude-haiku-4-5",
+      ]),
+    ).toEqual({ thinking: false });
+  });
+
   it("drops default-only claude options", () => {
     expect(
       normalizeClaudeModelOptions("claude-opus-4-6", {
@@ -821,6 +1002,19 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
+  it("keeps a configured opaque proxy API id literal with an explicit budget", () => {
+    expect(
+      resolveApiModelId(
+        {
+          provider: "claudeAgent",
+          model: "my-proxy/custom-opus",
+          options: { autoCompactWindow: "1m" },
+        },
+        ["my-proxy/custom-opus"],
+      ),
+    ).toBe("my-proxy/custom-opus");
+  });
+
   it("uses the normalized legacy 1M override for model identity too", () => {
     expect(
       resolveApiModelId({

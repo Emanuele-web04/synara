@@ -29,6 +29,15 @@ import { type ProviderOptions } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
+  buildDevinPairingPatch,
+  currentDevinPairing,
+  type DevinPairingParts,
+  devinPairingLeadEfforts,
+  devinPairingLeadHasFast,
+  devinPairingSidekicksForLead,
+  resolveDevinPairingUid,
+} from "./devinFusionPairing";
+import {
   getComposerTraitSelection,
   hasVisibleComposerTraitControls,
   planComposerEffortChange,
@@ -330,7 +339,14 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   } = selection;
   const effortLevels = excludeEffort ? [] : selection.effortLevels;
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
+    {
+      caps,
+      effortLevels,
+      thinkingEnabled,
+      contextWindowOptions,
+      fastModeDescriptor,
+      pairing: selection.pairing,
+    },
     { includeFastMode },
   );
   const supportsFastModeControl = supportsComposerFastModeControl({ caps, fastModeDescriptor });
@@ -385,13 +401,66 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     commitTrait(plan.patch);
   };
 
+  // Pairing families (Devin Fusion): each section composes one part of the exact
+  // variant UID and commits it as `modelVariant`. The menu stays open so the
+  // lead/effort/speed/sidekick combo can be assembled in one pass.
+  const pairing = selection.pairing;
+  const pairingParts = pairing ? currentDevinPairing(pairing, modelOptions).parts : null;
+  const commitPairing = (part: Partial<DevinPairingParts>) => {
+    if (!pairing || !pairingParts) return;
+    const uid = resolveDevinPairingUid(pairing, { ...pairingParts, ...part });
+    if (uid) commitTraitOptions(buildDevinPairingPatch(uid));
+  };
+
   if (!hasVisibleControls && !hasAgentControls) {
     return null;
   }
 
   return (
     <>
-      {thinkingEnabled !== null ? (
+      {pairing && pairingParts ? (
+        <>
+          <TraitRadioSection
+            label="Lead"
+            value={pairingParts.lead}
+            options={pairing.leads.map((option) => ({ ...option }))}
+            onValueChange={(value) => commitPairing({ lead: value })}
+          />
+          <MenuDivider />
+          <TraitRadioSection
+            label="Effort"
+            value={pairingParts.effort}
+            options={devinPairingLeadEfforts(pairing, pairingParts.lead).map((option) => ({
+              ...option,
+            }))}
+            onValueChange={(value) => commitPairing({ effort: value })}
+          />
+          {devinPairingLeadHasFast(pairing, pairingParts.lead) ? (
+            <>
+              <MenuDivider />
+              <TraitRadioSection
+                label="Speed"
+                value={pairingParts.fast ? "on" : "off"}
+                options={[
+                  { value: "off", label: "Standard" },
+                  { value: "on", label: "Fast" },
+                ]}
+                onValueChange={(value) => commitPairing({ fast: value === "on" })}
+              />
+            </>
+          ) : null}
+          <MenuDivider />
+          <TraitRadioSection
+            label="Sidekick"
+            value={pairingParts.sidekick}
+            options={devinPairingSidekicksForLead(pairing, pairingParts.lead).map((option) => ({
+              ...option,
+            }))}
+            onValueChange={(value) => commitPairing({ sidekick: value })}
+          />
+        </>
+      ) : null}
+      {!pairing && thinkingEnabled !== null ? (
         <TraitRadioSection
           label="Thinking"
           value={thinkingEnabled ? "on" : "off"}
@@ -403,7 +472,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           onSelectionComplete={onSelectionComplete}
         />
       ) : null}
-      {contextWindowOptions.length > 1 ? (
+      {!pairing && contextWindowOptions.length > 1 ? (
         <>
           {hasPriorContextWindowSection ? <MenuDivider /> : null}
           <TraitRadioSection
@@ -419,7 +488,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           />
         </>
       ) : null}
-      {effortLevels.length > 0 ? (
+      {!pairing && effortLevels.length > 0 ? (
         <>
           {hasPriorEffortSection ? <MenuDivider /> : null}
           <TraitRadioSection
@@ -454,7 +523,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           />
         </>
       ) : null}
-      {includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
+      {!pairing && includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <TraitRadioSection
@@ -553,10 +622,17 @@ export const TraitsPicker = memo(function TraitsPicker({
     setMenuOpen(false);
     scheduleSelectionCommitted();
   }, [scheduleSelectionCommitted, setMenuOpen]);
-  const { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor } =
+  const { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor, pairing } =
     getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
+    {
+      caps,
+      effortLevels,
+      thinkingEnabled,
+      contextWindowOptions,
+      fastModeDescriptor,
+      pairing,
+    },
     { includeFastMode },
   );
   const agentOptions = getAgentOptions(provider, runtimeAgents);

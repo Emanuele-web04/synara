@@ -139,6 +139,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { deriveContinuousHandoffPath } from "../lib/continuousHandoffPath";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -189,7 +190,7 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
+  resolveContinueThreadHandoffTargets,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   type ThreadHandoffTarget,
@@ -401,6 +402,7 @@ import {
 } from "./chat/chatHeaderControls";
 import type { LateComposerSendHandlers } from "./chat/chatSendTypes";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
+import { TitleSuggestionSlot } from "./TitleSuggestionBanner";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
@@ -2594,19 +2596,22 @@ export default function ChatView({
   );
   const continueHandoffTargets = useMemo(
     () =>
-      handoffTargets.filter(
-        (target) =>
-          activeThreadProvider !== null &&
-          canContinueThreadHandoff({
+      activeThreadProvider !== null
+        ? resolveContinueThreadHandoffTargets({
+            enabled: settings.enableSameThreadHandoffs,
             sourceProvider: activeThreadProvider,
-            targetProvider: target.provider,
-          }),
-      ),
-    [activeThreadProvider, handoffTargets],
+            targets: handoffTargets,
+          })
+        : [],
+    [activeThreadProvider, handoffTargets, settings.enableSameThreadHandoffs],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
     [handoffTargets],
+  );
+  const providerHandoffPath = useMemo(
+    () => deriveContinuousHandoffPath(activeThread?.activities ?? []),
+    [activeThread?.activities],
   );
 
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
@@ -2944,15 +2949,32 @@ export default function ChatView({
     };
   }, [pendingComposerFocusRef, focusComposer, threadId]);
   useEffect(() => {
+    let pendingFrame: number | null = null;
     const handleWindowFocus = () => {
       if (!pendingComposerFocusRef.current) return;
-      window.requestAnimationFrame(() => {
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = null;
+        if (!pendingComposerFocusRef.current) return;
+        const activeElement = document.activeElement;
+        // Window activation may come from clicking a picker or another input.
+        // Respect the control chosen before this deferred focus request runs.
+        if (
+          document.hasFocus() &&
+          activeElement &&
+          activeElement !== document.body &&
+          activeElement !== document.documentElement
+        ) {
+          pendingComposerFocusRef.current = false;
+          return;
+        }
         focusComposer();
       });
     };
     window.addEventListener("focus", handleWindowFocus);
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
     };
   }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
@@ -4296,7 +4318,7 @@ export default function ChatView({
   });
 
   const onContinueHandoffInThread = useStableCallback(async (target: ThreadHandoffTarget) => {
-    if (!activeThread || handoffDisabled) {
+    if (!settings.enableSameThreadHandoffs || !activeThread || handoffDisabled) {
       return;
     }
 
@@ -4587,6 +4609,7 @@ export default function ChatView({
     onSubmitPlanFollowUp,
     onContinueFailedTurn,
     onEditUserMessage,
+    onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
@@ -4614,6 +4637,8 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
+    runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
@@ -4648,6 +4673,44 @@ export default function ChatView({
     [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const retryEffortContext = useMemo(() => {
+    if (!activeThread || !isServerThread) return null;
+    const retryModelSelection = activeThread.modelSelection;
+    const retryRuntimeModel = resolveRuntimeModelDescriptor({
+      provider: retryModelSelection.provider,
+      model: retryModelSelection.model,
+      runtimeModels:
+        runtimeModelsByProviderInstance[
+          retryModelSelection.instanceId ?? retryModelSelection.provider
+        ] ?? runtimeModelsByProvider[retryModelSelection.provider],
+    });
+    return {
+      threadId: activeThread.id,
+      messages: activeThread.messages,
+      activities: activeThread.activities,
+      runtimeMode: activeThread.runtimeMode,
+      modelSelection: retryModelSelection,
+      modelOptions: retryModelSelection.options,
+      ...(retryRuntimeModel ? { runtimeModel: retryRuntimeModel } : {}),
+      activeTurnId:
+        activeThread.session?.orchestrationStatus === "running"
+          ? (activeThread.session.activeTurnId ?? null)
+          : null,
+      isBusy: isRevertingCheckpoint || isSendBusy || isConnecting,
+      onRetryWithEffort: (assistantMessageId: MessageId, effort: string) => {
+        void onRetryAssistantWithDifferentEffort(assistantMessageId, effort);
+      },
+    };
+  }, [
+    activeThread,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    isServerThread,
+    onRetryAssistantWithDifferentEffort,
+    runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
+  ]);
   const composerTraitSelection = getComposerTraitSelection(
     selectedProvider,
     selectedModel,
@@ -5144,6 +5207,8 @@ export default function ChatView({
     clearComposerSlashDraft,
     composerMenuOpenRef,
     onSend,
+    onSteerQueuedComposerTurn,
+    hasComposerContent: composerSendState.hasSendableContent,
     settings,
     hasLiveTurn,
     isLocalFolderBrowserOpen,
@@ -5784,7 +5849,6 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
-    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
     isGroupChat: isGroupContainer,
     groupFolderPath: isGroupContainer ? resolvedThreadWorkingDirectory : null,
     showGitActions,
@@ -6091,6 +6155,14 @@ export default function ChatView({
             {settledThreadBranchMismatch ? (
               <div className="pb-2">
                 <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />
+              </div>
+            ) : null}
+            {activeThread?.pendingSuggestedTitle && activeThread ? (
+              <div className="pb-2">
+                <TitleSuggestionSlot
+                  threadId={activeThread.id}
+                  candidate={activeThread.pendingSuggestedTitle}
+                />
               </div>
             ) : null}
             {/* Pending approvals and AskUserQuestion prompts both render as a detached
@@ -6531,6 +6603,8 @@ export default function ChatView({
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           continueHandoffActionTargets={continueHandoffTargets}
+          enableSameThreadHandoffs={settings.enableSameThreadHandoffs}
+          providerHandoffPath={providerHandoffPath}
           showHandoffAction={handoffAvailability.providerHandoff}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
@@ -6816,6 +6890,7 @@ export default function ChatView({
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
+                    {...(retryEffortContext ? { retryEffortContext } : {})}
                     onRespondToAsyncUserInput={onRespondToAsyncUserInput}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}

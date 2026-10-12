@@ -331,7 +331,15 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("f"),
     command: "chat.find",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("filePreviewFocus")),
+    ),
+  },
+  {
+    shortcut: modShortcut("f"),
+    command: "file.find",
+    whenAst: whenIdentifier("filePreviewFocus"),
   },
   {
     shortcut: modShortcut("p"),
@@ -439,6 +447,25 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
 ]);
+
+describe("scoped file find shortcut", () => {
+  it("routes mod+F to the focused file preview and keeps chat find elsewhere", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, filePreviewFocus: true },
+      }),
+      "file.find",
+    );
+    assert.equal(
+      resolveShortcutCommand(event({ key: "f", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, filePreviewFocus: false },
+      }),
+      "chat.find",
+    );
+  });
+});
 
 describe("terminal shortcuts", () => {
   it("ignores retired split shortcuts so they cannot consume shell keys", () => {

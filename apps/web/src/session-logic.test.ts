@@ -1043,10 +1043,11 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists available providers", () => {
+  it("lists installable providers without a bare external profile choice", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const devin = PROVIDER_OPTIONS.find((option) => option.value === "devin");
+    const cline = PROVIDER_OPTIONS.find((option) => option.value === "cline");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
     const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
@@ -1062,6 +1063,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "pi", label: "Pi", available: true },
       { value: "devin", label: "Devin", available: true },
       { value: "omp", label: "Oh My Pi", available: true },
+      { value: "cline", label: "Cline", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
@@ -1076,6 +1078,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(devin).toEqual({
       value: "devin",
       label: "Devin",
+      available: true,
+    });
+    expect(cline).toEqual({
+      value: "cline",
+      label: "Cline",
       available: true,
     });
     expect(grok).toEqual({

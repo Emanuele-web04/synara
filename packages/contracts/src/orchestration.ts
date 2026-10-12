@@ -13,6 +13,7 @@ import {
   CodexModelOptions,
   CursorModelOptions,
   DevinModelOptions,
+  ClineModelOptions,
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
@@ -26,6 +27,8 @@ import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from 
 import { ProjectKind } from "./project";
 import { ClaudeCacheObservation } from "./claudeCache";
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -85,6 +88,13 @@ export const ProviderKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "cline",
+  // `external` is a profile-driven connector: its launch command/args/env come
+  // from an AgentProfileRevision resolved at session start, not from a fixed
+  // binary path. It shares the adapter registry and provider-service dispatch
+  // path with built-in providers, but has no built-in model catalog or settings
+  // binary — the profile supplies everything needed to spawn the agent.
+  "external",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -235,7 +245,7 @@ function inferProviderForModelSelection(input: {
 function defaultModelForProvider(provider: ProviderKind): string {
   // OMP has no static default model; an empty model fails the per-provider
   // schema below instead of inventing one.
-  if (provider === "omp") return "";
+  if (provider === "omp" || provider === "external") return "";
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
@@ -318,12 +328,35 @@ export const DevinModelSelection = Schema.Struct({
   options: Schema.optional(DevinModelOptions),
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
+export const ExternalAgentModelSelection = Schema.Struct({
+  provider: Schema.Literal("external"),
+  instanceId: Schema.Literal("external").pipe(
+    Schema.withDecodingDefault(() => "external" as const),
+  ),
+  profileId: AgentProfileId,
+  revisionId: AgentProfileRevisionId,
+  model: TrimmedNonEmptyString,
+  // Connector-specific model options. The shape is defined by the external
+  // agent connector, so it is intentionally untyped here.
+  options: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+});
+export type ExternalAgentModelSelection = typeof ExternalAgentModelSelection.Type;
+
+export const ClineModelSelection = Schema.Struct({
+  provider: Schema.Literal("cline"),
+  instanceId: ProviderInstanceIdForDriver("cline"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(ClineModelOptions),
+});
+export type ClineModelSelection = typeof ClineModelSelection.Type;
 
 const ModelSelectionByProvider = Schema.Union([
+  ExternalAgentModelSelection,
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
   DevinModelSelection,
+  ClineModelSelection,
   AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
@@ -345,6 +378,8 @@ const ModelSelectionJsonValue: Schema.Codec<unknown, unknown> = Schema.Json.pipe
 );
 
 const ModelSelectionSource = Schema.Struct({
+  profileId: Schema.optional(ModelSelectionJsonValue),
+  revisionId: Schema.optional(ModelSelectionJsonValue),
   provider: Schema.optional(ModelSelectionJsonValue),
   instanceId: Schema.optional(ModelSelectionJsonValue),
   model: Schema.optional(ModelSelectionJsonValue),
@@ -372,6 +407,10 @@ export const ModelSelection: Schema.Codec<typeof ModelSelectionByProvider.Type, 
             instanceId,
             model,
           };
+          if (provider === "external") {
+            base.profileId = raw.profileId;
+            base.revisionId = raw.revisionId;
+          }
           if (raw.options !== undefined) {
             base.options = raw.options;
           }
@@ -389,12 +428,15 @@ export type ModelSelection = typeof ModelSelection.Type;
 export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  launchArgs: Schema.optional(Schema.String.check(Schema.isMaxLength(4096))),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ClaudeProviderStartOptions = Schema.Struct({
+  // Authoritative per-instance model configuration is attached by the server.
+  customModels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),
@@ -448,11 +490,17 @@ export const DevinProviderStartOptions = Schema.Struct({
   environment: Schema.optional(ProcessEnvRecord),
 });
 
+export const ClineProviderStartOptions = Schema.Struct({
+  environment: Schema.optional(ProcessEnvRecord),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   devin: Schema.optional(DevinProviderStartOptions),
+  cline: Schema.optional(ClineProviderStartOptions),
   antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
@@ -738,6 +786,10 @@ const ProjectAdditionalFoldersField = Schema.optional(ProjectAdditionalFolders).
   Schema.withDecodingDefault(() => []),
 );
 
+/** Opt-in automatic title-refresh policy mode (#1041). Null on thread/project means inherit. */
+export const ThreadTitleRefreshMode = Schema.Literals(["off", "suggested", "automatic"]);
+export type ThreadTitleRefreshMode = typeof ThreadTitleRefreshMode.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -746,6 +798,9 @@ export const OrchestrationProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
@@ -762,6 +817,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
@@ -1093,6 +1151,13 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  manualTitlePinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1200,6 +1265,13 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  manualTitlePinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1417,6 +1489,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
 });
 
@@ -1576,6 +1649,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean),
+  manualTitlePinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Desired settled state; the decider stamps the authoritative settledAt timestamp.
   isSettled: Schema.optional(Schema.Boolean),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -1690,6 +1766,24 @@ export const ThreadTurnStartCommand = Schema.Struct({
       /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
       recordedTurnId: Schema.NullOr(TurnId),
       recordedAt: IsoDateTime,
+    }),
+  ),
+  // Server-only external-task authorization, checked at serialized admission.
+  // ClientThreadTurnStartCommand deliberately cannot set this field.
+  taskWritePrecondition: Schema.optional(
+    Schema.Struct({
+      projectId: ProjectId,
+      projectWorkspaceRoot: TrimmedNonEmptyString,
+      envMode: ThreadEnvironmentMode,
+      branch: Schema.NullOr(TrimmedNonEmptyString),
+      worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+      workingDirectory: Schema.NullOr(TrimmedNonEmptyString),
+      runtimeMode: RuntimeMode,
+      interactionMode: ProviderInteractionMode,
+      modelSelection: ModelSelection,
+      sessionProviderInstanceId: Schema.NullOr(ProviderInstanceId),
+      sessionRuntimeMode: Schema.NullOr(RuntimeMode),
+      gatewayOperationId: TrimmedNonEmptyString,
     }),
   ),
   createdAt: IsoDateTime,
@@ -1845,12 +1939,28 @@ const ThreadConversationRollbackCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// A settled effort retry must still refer to the turn the user confirmed when
+// the command reaches admission and, later, the provider work lease.
+export const EffortRetrySource = Schema.Struct({
+  assistantMessageId: MessageId,
+  assistantMessageUpdatedAt: IsoDateTime,
+  turnId: TurnId,
+  userMessageText: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+  ),
+  modelSelection: ModelSelection,
+  checkpointTurnCount: PositiveInt,
+  checkpointRef: CheckpointRef,
+});
+export type EffortRetrySource = typeof EffortRetrySource.Type;
+
 const ThreadMessageEditAndResendCommand = Schema.Struct({
   type: Schema.Literal("thread.message.edit-and-resend"),
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  retryFrom: Schema.optional(EffortRetrySource),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
@@ -2208,6 +2318,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
   updatedAt: IsoDateTime,
 });
@@ -2331,6 +2442,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean),
+  manualTitlePinned: Schema.optional(Schema.Boolean),
+  titleRefreshMode: Schema.optional(Schema.NullOr(ThreadTitleRefreshMode)),
+  pendingSuggestedTitle: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -2534,6 +2648,7 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   rollbackTurnCount: Schema.optional(NonNegativeInt),
   removedTurnIds: Schema.optional(Schema.Array(TurnId)),
+  retryFrom: Schema.optional(EffortRetrySource),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
@@ -3124,16 +3239,23 @@ export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadRe
 
 export const OrchestrationRegenerateThreadTitleInput = Schema.Struct({
   threadId: ThreadId,
+  /** Explicit user request vs background automatic trigger. Defaults to explicit. */
+  triggeredBy: Schema.optional(Schema.Literals(["explicit", "automatic"])).pipe(
+    Schema.withDecodingDefault(() => "explicit" as const),
+  ),
 });
 export type OrchestrationRegenerateThreadTitleInput =
   typeof OrchestrationRegenerateThreadTitleInput.Type;
 
 export const OrchestrationRegenerateThreadTitleResult = Schema.Union([
   Schema.Struct({
-    status: Schema.Literals(["renamed", "unchanged"]),
+    status: Schema.Literals(["renamed", "unchanged", "suggested"]),
     title: TrimmedNonEmptyString,
   }),
-  Schema.Struct({ status: Schema.Literals(["no-context", "stale"]), title: Schema.Null }),
+  Schema.Struct({
+    status: Schema.Literals(["no-context", "stale", "pinned"]),
+    title: Schema.Null,
+  }),
 ]);
 export type OrchestrationRegenerateThreadTitleResult =
   typeof OrchestrationRegenerateThreadTitleResult.Type;

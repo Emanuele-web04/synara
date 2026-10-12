@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AppSettingsSchema } from "~/appSettings";
+import { AppSettingsSchema, type AppSettings } from "~/appSettings";
 
 import {
   createProviderInstallResetPatch,
@@ -11,6 +11,41 @@ import {
 const defaults = AppSettingsSchema.makeUnsafe({});
 
 describe("isProviderInstallSettingsDirty", () => {
+  it("covers every provider install text and boolean field", () => {
+    const dirtyPatches = [
+      { codexBinaryPath: "/opt/codex" },
+      { codexHomePath: "/tmp/codex-home" },
+      { claudeBinaryPath: "/opt/claude" },
+      { cursorBinaryPath: "/opt/cursor" },
+      { cursorApiEndpoint: "https://cursor.example" },
+      { devinBinaryPath: "/opt/devin" },
+      { clineBinaryPath: "/opt/cline" },
+      { antigravityBinaryPath: "/opt/agy" },
+      { grokBinaryPath: "/opt/grok" },
+      { droidBinaryPath: "/opt/droid" },
+      { openCodeBinaryPath: "/opt/opencode" },
+      { openCodeServerUrl: "http://127.0.0.1:5001" },
+      { openCodeExperimentalWebSockets: true },
+      { piBinaryPath: "/opt/pi" },
+      { piAgentDir: "/tmp/pi-agent" },
+    ] satisfies ReadonlyArray<Partial<AppSettings>>;
+
+    expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
+    for (const patch of dirtyPatches) {
+      expect(isProviderInstallSettingsDirty({ ...defaults, ...patch }, defaults)).toBe(true);
+    }
+  });
+
+  it("detects changed Codex launch args", () => {
+    expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
+    expect(
+      isProviderInstallSettingsDirty(
+        { ...defaults, codexLaunchArgs: '-c model_provider="apitoken"' },
+        defaults,
+      ),
+    ).toBe(true);
+  });
+
   it("uses configured flags instead of unreadable password values", () => {
     expect(
       isProviderInstallSettingsDirty({ ...defaults, openCodeServerPassword: "secret" }, defaults),
@@ -41,8 +76,10 @@ describe("createProviderInstallResetPatch", () => {
         "codexAccounts",
         "codexBinaryPath",
         "codexHomePath",
+        "codexLaunchArgs",
         "cursorApiEndpoint",
         "cursorBinaryPath",
+        "clineBinaryPath",
         "devinBinaryPath",
         "droidBinaryPath",
         "grokBinaryPath",
@@ -85,4 +122,14 @@ describe("providerInstanceLaunchConfigFor", () => {
       }),
     ).toEqual({ binaryPath: "/opt/homebrew/bin/claude" });
   });
+});
+
+it("does not inherit provider-wide Codex launch args as an account executable", () => {
+  expect(
+    providerInstanceLaunchConfigFor("codex", {
+      ...defaults,
+      codexBinaryPath: "/custom/codex",
+      codexLaunchArgs: '-c model_provider="apitoken"',
+    }),
+  ).toEqual({ binaryPath: "/custom/codex" });
 });

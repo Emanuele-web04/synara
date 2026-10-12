@@ -53,6 +53,13 @@
     <script>
       const { ipcRenderer } = require("electron");
       const host = document.getElementById("browser-host");
+      const floatingHandoff =
+        process.env.SYNARA_E2E_FLOATING_HANDOFF === "1"
+          ? require(
+              process.env.SYNARA_E2E_FLOATING_HANDOFF_RENDERER,
+            ).createFloatingBrowserHandoffFixture(process.env.SYNARA_E2E_THREAD_ID)
+          : null;
+      window.__synaraFloatingHandoffE2E = floatingHandoff;
       let latestState = null;
       let mountedTabId = null;
       let webview = null;
@@ -136,7 +143,8 @@
           webview.addEventListener("did-navigate", (event) => {
             document.documentElement.dataset.pooledWebviewUrl = event.url;
           });
-          host.append(webview);
+          if (floatingHandoff) floatingHandoff.mount(webview, tabId);
+          else host.append(webview);
         }
         webview.style.visibility = "visible";
         webview.style.pointerEvents = "auto";

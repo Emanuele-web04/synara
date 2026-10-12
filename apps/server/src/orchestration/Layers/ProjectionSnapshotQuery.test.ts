@@ -788,6 +788,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
           isPinned: false,
+          titleRefreshMode: null,
         },
       ]);
       assert.deepEqual(snapshot.threads, [
@@ -811,6 +812,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreeRef: null,
           createBranchFlowCompleted: false,
           isPinned: false,
+          manualTitlePinned: false,
+          titleRefreshMode: null,
+          pendingSuggestedTitle: null,
           parentThreadId: null,
           creationSource: null,
           sourceThreadId: null,
@@ -2238,6 +2242,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           workspace_root,
           default_model_selection_json,
           scripts_json,
+          title_refresh_mode,
           created_at,
           updated_at,
           deleted_at
@@ -2248,6 +2253,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '/tmp/project-shell',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[]',
+          'suggested',
           '2026-03-03T00:00:00.000Z',
           '2026-03-03T00:00:01.000Z',
           NULL
@@ -2267,6 +2273,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           worktree_path,
           latest_turn_id,
           handoff_json,
+          manual_title_pinned,
+          title_refresh_mode,
+          pending_suggested_title,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
@@ -2288,6 +2297,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           NULL,
           'turn-shell',
           NULL,
+          1,
+          'automatic',
+          'Stored title candidate',
           '2026-03-03T00:00:02.500Z',
           2,
           1,
@@ -2377,6 +2389,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.equal(shellSnapshot.projects[0]?.titleRefreshMode, "suggested");
+      const projectsByIds = yield* snapshotQuery.getProjectShellsByIds([
+        asProjectId("project-shell"),
+      ]);
+      assert.deepEqual(projectsByIds, shellSnapshot.projects);
       assert.deepEqual(shellSnapshot.threads, [
         {
           id: ThreadId.makeUnsafe("thread-shell"),
@@ -2398,6 +2415,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreeRef: null,
           createBranchFlowCompleted: false,
           isPinned: false,
+          manualTitlePinned: true,
+          titleRefreshMode: "automatic",
+          pendingSuggestedTitle: "Stored title candidate",
           parentThreadId: null,
           creationSource: null,
           sourceThreadId: null,
@@ -2854,6 +2874,109 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("pages stale candidates past timestamp ties and a removed cursor row", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const older = "2026-07-20T00:00:00.000Z";
+      const later = "2026-07-21T00:00:00.000Z";
+      const updatedBefore = "2026-07-22T00:00:00.000Z";
+      const fresh = "2026-07-23T00:00:00.000Z";
+      const ids = ["page-a", "page-b", "page-c", "page-d", "page-fresh"].map(asThreadId);
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM provider_session_runtime`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects
+          (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('page-project', 'Paging', '/tmp/page-project', '[]', ${older}, ${older})
+      `;
+      for (const [index, threadId] of ids.entries()) {
+        const observedAt = index < 2 ? older : index < 4 ? later : fresh;
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+          VALUES (
+            ${threadId}, 'page-project', 'Paging',
+            '{"provider":"codex","model":"gpt-5-codex"}', ${observedAt}, ${observedAt}
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id, status, provider_name, provider_session_id, provider_thread_id,
+            runtime_mode, active_turn_id, last_error, updated_at
+          ) VALUES (
+            ${threadId}, 'running', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, ${observedAt}
+          )
+        `;
+      }
+
+      assert.deepEqual(
+        yield* query.listStaleInFlightThreadIds({ updatedBefore, limit: 5 }),
+        ids.slice(0, 4),
+      );
+      const first = yield* query.listStaleInFlightThreadPage({ updatedBefore, limit: 1 });
+      assert.deepEqual(first, {
+        threadIds: [asThreadId("page-a")],
+        nextCursor: { observedAt: older, threadId: asThreadId("page-a") },
+      });
+      assert.isNotNull(first.nextCursor);
+      if (first.nextCursor === null) return;
+      const tied = yield* query.listStaleInFlightThreadPage({
+        updatedBefore,
+        limit: 1,
+        after: first.nextCursor,
+      });
+      assert.deepEqual(tied, {
+        threadIds: [asThreadId("page-b")],
+        nextCursor: { observedAt: older, threadId: asThreadId("page-b") },
+      });
+
+      // Both earlier candidates leave the result set. Offset paging would now
+      // skip later work; the retained tuple must not need a live cursor row.
+      yield* sql`UPDATE projection_threads SET updated_at = ${fresh} WHERE thread_id = 'page-a'`;
+      yield* sql`DELETE FROM projection_thread_sessions WHERE thread_id = 'page-b'`;
+      yield* sql`DELETE FROM projection_threads WHERE thread_id = 'page-b'`;
+      assert.isNotNull(tied.nextCursor);
+      if (tied.nextCursor === null) return;
+      const afterDeletion = yield* query.listStaleInFlightThreadPage({
+        updatedBefore,
+        limit: 1,
+        after: tied.nextCursor,
+      });
+      assert.deepEqual(afterDeletion, {
+        threadIds: [asThreadId("page-c")],
+        nextCursor: { observedAt: later, threadId: asThreadId("page-c") },
+      });
+      assert.isNotNull(afterDeletion.nextCursor);
+      if (afterDeletion.nextCursor === null) return;
+      const last = yield* query.listStaleInFlightThreadPage({
+        updatedBefore,
+        limit: 2,
+        after: afterDeletion.nextCursor,
+      });
+      assert.deepEqual(last, {
+        threadIds: [asThreadId("page-d")],
+        nextCursor: { observedAt: later, threadId: asThreadId("page-d") },
+      });
+      assert.isNotNull(last.nextCursor);
+      if (last.nextCursor === null) return;
+      assert.deepEqual(
+        yield* query.listStaleInFlightThreadPage({
+          updatedBefore,
+          limit: 2,
+          after: last.nextCursor,
+        }),
+        { threadIds: [], nextCursor: null },
+      );
+    }),
+  );
+
   it.effect("lists only stale active thread ids for reconciliation, oldest first", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -3107,6 +3230,22 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (boundTurnActivity._tag === "Some") {
         assert.equal(boundTurnActivity.value.updatedAt, "2026-07-23T09:30:00.000Z");
       }
+
+      // Refresh the separate, older ownerless fixture after its ordering and
+      // activity assertions, so the original stuck-signature control is first.
+      yield* sql`UPDATE projection_thread_sessions SET updated_at = '2026-07-24T00:00:00.000Z' WHERE thread_id = 'thread-running-without-turn'`;
+
+      // Exact stuck signature: an interrupted previous turn, an optimistic
+      // starting session, and no runtime binding left to supply an active id.
+      yield* sql`UPDATE projection_turns SET state = 'interrupted', completed_at = '2026-07-21T01:00:00.000Z', checkpoint_turn_count = NULL, checkpoint_status = NULL WHERE thread_id = 'thread-queued-oldest'`;
+      yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = 'thread-queued-oldest'`;
+      assert.deepEqual(
+        yield* snapshotQuery.listStaleInFlightThreadIds({
+          updatedBefore: "2026-07-23T09:00:00.000Z",
+          limit: 1,
+        }),
+        [ThreadId.makeUnsafe("thread-queued-oldest")],
+      );
     }),
   );
 

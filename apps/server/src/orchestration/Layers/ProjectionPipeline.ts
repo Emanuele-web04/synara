@@ -78,6 +78,7 @@ import {
   canAdoptFirstTurnProvider,
   deriveTurnStartModelSelection,
   deriveTurnStartSession,
+  deriveTurnAttribution,
 } from "../turnStartSession.ts";
 import {
   attachmentRelativePath,
@@ -582,6 +583,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ? false
               : (event.payload.createBranchFlowCompleted ?? false),
             isPinned: event.payload.isPinned ?? false,
+            manualTitlePinned: false,
+            titleRefreshMode: null,
+            pendingSuggestedTitle: null,
             parentThreadId: event.payload.parentThreadId ?? null,
             creationSource: event.payload.creationSource ?? null,
             sourceThreadId: event.payload.sourceThreadId ?? null,
@@ -690,6 +694,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   }
                 : {}),
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+              ...(event.payload.manualTitlePinned !== undefined
+                ? { manualTitlePinned: event.payload.manualTitlePinned }
+                : {}),
+              ...(event.payload.titleRefreshMode !== undefined
+                ? { titleRefreshMode: event.payload.titleRefreshMode }
+                : {}),
+              ...(event.payload.pendingSuggestedTitle !== undefined
+                ? { pendingSuggestedTitle: event.payload.pendingSuggestedTitle }
+                : {}),
               ...(event.payload.settledAt !== undefined
                 ? { settledAt: event.payload.settledAt }
                 : {}),
@@ -1436,6 +1449,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionTurnRepository.replacePendingTurnStart({
               threadId: event.payload.threadId,
               messageId: event.payload.review.messageId,
+              externalAgentRevisionId: null,
+              spawningProfileId: null,
               sourceProposedPlanThreadId: event.payload.review.sourceProposedPlan?.threadId ?? null,
               sourceProposedPlanId: event.payload.review.sourceProposedPlan?.planId ?? null,
               requestedAt: event.payload.review.requestedAt ?? event.payload.review.createdAt,
@@ -1444,12 +1459,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
 
         case "thread.turn-start-requested": {
+          const attribution = deriveTurnAttribution({
+            modelSelection: event.payload.modelSelection,
+          });
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
             sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
             sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
             requestedAt: event.payload.createdAt,
+            externalAgentRevisionId: attribution.externalAgentRevisionId,
+            spawningProfileId: attribution.spawningProfileId,
           });
           return;
         }
@@ -1512,6 +1532,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: nextState,
+              // Live reconciliation can restore an incorrectly interrupted
+              // turn. Its completion timestamp must be reopened with it.
+              completedAt: nextState === "running" ? null : existingTurn.value.completedAt,
               pendingMessageId:
                 existingTurn.value.pendingMessageId ??
                 (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),
@@ -1529,6 +1552,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 existingTurn.value.startedWithoutGitWorkspace === true ||
                 (Option.isSome(pendingTurnStart) &&
                   pendingTurnStart.value.startedWithoutGitWorkspace === true),
+              // KAR-529 attribution: prefer the revision/spawning profile pinned
+              // at turn start, falling back to the pending-start placeholder
+              // (resumed threads re-project after restart).
+              externalAgentRevisionId:
+                existingTurn.value.externalAgentRevisionId ??
+                (Option.isSome(pendingTurnStart)
+                  ? pendingTurnStart.value.externalAgentRevisionId
+                  : null),
+              spawningProfileId:
+                existingTurn.value.spawningProfileId ??
+                (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.spawningProfileId : null),
               startedAt:
                 existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
@@ -1553,6 +1587,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               startedWithoutGitWorkspace: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.startedWithoutGitWorkspace === true
                 : false,
+              externalAgentRevisionId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.externalAgentRevisionId
+                : null,
+              spawningProfileId: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.spawningProfileId
+                : null,
               assistantMessageId: null,
               state: "running",
               requestedAt: Option.isSome(pendingTurnStart)
@@ -1618,6 +1658,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
+            externalAgentRevisionId: null,
+            spawningProfileId: null,
             assistantMessageId: event.payload.messageId,
             state: "running",
             requestedAt: event.payload.createdAt,
@@ -1704,6 +1746,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             pendingMessageId: null,
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
+            externalAgentRevisionId: null,
+            spawningProfileId: null,
             assistantMessageId: event.payload.assistantMessageId,
             state: nextState,
             requestedAt: event.payload.completedAt,
@@ -1751,6 +1795,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                     sourceProposedPlanThreadId: turn.sourceProposedPlanThreadId,
                     sourceProposedPlanId: turn.sourceProposedPlanId,
                     requestedAt: turn.requestedAt,
+                    externalAgentRevisionId: turn.externalAgentRevisionId,
+                    spawningProfileId: turn.spawningProfileId,
                   })
               : projectionTurnRepository.upsertByTurnId({
                   ...turn,

@@ -5,9 +5,11 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 import {
+  EMPTY_MODEL_CAPABILITIES,
   getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getModelCapabilities,
+  getClaudeModelOptionCapabilities,
   hasAutoCompactWindowOption,
   stripClaudeContextWindowSuffix,
   trimOrNull,
@@ -162,23 +164,27 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
   if (!apiModelId) {
     return undefined;
   }
+  const caps = getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId));
+  // A proxy identifier can contain a context-like suffix without describing
+  // the deployed model. Only known model metadata supports a bootstrap guess.
+  if (caps === EMPTY_MODEL_CAPABILITIES) {
+    return undefined;
+  }
   // Bootstrap estimate only: the live SDK response takes precedence.
   // Opus/Sonnet 4.6 need extended-context opt-in; capacity remains 1M.
   return (
     claudeContextWindowTokensForOption(getClaudeContextWindowSuffix(apiModelId)) ??
     (/^claude-(?:opus|sonnet)-4-6$/u.test(apiModelId) ? 200_000 : undefined) ??
-    positiveFiniteNumber(
-      getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
-        .contextWindowTokens,
-    )
+    positiveFiniteNumber(caps.contextWindowTokens)
   );
 }
 
 export function resolveSelectedClaudeAutoCompactWindow(
   model: string | null | undefined,
   selectedAutoCompactWindow: string | null | undefined,
+  configuredCustomModels: readonly string[] = [],
 ): number | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
+  const caps = getClaudeModelOptionCapabilities(model, configuredCustomModels);
   const selected = trimOrNull(selectedAutoCompactWindow);
   // Only an explicit override is pinned; the model-native window is left to
   // Claude Code's own resolution (server tuning, settings.json, env override).

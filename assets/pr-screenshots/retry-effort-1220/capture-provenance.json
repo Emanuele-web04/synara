@@ -1,0 +1,165 @@
+{
+  "captured_at_utc": "2026-10-10",
+  "before": {
+    "commit": "1e77960843245c860265cda9b102e65db3c80fc4",
+    "observation": {
+      "mode": "before",
+      "retryControl": "absent",
+      "fixture": "actual ChatView with mocked RPC, completed approval-required turn"
+    },
+    "page_errors": [],
+    "selected_fixture_result": "1 passed, 210 skipped"
+  },
+  "after": {
+    "base_commit": "7fa64537d6ae0b6134167b6c0aadd92485df4e40",
+    "source_files": [
+      {
+        "path": "apps/web/src/components/ChatView.tsx",
+        "bytes": 278250,
+        "sha256": "488d37fdc6cd0dc4df7ce23b72a5b2a5160b1c53864807dedd40f701bb5a6c34",
+        "git_blob": "8ee5dd5ad80aac76f497618a0541a8a6a56a8b4d"
+      },
+      {
+        "path": "apps/web/src/components/chat/AssistantRetryEffortControls.tsx",
+        "bytes": 5844,
+        "sha256": "f6b653196473fbd159248fe7269804895ff3322def51ebcdf62eda3b691f545c",
+        "git_blob": "8f330990b86046c91ee1f0df173d73e527dbcdf5"
+      },
+      {
+        "path": "apps/web/src/components/chat/ChatTranscriptPane.tsx",
+        "bytes": 22367,
+        "sha256": "d0ea2ccf8868072b5e867995b2f7be1cea7765b16dfaadd74b9e3bd0a1bb7a4a",
+        "git_blob": "60f36e9bdf86bc8352dd5d7f0ae20e5fa77b8829"
+      },
+      {
+        "path": "apps/web/src/components/chat/MessagesTimeline.tsx",
+        "bytes": 159471,
+        "sha256": "89870d2390768feec371fc0a3ae14c846c47478292f6095a770a9c34c21bd72b",
+        "git_blob": "71cdc442b69c8c2fa0abbdd67f9d713cd11f5cab"
+      },
+      {
+        "path": "apps/web/src/components/chat/RetryWithDifferentEffortAction.tsx",
+        "bytes": 7564,
+        "sha256": "b45fafe4b57f27481d7f1a6e8f4a7c4a14e017eb7a310bca06dde9249a922954",
+        "git_blob": "4682062d6e5802a99627989cc3764e064a9b609f"
+      },
+      {
+        "path": "apps/web/src/components/chat/retryEffortVariantStore.ts",
+        "bytes": 5614,
+        "sha256": "cc1f182f6cf626ad5bda84a946cbde81fe8505fee3b05c5c08caf26962ab46b4",
+        "git_blob": "7ed7bcd07f418ce6a239265b173df5998271840c"
+      },
+      {
+        "path": "apps/web/src/components/chat/retryWithDifferentEffort.logic.test.ts",
+        "bytes": 10259,
+        "sha256": "d3d85b6ad91e6471b00e2d5f2603bf8929446e7c5d744bb99c7f90d5f9dcd9ee",
+        "git_blob": "966b2fff326882f43306d6ff0bd9cdabe52c8452"
+      },
+      {
+        "path": "apps/web/src/components/chat/retryWithDifferentEffort.logic.ts",
+        "bytes": 14329,
+        "sha256": "8d2ff147b8e25a6bc3b2fc3ebaeb1698f01a0e2cee9a643cf166021c4d345ff5",
+        "git_blob": "5c344b05097b3be36c5f2dcfad199679801fba86"
+      },
+      {
+        "path": "apps/web/src/components/chat/useChatTurnFollowUps.ts",
+        "bytes": 34063,
+        "sha256": "93c4f3de32ca752a34468e7866b9dab330f15cbc0663ed5e0b67d433f9aa3fe1",
+        "git_blob": "bd550fcf10f3a8f53a142a2c51c027c99424891d"
+      }
+    ],
+    "source_review_patch_sha256": "7399af9186c3b56bf4adc18c414a4a744deb93df33e892e706090f83d54da1a0",
+    "observation": {
+      "mode": "after",
+      "retryDisabled": true,
+      "explanation": "The original model and recovery checkpoint could not be verified for this turn.",
+      "mutationCountBefore": 0,
+      "mutationCountAfter": 0,
+      "composerDraftUnchanged": true,
+      "originalPerTurnTargetAvailable": false,
+      "pagerSource": "temporary fixture seeded directly into the existing local variant store; no retry was performed",
+      "previousAttemptShown": "Start with one retry and report a clear error if reconnection still fails.",
+      "liveAttemptRestored": "Keep the timeout bounded and preserve the current draft while the provider reconnects.",
+      "liveEffortBadge": null
+    },
+    "page_errors": [],
+    "selected_fixture_result": "1 passed, 210 skipped"
+  },
+  "browser": {
+    "name": "Chromium",
+    "version": "138.0.7204.0",
+    "ci_browser_difference": "CI uses Chromium 151; its archive was unavailable in this execution environment.",
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "capture_method": "Actual full ChatView existing browser fixture with temporary commands and mocked RPC. Temporary fixture/config changes were removed and exact original fixture bytes were verified in both worktrees.",
+  "interaction": {
+    "native_screencast_frames": 56,
+    "marks": [
+      {
+        "name": "clip-start",
+        "wallTime": 1791639064157
+      },
+      {
+        "name": "screenshot:after-unavailable.png",
+        "wallTime": 1791639066517
+      },
+      {
+        "name": "unverified-retry-refused-with-explanation",
+        "wallTime": 1791639066518
+      },
+      {
+        "name": "fixture-seeded-previous-attempt-selected",
+        "wallTime": 1791639067860
+      },
+      {
+        "name": "screenshot:after-previous-attempt.png",
+        "wallTime": 1791639069554
+      },
+      {
+        "name": "live-attempt-restored-without-guessed-model-effort",
+        "wallTime": 1791639069643
+      },
+      {
+        "name": "clip-stop",
+        "wallTime": 1791639071085
+      }
+    ],
+    "duration_seconds": 6.958333,
+    "codec": "H.264",
+    "frames_per_second": 24,
+    "audio": false
+  },
+  "limits": [
+    "The previous attempt was seeded directly into the existing local variant store for this capture.",
+    "No live provider retry, settings mutation, workspace restore, or provider conversation rollback was performed.",
+    "Retry remains disabled pending server-authoritative preparation and atomic execution.",
+    "The local text pager is not durable server attempt history."
+  ],
+  "files": [
+    {
+      "file": "before-main.png",
+      "bytes": 45135,
+      "sha256": "905ff8d97cc44d478cadc5ef9819765df75d96a06541cd1efc9f48d69a619733"
+    },
+    {
+      "file": "after-unavailable.png",
+      "bytes": 54541,
+      "sha256": "c0074da0ed8f9a78625577e9662387983a458421e83e3eae65d477e2a584847c"
+    },
+    {
+      "file": "after-previous-attempt.png",
+      "bytes": 45719,
+      "sha256": "105fb21cf6799fe3f1bb35fd3b6ed5d269ed4637529e990e2f67b905d5cb117f"
+    },
+    {
+      "file": "retry-interaction.mp4",
+      "bytes": 65699,
+      "sha256": "6dcd2b0ab49103632e93dbe5a64b970a82bb1bab9ce540aea96d3d9e0e4f60bb"
+    }
+  ]
+}
