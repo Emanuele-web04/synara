@@ -768,6 +768,7 @@ export function SingleChatSurface(props: {
     const latestThread = sortThreadsForSidebar(
       threadSummaries.filter((thread) => thread.projectId === projectId),
       appSettings.sidebarThreadSortOrder,
+      { attentionFirst: appSettings.sidebarThreadAttentionFirst },
     )[0];
 
     if (latestThread) {

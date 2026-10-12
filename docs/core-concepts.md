@@ -182,6 +182,56 @@ again. An assistant item that ends without any text does not add an empty respon
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
+### Inline visuals (Beta)
+
+In Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
+line chart, a table, a side-by-side comparison, a checklist or step list, a note, a small
+calculator, follow-up choices, or tabs that combine them. Ask for one ("show this as a chart") and
+the agent calls the `synara_show_visual` tool, then places the visual in its answer like a
+paragraph, with text before and after it. This works with every provider that has Synara's thread
+tools (see [Providers](providers.md)).
+
+Most visuals are component specs: the agent sends data, and Synara draws it with its own
+components, so a visual matches the app, the current light or dark theme, custom theme colors, and
+the chat font size. Bar charts can compare before and after on each row, with the change in
+percent. Tables sort when you click a column header and fold after ten rows.
+Calculators recompute as you move a slider or type a value. Checklists can be ticked. Clicking a
+follow-up choice sends it as your next message, or adds it to the composer for review if it already holds text, attachments, or context. What you change in a visual is kept while you scroll. Anything the components cannot draw,
+such as a diagram, the agent sends as a self-contained HTML page instead; the rest of this section
+covers those pages.
+
+While a turn runs, a visual its answer has not placed yet waits for that answer, so the reply
+does not jump. A visual the agent never places appears above the answer, under **Worked for**,
+when the turn settles. Expanding or collapsing **Worked for**, or the turn settling, never
+reloads a visual.
+
+An HTML page has no border, caption, or card of its own. It sits on the chat background, spans the
+reply column, and lines up with the reply text; its title is the name screen readers announce.
+Plain headings, tables, buttons, inputs, and selects inside a page already look like Synara,
+with a visible keyboard focus ring. The tool also tells agents to draw at natural size: text that
+never scales with the column, SVG at its own size, and charts sized to their data. That guidance
+shapes the page; Synara does not rewrite it. Pages follow theme and font size changes without
+reloading.
+
+Scripts in a visual run in a sandboxed frame with its own origin. They cannot read Synara's
+pages, your session, or your files, or open windows or dialogs, and the page's fetches and remote
+scripts, fonts, and images are blocked. WebRTC entry points are removed before page scripts.
+A visual that tries to navigate
+stops and offers **Reload**: the desktop app refuses the navigation before the request. HTML
+execution is disabled in plain browsers; use native component specs there instead. HTML pages
+cannot open external links through the host. Hover
+a page to copy its source or reload it. Each page is limited to 256 KiB and each component spec to
+64 KiB, and a turn can show at most six visuals. A turn you stop after it showed a visual ends with the stop line below that
+visual.
+
+The transcript keeps following the end while a visual grows if you were at the end; scrolling
+up, including over a visual, leaves you where you are. A visual that is no longer available
+(for example after its thread was deleted) shows **Visual unavailable.** Deleting a thread
+deletes its visuals, and undoing a turn removes that turn's visuals from the conversation.
+Visuals are not included in thread exports; an exported answer shows the `synara-visual` block
+that placed one. Far-off HTML pages are unloaded as you scroll, so an interactive page restarts
+when you come back to it.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores

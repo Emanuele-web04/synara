@@ -33,6 +33,9 @@
   --text-chat-code: var(--app-font-size-chat-code);
   --text-chat-meta: var(--app-font-size-chat-meta);
   --text-chat-tiny: var(--app-font-size-chat-tiny);
+  /* Inline visual labels and headline figures, scaled from the chat size like the reply. */
+  --text-chat-sm: calc(var(--app-font-size-chat) * 0.86);
+  --text-chat-display: calc(var(--app-font-size-chat) * 1.6);
   --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
@@ -125,6 +128,17 @@
 }
 
 @layer components {
+  /* Inline visual blocks: the same data tokens agent HTML pages get (inlineVisual.ts), so a
+     native chart and a page chart read alike. Series 2-6 are set inline per appearance. */
+  .inline-visual-blocks {
+    --chart-accent: var(--info);
+    --series-1: var(--chart-accent);
+    --chart-muted: color-mix(in srgb, var(--foreground) 18%, var(--background));
+    --chart-grid: color-mix(in srgb, var(--foreground) 8%, transparent);
+    --rule: color-mix(in srgb, var(--foreground) 11%, transparent);
+    --surface: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  }
+
   .sidebar-icon-button {
     @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
     background: transparent;
@@ -2798,6 +2812,16 @@ label:has(> select#reasoning-effort) select {
   border: 1px solid var(--border);
   padding: 0.35rem 0.45rem;
   text-align: left;
+}
+
+/* A visual placed in a reply sits inside that reply's markdown. Its components style
+   themselves, so the prose rules above step back for them (not for its own prose blocks). */
+.chat-markdown
+  .inline-visual-blocks
+  :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, table, th, td, dl, dt, dd, blockquote):not(
+    .inline-visual-markdown *
+  ) {
+  all: revert-layer;
 }
 
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */

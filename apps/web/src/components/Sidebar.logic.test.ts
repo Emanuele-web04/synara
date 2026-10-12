@@ -11,6 +11,7 @@ import {
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
+  getSidebarThreadSortKey,
   getVisibleSidebarEntriesForPreview,
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
@@ -2169,6 +2170,75 @@ describe("sortThreadsForSidebar", () => {
       ThreadId.makeUnsafe("thread-running"),
       ThreadId.makeUnsafe("thread-newer"),
     ]);
+  });
+});
+
+describe("sortThreadsForSidebar attention and held order", () => {
+  const plain = makeThread({
+    id: ThreadId.makeUnsafe("thread-newest-plain"),
+    createdAt: "2026-03-09T11:00:00.000Z",
+    updatedAt: "2026-03-09T11:00:00.000Z",
+  });
+  const working = {
+    ...makeThread({
+      id: ThreadId.makeUnsafe("thread-working"),
+      createdAt: "2026-03-09T09:00:00.000Z",
+      updatedAt: "2026-03-09T09:00:00.000Z",
+    }),
+    hasLiveTailWork: true,
+  };
+  const unread = makeThread({
+    id: ThreadId.makeUnsafe("thread-unread"),
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+  });
+
+  it("keeps plain activity order when working and unread chats are not floated", () => {
+    const sorted = sortThreadsForSidebar([working, unread, plain], "updated_at", {
+      attentionFirst: false,
+    });
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-working"),
+    ]);
+  });
+
+  it("holds an opened unread chat in place and slots new chats in by their live key", () => {
+    const heldKeys = new Map(
+      [unread, plain].map((thread) => [
+        thread.id,
+        getSidebarThreadSortKey(thread, "updated_at", true),
+      ]),
+    );
+    const opened = { ...unread, lastVisitedAt: "2026-03-09T12:00:00.000Z" };
+    const created = makeThread({
+      id: ThreadId.makeUnsafe("thread-created"),
+      createdAt: "2026-03-09T11:30:00.000Z",
+      updatedAt: "2026-03-09T11:30:00.000Z",
+    });
+
+    expect(sortThreadsForSidebar([plain, opened], "updated_at").map((thread) => thread.id)).toEqual(
+      [ThreadId.makeUnsafe("thread-newest-plain"), ThreadId.makeUnsafe("thread-unread")],
+    );
+    expect(
+      sortThreadsForSidebar([plain, opened, created], "updated_at", { heldKeys }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-created"),
+      ThreadId.makeUnsafe("thread-newest-plain"),
+    ]);
+  });
+
+  it("ignores the toggle for created-at order", () => {
+    expect(getSidebarThreadSortKey(working, "created_at", true).attentionRank).toBe(0);
+    expect(getSidebarThreadSortKey(working, "updated_at", true).attentionRank).toBe(2);
+    expect(getSidebarThreadSortKey(unread, "updated_at", true).attentionRank).toBe(1);
+    expect(getSidebarThreadSortKey(unread, "updated_at", false).attentionRank).toBe(0);
   });
 });
 

@@ -1,18 +1,26 @@
 import type { ProviderKind } from "@synara/contracts";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+
+import { isServerBetaFeatureEnabled } from "../betaFeatureGate.ts";
 
 import { computerToolInstructions } from "./computerGuidance.ts";
 
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 /** Canonical, versioned host policy delivered to every supported provider. */
-export const SYNARA_HARNESS_POLICY_VERSION = "2026-10-13.1";
+export const SYNARA_HARNESS_POLICY_VERSION = "2026-10-13.2";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
 export interface SynaraHarnessCapabilities {
   readonly gatewayControlAvailable: boolean;
   readonly automationAuthoring?: "tool-descriptions";
   readonly enableComputerControl?: boolean | undefined;
+  /** The `synara_show_visual` tool is offered (Beta-only feature). */
+  readonly inlineVisuals?: boolean | undefined;
 }
+
+/** Whether this server offers inline visuals; the gateway catalog uses the same gate. */
+const INLINE_VISUALS_ENABLED = isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE);
 
 /**
  * Render one truthful policy. Providers without a safely thread-scoped MCP
@@ -45,6 +53,11 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         ...(capabilities.automationAuthoring === "tool-descriptions"
           ? []
           : [AUTOMATION_AUTHORING_GUIDANCE]),
+        ...(capabilities.inlineVisuals === true
+          ? [
+              "When a chart, table, or comparison says more than prose, call synara_show_visual and place its block in your reply.",
+            ]
+          : []),
         "Prefer synara_create_automation with suggested: true when the user has not explicitly asked to create an automation. Suggested automations remain disabled until the user accepts their proposal card.",
         "Before synara_update_automation, call synara_view_automation. Resend all mutable fields, including unchanged ones: updates replace, not merge.",
         'Automation-dispatched turns receive an identity/run/memory envelope in the current user message. Only that current turn is automation-dispatched; the status never carries into a later manual follow-up such as "continue", even in the same thread.',
@@ -71,6 +84,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
 
 export const SYNARA_GATEWAY_HARNESS_POLICY = renderSynaraHarnessPolicy({
   gatewayControlAvailable: true,
+  inlineVisuals: INLINE_VISUALS_ENABLED,
 });
 
 export interface SynaraHarnessPolicyDeliveryState {
@@ -129,6 +143,7 @@ export function takeSynaraHarnessPolicyForProviderSession(
   return takeSynaraHarnessPolicyForSession(state, {
     gatewayControlAvailable: providerHasSynaraGatewayControl(input),
     enableComputerControl: state.enableComputerControl === true,
+    inlineVisuals: INLINE_VISUALS_ENABLED,
   });
 }
 

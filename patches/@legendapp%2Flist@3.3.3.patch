@@ -1,7 +1,7 @@
 diff --git a/react.js b/react.js
 --- a/react.js
 +++ b/react.js
-@@ -1145,7 +1145,7 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1145,7 +1145,7 @@
    const {
      sizes,
      averageSizes,
@@ -10,7 +10,7 @@ diff --git a/react.js b/react.js
      scrollingTo
    } = state;
    const sizeKnown = state.sizesKnown.get(key);
-@@ -1165,6 +1165,17 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1165,6 +1165,17 @@
      return size;
    }
    const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
@@ -28,7 +28,7 @@ diff --git a/react.js b/react.js
    if (useAverageSize && !scrollingTo) {
      const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
      if (averageSizeForType !== void 0) {
-@@ -1299,6 +1310,8 @@ function doScrollTo(ctx, params) {
+@@ -1299,6 +1310,8 @@
    const contentSize = isHorizontal ? getContentSize(ctx) : void 0;
    const left = isHorizontal ? toNativeHorizontalOffset(state, offset, contentSize) : 0;
    const top = isHorizontal ? 0 : offset;
@@ -37,7 +37,7 @@ diff --git a/react.js b/react.js
    scroller.scrollTo({ animated: isAnimated, x: left, y: top });
    if (isAnimated) {
      const target = (_b = (_a3 = scroller.getScrollEventTarget) == null ? void 0 : _a3.call(scroller)) != null ? _b : null;
-@@ -1312,6 +1325,11 @@ function doScrollTo(ctx, params) {
+@@ -1312,6 +1325,11 @@
      setTimeout(() => {
        finishScrollTo(ctx);
      }, 100);
@@ -49,7 +49,7 @@ diff --git a/react.js b/react.js
    }
  }
  function listenForScrollEnd(ctx, params) {
-@@ -1392,7 +1410,7 @@ function doMaintainScrollAtEnd(ctx) {
+@@ -1392,7 +1410,7 @@
        const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
        state.maintainingScrollAtEnd = pendingState;
        requestAnimationFrame(() => {
@@ -58,10 +58,11 @@ diff --git a/react.js b/react.js
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -2934,6 +2952,24 @@ function getCurrentTargetOffset(ctx, scrollingTo) {
+@@ -2933,6 +2951,24 @@
+   const shouldRecomputeEndTarget = isEndAlignedLastItemTarget(ctx, scrollingTo);
    const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
    return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
- }
++}
 +// An end-aligned target can sit past what the scroller can reach (footer and bottom
 +// padding are added to it), so the offset never matches and an instant scroll would only
 +// finish on its 100ms fallback. Being pinned at the native scroll end is arrival.
@@ -79,11 +80,10 @@ diff --git a/react.js b/react.js
 +  const maxNativeOffset = horizontal ? node.scrollWidth - node.clientWidth : node.scrollHeight - node.clientHeight;
 +  const nativeOffset = horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
 +  return maxNativeOffset - nativeOffset <= 1 && Math.abs(nativeOffset - scroll) <= 1;
-+}
+ }
  function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const { state } = ctx;
-   const scroll = state.scrollPending;
-@@ -2946,7 +2982,7 @@ function getResolvedScrollCompletionState(ctx, scrollingTo) {
+@@ -2946,7 +2982,7 @@
    const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
    return {
      clampedTargetOffset,
@@ -92,7 +92,7 @@ diff --git a/react.js b/react.js
    };
  }
  function checkFinishedScrollFrame(ctx) {
-@@ -2957,12 +2993,58 @@ function checkFinishedScrollFrame(ctx) {
+@@ -2957,13 +2993,59 @@
    const { state } = ctx;
    state.animFrameCheckFinishedScroll = void 0;
    const completionState = getResolvedScrollCompletionState(ctx, scrollingTo);
@@ -110,8 +110,8 @@ diff --git a/react.js b/react.js
 +    // the native offset so later position adjustments start from where the list really is.
 +    syncInitialScrollOffset(state, getNativeScrollOffset(ctx));
 +    finishScrollTo(ctx);
-+  }
-+}
+   }
+ }
 +// When every item size is already known, the list mounts at its initial target and the
 +// instant scroll moves nothing, so no scroll event ever grants ownership and the list
 +// would stay hidden until the 100ms finishScrollTo fallback. The native position being
@@ -145,14 +145,15 @@ diff --git a/react.js b/react.js
 +  const nativeOffset = getNativeScrollOffset(ctx);
 +  if (Math.abs(nativeOffset - offset) <= 1) {
 +    return true;
-   }
++  }
 +  const nativeContentSize = horizontal ? node.scrollWidth : node.scrollHeight;
 +  const maxNativeOffset = nativeContentSize - (horizontal ? node.clientWidth : node.clientHeight);
 +  return offset > nativeOffset && maxNativeOffset - nativeOffset <= 1 && nativeContentSize >= getContentSize(ctx) - 1;
- }
++}
  function scrollToFallbackOffset(ctx, offset) {
    var _a3;
-@@ -4072,7 +4154,8 @@ function trackVisibleRange(range, i, top, size, scroll, scrollBottom) {
+   (_a3 = ctx.state.refScroller.current) == null ? void 0 : _a3.scrollTo({
+@@ -4072,7 +4154,8 @@
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];
@@ -162,7 +163,63 @@ diff --git a/react.js b/react.js
    if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
      for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
        const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);
-@@ -7582,6 +7665,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -5610,6 +5693,18 @@
+ });
+ 
+ // src/utils/reordering.ts
++// Element.moveBefore keeps the moved subtree's state, so an iframe in a row (an
++// inline visual) does not reload and lose its page when the list puts its
++// containers back in item order. insertBefore is the fallback where unsupported.
++function moveChildBefore(container, element, reference) {
++  if (typeof container.moveBefore === "function") {
++    container.moveBefore(element, reference);
++  } else if (reference) {
++    container.insertBefore(element, reference);
++  } else {
++    container.appendChild(element);
++  }
++}
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
+@@ -5649,9 +5744,9 @@
+         }
+       }
+       if (nextStableElement) {
+-        container.insertBefore(element, nextStableElement);
++        moveChildBefore(container, element, nextStableElement);
+       } else {
+-        container.appendChild(element);
++        moveChildBefore(container, element, null);
+       }
+     }
+   }
+@@ -7406,12 +7501,22 @@
+   }
+   const {
+     indexByKey,
+-    props: { data, getItemType, renderItem }
++    props: { data, getItemType, keyExtractor, renderItem }
+   } = state;
+-  const index = indexByKey.get(key);
++  let index = indexByKey.get(key);
+   if (index === void 0) {
+     return null;
+   }
++  // New data reaches render before indexByKey is rebuilt, so after rows are
++  // inserted or removed a cached index can point at another row. Rendering
++  // that row for one commit remounts this container's content (an iframe in
++  // it reloads), so look the key up in the new data instead.
++  if (keyExtractor && (index >= data.length || keyExtractor(data[index], index) !== key)) {
++    index = data.findIndex((candidate, candidateIndex) => keyExtractor(candidate, candidateIndex) === key);
++    if (index < 0) {
++      return null;
++    }
++  }
+   let renderedItem = null;
+   const extraData = peek$(ctx, "extraData");
+   const item = data[index];
+@@ -7582,6 +7687,7 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -170,7 +227,7 @@ diff --git a/react.js b/react.js
      getFixedItemSize,
      getItemType,
      horizontal,
-@@ -7839,6 +7923,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7839,6 +7945,7 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -181,7 +238,7 @@ diff --git a/react.js b/react.js
 diff --git a/react.mjs b/react.mjs
 --- a/react.mjs
 +++ b/react.mjs
-@@ -1124,7 +1124,7 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1124,7 +1124,7 @@
    const {
      sizes,
      averageSizes,
@@ -190,7 +247,7 @@ diff --git a/react.mjs b/react.mjs
      scrollingTo
    } = state;
    const sizeKnown = state.sizesKnown.get(key);
-@@ -1144,6 +1144,17 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1144,6 +1144,17 @@
      return size;
    }
    const itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
@@ -208,7 +265,7 @@ diff --git a/react.mjs b/react.mjs
    if (useAverageSize && !scrollingTo) {
      const averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
      if (averageSizeForType !== void 0) {
-@@ -1278,6 +1289,8 @@ function doScrollTo(ctx, params) {
+@@ -1278,6 +1289,8 @@
    const contentSize = isHorizontal ? getContentSize(ctx) : void 0;
    const left = isHorizontal ? toNativeHorizontalOffset(state, offset, contentSize) : 0;
    const top = isHorizontal ? 0 : offset;
@@ -217,7 +274,7 @@ diff --git a/react.mjs b/react.mjs
    scroller.scrollTo({ animated: isAnimated, x: left, y: top });
    if (isAnimated) {
      const target = (_b = (_a3 = scroller.getScrollEventTarget) == null ? void 0 : _a3.call(scroller)) != null ? _b : null;
-@@ -1291,6 +1304,11 @@ function doScrollTo(ctx, params) {
+@@ -1291,6 +1304,11 @@
      setTimeout(() => {
        finishScrollTo(ctx);
      }, 100);
@@ -229,7 +286,7 @@ diff --git a/react.mjs b/react.mjs
    }
  }
  function listenForScrollEnd(ctx, params) {
-@@ -1371,7 +1389,7 @@ function doMaintainScrollAtEnd(ctx) {
+@@ -1371,7 +1389,7 @@
        const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
        state.maintainingScrollAtEnd = pendingState;
        requestAnimationFrame(() => {
@@ -238,10 +295,11 @@ diff --git a/react.mjs b/react.mjs
            state.maintainingScrollAtEnd = activeState;
            const scroller = refScroller.current;
            if (state.props.horizontal && isHorizontalRTL(state)) {
-@@ -2913,6 +2931,24 @@ function getCurrentTargetOffset(ctx, scrollingTo) {
+@@ -2912,6 +2930,24 @@
+   const shouldRecomputeEndTarget = isEndAlignedLastItemTarget(ctx, scrollingTo);
    const requestedTargetOffset = shouldRecomputeEndTarget && index !== void 0 ? calculateOffsetWithOffsetPosition(ctx, calculateOffsetForIndex(ctx, index), scrollingTo) : (_a3 = scrollingTo.targetOffset) != null ? _a3 : clampScrollOffset(ctx, scrollingTo.offset - (scrollingTo.viewOffset || 0), scrollingTo);
    return clampScrollOffset(ctx, requestedTargetOffset, scrollingTo);
- }
++}
 +// An end-aligned target can sit past what the scroller can reach (footer and bottom
 +// padding are added to it), so the offset never matches and an instant scroll would only
 +// finish on its 100ms fallback. Being pinned at the native scroll end is arrival.
@@ -259,11 +317,10 @@ diff --git a/react.mjs b/react.mjs
 +  const maxNativeOffset = horizontal ? node.scrollWidth - node.clientWidth : node.scrollHeight - node.clientHeight;
 +  const nativeOffset = horizontal ? Math.abs(node.scrollLeft) : node.scrollTop;
 +  return maxNativeOffset - nativeOffset <= 1 && Math.abs(nativeOffset - scroll) <= 1;
-+}
+ }
  function getResolvedScrollCompletionState(ctx, scrollingTo) {
    const { state } = ctx;
-   const scroll = state.scrollPending;
-@@ -2925,7 +2961,7 @@ function getResolvedScrollCompletionState(ctx, scrollingTo) {
+@@ -2925,7 +2961,7 @@
    const canUseAdjustedCompletion = !scrollingTo.animated || Platform.OS === "ios";
    return {
      clampedTargetOffset,
@@ -272,7 +329,7 @@ diff --git a/react.mjs b/react.mjs
    };
  }
  function checkFinishedScrollFrame(ctx) {
-@@ -2936,12 +2972,58 @@ function checkFinishedScrollFrame(ctx) {
+@@ -2936,13 +2972,59 @@
    const { state } = ctx;
    state.animFrameCheckFinishedScroll = void 0;
    const completionState = getResolvedScrollCompletionState(ctx, scrollingTo);
@@ -290,8 +347,8 @@ diff --git a/react.mjs b/react.mjs
 +    // the native offset so later position adjustments start from where the list really is.
 +    syncInitialScrollOffset(state, getNativeScrollOffset(ctx));
 +    finishScrollTo(ctx);
-+  }
-+}
+   }
+ }
 +// When every item size is already known, the list mounts at its initial target and the
 +// instant scroll moves nothing, so no scroll event ever grants ownership and the list
 +// would stay hidden until the 100ms finishScrollTo fallback. The native position being
@@ -325,14 +382,15 @@ diff --git a/react.mjs b/react.mjs
 +  const nativeOffset = getNativeScrollOffset(ctx);
 +  if (Math.abs(nativeOffset - offset) <= 1) {
 +    return true;
-   }
++  }
 +  const nativeContentSize = horizontal ? node.scrollWidth : node.scrollHeight;
 +  const maxNativeOffset = nativeContentSize - (horizontal ? node.clientWidth : node.clientHeight);
 +  return offset > nativeOffset && maxNativeOffset - nativeOffset <= 1 && nativeContentSize >= getContentSize(ctx) - 1;
- }
++}
  function scrollToFallbackOffset(ctx, offset) {
    var _a3;
-@@ -4051,7 +4133,8 @@ function trackVisibleRange(range, i, top, size, scroll, scrollBottom) {
+   (_a3 = ctx.state.refScroller.current) == null ? void 0 : _a3.scrollTo({
+@@ -4051,7 +4133,8 @@
  function getIdsInVisibleRange(state, range) {
    var _a3, _b;
    const idsInView = [];
@@ -342,7 +400,63 @@ diff --git a/react.mjs b/react.mjs
    if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
      for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
        const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);
-@@ -7561,6 +7644,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -5589,6 +5672,18 @@
+ });
+ 
+ // src/utils/reordering.ts
++// Element.moveBefore keeps the moved subtree's state, so an iframe in a row (an
++// inline visual) does not reload and lose its page when the list puts its
++// containers back in item order. insertBefore is the fallback where unsupported.
++function moveChildBefore(container, element, reference) {
++  if (typeof container.moveBefore === "function") {
++    container.moveBefore(element, reference);
++  } else if (reference) {
++    container.insertBefore(element, reference);
++  } else {
++    container.appendChild(element);
++  }
++}
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
+@@ -5628,9 +5723,9 @@
+         }
+       }
+       if (nextStableElement) {
+-        container.insertBefore(element, nextStableElement);
++        moveChildBefore(container, element, nextStableElement);
+       } else {
+-        container.appendChild(element);
++        moveChildBefore(container, element, null);
+       }
+     }
+   }
+@@ -7385,12 +7480,22 @@
+   }
+   const {
+     indexByKey,
+-    props: { data, getItemType, renderItem }
++    props: { data, getItemType, keyExtractor, renderItem }
+   } = state;
+-  const index = indexByKey.get(key);
++  let index = indexByKey.get(key);
+   if (index === void 0) {
+     return null;
+   }
++  // New data reaches render before indexByKey is rebuilt, so after rows are
++  // inserted or removed a cached index can point at another row. Rendering
++  // that row for one commit remounts this container's content (an iframe in
++  // it reloads), so look the key up in the new data instead.
++  if (keyExtractor && (index >= data.length || keyExtractor(data[index], index) !== key)) {
++    index = data.findIndex((candidate, candidateIndex) => keyExtractor(candidate, candidateIndex) === key);
++    if (index < 0) {
++      return null;
++    }
++  }
+   let renderedItem = null;
+   const extraData = peek$(ctx, "extraData");
+   const item = data[index];
+@@ -7561,6 +7666,7 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -350,7 +464,7 @@ diff --git a/react.mjs b/react.mjs
      getFixedItemSize,
      getItemType,
      horizontal,
-@@ -7818,6 +7902,7 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7818,6 +7924,7 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -361,15 +475,15 @@ diff --git a/react.mjs b/react.mjs
 diff --git a/react.d.ts b/react.d.ts
 --- a/react.d.ts
 +++ b/react.d.ts
-@@ -222,6 +222,11 @@ interface LegendListSpecificProps<ItemT, TItemType extends string | undefined> {
-      * In case items always have a fixed size, you can provide a function to return it.
+@@ -223,6 +223,11 @@
       */
      getFixedItemSize?: (item: ItemT, index: number, type: TItemType) => number | undefined;
-+    /**
+     /**
 +     * Per-item size estimate for items that have not been measured yet. Takes precedence
 +     * over the per-type average; measurement replaces it like any other estimate.
 +     */
 +    getEstimatedItemSize?: (item: ItemT, index: number, type: TItemType) => number | undefined;
-     /**
++    /**
       * Returns a stable item type used for pooling and size estimation.
       */
+     getItemType?: (item: ItemT, index: number) => TItemType;
