@@ -91,6 +91,7 @@ interface ChatHeaderProps {
   // Open-thread tabs rendered in place of the thread title (the rail shell's single chat).
   // They stay visible on the empty-draft landing so switching threads never loses the row.
   threadTabs?: React.ReactNode;
+  parallelRunControl?: React.ReactNode;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
   // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
@@ -450,6 +451,7 @@ export function ChatHeader({
   environment: environmentProp,
   projectPanel = null,
   libraryPanel = null,
+  parallelRunControl,
   editorChatControls: editorChatControlsProp,
   onRunProjectScript,
   onAddProjectScript,
@@ -717,6 +719,7 @@ export function ChatHeader({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        {parallelRunControl}
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}

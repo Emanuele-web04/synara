@@ -1,0 +1,12 @@
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1811/apps/web
+
+Browserslist: browsers data (caniuse-lite) is 7 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  22:24:02
+   Duration  173.82s (transform 0ms, setup 0ms, import 160.28s, tests 2.03s, environment 0ms)
+

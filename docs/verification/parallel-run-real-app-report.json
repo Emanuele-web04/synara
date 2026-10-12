@@ -1,0 +1,39 @@
+{
+  "home": "/workspace/scratch/a47932516920/local-acceptance-yNsHn6",
+  "sourceTree": "fcd0dd1ad77971e0a928766cb3624c71af5af25d",
+  "sourceComponent": "221c2f7266653f54781cf78c4ae7d2decd00ff74",
+  "base": "9fabfb7156167c1be0b3fa41b471b8bde11509e0",
+  "threads": [
+    {
+      "thread_id": "8de770a7-f98c-4618-a536-574c30a25568",
+      "title": "New thread",
+      "worktree_path": null,
+      "parallel_run_json": null,
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-ab5b058b-90e9-4673-a352-c35a3783c7e6-0",
+      "title": "Synthetic local acceptance: return LOCAL_ONLY_CHECK. · Attempt 1",
+      "worktree_path": "/workspace/scratch/a47932516920/local-acceptance-yNsHn6/worktrees/fixture-repo/synara-parallel-ab5b058b-90e9-4673-a352-c35a3783c7e6-1",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T19:19:17.752Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"ab5b058b-90e9-4673-a352-c35a3783c7e6\",\"sourceThreadId\":\"8de770a7-f98c-4618-a536-574c30a25568\",\"prompt\":\"Synthetic local acceptance: return LOCAL_ONLY_CHECK.\",\"attempts\":[{\"provider\":\"codex\",\"instanceId\":\"codex\",\"model\":\"gpt-6-astra\"},{\"provider\":\"codex\",\"instanceId\":\"codex\",\"model\":\"gpt-6-astra\"}]},\"runId\":\"ab5b058b-90e9-4673-a352-c35a3783c7e6\",\"index\":0,\"count\":2,\"baseCommit\":\"9fabfb7156167c1be0b3fa41b471b8bde11509e0\",\"requestHash\":\"8dd77bd80ecaa0b03d00425a26464f7d5e28ab0a35d5f6766b9b0738ecc05c70\"}",
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-ab5b058b-90e9-4673-a352-c35a3783c7e6-1",
+      "title": "Synthetic local acceptance: return LOCAL_ONLY_CHECK. · Attempt 2",
+      "worktree_path": "/workspace/scratch/a47932516920/local-acceptance-yNsHn6/worktrees/fixture-repo/synara-parallel-ab5b058b-90e9-4673-a352-c35a3783c7e6-2",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T19:19:17.752Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"ab5b058b-90e9-4673-a352-c35a3783c7e6\",\"sourceThreadId\":\"8de770a7-f98c-4618-a536-574c30a25568\",\"prompt\":\"Synthetic local acceptance: return LOCAL_ONLY_CHECK.\",\"attempts\":[{\"provider\":\"codex\",\"instanceId\":\"codex\",\"model\":\"gpt-6-astra\"},{\"provider\":\"codex\",\"instanceId\":\"codex\",\"model\":\"gpt-6-astra\"}]},\"runId\":\"ab5b058b-90e9-4673-a352-c35a3783c7e6\",\"index\":1,\"count\":2,\"baseCommit\":\"9fabfb7156167c1be0b3fa41b471b8bde11509e0\",\"requestHash\":\"8dd77bd80ecaa0b03d00425a26464f7d5e28ab0a35d5f6766b9b0738ecc05c70\"}",
+      "archived_at": "2026-10-11T19:19:22.688Z",
+      "deleted_at": null
+    }
+  ],
+  "providersDisabled": true,
+  "realGitHeadsEqual": true,
+  "sourcePreserved": true,
+  "keepEnabled": true,
+  "siblingArchived": true,
+  "gracefulServerExit": true,
+  "limitations": "Actual disabled-provider failure path; no live model output or successful provider completion claimed."
+}

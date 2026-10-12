@@ -1,0 +1,27 @@
+COMPARISON Parallel attempts
+
+Inspect each answer and its changes from the common base. Keeping an attempt archives the other conversations and preserves their branches and worktrees.
+
+Attempt 1 · gpt-6-astra
+
+synara/parallel/ab5b058b-90e9-4673-a352-c35a3783c7e6/1
+
+Failed to start
+
+No final answer recorded.
+Changes from base
+Open
+Keep this attempt
+Attempt 2 · gpt-6-astra
+
+synara/parallel/ab5b058b-90e9-4673-a352-c35a3783c7e6/2
+
+Failed to start
+
+No final answer recorded.
+Changes from base
+Open
+Keep this attempt
+Stop all attempts
+Compare in new thread
+PASS {"home":"/workspace/scratch/a47932516920/local-acceptance-yNsHn6","base":"9fabfb7156167c1be0b3fa41b471b8bde11509e0","attempts":2,"sourcePreserved":true}

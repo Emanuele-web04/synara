@@ -47,6 +47,23 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./t
 import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains parallel grouping through shell hydration, detail updates and eviction", () => {
+    const parallelRun = {
+      runId: "run",
+      index: 1,
+      count: 3,
+      baseCommit: "a".repeat(40),
+      requestHash: "b".repeat(64),
+    };
+    const thread = makeReadModelThread({ parallelRun });
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));
+    expect(getThreadFromState(state, thread.id)?.parallelRun).toEqual(parallelRun);
+    expect(state.sidebarThreadSummaryById[thread.id]?.parallelRun).toEqual(parallelRun);
+    state = syncServerReadModel(state, makeReadModel(thread));
+    state = evictThreadDetailFromClientState(state, thread.id);
+    expect(getThreadFromState(state, thread.id)?.parallelRun).toEqual(parallelRun);
+    expect(state.sidebarThreadSummaryById[thread.id]?.parallelRun).toEqual(parallelRun);
+  });
   it("drops missed rollback messages while preserving live text within the same revision", () => {
     const thread = makeReadModelThread({
       messages: [

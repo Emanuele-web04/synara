@@ -594,6 +594,7 @@ export function projectEvent(
             creationSource: payload.creationSource ?? null,
             sourceThreadId: payload.sourceThreadId ?? null,
             sourceTurnId: payload.sourceTurnId ?? null,
+            ...(payload.parallelRun ? { parallelRun: payload.parallelRun } : {}),
             gatewayOperationId: payload.gatewayOperationId ?? null,
             gatewayOperationIndex: payload.gatewayOperationIndex ?? null,
             subagentAgentId: payload.subagentAgentId,

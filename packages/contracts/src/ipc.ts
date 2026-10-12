@@ -338,6 +338,8 @@ import type {
   OrchestrationReconcileProviderDeliveryInput,
   OrchestrationReconcileProviderDeliveryResult,
   OrchestrationPrepareQuitResumeInput,
+  OrchestrationStartParallelRunInput,
+  OrchestrationStartParallelRunResult,
   OrchestrationPrepareQuitResumeResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
@@ -1389,6 +1391,9 @@ export interface NativeApi {
     reconcileProviderDelivery: (
       input: OrchestrationReconcileProviderDeliveryInput,
     ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
+    startParallelRun: (
+      input: OrchestrationStartParallelRunInput,
+    ) => Promise<OrchestrationStartParallelRunResult>;
     prepareQuitResume: (
       input: OrchestrationPrepareQuitResumeInput,
     ) => Promise<OrchestrationPrepareQuitResumeResult>;

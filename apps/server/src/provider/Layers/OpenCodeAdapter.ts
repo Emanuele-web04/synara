@@ -670,12 +670,15 @@ function bufferPendingTextDelta(
     return;
   }
   const previous = context.pendingTextDeltasByPartId.get(partId);
+  const knownPart = context.partById.get(partId);
+  const baseText = previous?.baseText ?? (knownPart ? textFromPart(knownPart) : undefined);
   const { nextText } = appendOpenCodeAssistantTextDelta(previous?.text ?? "", delta);
   context.pendingTextDeltasByPartId.set(partId, {
     messageId,
     text: nextText,
     bufferedAfterKnownSnapshot:
       (previous?.bufferedAfterKnownSnapshot ?? false) || context.partById.has(partId),
+    ...(baseText !== undefined ? { baseText } : {}),
   });
 }
 
@@ -690,14 +693,16 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
     return part;
   }
 
-  // A delta buffered before the first part snapshot may already be present in
-  // the later cumulative snapshot. A delta buffered after a known snapshot
-  // (for example while the message role is still unknown) is newer than that
-  // snapshot and must be appended even when its text matches the snapshot suffix.
+  // Preserve the baseline of a known snapshot while role metadata is delayed.
+  // A later cumulative snapshot can already contain the buffered delta; compare
+  // it with baseline + delta instead of appending that delta a second time.
+  // Comparing the whole accumulated value also preserves intentional repeats.
   const nextText =
-    !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
-      ? part.text
-      : part.text + pendingDelta.text;
+    pendingDelta.baseText !== undefined
+      ? resolveLatestAssistantText(pendingDelta.baseText + pendingDelta.text, part.text)
+      : !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
+        ? part.text
+        : part.text + pendingDelta.text;
   context.pendingTextDeltasByPartId.delete(part.id);
   return nextText === part.text ? part : { ...part, text: nextText };
 }

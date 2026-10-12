@@ -5591,9 +5591,35 @@ export default function Sidebar() {
     } = projectSidebarData;
     return (
       <>
-        {visibleEntries.map((entry) =>
-          renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
-        )}
+        {visibleEntries.map((entry, index) => {
+          const run = entry.thread.parallelRun;
+          if (!run) return renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth);
+          if (
+            visibleEntries
+              .slice(0, index)
+              .some((previous) => previous.thread.parallelRun?.runId === run.runId)
+          )
+            return null;
+          const siblings = visibleEntries.filter(
+            (candidate) => candidate.thread.parallelRun?.runId === run.runId,
+          );
+          return (
+            <details
+              key={run.runId}
+              className="text-ui"
+              open={siblings.some(
+                (candidate) => candidate.thread.id === visualActiveSidebarThreadId,
+              )}
+            >
+              <summary className="cursor-pointer rounded-lg px-4 py-1 text-muted-foreground">
+                Parallel run · {run.count} attempts
+              </summary>
+              {siblings.map((candidate) =>
+                renderThreadRow(candidate.thread, orderedProjectThreadIds, candidate.depth + 1),
+              )}
+            </details>
+          );
+        })}
 
         {(canShowMoreThreads || canShowLessThreads) && (
           <SidebarMenuSubItem className="w-full">

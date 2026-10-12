@@ -10,7 +10,8 @@ export interface OrchestrationCommandFingerprint {
   readonly value: string;
 }
 
-function canonicalizeJson(value: unknown): unknown {
+/** Stable JSON representation for idempotent command and run requests. */
+export function canonicalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(canonicalizeJson);
   }

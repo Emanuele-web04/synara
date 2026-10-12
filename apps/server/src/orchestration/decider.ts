@@ -1166,6 +1166,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
+          ...(command.parallelRun
+            ? { parallelRun: command.parallelRun, sourceThreadId: command.sourceThreadId ?? null }
+            : {}),
           ...(command.creationSource !== undefined
             ? {
                 creationSource: command.creationSource,

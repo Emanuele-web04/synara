@@ -515,6 +515,15 @@ export const WsOrchestrationReconcileProviderDeliveryRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationStartParallelRunRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.startParallelRun,
+  {
+    payload: OrchestrationRpcSchemas.startParallelRun.input,
+    success: OrchestrationRpcSchemas.startParallelRun.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationPrepareQuitResumeRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.prepareQuitResume,
   {
@@ -1900,7 +1909,156 @@ export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribePro
 
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
-export const WsFeatureRpcGroup = RpcGroup.make(
+type WsFeatureRpc =
+  | typeof WsOrchestrationDispatchCommandRpc
+  | typeof WsOrchestrationSettleTurnDispatchRpc
+  | typeof WsOrchestrationImportThreadRpc
+  | typeof WsListProjectImportsRpc
+  | typeof WsImportProjectRpc
+  | typeof WsLoadProjectImportHistoryRpc
+  | typeof WsOrchestrationRegenerateThreadTitleRpc
+  | typeof WsOrchestrationGetSnapshotRpc
+  | typeof WsOrchestrationGetShellSnapshotRpc
+  | typeof WsOrchestrationGetThreadDetailSnapshotRpc
+  | typeof WsOrchestrationSearchThreadsRpc
+  | typeof WsOrchestrationRepairStateRpc
+  | typeof WsOrchestrationGetTurnDiffRpc
+  | typeof WsOrchestrationGetFullThreadDiffRpc
+  | typeof WsOrchestrationReplayEventsRpc
+  | typeof WsOrchestrationListProviderDeliveryBlockersRpc
+  | typeof WsOrchestrationReconcileProviderDeliveryRpc
+  | typeof WsOrchestrationPrepareQuitResumeRpc
+  | typeof WsOrchestrationStartParallelRunRpc
+  | typeof WsOrchestrationSubscribeShellRpc
+  | typeof WsOrchestrationUnsubscribeShellRpc
+  | typeof WsOrchestrationSubscribeThreadRpc
+  | typeof WsOrchestrationUnsubscribeThreadRpc
+  | typeof WsOrchestrationSubscribeDomainEventsRpc
+  | typeof WsProjectsDiscoverScriptsRpc
+  | typeof WsProjectsListDirectoriesRpc
+  | typeof WsProjectsSearchEntriesRpc
+  | typeof WsProjectsSearchLocalEntriesRpc
+  | typeof WsProjectsSearchContentRpc
+  | typeof WsProjectsPrewarmSearchIndexRpc
+  | typeof WsProjectsReadFileRpc
+  | typeof WsProjectsSubscribeFileChangeRpc
+  | typeof WsProjectsResolveWorkspaceFileReferencesRpc
+  | typeof WsProjectsResolveOutOfRootFileReferenceRpc
+  | typeof WsProjectsCreateLocalFilePreviewGrantRpc
+  | typeof WsProjectsWriteFileRpc
+  | typeof WsProjectsRunDevServerRpc
+  | typeof WsProjectsStopDevServerRpc
+  | typeof WsProjectsListDevServersRpc
+  | typeof WsSubscribeProjectDevServerEventsRpc
+  | typeof WsProjectsProvisionFromGitHubRpc
+  | typeof WsStudioListThreadOutputsRpc
+  | typeof WsFilesystemBrowseRpc
+  | typeof WsShellOpenInEditorRpc
+  | typeof WsGitGithubRepositoryRpc
+  | typeof WsGitStatusRpc
+  | typeof WsGitReadWorkingTreeDiffRpc
+  | typeof WsGitBlameLineRpc
+  | typeof WsGitReadFileAtRevRpc
+  | typeof WsGitWorkingTreeDiffStatsRpc
+  | typeof WsGitSummarizeDiffRpc
+  | typeof WsGitPullRpc
+  | typeof WsGitRunStackedActionRpc
+  | typeof WsGitResolvePullRequestRpc
+  | typeof WsGitPullRequestSnapshotRpc
+  | typeof WsGitPreparePullRequestThreadRpc
+  | typeof WsGitHubInboxListRpc
+  | typeof WsGitHubInboxIssueDetailRpc
+  | typeof WsGitHubInboxIssueCommentRpc
+  | typeof WsPullRequestsDetailRpc
+  | typeof WsPullRequestsDiffRpc
+  | typeof WsPullRequestsActionRpc
+  | typeof WsPullRequestsCommentRpc
+  | typeof WsPullRequestsSetPinnedRpc
+  | typeof WsPullRequestsGetAutoFixRpc
+  | typeof WsPullRequestsSetAutoFixRpc
+  | typeof WsGitListBranchesRpc
+  | typeof WsGitListRecentCommitsRpc
+  | typeof WsGitCreateWorktreeRpc
+  | typeof WsGitCreateDetachedWorktreeRpc
+  | typeof WsGitRemoveWorktreeRpc
+  | typeof WsGitCreateBranchRpc
+  | typeof WsGitCheckoutRpc
+  | typeof WsGitStashAndCheckoutRpc
+  | typeof WsGitStashDropRpc
+  | typeof WsGitStashInfoRpc
+  | typeof WsGitRemoveIndexLockRpc
+  | typeof WsGitInitRpc
+  | typeof WsGitStageFilesRpc
+  | typeof WsGitUnstageFilesRpc
+  | typeof WsGitHandoffThreadRpc
+  | typeof WsTerminalOpenRpc
+  | typeof WsTerminalWriteRpc
+  | typeof WsTerminalAckOutputRpc
+  | typeof WsTerminalResizeRpc
+  | typeof WsTerminalClearRpc
+  | typeof WsTerminalRestartRpc
+  | typeof WsTerminalCloseRpc
+  | typeof WsSubscribeTerminalEventsRpc
+  | typeof WsServerGetRuntimeStatusRpc
+  | typeof WsServerGetConfigRpc
+  | typeof WsServerGetEnvironmentRpc
+  | typeof WsServerGetSettingsRpc
+  | typeof WsServerUpdateSettingsRpc
+  | typeof WsServerRefreshProvidersRpc
+  | typeof WsServerUpdateProviderRpc
+  | typeof WsServerListExternalMcpIntegrationsRpc
+  | typeof WsServerCreateExternalMcpIntegrationRpc
+  | typeof WsServerRevokeExternalMcpIntegrationRpc
+  | typeof WsServerRefreshExternalMcpPairingRpc
+  | typeof WsServerListWorktreesRpc
+  | typeof WsServerListLocalServersRpc
+  | typeof WsServerStopLocalServerRpc
+  | typeof WsServerGetProviderUsageSnapshotRpc
+  | typeof WsServerListProviderUsageRpc
+  | typeof WsServerConsumeCodexResetCreditRpc
+  | typeof WsStatsGetProfileStatsRpc
+  | typeof WsStatsGetProfileTokenStatsRpc
+  | typeof WsStatsGetRecapRpc
+  | typeof WsServerGetDiagnosticsRpc
+  | typeof WsServerReadThreadDiagnosticsRpc
+  | typeof WsServerPrewarmVoiceRpc
+  | typeof WsServerTranscribeVoiceRpc
+  | typeof WsServerGenerateThreadRecapRpc
+  | typeof WsServerGenerateAutomationIntentRpc
+  | typeof WsServerUpsertKeybindingRpc
+  | typeof WsServerEditKeybindingsRpc
+  | typeof WsSubscribeServerLifecycleRpc
+  | typeof WsSubscribeServerConfigRpc
+  | typeof WsSubscribeServerProviderStatusesRpc
+  | typeof WsSubscribeServerKeepAwakeRpc
+  | typeof WsSubscribeServerSettingsRpc
+  | typeof WsProviderGetComposerCapabilitiesRpc
+  | typeof WsProviderCompactThreadRpc
+  | typeof WsProviderListCommandsRpc
+  | typeof WsProviderListSkillsRpc
+  | typeof WsProviderListSkillsCatalogRpc
+  | typeof WsProviderListPluginsRpc
+  | typeof WsProviderReadPluginRpc
+  | typeof WsProviderListModelsRpc
+  | typeof WsProviderListAgentsRpc
+  | typeof WsAutomationListRpc
+  | typeof WsAutomationGetMemoryRpc
+  | typeof WsAutomationCreateRpc
+  | typeof WsAutomationUpdateRpc
+  | typeof WsAutomationDeleteRpc
+  | typeof WsAutomationRunNowRpc
+  | typeof WsAutomationCancelRunRpc
+  | typeof WsAutomationMarkRunReadRpc
+  | typeof WsAutomationArchiveRunRpc
+  | typeof WsAutomationResolveProposalRpc
+  | typeof WsSubscribeAutomationEventsRpc
+  | typeof WsTodoListRpc
+  | typeof WsTodoCreateRpc
+  | typeof WsTodoUpdateRpc
+  | typeof WsTodoDeleteRpc
+  | typeof WsSubscribeTodoEventsRpc;
+
+export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationSettleTurnDispatchRpc,
   WsOrchestrationImportThreadRpc,
@@ -1919,6 +2077,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationListProviderDeliveryBlockersRpc,
   WsOrchestrationReconcileProviderDeliveryRpc,
   WsOrchestrationPrepareQuitResumeRpc,
+  WsOrchestrationStartParallelRunRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,

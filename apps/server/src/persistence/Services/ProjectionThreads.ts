@@ -10,6 +10,7 @@ import {
   IsoDateTime,
   MessageId,
   ModelSelection,
+  ParallelRunAttempt,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
   PendingClaudeCacheReview,
@@ -33,6 +34,7 @@ import type { Effect } from "effect";
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThread = Schema.Struct({
+  parallelRun: Schema.optional(Schema.NullOr(ParallelRunAttempt)),
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,

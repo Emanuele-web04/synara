@@ -261,6 +261,7 @@ export interface Thread extends ThreadWorkspaceState {
   claudeCacheReviewSequence?: number;
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
+  parallelRun?: import("@synara/contracts").ParallelRunAttempt;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -315,6 +316,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   claudeCacheReviewSequence?: number;
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
+  parallelRun?: import("@synara/contracts").ParallelRunAttempt;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -374,6 +376,7 @@ export interface SidebarThreadSummary {
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  parallelRun?: import("@synara/contracts").ParallelRunAttempt;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 

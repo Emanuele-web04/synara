@@ -22,6 +22,8 @@ import {
   sanitizeBrowserAnnotationUrl,
 } from "@synara/shared/browserAnnotations";
 
+import { escapeJsonForTaggedBlock } from "./taggedPromptJson";
+
 export const BROWSER_ANNOTATIONS_VERSION = 2 as const;
 export const BROWSER_ANNOTATION_MAX_COUNT = 32;
 
@@ -176,10 +178,6 @@ export function formatBrowserAnnotationLabel(
     annotation.selector.trim() ||
     "Page element"
   );
-}
-
-function escapeJsonForTaggedBlock(json: string): string {
-  return json.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 }
 
 export function buildBrowserAnnotationsPromptBlock(

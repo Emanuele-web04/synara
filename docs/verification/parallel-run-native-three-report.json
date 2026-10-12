@@ -1,0 +1,116 @@
+{
+  "home": "/tmp/native-parallel-acceptance-jJ83TF",
+  "base": "26e331c886eb6ada58a320f5537704d0353daaa9",
+  "threads": [
+    {
+      "thread_id": "fdf5782e-e658-4dbd-b201-10d012ccb096",
+      "title": "New thread",
+      "worktree_path": null,
+      "parallel_run_json": null,
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-0",
+      "title": "Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empt \u00b7 Attempt 1",
+      "worktree_path": "/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T21:35:03.244Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"sourceThreadId\":\"fdf5782e-e658-4dbd-b201-10d012ccb096\",\"prompt\":\"Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empty synthetic acceptance repository.\",\"attempts\":[{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"}]},\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"index\":0,\"count\":3,\"baseCommit\":\"26e331c886eb6ada58a320f5537704d0353daaa9\",\"requestHash\":\"9fe9160ef7555da6fa9520c7ae130f689f3b8b469c5a1e7798c10926716061ed\"}",
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1",
+      "title": "Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empt \u00b7 Attempt 2",
+      "worktree_path": "/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T21:35:03.244Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"sourceThreadId\":\"fdf5782e-e658-4dbd-b201-10d012ccb096\",\"prompt\":\"Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empty synthetic acceptance repository.\",\"attempts\":[{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"}]},\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"index\":1,\"count\":3,\"baseCommit\":\"26e331c886eb6ada58a320f5537704d0353daaa9\",\"requestHash\":\"9fe9160ef7555da6fa9520c7ae130f689f3b8b469c5a1e7798c10926716061ed\"}",
+      "archived_at": "2026-10-11T21:36:21.272Z",
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2",
+      "title": "Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empt \u00b7 Attempt 3",
+      "worktree_path": "/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-3",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T21:35:03.244Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"sourceThreadId\":\"fdf5782e-e658-4dbd-b201-10d012ccb096\",\"prompt\":\"Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empty synthetic acceptance repository.\",\"attempts\":[{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"}]},\"runId\":\"9691f621-f500-4f82-b3d9-2a6386019d43\",\"index\":2,\"count\":3,\"baseCommit\":\"26e331c886eb6ada58a320f5537704d0353daaa9\",\"requestHash\":\"9fe9160ef7555da6fa9520c7ae130f689f3b8b469c5a1e7798c10926716061ed\"}",
+      "archived_at": "2026-10-11T21:36:21.340Z",
+      "deleted_at": null
+    },
+    {
+      "thread_id": "4d9c6e20-a928-431c-b3cb-44f876452bae",
+      "title": "Compare parallel attempts",
+      "worktree_path": null,
+      "parallel_run_json": null,
+      "archived_at": null,
+      "deleted_at": null
+    }
+  ],
+  "sourceComponent": "636606478a0dd774b60e46d9a4531f4ee8d18769",
+  "sessions": [
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-0",
+      "resume_cursor_json": "{\"openCodeSessionId\":\"ses_ed31bf6c9ffeVPUhtFrX1IZPFb\",\"cwd\":\"/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1\",\"harnessPolicyDelivery\":{\"sessionId\":\"ses_ed31bf6c9ffeVPUhtFrX1IZPFb\",\"policyVersion\":\"2026-10-02.1\",\"gatewayControlAvailable\":false,\"enableComputerControl\":false}}"
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1",
+      "resume_cursor_json": "{\"openCodeSessionId\":\"ses_ed31bf4f9ffeJNdERAZeJN5im9\",\"cwd\":\"/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2\",\"harnessPolicyDelivery\":{\"sessionId\":\"ses_ed31bf4f9ffeJNdERAZeJN5im9\",\"policyVersion\":\"2026-10-02.1\",\"gatewayControlAvailable\":false,\"enableComputerControl\":false}}"
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2",
+      "resume_cursor_json": "{\"openCodeSessionId\":\"ses_ed31bf3a3ffeKQt4ag3yfoN6Ik\",\"cwd\":\"/tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-3\",\"harnessPolicyDelivery\":{\"sessionId\":\"ses_ed31bf3a3ffeKQt4ag3yfoN6Ik\",\"policyVersion\":\"2026-10-02.1\",\"gatewayControlAvailable\":false,\"enableComputerControl\":false}}"
+    }
+  ],
+  "turns": [
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-0",
+      "state": "completed"
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1",
+      "state": "completed"
+    },
+    {
+      "thread_id": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2",
+      "state": "completed"
+    },
+    {
+      "thread_id": "4d9c6e20-a928-431c-b3cb-44f876452bae",
+      "state": "completed"
+    }
+  ],
+  "answers": [
+    {
+      "threadId": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-0",
+      "nativeSessionId": "ses_ed31bf6c9ffeVPUhtFrX1IZPFb",
+      "nativeText": "NATIVE_PARALLEL_OK",
+      "synaraText": "NATIVE_PARALLEL_OK"
+    },
+    {
+      "threadId": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1",
+      "nativeSessionId": "ses_ed31bf4f9ffeJNdERAZeJN5im9",
+      "nativeText": "NATIVE_PARALLEL_OK",
+      "synaraText": "NATIVE_PARALLEL_OK"
+    },
+    {
+      "threadId": "parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2",
+      "nativeSessionId": "ses_ed31bf3a3ffeKQt4ag3yfoN6Ik",
+      "nativeText": "NATIVE_PARALLEL_OK",
+      "synaraText": "NATIVE_PARALLEL_OK"
+    }
+  ],
+  "actualModel": "opencode/mimo-v2.6-flash-free",
+  "approvedReadOnlyCommands": [
+    "git -C /tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1 status --porcelain git -C /tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-2 status --porcelain git -C /tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-3 status --porcelain echo \"---\" git -C /tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1 log --oneline -1 git -C /tmp/native-parallel-acceptance-jJ83TF/worktrees/fixture-repo/synara-parallel-9691f621-f500-4f82-b3d9-2a6386019d43-1 rev-parse HEAD"
+  ],
+  "realAnswers": true,
+  "sourcePreserved": true,
+  "siblingArchived": true,
+  "gracefulServerExit": true,
+  "comparisonNativeIntegrity": {
+    "threadId": "4d9c6e20-a928-431c-b3cb-44f876452bae",
+    "nativeSessionId": "ses_ed31bbf23ffeJY6Qy9w6invlL5",
+    "fourDistinctNativeSessions": true,
+    "actualNativeComparisonPromptVerified": true,
+    "actualNativeUserTextSha256": "3c628e825327b03f662d5ab3789daa754e7981e745352363af1f18dab2d03d3c",
+    "nativeAnswer": "All three attempts are correct and equivalent.\n\n- **Correctness:** Each attempt replied exactly `NATIVE_PARALLEL_OK` with no tool use, satisfying the task. All three worktrees are clean (no file changes) and sit on the common base `26e331c`.\n- **Tradeoffs/changes vs. base:** None \u2014 no diffs against the base in any attempt.\n- **Recommendation:** No winner is needed; the attempts are identical. If one must be chosen, pick attempt 1 arbitrarily.",
+    "synaraAnswer": "All three attempts are correct and equivalent.\n\n- **Correctness:** Each attempt replied exactly `NATIVE_PARALLEL_OK` with no tool use, satisfying the task. All three worktrees are clean (no file changes) and sit on the common base `26e331c`.\n- **Tradeoffs/changes vs. base:** None \u2014 no diffs against the base in any attempt.\n- **Recommendation:** No winner is needed; the attempts are identical. If one must be chosen, pick attempt 1 arbitrarily."
+  }
+}

@@ -110,6 +110,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
+    ...(thread.parallelRun ? { parallelRun: thread.parallelRun } : {}),
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.isProjectImport ? { isProjectImport: true } : {}),
@@ -379,6 +380,7 @@ function sidebarThreadSummariesEqual(
     (left.sidechatContext?.url ?? null) === (right.sidechatContext?.url ?? null) &&
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
+    deepEqualJson(left.parallelRun ?? null, right.parallelRun ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
@@ -430,6 +432,7 @@ function buildSidebarThreadSummary(
     sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
+    ...(thread.parallelRun ? { parallelRun: thread.parallelRun } : {}),
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
   };

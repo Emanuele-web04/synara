@@ -153,6 +153,7 @@ import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
+import { startParallelRun } from "./parallelRuns";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
@@ -1318,6 +1319,20 @@ const makeWsRpcHandlersLayer = () =>
                 );
             }),
             "Failed to resolve the original message delivery.",
+          ),
+        [ORCHESTRATION_WS_METHODS.startParallelRun]: (input) =>
+          rpcEffect(
+            startParallelRun(input, {
+              git,
+              query: projectionReadModelQuery,
+              dispatch: (command) =>
+                normalizeDispatchCommand({ command }).pipe(
+                  Effect.flatMap(({ command: normalized }) =>
+                    dispatchOrchestrationCommand(normalized),
+                  ),
+                ),
+            }),
+            "Failed to start parallel run",
           ),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(

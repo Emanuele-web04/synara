@@ -586,6 +586,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             creationSource: event.payload.creationSource ?? null,
             sourceThreadId: event.payload.sourceThreadId ?? null,
             sourceTurnId: event.payload.sourceTurnId ?? null,
+            ...(event.payload.parallelRun ? { parallelRun: event.payload.parallelRun } : {}),
             gatewayOperationId: event.payload.gatewayOperationId ?? null,
             gatewayOperationIndex: event.payload.gatewayOperationIndex ?? null,
             subagentAgentId: event.payload.subagentAgentId ?? null,

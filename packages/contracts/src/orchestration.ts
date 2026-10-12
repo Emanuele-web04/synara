@@ -62,6 +62,7 @@ export const ORCHESTRATION_WS_METHODS = {
   listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
   reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
   prepareQuitResume: "orchestration.prepareQuitResume",
+  startParallelRun: "orchestration.startParallelRun",
   subscribeShell: "orchestration.subscribeShell",
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -1062,7 +1063,41 @@ export const PendingClaudeCacheReview = Schema.Struct({
 });
 export type PendingClaudeCacheReview = typeof PendingClaudeCacheReview.Type;
 
+export const OrchestrationStartParallelRunInput = Schema.Struct({
+  createdAt: IsoDateTime,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  runId: Schema.String.pipe(
+    Schema.check(
+      Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u),
+    ),
+  ),
+  sourceThreadId: ThreadId,
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  attempts: Schema.Array(ModelSelection).pipe(
+    Schema.check(Schema.isMinLength(2), Schema.isMaxLength(3)),
+  ),
+});
+export type OrchestrationStartParallelRunInput = typeof OrchestrationStartParallelRunInput.Type;
+export const OrchestrationStartParallelRunResult = Schema.Struct({
+  threadIds: Schema.Array(ThreadId),
+  baseCommit: TrimmedNonEmptyString,
+});
+export type OrchestrationStartParallelRunResult = typeof OrchestrationStartParallelRunResult.Type;
+
+/** Independent attempts share a frozen base, never a provider session or worktree. */
+export const ParallelRunAttempt = Schema.Struct({
+  request: Schema.optional(OrchestrationStartParallelRunInput),
+  runId: TrimmedNonEmptyString,
+  index: NonNegativeInt.check(Schema.isLessThanOrEqualTo(2)),
+  count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(2), Schema.isLessThanOrEqualTo(3)),
+  baseCommit: TrimmedNonEmptyString,
+  requestHash: TrimmedNonEmptyString,
+});
+export type ParallelRunAttempt = typeof ParallelRunAttempt.Type;
+
 export const OrchestrationThread = Schema.Struct({
+  parallelRun: Schema.optional(ParallelRunAttempt),
   /** Durable project-import provenance; ordinary chats never request imported history. */
   isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
@@ -1170,6 +1205,7 @@ export const OrchestrationThread = Schema.Struct({
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  parallelRun: Schema.optional(ParallelRunAttempt),
   /** Durable project-import provenance; ordinary chats never request imported history. */
   isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
@@ -1427,6 +1463,7 @@ const ProjectDeleteCommand = Schema.Struct({
 });
 
 const ThreadCreateCommand = Schema.Struct({
+  parallelRun: Schema.optional(ParallelRunAttempt),
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -2218,6 +2255,7 @@ export const ProjectDeletedPayload = Schema.Struct({
 });
 
 export const ThreadCreatedPayload = Schema.Struct({
+  parallelRun: Schema.optional(ParallelRunAttempt),
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -3205,6 +3243,10 @@ export const OrchestrationRpcSchemas = {
   reconcileProviderDelivery: {
     input: OrchestrationReconcileProviderDeliveryInput,
     output: OrchestrationReconcileProviderDeliveryResult,
+  },
+  startParallelRun: {
+    input: OrchestrationStartParallelRunInput,
+    output: OrchestrationStartParallelRunResult,
   },
   prepareQuitResume: {
     input: OrchestrationPrepareQuitResumeInput,

@@ -1,0 +1,35 @@
+{
+  "home": "/workspace/scratch/a47932516920/native-parallel-acceptance-yLVeqA",
+  "base": "b51c3d32d15f8700a186ecaf0b7d162a1863b9b1",
+  "threads": [
+    {
+      "thread_id": "a22731d3-0ea7-4fbc-a0c8-22355c16df26",
+      "title": "New thread",
+      "worktree_path": null,
+      "parallel_run_json": null,
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-a4a220e0-505b-4c29-b8c7-e73573f0475a-0",
+      "title": "Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empt · Attempt 1",
+      "worktree_path": "/workspace/scratch/a47932516920/native-parallel-acceptance-yLVeqA/worktrees/fixture-repo/synara-parallel-a4a220e0-505b-4c29-b8c7-e73573f0475a-1",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T19:38:48.705Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"a4a220e0-505b-4c29-b8c7-e73573f0475a\",\"sourceThreadId\":\"a22731d3-0ea7-4fbc-a0c8-22355c16df26\",\"prompt\":\"Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empty synthetic acceptance repository.\",\"attempts\":[{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"}]},\"runId\":\"a4a220e0-505b-4c29-b8c7-e73573f0475a\",\"index\":0,\"count\":2,\"baseCommit\":\"b51c3d32d15f8700a186ecaf0b7d162a1863b9b1\",\"requestHash\":\"83080cab8d3ea9eada84e33ab222550d2658c6abf782f1a66dee3e34315e9b55\"}",
+      "archived_at": null,
+      "deleted_at": null
+    },
+    {
+      "thread_id": "parallel-a4a220e0-505b-4c29-b8c7-e73573f0475a-1",
+      "title": "Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empt · Attempt 2",
+      "worktree_path": "/workspace/scratch/a47932516920/native-parallel-acceptance-yLVeqA/worktrees/fixture-repo/synara-parallel-a4a220e0-505b-4c29-b8c7-e73573f0475a-2",
+      "parallel_run_json": "{\"request\":{\"createdAt\":\"2026-10-11T19:38:48.705Z\",\"runtimeMode\":\"full-access\",\"interactionMode\":\"default\",\"runId\":\"a4a220e0-505b-4c29-b8c7-e73573f0475a\",\"sourceThreadId\":\"a22731d3-0ea7-4fbc-a0c8-22355c16df26\",\"prompt\":\"Reply with exactly NATIVE_PARALLEL_OK. Do not use tools. This is an empty synthetic acceptance repository.\",\"attempts\":[{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"},{\"provider\":\"opencode\",\"instanceId\":\"opencode\",\"model\":\"opencode/mimo-v2.6-flash-free\"}]},\"runId\":\"a4a220e0-505b-4c29-b8c7-e73573f0475a\",\"index\":1,\"count\":2,\"baseCommit\":\"b51c3d32d15f8700a186ecaf0b7d162a1863b9b1\",\"requestHash\":\"83080cab8d3ea9eada84e33ab222550d2658c6abf782f1a66dee3e34315e9b55\"}",
+      "archived_at": "2026-10-11T19:39:08.689Z",
+      "deleted_at": null
+    }
+  ],
+  "actualModel": "opencode/mimo-v2.6-flash-free",
+  "realAnswers": true,
+  "sourcePreserved": true,
+  "siblingArchived": true,
+  "gracefulServerExit": true
+}

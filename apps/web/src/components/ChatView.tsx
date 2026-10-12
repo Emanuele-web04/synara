@@ -288,6 +288,7 @@ import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
+import { ParallelRunsControl } from "./chat/ParallelRunsControl";
 import { ChatHeader } from "./chat/ChatHeader";
 import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
@@ -6514,6 +6515,30 @@ export default function ChatView({
                 ),
               }
             : {})}
+          parallelRunControl={
+            activeProject &&
+            (activeProject.kind ?? "project") === "project" &&
+            isGitRepo &&
+            !isSidechatThread(activeThread) &&
+            !isCoordinatorConversation ? (
+              <ParallelRunsControl
+                key={activeThread.id}
+                thread={activeThread}
+                project={activeProject}
+                selection={selectedModelSelection}
+                catalog={{ runtimeModelsByProvider, runtimeModelsByProviderInstance }}
+                picker={{
+                  providers: providerStatuses,
+                  modelOptionsByProvider,
+                  modelOptionsByProviderInstance,
+                  providerInstances,
+                  loadingModelProviders,
+                  discoveryErrorsByProvider,
+                }}
+                onNavigate={onNavigateToThread}
+              />
+            ) : undefined
+          }
           isSidechat={isSidechatThread(activeThread)}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}

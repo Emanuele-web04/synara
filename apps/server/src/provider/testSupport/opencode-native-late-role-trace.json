@@ -1,0 +1,144 @@
+[
+  {
+    "id": "evt_12c88f55f001FD9Vgu58U9V6Zu",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "part": {
+        "id": "prt_12c88f55e001QK3hbqTzsLvMRD",
+        "messageID": "msg_12c8899be0017zUdWrb4s5tz35",
+        "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+        "type": "text",
+        "text": "",
+        "time": {
+          "start": 1791748535646
+        }
+      },
+      "time": 1791748535647
+    }
+  },
+  {
+    "id": "evt_12c88f561001uFOA5F96P9YRKk",
+    "type": "message.part.delta",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "messageID": "msg_12c8899be0017zUdWrb4s5tz35",
+      "partID": "prt_12c88f55e001QK3hbqTzsLvMRD",
+      "field": "text",
+      "delta": "N"
+    }
+  },
+  {
+    "id": "evt_12c88f561002pSKWiaP03pgcVA",
+    "type": "message.part.delta",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "messageID": "msg_12c8899be0017zUdWrb4s5tz35",
+      "partID": "prt_12c88f55e001QK3hbqTzsLvMRD",
+      "field": "text",
+      "delta": "ATIVE_PARALLEL_OK"
+    }
+  },
+  {
+    "id": "evt_12c88f565001WcSFiLsnQCE3w1",
+    "type": "message.part.updated",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "part": {
+        "id": "prt_12c88f55e001QK3hbqTzsLvMRD",
+        "messageID": "msg_12c8899be0017zUdWrb4s5tz35",
+        "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+        "type": "text",
+        "text": "NATIVE_PARALLEL_OK",
+        "time": {
+          "start": 1791748535646,
+          "end": 1791748535653
+        }
+      },
+      "time": 1791748535653
+    }
+  },
+  {
+    "id": "evt_12c88f586001GEbLu5cE0YDCe0",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "info": {
+        "id": "msg_12c8899be0017zUdWrb4s5tz35",
+        "parentID": "msg_12c8899790017u06ROQHBwCVMH",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/workspace/scratch/a47932516920/native-parallel-acceptance-GT79br/worktrees/fixture-repo/synara-parallel-b6e663c9-b3ba-4cb1-83e7-c0bb802dc097-2",
+          "root": "/workspace/scratch/a47932516920/native-parallel-acceptance-GT79br/worktrees/fixture-repo/synara-parallel-b6e663c9-b3ba-4cb1-83e7-c0bb802dc097-2"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 8197,
+          "input": 2029,
+          "output": 7,
+          "reasoning": 17,
+          "cache": {
+            "write": 0,
+            "read": 6144
+          }
+        },
+        "modelID": "mimo-v2.6-flash-free",
+        "providerID": "opencode",
+        "time": {
+          "created": 1791748512190
+        },
+        "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+        "finish": "stop"
+      }
+    }
+  },
+  {
+    "id": "evt_12c88f5b2001thL1IHwioHXZnD",
+    "type": "message.updated",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "info": {
+        "id": "msg_12c8899be0017zUdWrb4s5tz35",
+        "parentID": "msg_12c8899790017u06ROQHBwCVMH",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/workspace/scratch/a47932516920/native-parallel-acceptance-GT79br/worktrees/fixture-repo/synara-parallel-b6e663c9-b3ba-4cb1-83e7-c0bb802dc097-2",
+          "root": "/workspace/scratch/a47932516920/native-parallel-acceptance-GT79br/worktrees/fixture-repo/synara-parallel-b6e663c9-b3ba-4cb1-83e7-c0bb802dc097-2"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 8197,
+          "input": 2029,
+          "output": 7,
+          "reasoning": 17,
+          "cache": {
+            "write": 0,
+            "read": 6144
+          }
+        },
+        "modelID": "mimo-v2.6-flash-free",
+        "providerID": "opencode",
+        "time": {
+          "created": 1791748512190,
+          "completed": 1791748535730
+        },
+        "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+        "finish": "stop"
+      }
+    }
+  },
+  {
+    "id": "evt_12c88f5b6001VmRbrMIkwd7Ax7",
+    "type": "session.status",
+    "properties": {
+      "sessionID": "ses_ed37768b5ffegBoh2x2dMgwZrQ",
+      "status": {
+        "type": "idle"
+      }
+    }
+  }
+]
