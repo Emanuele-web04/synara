@@ -257,6 +257,30 @@ describe("imported browser session restoration", () => {
     await first.shutdown();
   });
 
+  it("recovers session checkpointing when OS storage becomes available on a later import", async () => {
+    const directory = await home();
+    let available = false;
+    const osStore = { ...store, available: async () => available };
+    const source = backend([cookie, { ...cookie, domain: "other.test" }]);
+    const first = new BrowserSessionRestore(directory, source, osStore);
+    await first.initialize();
+
+    await expect(first.rememberImport(["example.test"])).rejects.toThrow(
+      "Secure browser session storage is unavailable",
+    );
+    expect(existsSync(join(directory, "sessions.enc"))).toBe(false);
+
+    available = true;
+    await first.rememberImport(["other.test"]);
+    await first.shutdown();
+
+    const next = backend([]);
+    const restarted = new BrowserSessionRestore(directory, next, osStore);
+    await restarted.initialize();
+    expect(next.restore.mock.calls[0]?.[0]).toHaveLength(2);
+    await restarted.shutdown();
+  });
+
   it("keeps the dirty marker when a replacement snapshot cannot be written", async () => {
     const directory = await home();
     const first = new BrowserSessionRestore(directory, backend(), store);
