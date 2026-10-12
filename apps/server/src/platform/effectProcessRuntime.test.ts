@@ -16,6 +16,37 @@ import { makeEffectProcessCommand, spawnProviderProcess } from "./effectProcessR
 afterEach(() => vi.restoreAllMocks());
 
 describe("spawnProviderProcess", () => {
+  it.each([false, true])(
+    "reports unsafe Windows batch arguments as typed launch failure (priority=%s)",
+    async (enabled) => {
+      const spawn = vi.fn(() => Effect.die("unsafe command must not reach spawn"));
+      const exit = await Effect.runPromiseExit(
+        spawnProviderProcess({ spawn }, "C:\\tools\\provider.cmd", ["one&two"], {
+          platform: "win32",
+          env: { PATH: "", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            ServerSettingsService.layerTest({ lowerProviderProcessPriority: enabled }),
+          ),
+        ),
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(false);
+        expect(Cause.findErrorOption(exit.cause)).toMatchObject({
+          _tag: "Some",
+          value: {
+            _tag: "PlatformError",
+            reason: { _tag: "BadArgument", module: "ChildProcess", method: "spawn" },
+          },
+        });
+        expect(Cause.pretty(exit.cause)).toContain("Cannot safely execute Windows batch argument");
+      }
+    },
+  );
+
   it
     .runIf(process.platform !== "win32")
     .each(["unresolved executable", "missing POSIX shell"] as const)(
