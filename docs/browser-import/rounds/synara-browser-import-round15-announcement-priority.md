@@ -13,7 +13,7 @@ Startup sheets now claim the shared slot at priority 1 and passive coachmarks at
 | Browser announcement UI, installed Chrome   | 11/11 passed, including sheet priority, coachmark deferral, and post-dismissal display |
 | Announcement slot unit tests                | 3/3 passed                                                                             |
 | Web native TypeScript check                 | Passed; existing Effect suggestion diagnostics only                                    |
-| `oxfmt --check`                             | Passed for the repository (4,645 files)                                                |
+| `oxfmt --check`                             | Passed for the repository (4,646 files)                                                |
 | `oxlint --report-unused-disable-directives` | 0 errors; 886 existing warnings                                                        |
 | `git diff --check`                          | Passed                                                                                 |
 
