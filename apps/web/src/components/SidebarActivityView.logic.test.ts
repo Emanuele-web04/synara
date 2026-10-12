@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
+import type { ThreadStatusPill } from "./Sidebar.logic";
 
 import {
   buildActivityViewModel,
@@ -18,6 +19,7 @@ import {
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
+  splitWorkingActivityThreads,
 } from "./SidebarActivityView.logic";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -767,6 +769,8 @@ describe("collectVisibleActivityThreadIds", () => {
         earlierOpen: true,
         earlier: [thread("earlier-visible")],
         projectGroups: [],
+        workingOpen: false,
+        working: [thread("working")],
         settledOpen: false,
         settled: [thread("done")],
       }),
@@ -787,11 +791,68 @@ describe("collectVisibleActivityThreadIds", () => {
         earlierOpen: false,
         earlier: [],
         projectGroups: [],
+        workingOpen: false,
+        working: [thread("working-elsewhere"), thread("working-open")],
         settledOpen: true,
         settled: [thread("done")],
-        revealed: { pinned: [], earlier: [thread("old-active")], settled: [] },
+        revealed: {
+          pinned: [],
+          earlier: [thread("old-active")],
+          working: [thread("working-open")],
+          settled: [],
+        },
       }),
-    ).toEqual(["recent", "old-active", "done"]);
+    ).toEqual(["recent", "old-active", "working-open", "done"]);
+  });
+
+  it("lists an open Working section after the feed and before Done", () => {
+    const thread = (id: string) => makeThread({ id });
+    expect(
+      collectVisibleActivityThreadIds({
+        groupMode: "project",
+        pinnedOpen: true,
+        pinned: [],
+        drafts: [],
+        recent: [],
+        today: [],
+        yesterday: [],
+        earlierOpen: false,
+        earlier: [],
+        projectGroups: [[thread("idle")]],
+        workingOpen: true,
+        working: [thread("working")],
+        settledOpen: true,
+        settled: [thread("done")],
+      }),
+    ).toEqual(["idle", "working", "done"]);
+  });
+});
+
+describe("splitWorkingActivityThreads", () => {
+  it("moves only busy chats to Working and keeps ones waiting on the user in the feed", () => {
+    const labelById = new Map<string, ThreadStatusPill["label"] | null>([
+      ["working", "Working"],
+      ["connecting", "Connecting"],
+      ["preparing", "Preparing worktree"],
+      ["approval", "Pending Approval"],
+      ["input", "Awaiting Input"],
+      ["background", "In Background"],
+      ["completed", "Completed"],
+      ["plain", null],
+    ]);
+    const threads = [...labelById.keys()].map((id) => makeThread({ id }));
+    const { working, rest } = splitWorkingActivityThreads(threads, (thread) => {
+      const label = labelById.get(thread.id) ?? null;
+      return label === null ? null : { label };
+    });
+    expect(working.map((thread) => thread.id)).toEqual(["working", "connecting", "preparing"]);
+    expect(rest.map((thread) => thread.id)).toEqual([
+      "approval",
+      "input",
+      "background",
+      "completed",
+      "plain",
+    ]);
   });
 });
 

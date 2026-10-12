@@ -185,6 +185,7 @@ function AgentActivityEventRow(props: {
             text={body}
             cwd={props.markdownCwd}
             isStreaming={false}
+            tone={isReasoningUpdateWorkEntry(props.entry) ? "process" : "subtle"}
             style={props.chatTypographyStyle}
             onImageExpand={props.onImageExpand}
           />

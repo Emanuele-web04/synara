@@ -59,4 +59,8 @@ export default defineConfig([
     entry: ["src/cuaDriverHostStandalone.ts"],
     noExternal: (id) => id.startsWith("@synara/"),
   },
+  {
+    ...shared,
+    entry: ["src/floatingBrowserChromePreload.ts"],
+  },
 ]);

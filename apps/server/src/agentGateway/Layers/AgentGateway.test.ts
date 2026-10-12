@@ -24,6 +24,7 @@ import {
   MessageId,
   ModelSelection,
   ProjectId,
+  ProviderInstanceId,
   THREAD_GOAL_MAX_CHARS,
   ThreadId,
   TurnId,
@@ -34,6 +35,8 @@ import { homedir } from "node:os";
 
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { vi } from "vitest";
+import { getCachedProviderInstanceUsageSnapshot } from "../../providerUsage/index.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -92,6 +95,11 @@ import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
+
+// Gateway tests exercise authorization and conversion without reading local account credentials.
+vi.mock("../../providerUsage/index.ts", () => ({
+  getCachedProviderInstanceUsageSnapshot: vi.fn(async () => null),
+}));
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -499,6 +507,7 @@ function makeHarnessLayer(
                       "thread:write",
                       "automation:write",
                       "diagnostics:read",
+                      "usage:read",
                     ] as const),
           }
         : null;
@@ -1466,7 +1475,7 @@ function toolErrorText(result: Record<string, unknown> | undefined): string {
   return content[0]?.text ?? "";
 }
 
-function makeClaudeGatewayRuntime(models: ModelInfo[]) {
+function makeClaudeGatewayRuntime(models: ModelInfo[], customModels: readonly string[] = []) {
   const queries: Array<{
     options: ClaudeQueryOptions;
     modelChanges: Array<string | undefined>;
@@ -1533,7 +1542,9 @@ function makeClaudeGatewayRuntime(models: ModelInfo[]) {
           }),
         ),
       ),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        ServerSettingsService.layerTest({ providers: { claudeAgent: { customModels } } }),
+      ),
       Layer.provide(
         Layer.succeed(ProviderHealth, {
           getStatuses: Effect.succeed([]),
@@ -1566,17 +1577,25 @@ describe("AgentGateway", () => {
     { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5" },
     { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
     { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
+    { value: "team-model", resolvedModel: "claude-fable-5-1" },
+    // The author's proxy case needs explicit server configuration; the same
+    // unconfigured unknown-model negative case below remains unchanged.
+    { value: "unknown-model", configuredCustom: true },
   ]) {
     it.effect(
       `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
       () => {
-        const runtime = makeClaudeGatewayRuntime([
-          {
-            ...model,
-            displayName: model.value,
-            description: "SDK-discovered model",
-          },
-        ]);
+        const customModels = model.configuredCustom ? [model.value] : [];
+        const runtime = makeClaudeGatewayRuntime(
+          [
+            {
+              ...model,
+              displayName: model.value,
+              description: "SDK-discovered model",
+            },
+          ],
+          customModels,
+        );
         return Effect.gen(function* () {
           const adapter = yield* ClaudeAdapter;
           const discovery = yield* ProviderDiscoveryService;
@@ -1615,6 +1634,15 @@ describe("AgentGateway", () => {
               )?.allowedValues,
               ["auto", "200k", "1m"],
             );
+            if (model.configuredCustom) {
+              // MCP accepts real schema values. Native Auto is omission, not
+              // the descriptor-only UI sentinel that would fail input decode.
+              assert.deepEqual(
+                construction.optionsByModel[model.value]?.find((rule) => rule.key === "effort")
+                  ?.allowedValues,
+                ["low", "medium", "high", "xhigh", "max", "ultrathink", "ultracode"],
+              );
+            }
 
             // A rejected window must fail before creating a thread or starting a turn.
             const invalid = yield* harness.callTool({
@@ -1694,6 +1722,9 @@ describe("AgentGateway", () => {
                 provider: "claudeAgent",
                 runtimeMode: "full-access",
                 modelSelection: saved.modelSelection,
+                ...(customModels.length
+                  ? { providerOptions: { claudeAgent: { customModels } } }
+                  : {}),
               });
               yield* adapter.sendTurn({
                 threadId: create.threadId,
@@ -1708,7 +1739,7 @@ describe("AgentGateway", () => {
                   : model.value;
               assert.equal(
                 query.options.model,
-                window === "1m" && !expectedModel.endsWith("[1m]")
+                window === "1m" && !model.configuredCustom && !expectedModel.endsWith("[1m]")
                   ? `${expectedModel}[1m]`
                   : expectedModel,
               );
@@ -2144,6 +2175,169 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("requires the explicit usage capability for quota tools", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const error = toolResultJson(response.result).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "usage:read");
+      assert.equal(vi.mocked(getCachedProviderInstanceUsageSnapshot).mock.calls.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lists account usage while keeping context summaries caller-scoped", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockResolvedValue({
+        provider: "codex",
+        updatedAt: new Date().toISOString(),
+        limits: [{ window: "Weekly", usedPercent: 75 }],
+        usageLines: [],
+        source: "codex-usage-api",
+        status: "ok",
+      });
+      const harness = yield* makeHarness;
+      const usageResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const usages = toolResultJson(usageResponse.result).usage as Array<{
+        instanceId: string;
+        provider: string;
+        availability: string;
+        unavailableReason?: string;
+        snapshot: unknown;
+        quotaWindows: unknown[];
+      }>;
+      const usage = usages.find((entry) => entry.instanceId === "codex")!;
+      assert.equal(usage.provider, "codex");
+      assert.equal(usage.availability, "available");
+      assert.isArray(usage.quotaWindows);
+      assert.notProperty(usage, "credential");
+      assert.notProperty(usage, "token");
+
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+      const contextResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+      const context = toolResultJson(contextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { provider: string; availability: string };
+      };
+      assert.isTrue(context.capabilities.usageRead);
+      assert.equal(context.usage.provider, "codex");
+      assert.deepEqual(
+        vi
+          .mocked(getCachedProviderInstanceUsageSnapshot)
+          .mock.calls.map(([instance]) => instance.instanceId),
+        ["codex"],
+      );
+
+      const readonlyContextResponse = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_context",
+        args: {},
+      });
+      const readonlyContext = toolResultJson(readonlyContextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { unavailableReason: string };
+      };
+      assert.isFalse(readonlyContext.capabilities.usageRead);
+      assert.equal(readonlyContext.usage.unavailableReason, "not-authorized");
+    }).pipe(
+      Effect.provide(gatewayLayer),
+      Effect.ensuring(
+        Effect.sync(() => vi.mocked(getCachedProviderInstanceUsageSnapshot).mockReset()),
+      ),
+    );
+  });
+
+  it.effect("reads only the caller's selected account, never another enabled account", () => {
+    const threads = baseThreads.map((thread) =>
+      thread.id === "thread-parent"
+        ? {
+            ...thread,
+            modelSelection: {
+              provider: "codex" as const,
+              model: thread.modelSelection.model,
+              instanceId: ProviderInstanceId.makeUnsafe("codex_work"),
+            },
+          }
+        : thread,
+    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(threads, [], {
+      serverSettings: {
+        providerInstances: {
+          codex_work: { driver: "codex", enabled: true },
+          codex_other: { driver: "codex", enabled: true },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(
+        vi
+          .mocked(getCachedProviderInstanceUsageSnapshot)
+          .mock.calls.map(([instance]) => instance.instanceId),
+        ["codex_work"],
+      );
+    }).pipe(
+      Effect.provide(gatewayLayer),
+      Effect.ensuring(
+        Effect.sync(() => vi.mocked(getCachedProviderInstanceUsageSnapshot).mockReset()),
+      ),
+    );
+  });
+
+  it.effect("does not fall back to ambient credentials for a removed caller account", () => {
+    const threads = baseThreads.map((thread) =>
+      thread.id === "thread-parent"
+        ? {
+            ...thread,
+            modelSelection: {
+              provider: "codex" as const,
+              model: thread.modelSelection.model,
+              instanceId: ProviderInstanceId.makeUnsafe("codex_removed"),
+            },
+          }
+        : thread,
+    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(threads);
+    return Effect.gen(function* () {
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.equal(vi.mocked(getCachedProviderInstanceUsageSnapshot).mock.calls.length, 0);
+      const usage = toolResultJson(response.result).usage as { availability: string };
+      assert.equal(usage.availability, "unavailable");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -2233,6 +2427,8 @@ describe("AgentGateway", () => {
         "synara_read_thread_runtime_events",
         "synara_diagnose_thread",
         "synara_wait_for_threads",
+        "synara_get_usage",
+        "synara_list_provider_usage",
         "synara_create_threads",
         "synara_create_thread",
         "synara_send_message",
@@ -2884,6 +3080,53 @@ describe("AgentGateway", () => {
         (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
         ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
       );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("diagnoses an abandoned startup even without delivery blockers or incidents", () => {
+    const thread = makeThreadShell("thread-parent", {
+      latestTurn: {
+        ...baseThreads[0]!.latestTurn!,
+        state: "interrupted",
+        completedAt: NOW,
+      },
+      session: {
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([thread]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const diagnose = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        });
+      const payload = toolResultJson((yield* diagnose()).result);
+      assert.deepEqual(payload.providerDeliveryBlockers, []);
+      assert.deepEqual(payload.operationalIncidents, []);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_lifecycle_stale"],
+      );
+
+      // The same combination is normal while a new queued turn is starting.
+      const now = new Date().toISOString();
+      harness.setThreadDetail(
+        makeThreadDetail({
+          ...thread,
+          updatedAt: now,
+          session: { ...thread.session!, updatedAt: now },
+        }),
+      );
+      assert.deepEqual(toolResultJson((yield* diagnose()).result).findings, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

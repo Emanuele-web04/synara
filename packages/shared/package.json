@@ -4,9 +4,17 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./effortRetryMetrics": {
+      "types": "./src/effortRetryMetrics.ts",
+      "import": "./src/effortRetryMetrics.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
+    },
+    "./pairingUrl": {
+      "types": "./src/pairingUrl.ts",
+      "import": "./src/pairingUrl.ts"
     },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
@@ -104,6 +112,10 @@
       "types": "./src/processRuntime.ts",
       "import": "./src/processRuntime.ts"
     },
+    "./providerLaunchArgs": {
+      "types": "./src/providerLaunchArgs.ts",
+      "import": "./src/providerLaunchArgs.ts"
+    },
     "./filesystemPlatform": {
       "types": "./src/filesystemPlatform.ts",
       "import": "./src/filesystemPlatform.ts"
@@ -163,6 +175,18 @@
     "./todo": {
       "types": "./src/todo.ts",
       "import": "./src/todo.ts"
+    },
+    "./threadTitleRefreshPolicy": {
+      "types": "./src/threadTitleRefreshPolicy.ts",
+      "import": "./src/threadTitleRefreshPolicy.ts"
+    },
+    "./threadTitleRefreshTrigger": {
+      "types": "./src/threadTitleRefreshTrigger.ts",
+      "import": "./src/threadTitleRefreshTrigger.ts"
+    },
+    "./threadTitleRefreshContext": {
+      "types": "./src/threadTitleRefreshContext.ts",
+      "import": "./src/threadTitleRefreshContext.ts"
     },
     "./localServers": {
       "types": "./src/localServers.ts",
@@ -339,6 +363,10 @@
     "./providerCliProfiles": {
       "types": "./src/providerCliProfiles.ts",
       "import": "./src/providerCliProfiles.ts"
+    },
+    "./capabilityEvidence": {
+      "types": "./src/capabilityEvidence.ts",
+      "import": "./src/capabilityEvidence.ts"
     },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",

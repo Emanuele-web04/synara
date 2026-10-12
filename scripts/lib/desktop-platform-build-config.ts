@@ -4,6 +4,7 @@
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
 import { fileURLToPath } from "node:url";
+import { parseLinuxPackageTargets } from "./linux-package-targets.ts";
 
 import {
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
@@ -48,6 +49,9 @@ const MAC_DMG_ICON_PATH = "icon.icns";
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
+  readonly publish?: null;
+  readonly deb?: Record<string, unknown>;
+  readonly rpm?: Record<string, unknown>;
   readonly afterSign?: string;
   readonly afterPack?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
@@ -120,6 +124,9 @@ export function createDesktopPlatformBuildConfig(
       target: [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
+      // The bundled Claude and Cua native executables require macOS 13.
+      // Keep the app's launch metadata consistent with its complete payload.
+      minimumSystemVersion: "13.0",
       hardenedRuntime: input.signed === true,
       // The mandatory afterSign hook splits Apple upload/wait timings and
       // staples the app before electron-builder creates either container.
@@ -209,8 +216,14 @@ export function createDesktopPlatformBuildConfig(
   }
 
   if (input.platform === "linux") {
+    const targets = parseLinuxPackageTargets(input.target);
     return {
       ...nativePackaging,
+      // FpmTarget otherwise adds its packages to the shared updater manifest.
+      // Only AppImage events retain the global publish configuration.
+      ...(targets.includes("deb") ? { deb: { publish: null } } : {}),
+      ...(targets.includes("rpm") ? { rpm: { publish: null } } : {}),
+      ...(!targets.includes("AppImage") ? { publish: null } : {}),
       // The driver is spawned by path; an executable inside app.asar cannot
       // serve that path. Keep the staged copy outside the archive and omit
       // both source and runtime-resource copies from the application bundle.
@@ -221,7 +234,8 @@ export function createDesktopPlatformBuildConfig(
       ],
       extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
       linux: {
-        target: [input.target],
+        // Package each format from the same staged native application.
+        target: [...targets],
         executableName: "synara",
         icon: "icon.png",
         category: "Development",

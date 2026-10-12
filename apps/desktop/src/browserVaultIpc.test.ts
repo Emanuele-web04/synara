@@ -1,5 +1,6 @@
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import { describe, expect, it, vi } from "vitest";
+import type { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
 import type { BrowserVault } from "./browserAutomation/browserVault";
 import type { DesktopBrowserManager } from "./browserManager";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
@@ -24,12 +25,14 @@ describe("browser vault IPC", () => {
       reveal: vi.fn(),
       onChanged: () => () => {},
     };
+    const cookies = { profiles: vi.fn(async () => [{ id: "Default", name: "Default" }]) };
     const manager = { isTrustedRenderer: (id: number) => id === 1 };
     const dispose = registerBrowserVaultIpc(
       ipc as unknown as IpcMain,
       manager as unknown as DesktopBrowserManager,
       vault as unknown as BrowserVault,
       vi.fn(),
+      cookies as unknown as BrowserCookieImport,
     );
     const mainFrame = {};
     const trusted = {
@@ -52,6 +55,7 @@ describe("browser vault IPC", () => {
       BROWSER_IPC_CHANNELS.vault.unlock,
       BROWSER_IPC_CHANNELS.vault.reveal,
       BROWSER_IPC_CHANNELS.vault.importCookies,
+      BROWSER_IPC_CHANNELS.vault.cookieProfiles,
     ]) {
       await expect(
         handlers.get(channel)!({ ...trusted, senderFrame: {} } as IpcMainInvokeEvent, {
@@ -66,6 +70,16 @@ describe("browser vault IPC", () => {
         ),
       ).rejects.toThrow("denied");
     }
+    expect(cookies.profiles).not.toHaveBeenCalled();
+    const profiles = handlers.get(BROWSER_IPC_CHANNELS.vault.cookieProfiles)!;
+    for (const browser of ["helium", "aside", "arc", "dia"]) {
+      await expect(profiles(trusted, browser)).resolves.toEqual([
+        { id: "Default", name: "Default" },
+      ]);
+      expect(cookies.profiles).toHaveBeenLastCalledWith(browser);
+    }
+    await expect(profiles(trusted, "__proto__")).rejects.toThrow("could not be completed");
+    expect(cookies.profiles).toHaveBeenCalledTimes(4);
     expect(vault.reveal).not.toHaveBeenCalled();
     expect(vault.setupMaster).not.toHaveBeenCalled();
     expect(vault.unlock).not.toHaveBeenCalled();

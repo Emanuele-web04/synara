@@ -60,6 +60,7 @@ import {
   ProviderAdapterProcessError,
   ProviderAdapterValidationError,
   ProviderAdapterRequestError,
+  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
@@ -315,6 +316,10 @@ function makeFakeCodexAdapter(
   },
 ) {
   const sessions = new Map<ThreadId, ProviderSession>();
+  // Retained-stopped sessions stay registered: the faithful fake models the
+  // production state where an interrupted stop marked the context stopped but
+  // never reached the map deletion.
+  const stoppedSessions = new Set<ThreadId>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
   const startSession = vi.fn(
@@ -335,6 +340,7 @@ function makeFakeCodexAdapter(
           updatedAt: now,
         };
         sessions.set(session.threadId, session);
+        stoppedSessions.delete(session.threadId);
         return session;
       }),
   );
@@ -346,6 +352,14 @@ function makeFakeCodexAdapter(
       if (!sessions.has(input.threadId)) {
         return Effect.fail(
           new ProviderAdapterSessionNotFoundError({
+            provider,
+            threadId: input.threadId,
+          }),
+        );
+      }
+      if (stoppedSessions.has(input.threadId)) {
+        return Effect.fail(
+          new ProviderAdapterSessionClosedError({
             provider,
             threadId: input.threadId,
           }),
@@ -405,6 +419,7 @@ function makeFakeCodexAdapter(
     (threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
         sessions.delete(threadId);
+        stoppedSessions.delete(threadId);
       }),
   );
   const renewAgentGatewayCredential = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
@@ -415,7 +430,8 @@ function makeFakeCodexAdapter(
   );
 
   const hasSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
+    (threadId: ThreadId): Effect.Effect<boolean> =>
+      Effect.succeed(sessions.has(threadId) && !stoppedSessions.has(threadId)),
   );
 
   const readThread = vi.fn(
@@ -460,6 +476,7 @@ function makeFakeCodexAdapter(
     (): Effect.Effect<void, ProviderAdapterError> =>
       Effect.sync(() => {
         sessions.clear();
+        stoppedSessions.clear();
       }),
   );
 
@@ -544,6 +561,11 @@ function makeFakeCodexAdapter(
     compactThread,
     forkThread,
     stopAll,
+    retainStopped: (threadId: ThreadId): void => {
+      if (sessions.has(threadId)) {
+        stoppedSessions.add(threadId);
+      }
+    },
   };
 }
 
@@ -590,6 +612,7 @@ function makeProviderServiceLayer(
     readonly freshRuntimeEventDelivery?: boolean;
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
+    readonly includeOpenCode?: boolean;
     readonly codexDidResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -614,6 +637,7 @@ function makeProviderServiceLayer(
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
   const pi = makeFakeCodexAdapter("pi");
+  const openCode = makeFakeCodexAdapter("opencode");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
       provider === "codex"
@@ -626,7 +650,9 @@ function makeProviderServiceLayer(
               ? Effect.succeed(droid.adapter)
               : provider === "pi" && providers?.includePi === true
                 ? Effect.succeed(pi.adapter)
-                : Effect.fail(new ProviderUnsupportedError({ provider })),
+                : provider === "opencode" && providers?.includeOpenCode === true
+                  ? Effect.succeed(openCode.adapter)
+                  : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
       Effect.succeed([
         "codex",
@@ -634,6 +660,7 @@ function makeProviderServiceLayer(
         "antigravity",
         ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
         ...(providers?.includePi === true ? (["pi"] as const) : []),
+        ...(providers?.includeOpenCode === true ? (["opencode"] as const) : []),
       ] as const),
   };
 
@@ -665,12 +692,129 @@ function makeProviderServiceLayer(
     antigravity,
     droid,
     pi,
+    openCode,
     layer,
     rawLayer,
   };
 }
 
 const routing = makeProviderServiceLayer();
+const customModelRouting = makeProviderServiceLayer();
+customModelRouting.layer("ProviderServiceLive authoritative Claude custom models", (it) => {
+  it.effect(
+    "replaces caller membership with the resolved default or named instance and persists it",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const settings = yield* ServerSettingsService;
+        const directory = yield* ProviderSessionDirectory;
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: { driver: "claudeAgent", config: { customModels: ["default-proxy"] } },
+            claude_work: { driver: "claudeAgent", config: { customModels: ["work-proxy"] } },
+            claude_empty: { driver: "claudeAgent", config: { customModels: [] } },
+          },
+        });
+        for (const [instanceId, expected] of [
+          ["claudeAgent", ["default-proxy"]],
+          ["claude_work", ["work-proxy"]],
+          ["claude_empty", undefined],
+        ] as const) {
+          const threadId = asThreadId(`custom-model-${instanceId}`);
+          yield* provider.startSession(threadId, {
+            threadId,
+            provider: "claudeAgent",
+            ...(instanceId === "claudeAgent" ? {} : { providerInstanceId: instanceId }),
+            runtimeMode: "full-access",
+            providerOptions: { claudeAgent: { customModels: ["forged-proxy"] } },
+          });
+          const start = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+          assert.deepEqual(start?.providerOptions?.claudeAgent?.customModels, expected);
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const persisted = asRuntimePayloadRecord(binding.runtimePayload)
+            .providerOptions as ProviderSessionStartInput["providerOptions"];
+          assert.deepEqual(persisted?.claudeAgent?.customModels, expected);
+          yield* provider.stopSession({ threadId });
+        }
+      }),
+  );
+
+  it.effect("refreshes membership on recovery while preserving the same native continuation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      const threadId = asThreadId("custom-model-recovery");
+      const config = (customModels: readonly string[]) => ({
+        providerInstances: {
+          claude_custom_recovery: { driver: "claudeAgent" as const, config: { customModels } },
+        },
+      });
+      yield* settings.updateSettings(config(["old-proxy"]));
+      const session = yield* provider.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        providerInstanceId: "claude_custom_recovery",
+        runtimeMode: "full-access",
+      });
+      yield* customModelRouting.claude.stopSession(threadId);
+      yield* settings.updateSettings(config(["current-proxy"]));
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue with current configuration",
+        attachments: [],
+      });
+      const recovered = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+      assert.deepEqual(recovered?.providerOptions?.claudeAgent?.customModels, ["current-proxy"]);
+      assert.deepEqual(recovered?.resumeCursor, session.resumeCursor);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("refreshes default-instance membership despite legacy launch-option precedence", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      const directory = yield* ProviderSessionDirectory;
+      for (const [index, customModels] of [["current-proxy"], []].entries()) {
+        const threadId = asThreadId(`default-custom-model-recovery-${index}`);
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: { driver: "claudeAgent", config: { customModels: ["old-proxy"] } },
+          },
+        });
+        const session = yield* provider.startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { binaryPath: "legacy-claude" } },
+        });
+        yield* customModelRouting.claude.stopSession(threadId);
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: {
+              driver: "claudeAgent",
+              config: { binaryPath: "new-default-claude", customModels },
+            },
+          },
+        });
+        yield* provider.sendTurn({ threadId, input: "recover the legacy launch", attachments: [] });
+        const recovered = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+        const expected = customModels.length > 0 ? customModels : undefined;
+        assert.equal(recovered?.providerOptions?.claudeAgent?.binaryPath, "legacy-claude");
+        assert.deepEqual(recovered?.providerOptions?.claudeAgent?.customModels, expected);
+        assert.deepEqual(recovered?.resumeCursor, session.resumeCursor);
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const persisted = asRuntimePayloadRecord(binding.runtimePayload)
+          .providerOptions as ProviderSessionStartInput["providerOptions"];
+        assert.deepEqual(persisted?.claudeAgent?.customModels, expected);
+        if (expected === undefined) {
+          assert.equal(Object.hasOwn(persisted?.claudeAgent ?? {}, "customModels"), false);
+        }
+        yield* provider.stopSession({ threadId });
+      }
+    }),
+  );
+});
 const replacementEvents = new Map<string, ProviderRuntimeEvent>();
 const replacementRouting = makeProviderServiceLayer({
   persistRuntimeEvent: (event) =>
@@ -817,6 +961,14 @@ const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: tr
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
   codexDidResumeSession: () => false,
 });
+const unboundStoppedOpenCodeRouting = makeProviderServiceLayer(undefined, {
+  includeOpenCode: true,
+});
+const stoppedOpenCodeRouting = makeProviderServiceLayer(undefined, { includeOpenCode: true });
+const stoppedOpenCodeDisabledRouting = makeProviderServiceLayer(
+  { providerIsEnabled: (provider) => Effect.succeed(provider !== "opencode") },
+  { includeOpenCode: true },
+);
 
 routing.layer("ProviderServiceLive native forks", (it) => {
   it.effect("forks across Codex account instances sharing continuation storage", () =>
@@ -6744,8 +6896,487 @@ piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it)
   );
 });
 
+const manualIdleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 0 });
+manualIdleCleanup.layer("ProviderServiceLive manual idle cleanup", (it) => {
+  it.effect(
+    "stops an idle runtime with automatic cleanup disabled and preserves its identity",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("manual-idle-preserve");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        manualIdleCleanup.codex.updateSession(threadId, withoutResumeCursor);
+        manualIdleCleanup.codex.stopSession.mockClear();
+
+        assert.ok(provider.stopIdleRuntimeSession);
+        yield* provider.stopIdleRuntimeSession({ threadId });
+
+        assert.deepEqual(manualIdleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        assert.isFalse(yield* manualIdleCleanup.codex.hasSession(threadId));
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(after.status, "stopped");
+        assert.deepEqual(after.resumeCursor, before.resumeCursor);
+        assert.equal(after.provider, before.provider);
+        assert.equal(after.providerInstanceId, before.providerInstanceId);
+        assert.equal(after.adapterKey, before.adapterKey);
+        assert.equal(after.runtimeMode, before.runtimeMode);
+        assert.equal(asRuntimePayloadRecord(after.runtimePayload).activeTurnId, null);
+      }),
+  );
+
+  it.effect(
+    "refuses active turns, live tasks and missing resume state without changing bindings",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        assert.ok(provider.stopIdleRuntimeSession);
+        yield* manualIdleCleanup.codex.waitForRuntimeSubscribers();
+        for (const reason of ["turn", "task", "cursor"] as const) {
+          const threadId = asThreadId(`manual-idle-refuse-${reason}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          if (reason === "turn") {
+            manualIdleCleanup.codex.updateSession(threadId, (session) => ({
+              ...session,
+              status: "running",
+              activeTurnId: asTurnId("manual-idle-active-turn"),
+            }));
+          } else if (reason === "task") {
+            manualIdleCleanup.codex.emit({
+              type: "task.started",
+              eventId: asEventId("manual-idle-active-task"),
+              provider: "codex",
+              threadId,
+              createdAt: new Date().toISOString(),
+              payload: { taskId: "background-task" },
+            });
+            yield* waitUntilEffect(() => provider.hasLiveRuntimeTasks!({ threadId }));
+          } else {
+            manualIdleCleanup.codex.updateSession(threadId, withoutResumeCursor);
+            yield* directory.upsert({ threadId, provider: "codex", resumeCursor: null });
+          }
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          manualIdleCleanup.codex.stopSession.mockClear();
+
+          const result = yield* Effect.result(provider.stopIdleRuntimeSession({ threadId }));
+
+          assert.equal(result._tag, "Failure");
+          assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+          assert.isTrue(yield* manualIdleCleanup.codex.hasSession(threadId));
+          assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+          yield* provider.stopSession({ threadId });
+        }
+      }),
+  );
+
+  it.effect("abandons manual admission when current-generation background work arrives", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("manual-idle-admission-race");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const listSessions = manualIdleCleanup.codex.listSessions.getMockImplementation()!;
+      manualIdleCleanup.codex.listSessions.mockImplementationOnce(() =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(listSessions()),
+        ),
+      );
+      manualIdleCleanup.codex.stopSession.mockClear();
+      yield* manualIdleCleanup.codex.waitForRuntimeSubscribers();
+      assert.ok(provider.stopIdleRuntimeSession);
+      const stopping = yield* provider
+        .stopIdleRuntimeSession({ threadId })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      manualIdleCleanup.codex.emit({
+        type: "task.started",
+        eventId: asEventId("manual-idle-racing-task"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: before.lifecycleGeneration,
+        createdAt: new Date().toISOString(),
+        payload: { taskId: "racing-background-task" },
+      });
+      yield* waitUntilEffect(() => provider.hasLiveRuntimeTasks!({ threadId }));
+      yield* Deferred.succeed(release, undefined);
+
+      assert.equal((yield* Fiber.join(stopping))._tag, "Failure");
+      assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+      assert.equal(
+        Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+        before.lifecycleGeneration,
+      );
+      const turnId = asTurnId("manual-idle-still-routed");
+      manualIdleCleanup.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("manual-idle-routed-turn"),
+        provider: "codex",
+        threadId,
+        turnId,
+        lifecycleGeneration: before.lifecycleGeneration,
+        createdAt: new Date().toISOString(),
+        payload: { state: "running" },
+      });
+      yield* waitUntilEffect(() =>
+        directory
+          .getBinding(threadId)
+          .pipe(
+            Effect.map(
+              (binding) =>
+                asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload).activeTurnId ===
+                turnId,
+            ),
+          ),
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect(
+    "holds manual cleanup across caller cancellation before a subsequent turn resumes",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("manual-idle-cleanup-barrier");
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const stopSession = manualIdleCleanup.codex.stopSession.getMockImplementation()!;
+        manualIdleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(stopSession(id)),
+          ),
+        );
+        manualIdleCleanup.codex.sendTurn.mockClear();
+        manualIdleCleanup.codex.startSession.mockClear();
+        assert.ok(provider.stopIdleRuntimeSession);
+        const stopping = yield* provider
+          .stopIdleRuntimeSession({ threadId })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(stopping);
+        const sending = yield* provider
+          .sendTurn({ threadId, input: "Resume after manual cleanup" })
+          .pipe(Effect.forkChild);
+        yield* sleep(20);
+        assert.equal(manualIdleCleanup.codex.sendTurn.mock.calls.length, 0);
+        assert.equal(manualIdleCleanup.codex.startSession.mock.calls.length, 0);
+        assert.isTrue(yield* manualIdleCleanup.codex.hasSession(threadId));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(sending);
+
+        assert.equal(manualIdleCleanup.codex.startSession.mock.calls.length, 1);
+        assert.deepEqual(
+          manualIdleCleanup.codex.startSession.mock.calls[0]?.[0].resumeCursor,
+          session.resumeCursor,
+        );
+        assert.equal(manualIdleCleanup.codex.sendTurn.mock.calls.length, 1);
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(after.status, "running");
+        assert.equal(
+          asRuntimePayloadRecord(after.runtimePayload).activeTurnId,
+          `turn-${String(threadId)}`,
+        );
+        yield* provider.stopSession({ threadId });
+      }),
+  );
+
+  it.effect("refuses manual cleanup while a send is preparing without an active turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("manual-idle-pending-send");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const sendTurn = manualIdleCleanup.codex.sendTurn.getMockImplementation()!;
+      manualIdleCleanup.codex.sendTurn.mockImplementationOnce((input) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(sendTurn(input)),
+        ),
+      );
+      manualIdleCleanup.codex.stopSession.mockClear();
+      const sending = yield* provider
+        .sendTurn({ threadId, input: "Preparing" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.ok(provider.stopIdleRuntimeSession);
+      const result = yield* Effect.result(provider.stopIdleRuntimeSession({ threadId }));
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.stopIdleRuntimeSession",
+          issue: "Wait for the current provider operation before stopping the agent process.",
+        }),
+      );
+      assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(sending);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("does not block a force stop behind queued manual admission", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("manual-idle-force-stop-race");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const stopSession = manualIdleCleanup.codex.stopSession.getMockImplementation()!;
+      manualIdleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(stopSession(id)),
+        ),
+      );
+      const forced = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.ok(provider.stopIdleRuntimeSession);
+      const manual = yield* provider
+        .stopIdleRuntimeSession({ threadId })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* sleep(20);
+      yield* Deferred.succeed(release, undefined);
+
+      yield* Fiber.join(forced);
+      assert.equal((yield* Fiber.join(manual))._tag, "Failure");
+      assert.isFalse(yield* manualIdleCleanup.codex.hasSession(threadId));
+    }),
+  );
+});
+
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
+  it.effect("rearms existing idle timers and remembers idle runtimes while disabled", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-timeout-settings");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      yield* Effect.gen(function* () {
+        idleCleanup.codex.stopSession.mockClear();
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-timeout-settings-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
+        );
+        configure(300);
+        yield* sleep(150);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        configure(0);
+        yield* sleep(350);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        configure(40);
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "provider.stopRuntimeSession",
+              ),
+            ),
+        );
+        assert.deepEqual(idleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        assert.deepEqual(
+          Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+          session.resumeCursor,
+        );
+        yield* provider.stopSession({ threadId });
+      }).pipe(Effect.ensuring(Effect.sync(() => configure(undefined))));
+    }),
+  );
+
+  it.effect("does not rearm busy or preparing runtimes when the idle timeout changes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-settings-busy");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        configure(0);
+        idleCleanup.codex.stopSession.mockClear();
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-settings-before-busy"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "turn.completed",
+              ),
+            ),
+        );
+        const sendTurn = idleCleanup.codex.sendTurn.getMockImplementation()!;
+        idleCleanup.codex.sendTurn.mockImplementationOnce((input) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(sendTurn(input)),
+          ),
+        );
+        const sending = yield* provider
+          .sendTurn({ threadId, input: "Preparing a turn" })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        configure(30);
+        yield* sleep(70);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(sending);
+        configure(0);
+        configure(20);
+        yield* sleep(60);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(release, undefined).pipe(
+            Effect.andThen(Effect.sync(() => configure(undefined))),
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect("invalidates a fired idle probe on disable without retiring a later timer", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-settings-fired-probe");
+      const configure = provider.configureRuntimeIdleStopMs;
+      assert.ok(configure);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        idleCleanup.codex.stopSession.mockClear();
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        idleCleanup.codex.listSessions
+          .mockImplementationOnce(() => Effect.succeed([session]))
+          .mockImplementationOnce(() =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as([session]),
+            ),
+          );
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("idle-settings-fired-probe-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        yield* Deferred.await(entered);
+        configure(0);
+        yield* Deferred.succeed(release, undefined);
+        yield* sleep(150);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+        assert.equal(
+          Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+          before.lifecycleGeneration,
+        );
+        configure(undefined);
+        yield* waitUntilEffect(() =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload)
+                    .lastRuntimeEvent === "provider.stopRuntimeSession",
+              ),
+            ),
+        );
+        assert.deepEqual(idleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Deferred.succeed(release, undefined).pipe(
+            Effect.andThen(Effect.sync(() => configure(undefined))),
+          ),
+        ),
+      );
+    }),
+  );
+
   it.effect("retries failed idle teardown after a delayed session exit notification", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -6782,6 +7413,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       });
       yield* waitUntil(() => idleCleanup.codex.stopSession.mock.calls.length === 1);
       yield* sleep(30);
+      // Disabling future idle cleanup must not abandon already-owned descendant cleanup.
+      provider.configureRuntimeIdleStopMs!(0);
       idleCleanup.codex.emit({
         type: "session.exited",
         eventId: asEventId("runtime-idle-delayed-exit"),
@@ -6815,7 +7448,13 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           ),
       );
       yield* provider.stopSession({ threadId });
-    }),
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          (yield* ProviderService).configureRuntimeIdleStopMs!(undefined);
+        }),
+      ),
+    ),
   );
 
   it.effect("cancels a pending idle cleanup retry when new user work starts", () =>
@@ -7913,6 +8552,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-failed-dispatch");
+      provider.configureRuntimeIdleStopMs!(0);
       const dispatchFailure = new ProviderAdapterSessionNotFoundError({
         provider: "codex",
         threadId,
@@ -7966,6 +8606,9 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       );
       assertFailure(failedTurn, dispatchFailure);
 
+      yield* sleep(150);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+      provider.configureRuntimeIdleStopMs!(undefined);
       yield* waitUntil(
         () => idleCleanup.codex.stopSession.mock.calls.length > 0,
         500,
@@ -7973,7 +8616,13 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         "idle runtime stop after failed dispatch",
       );
       assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
-    }),
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          (yield* ProviderService).configureRuntimeIdleStopMs!(undefined);
+        }),
+      ),
+    ),
   );
 });
 
@@ -9166,5 +9815,189 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
     }),
+  );
+});
+
+unboundStoppedOpenCodeRouting.layer(
+  "ProviderServiceLive unbound OpenCode stopped retention",
+  (it) => {
+    it.effect("does not route an unbound stopped context through the live-startup fallback", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-opencode-stopped-unbound");
+        yield* unboundStoppedOpenCodeRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        unboundStoppedOpenCodeRouting.openCode.retainStopped(threadId);
+        unboundStoppedOpenCodeRouting.openCode.startSession.mockClear();
+        unboundStoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(provider.sendTurn({ threadId, input: "recover" }));
+        assertFailure(
+          result,
+          new ProviderValidationError({
+            operation: "ProviderService.sendTurn",
+            issue: `Cannot route thread '${threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          }),
+        );
+        assert.equal(unboundStoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(unboundStoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
+    );
+  },
+);
+
+stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (it) => {
+  it.effect("PR1160 TASK-06 recovers a stopped-retained OpenCode session for sendTurn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-opencode-stopped-retained");
+
+      const initial = yield* provider.startSession(threadId, {
+        provider: "opencode",
+        threadId,
+        cwd: "/tmp/opencode-stopped-retained",
+        runtimeMode: "full-access",
+      });
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), true);
+
+      stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), false);
+      const retained = yield* stoppedOpenCodeRouting.openCode.listSessions();
+      assert.equal(retained.length, 1);
+      assert.equal(retained[0]?.threadId, threadId);
+
+      stoppedOpenCodeRouting.openCode.startSession.mockClear();
+      stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+      const turn = yield* provider.sendTurn({ threadId, input: "recover", attachments: [] });
+
+      assert.equal(turn.threadId, threadId);
+      assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 1);
+      const resumeInput = stoppedOpenCodeRouting.openCode.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(resumeInput?.resumeCursor, initial.resumeCursor);
+      assert.equal(stoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 1);
+      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), true);
+    }),
+  );
+
+  it.effect(
+    "PR1160 TASK-06 fails explicitly when a stopped-retained OpenCode session has no resume state",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-no-resume");
+
+        yield* stoppedOpenCodeRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+        yield* directory.upsert({ threadId, provider: "opencode" });
+        stoppedOpenCodeRouting.openCode.startSession.mockClear();
+        stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(
+          provider.sendTurn({ threadId, input: "recover", attachments: [] }),
+        );
+        assertFailure(
+          result,
+          new ProviderValidationError({
+            operation: "ProviderService.sendTurn",
+            issue: `Cannot recover thread '${threadId}' because no provider resume state is persisted.`,
+          }),
+        );
+        assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
+  );
+
+  it.effect(
+    "PR1160 TASK-07 rejects inactive control-plane calls for a stopped-retained OpenCode session",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-control-plane");
+
+        yield* provider.startSession(threadId, {
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeRouting.openCode.retainStopped(threadId);
+
+        const interruptResult = yield* Effect.result(provider.interruptTurn({ threadId }));
+        assertFailure(
+          interruptResult,
+          new ProviderValidationError({
+            operation: "ProviderService.interruptTurn",
+            issue: `Cannot interrupt thread '${threadId}' because its provider runtime is not active.`,
+          }),
+        );
+
+        const approvalResult = yield* Effect.result(
+          provider.respondToRequest({
+            threadId,
+            requestId: asRequestId("opencode-stopped-approval"),
+            decision: "accept",
+          }),
+        );
+        assertFailure(
+          approvalResult,
+          new ProviderValidationError({
+            operation: "ProviderService.respondToRequest",
+            issue:
+              "Cannot respond to request 'opencode-stopped-approval' because the provider runtime is not active.",
+            reason: "runtime-unavailable",
+          }),
+        );
+        assert.equal(stoppedOpenCodeRouting.openCode.interruptTurn.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeRouting.openCode.respondToRequest.mock.calls.length, 0);
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(binding?.provider, "opencode");
+      }),
+  );
+});
+
+stoppedOpenCodeDisabledRouting.layer("ProviderServiceLive OpenCode disabled provider", (it) => {
+  it.effect(
+    "PR1160 TASK-06 rejects recovery of a stopped-retained OpenCode session while disabled",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-opencode-stopped-disabled");
+
+        yield* stoppedOpenCodeDisabledRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeDisabledRouting.openCode.retainStopped(threadId);
+        yield* directory.upsert({
+          threadId,
+          provider: "opencode",
+          resumeCursor: { opaque: "resume-disabled-opencode" },
+          runtimeMode: "full-access",
+        });
+        stoppedOpenCodeDisabledRouting.openCode.startSession.mockClear();
+        stoppedOpenCodeDisabledRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(
+          provider.sendTurn({ threadId, input: "recover", attachments: [] }),
+        );
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure._tag, "ProviderValidationError");
+        assert.equal(result.failure.message.includes("disabled"), true);
+        assert.equal(stoppedOpenCodeDisabledRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(stoppedOpenCodeDisabledRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
   );
 });

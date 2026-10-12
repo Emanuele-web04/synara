@@ -60,6 +60,18 @@ Use a base ref that represents the state the task should actually modify:
 
 When an orchestrating task creates managed worktrees through the Agent Gateway, each worktree starts from the selected base ref. Creation should be treated as one durable operation with a stable request ID.
 
+## Ignored files in a new worktree
+
+A new worktree starts with the source checkout's tracked files, its uncommitted changes, and its untracked files. Files that Git ignores stay behind unless the repository names them in one of two files at its root. Both use `.gitignore` pattern syntax.
+
+`.worktreeinclude` lists ignored files to copy, such as `.env`. Each worktree gets its own copy, and the recovery snapshot taken before a managed removal includes them.
+
+`.worktreelink` lists ignored paths to link instead of copy, such as a vendored SDK or a toolchain that every worktree reads and none writes. Directory links use junctions on Windows and symlinks elsewhere, so the worktree shares the source checkout's copy. File links use symlinks; when the operating system refuses a file symlink, Synara copies the resolved file instead. Write the pattern without a trailing slash, in `.worktreelink` and in `.gitignore`, so it also matches the link itself. A path that both files name is copied.
+
+Removing the worktree detaches its recorded shared links before Git removes the checkout, leaving their targets in place even if `.worktreelink` was later edited or removed. If Git rejects removal, Synara restores the detached links; a restoration failure is reported instead of being hidden. Recovery snapshots record shared links without copying their targets, and preserve local edits to files that fell back to independent copies.
+
+Everything else Git ignores, such as build output and `node_modules`, starts empty in the new worktree.
+
 ## Working inside the task
 
 Run repository commands from the task’s terminal so they use the correct working directory:

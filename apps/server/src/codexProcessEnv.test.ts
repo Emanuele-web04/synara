@@ -1462,3 +1462,40 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 });
+
+describe("Codex configured app-server arguments", () => {
+  it("keeps managed continuation and credential overrides after custom global and subcommand flags", () => {
+    const home = path.resolve("trusted Codex home");
+    const args = buildCodexAppServerArgs(
+      home,
+      '-c sqlite_home="/untrusted" -- --config cli_auth_credentials_store="keyring"',
+    );
+    expect(args).toEqual([
+      "-c",
+      "sqlite_home=/untrusted",
+      "app-server",
+      "--config",
+      "cli_auth_credentials_store=keyring",
+      "--config",
+      `sqlite_home=${JSON.stringify(home)}`,
+      "--config",
+      'cli_auth_credentials_store="file"',
+    ]);
+  });
+
+  it("preserves quoted separators, empty values, Windows paths and escaped trailing spaces", () => {
+    const custom = String.raw`"--" "" "C:\tools\codex" -- --value tail\ `;
+    expect(buildCodexAppServerArgs("trusted", custom).slice(0, 6)).toEqual([
+      "--",
+      "",
+      "C:\\tools\\codex",
+      "app-server",
+      "--value",
+      "tail ",
+    ]);
+  });
+
+  it("rejects malformed quoting before invoking a child process", () => {
+    expect(() => buildCodexAppServerArgs("trusted", '"unclosed')).toThrow("unmatched");
+  });
+});

@@ -19,14 +19,14 @@ version, release notes and lockfile are final.
   omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Builds four platform legs in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
     Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
     job then downloads it and runs the startup smoke on `macos-15-intel`:
     under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
-  - Linux `x64` AppImage
+  - Linux `x64` AppImage, `.deb`, and `.rpm` (one electron-builder pass)
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,
   signs/notarizes where required, records verified provenance, runs Defender on
@@ -38,6 +38,7 @@ version, release notes and lockfile are final.
   `candidate-desktop-PLATFORM-ARCH` for 30 days. A retry of the same run and SHA
   can restore that verified candidate and skip packaging; see
   [release recovery](#resume-a-failed-release) for the limits.
+- Stable macOS DMG names `Synara-${version}-${arch}.dmg` are the proposed Homebrew Cask download contract. Its renderer shares the production macOS artifact identity from `scripts/lib/desktop-artifact-identity.ts`; Beta, Canary and Cua keep their distinct identities and filenames.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
@@ -65,10 +66,18 @@ version, release notes and lockfile are final.
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+  - platform installers (`.exe`, `.dmg`, `.AppImage`, `.deb`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
   - `*.blockmap` files, except the macOS update ZIP, which uses a full-archive payload
+- Linux package formats:
+  - the AppImage is the only Linux updater payload; `latest-linux.yml` and `synara-linux.yml` describe it
+  - `.deb` and `.rpm` are package-manager installs and are never mirrored to the pinned updater feed
+  - packaging, provenance and startup use the same strict Linux target declaration
+  - provenance requires one nonempty payload per requested format and verifies the sole Linux
+    updater manifest against the AppImage's exact version, filename, SHA-512 and size
+  - startup checks every requested format from its own temporary payload and user-data tree;
+    Debian/RPM metadata, desktop registration and archive paths are checked before launch
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
@@ -141,6 +150,8 @@ the smallest platform and stage that can answer the diagnostic question.
 3. Wait for `.github/workflows/release.yml` to finish.
 4. Confirm preflight and all four native matrix builds pass.
 5. Download the workflow artifacts and sanity-check installation on each OS.
+   Linux must include both `.AppImage` and `.deb`; extraction/startup smoke does
+   not replace an actual package-manager install, desktop launch and removal check.
 
 To publish from a manual dispatch instead of a tag push, select the existing
 release tag and pass `publish_release=true`. Publishing from a branch is refused.
@@ -274,6 +285,21 @@ provenance checks must still pass before publication.
 
 ### macOS release toolchains
 
+Mac application bundles declare `LSMinimumSystemVersion` 13.0 through electron-builder's
+`mac.minimumSystemVersion`. The bundled Claude and Cua executables require macOS 13;
+the application manifest must not advertise Electron's lower deployment target as the
+requirement for the complete bundle. This applies to signed, unsigned and local ad-hoc
+packages, including DMG and update ZIP payloads.
+
+The [read-only v1.0.1 inspection](https://github.com/Emanuele-web04/synara/actions/runs/38163962883)
+found app/Electron metadata at 12.0 and bundled Claude/Cua at 13.0 on both architectures.
+The [actual Homebrew audit](https://github.com/Emanuele-web04/synara/actions/runs/38166229495)
+rejected a cask requiring 13 because the old app plist still declares 12. This source fix
+does not modify signed historical releases. Recheck a newly built and published DMG's
+plist and native payload before refreshing the cask; the old audit failure remains
+unresolved until a matching release is available. Metadata inspection and macOS 15
+startup checks do not establish runtime behavior on macOS 13.
+
 Both native macOS release runners use macOS 15. Native helpers and the pinned
 Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
 job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
@@ -292,6 +318,53 @@ The release job installs the Cua driver's OpenSSL, X11, XCB, xkbcommon and
 Wayland development libraries before provisioning. This matches the build
 prerequisites in `cua-linux-check.yml`; it does not qualify Linux Computer Use
 as a supported 0.9.0 feature.
+
+### Linux package build dependencies
+
+The `linux-x64` leg additionally builds `.deb` and `.rpm` through electron-builder's
+fpm target. It needs `rpmbuild` (the `rpm` package) for the RPM, and `libcrypt.so.1`
+for the bundled fpm Ruby. Native startup verification uses `rpm2cpio` and `cpio` to
+inspect and extract the RPM without installing it. The workflow installs those tools and `libcrypt1` explicitly so
+the build does not depend on what the runner image happens to carry. On a local Arch
+or Fedora host the equivalents are `rpm` and `libxcrypt-compat`.
+
+Two package-metadata rules are enforced by the builder itself, not by this repository:
+a `.deb`/`.rpm` build fails without a project `homepage` and a maintainer email, which
+is why `DESKTOP_PACKAGE_AUTHOR_EMAIL` and `DESKTOP_PACKAGE_HOMEPAGE` exist in
+`scripts/build-desktop-artifact.ts`. That email is written into the `.deb` control
+file and the RPM maintainer field, so it must stay a real contactable address.
+
+electron-builder treats `deb`/`rpm` as auto-update-capable targets by default. The target-level
+`publish: null` settings exclude their artifact events from updater metadata; AppImage keeps
+the existing publish configuration. Synara's gate in `getAutoUpdateDisabledReason` additionally
+requires `process.env.APPIMAGE` on Linux, so package-manager installs have in-app updates disabled.
+Users download a newer Deb/RPM and install it again; these installers do not configure an apt/dnf repository.
+
+Before release, qualify actual installation, launch, upgrade and removal on disposable Debian/Ubuntu
+and Fedora systems, including Stable/Beta coexistence. The extraction/startup gate above does not
+execute package scripts and cannot replace those checks. Arch/Omarchy windowed verification remains
+separate below. Record the exact packages, source and hosts with any outstanding checks.
+
+### Arch / Omarchy release checklist
+
+The AppImage is the supported Arch install. There is no Arch CI, and no attempt is made to emulate
+Arch on the Ubuntu runner: these checks are manual, run by the person cutting the release on an
+Omarchy/Arch host with the new `Synara-<version>-x86_64.AppImage`.
+
+1. Mount check: `./Synara-<version>-x86_64.AppImage --appimage-mount` prints a `/tmp/.mount_Synara*`
+   path. FUSE 2 (`fuse2` package) is the supported setup on Arch/Omarchy.
+2. Fallback check when FUSE is unavailable:
+   `./Synara-<version>-x86_64.AppImage --appimage-extract-and-run` starts the app.
+3. Windowed launch: open the app, create a project, and run one basic flow. A headless Wayland
+   session is not a substitute for this step — if no graphical session is available, record the
+   release as unverified rather than as passing.
+4. Desktop integration: confirm the app appears in the launcher and reports a sane window title under
+   the compositor in use (Hyprland on Omarchy).
+5. Update path: the AppImage updates itself in-app; do not expect the package managers to own a
+   `.deb`/`.rpm` install on Arch.
+
+If a step fails, capture the app log and the `~/.config/Synara` state before reporting it, and see
+the user-facing FUSE fallback in `apps/marketing/content/docs/troubleshooting/desktop-and-updates.mdx`.
 
 ### Local DMG appearance validation
 
@@ -468,6 +541,22 @@ full subject distinguished name.
 8. Verify public downloads and the authorized website deployment. Report packaged
    startup proof separately from manual installation, installed-app updates and
    live-provider behavior; do not claim checks that were not performed.
+
+9. Refresh the proposed Homebrew Cask source with `bun run homebrew:cask -- --from-github --write`. Review the generated version, both architecture digests and the actual DMGs' minimum macOS requirement before proposing a cask update. The renderer accepts only complete published Stable releases with canonical asset names and download URLs; it rejects drafts, prereleases, missing or duplicate assets, and mixed manual/API inputs before writing.
+
+### Homebrew Cask maintenance
+
+`packaging/homebrew/Casks/synara.rb` is the source for a submission to [homebrew/cask](https://github.com/Homebrew/homebrew-cask). Checking it into this repository does not make `brew install --cask synara` available: upstream acceptance is a separate step. Keep the public download page on the working DMG path until the official cask resolves.
+
+The checked-in v1.0.1 cask requires macOS Ventura (13). The [read-only inspection of both published DMGs](https://github.com/Emanuele-web04/synara/actions/runs/38163962883) found macOS 12.0 for the application and Electron, but their bundled Claude and Cua executables carry a 13.0 Mach-O deployment target. The cask keeps the higher floor for the complete bundle; this metadata inspection does not establish runtime behavior on the oldest supported OS. Recheck the packaged binaries when refreshing the cask, rather than inferring its requirement from the app plist alone.
+
+The renderer prints the cask unless `--write` is supplied. For manually verified release hashes, use:
+
+```bash
+bun run homebrew:cask -- --version X.Y.Z --sha256-arm64 ARM64_SHA256 --sha256-x64 X64_SHA256
+```
+
+After acceptance, Homebrew's `livecheck` detects newer GitHub Latest versions; it does not itself publish this repository's cask changes. Submit or review the corresponding Homebrew cask updates and keep the Stable DMG filename contract unchanged. `auto_updates true` preserves Synara's own updater. The `uninstall quit:` action requests a normal quit, and optional `zap` paths cover only Stable data, including its updater cache.
 
 ### Resume a failed release
 

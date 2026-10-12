@@ -141,7 +141,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "alt+arrowup", command: "diff.change.previous", when: "!terminalFocus" },
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
-  { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
+  { key: "mod+f", command: "chat.find", when: "!terminalFocus && !filePreviewFocus" },
+  { key: "mod+f", command: "file.find", when: "filePreviewFocus" },
   // Workspace search palette: file names and snippet content. Keep these off terminal focus
   // so Ctrl+P/Ctrl+Shift+F remain available to the shell on Windows/Linux.
   { key: "mod+p", command: "search.files", when: "!terminalFocus" },

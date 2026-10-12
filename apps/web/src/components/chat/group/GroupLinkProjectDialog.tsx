@@ -104,7 +104,7 @@ export function GroupLinkProjectDialog(props: {
                       onClick={() => props.onPick(project.id)}
                     >
                       <span className="relative flex size-4 shrink-0 items-center justify-center">
-                        <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
+                        <ProjectSidebarIcon projectId={project.id} expanded={project.expanded} />
                       </span>
                       <span className="min-w-0 flex-1 truncate">{project.name}</span>
                       <span className="max-w-40 truncate text-ui-sm text-muted-foreground">

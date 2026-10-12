@@ -21,6 +21,7 @@ export const BUILT_IN_PROVIDER_KINDS = [
   "claudeAgent",
   "cursor",
   "devin",
+  "cline",
   "antigravity",
   "grok",
   "droid",
@@ -111,6 +112,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "claude" ? "" : trimmed;
     case "cursor":
       return trimmed === "cursor-agent" ? "" : trimmed;
+    case "cline":
+      return trimmed === "cline" ? "" : trimmed;
     case "devin":
       return trimmed === "devin" ? "" : trimmed;
     case "antigravity":
@@ -125,6 +128,8 @@ function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): st
       return trimmed === "pi" ? "" : trimmed;
     case "omp":
       return trimmed === "omp" ? "" : trimmed;
+    case "external":
+      return "";
   }
 }
 
@@ -275,7 +280,7 @@ export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
 
 function legacyProviderConfig(
   settings: ServerSettings,
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
 ): ProviderInstanceConfig {
   const legacy = settings.providers[provider] as Record<string, unknown>;
   return {
@@ -501,6 +506,24 @@ export function resolveProviderInstance(
   if (isUnresolvedAutomationInstanceId(input.instanceId)) {
     return null;
   }
+  // Profiles own their immutable executable and credential configuration.
+  // This route is intentionally absent from editable built-in instances.
+  if (
+    (input.instanceId === "external" ||
+      (input.instanceId === undefined && input.provider === "external")) &&
+    (input.provider === undefined || input.provider === "external")
+  ) {
+    return {
+      instanceId: "external",
+      driver: "external",
+      displayName: "External Agent",
+      enabled: true,
+      isDefault: true,
+      config: {},
+      environment: {},
+      raw: { driver: "external" },
+    };
+  }
   const instances = deriveProviderInstances(settings);
   if (input.instanceId !== undefined) {
     return (
@@ -560,6 +583,16 @@ export function providerStartOptionsFromInstance(
         : undefined;
     }
     case "claudeAgent": {
+      const customModels = Array.isArray(config.customModels)
+        ? [
+            ...new Set(
+              config.customModels
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter(Boolean),
+            ),
+          ]
+        : [];
       const homePath = trimString(config.homePath);
       const configDir = trimString(config.configDir) || profileDir;
       const secureStorageDir = trimString(config.secureStorageDir);
@@ -571,9 +604,10 @@ export function providerStartOptionsFromInstance(
               ...(secureStorageDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir } : {}),
             }
           : environment.environment;
-      return binaryPath || homePath || claudeEnvironment
+      return binaryPath || homePath || claudeEnvironment || customModels.length > 0
         ? {
             claudeAgent: {
+              ...(customModels.length > 0 ? { customModels } : {}),
               ...(claudeEnvironment !== undefined ? { environment: claudeEnvironment } : {}),
               ...(binaryPath ? { binaryPath } : {}),
               ...(homePath ? { homePath } : {}),
@@ -593,6 +627,10 @@ export function providerStartOptionsFromInstance(
           }
         : undefined;
     }
+    case "cline":
+      return binaryPath || environment.environment
+        ? { cline: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }
+        : undefined;
     case "devin":
       return binaryPath || environment.environment
         ? { devin: { ...environment, ...(binaryPath ? { binaryPath } : {}) } }

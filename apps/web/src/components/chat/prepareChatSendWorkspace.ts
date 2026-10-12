@@ -141,15 +141,18 @@ export async function prepareChatSendWorkspace({
   // Keep an optimistically selected Space across the command/snapshot race. The server
   // validates this best-effort target and degrades genuinely stale/deleted ids to Void.
   const activeSpaceIdForSend = readActiveSpaceId();
-  const firstSendDefaultModelSelection = buildModelSelection(
-    selectedModelSelectionForSend.provider,
-    selectedModelSelectionForSend.model ||
-      selectedModelForSend ||
-      getDefaultModel(selectedModelSelectionForSend.provider) ||
-      DEFAULT_MODEL_BY_PROVIDER.codex,
-    selectedModelSelectionForSend.options,
-    { instanceId: selectedModelSelectionForSend.instanceId },
-  );
+  const firstSendDefaultModelSelection =
+    selectedModelSelectionForSend.provider === "external"
+      ? selectedModelSelectionForSend
+      : buildModelSelection(
+          selectedModelSelectionForSend.provider,
+          selectedModelSelectionForSend.model ||
+            selectedModelForSend ||
+            getDefaultModel(selectedModelSelectionForSend.provider) ||
+            DEFAULT_MODEL_BY_PROVIDER.codex,
+          selectedModelSelectionForSend.options,
+          { instanceId: selectedModelSelectionForSend.instanceId },
+        );
   const firstSendTarget = resolveFirstSendTarget({
     activeProject,
     chatWorkspaceRoot,

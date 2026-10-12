@@ -8,6 +8,13 @@ import * as path from "node:path";
 
 const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set(["EINVAL", "ENOTSUP", "EBADF"]);
 
+/** Directory junctions do not require Windows symbolic-link privileges. */
+export function directorySymlinkType(
+  platform: NodeJS.Platform = process.platform,
+): "dir" | "junction" {
+  return platform === "win32" ? "junction" : "dir";
+}
+
 export function supportsPosixPermissions(platform: NodeJS.Platform = process.platform): boolean {
   return platform !== "win32";
 }

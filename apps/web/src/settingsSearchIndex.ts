@@ -93,6 +93,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show open threads as tabs in the chat header. Turn off to show only the current thread's title. horizontal tabs strip header chat title",
   },
   {
+    id: "general:idle-agent-stop",
+    section: "general",
+    title: "Stop idle agent processes after",
+    keywords:
+      "Release idle provider processes after a timeout in minutes to free memory. 0 never auto-stop server default resume session process RAM",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",
@@ -386,6 +393,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
   },
   {
+    id: "behavior:thread-titles",
+    section: "behavior",
+    title: "Thread titles",
+    keywords: "Automatic suggested title refresh rename stale conversation opt-in manual pin",
+  },
+  {
     id: "behavior:follow-up-behavior",
     section: "behavior",
     title: "Follow-up behavior",
@@ -404,6 +417,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "behavior",
     title: "Assistant output",
     keywords: "Show token-by-token output while a response is in progress. streaming",
+  },
+  {
+    id: "behavior:continue-handoffs-here",
+    section: "behavior",
+    title: "Continue handoffs here",
+    keywords:
+      "Opt in to Hand off Continue here same conversation provider bounded recap. New conversation remains available. Does not change the model picker.",
   },
   {
     id: "behavior:fold-finished-turns",
@@ -606,6 +626,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
 
   // ── Advanced ──────────────────────────────────────────────────────────────────
+  {
+    id: "advanced:pair-device",
+    section: "advanced",
+    title: "Pair a device",
+    keywords:
+      "Owners can create a one-time pairing link or QR code to sign in another phone tablet browser device.",
+    target: null,
+  },
   {
     id: "advanced:keybindings",
     section: "advanced",

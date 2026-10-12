@@ -58,6 +58,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "OpenAI",
     },
   ],
+  cline: [{ slug: "default", name: "Cline configured model" }],
   devin: [
     {
       slug: "devin/swe-1.7",
@@ -81,6 +82,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "Gemini 3.5 Flash",
     },
   ],
+  external: [],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({

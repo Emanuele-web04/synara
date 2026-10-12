@@ -13,6 +13,13 @@ import type {
 } from "@synara/contracts";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
+import {
+  EMPTY_MODEL_CAPABILITIES,
+  getClaudeModelOptionCapabilities,
+  getModelCapabilities,
+  isConfiguredCustomClaudeModel,
+  normalizeModelSlug,
+} from "@synara/shared/model";
 
 import {
   getAppModelOptions,
@@ -33,6 +40,7 @@ import {
 } from "../lib/providerDiscoveryReactQuery";
 import {
   getOmpModelSelectionIssue,
+  formatProviderModelOptionName,
   mergeDynamicModelOptions,
   type ProviderModelOption,
 } from "../providerModelOptions";
@@ -59,7 +67,7 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
-  /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
+  /** Account-local discovery plus explicit custom Claude controls, even before discovery. */
   runtimeModelsByProviderInstance: Partial<
     Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
   >;
@@ -76,6 +84,55 @@ export interface ProviderModelCatalog {
 }
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
+
+// A selected-model hint is not configuration. Derive optional Claude controls
+// only from this account's saved custom list, and retract cached synthetic
+// descriptors as soon as that list changes. Real resolved model metadata wins.
+function withConfiguredClaudeModels(
+  models: ReadonlyArray<ProviderModelDescriptor>,
+  configuredCustomModels: readonly string[],
+): ReadonlyArray<ProviderModelDescriptor> {
+  const seen = new Set<string>();
+  const result = models.map((model): ProviderModelDescriptor => {
+    const slug = normalizeModelSlug(model.slug, "claudeAgent") ?? model.slug;
+    seen.add(slug);
+    const resolvedKnownModel =
+      model.resolvedModel &&
+      getModelCapabilities("claudeAgent", model.resolvedModel) !== EMPTY_MODEL_CAPABILITIES;
+    if (!resolvedKnownModel && isConfiguredCustomClaudeModel(slug, configuredCustomModels)) {
+      return {
+        ...model,
+        isConfiguredCustomModel: true,
+        optionDescriptors: getClaudeModelOptionCapabilities(slug, configuredCustomModels)
+          .optionDescriptors,
+      };
+    }
+    if (model.isConfiguredCustomModel === true) {
+      const {
+        isConfiguredCustomModel: _configured,
+        optionDescriptors: _synthetic,
+        ...discovered
+      } = model;
+      return discovered;
+    }
+    return model;
+  });
+  for (const configured of configuredCustomModels) {
+    const slug = normalizeModelSlug(configured, "claudeAgent");
+    if (!slug || seen.has(slug) || !isConfiguredCustomClaudeModel(slug, configuredCustomModels)) {
+      continue;
+    }
+    seen.add(slug);
+    result.push({
+      slug,
+      name: formatProviderModelOptionName({ provider: "claudeAgent", slug }),
+      isConfiguredCustomModel: true,
+      optionDescriptors: getClaudeModelOptionCapabilities(slug, configuredCustomModels)
+        .optionDescriptors,
+    });
+  }
+  return result;
+}
 
 // Module scope: `useQueries` recombines whenever this function's identity changes.
 function selectQueryData<Data>(
@@ -108,9 +165,10 @@ export function modelQueryOptionsForProviderInstance(input: {
   readonly enabled: boolean;
   readonly refresh?: "if-stale" | "now";
 }) {
-  const providerOptions = getProviderStartOptions(input.settings, input.instanceId)?.[
-    input.provider
-  ];
+  const providerOptions =
+    input.provider === "external"
+      ? undefined
+      : getProviderStartOptions(input.settings, input.instanceId)?.[input.provider];
   return providerModelsQueryOptions({
     provider: input.provider,
     instanceId: input.instanceId,
@@ -256,6 +314,9 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
+    // External agent profiles resolve from their connector; there is no
+    // discovery pipeline or server toggle for them.
+    if (provider === "external") return false;
     // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
     // undefined while the settings query is in flight and stays undefined if it
     // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
@@ -285,6 +346,7 @@ export function useProviderModelCatalog(input: {
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
+  const clineModelDiscoveryEnabled = shouldDiscoverProvider("cline");
   const ompModelDiscoveryEnabled = shouldDiscoverProvider("omp");
 
   const queryOptionsForProvider = (provider: ProviderKind, enabled: boolean) => {
@@ -318,7 +380,9 @@ export function useProviderModelCatalog(input: {
     opencode: queryOptionsForProvider("opencode", openCodeModelDiscoveryEnabled),
     pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
     devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
+    cline: queryOptionsForProvider("cline", clineModelDiscoveryEnabled),
     omp: queryOptionsForProvider("omp", ompModelDiscoveryEnabled),
+    external: queryOptionsForProvider("external", false),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -330,6 +394,7 @@ export function useProviderModelCatalog(input: {
   const openCodeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.opencode);
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
   const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
+  const clineDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.cline);
 
   const [
     ,
@@ -474,6 +539,8 @@ export function useProviderModelCatalog(input: {
     !isInitialModelDiscoveryPending(ompDynamicModelsQuery);
   const ompModelDiscoveryPending =
     ompModelDiscoveryEnabled && !hasResolvedOmpModelDiscovery && !ompDiscoveryFailed;
+  const clineModelDiscoveryPending =
+    clineModelDiscoveryEnabled && isInitialModelDiscoveryPending(clineDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     antigravityModelDiscoveryEnabled &&
     !(
@@ -516,6 +583,12 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.omp,
         modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
       ),
+      cline: getAppModelOptions("cline", customModelsByProvider.cline, modelHintByProvider?.cline),
+      external: getAppModelOptions(
+        "external",
+        customModelsByProvider.external,
+        modelHintByProvider?.external,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -535,6 +608,8 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data,
       devin: devinDynamicModelsQuery.data,
       omp: ompDynamicModelsQuery.data,
+      cline: clineDynamicModelsQuery.data,
+      external: undefined,
     };
     for (const provider of [
       "claudeAgent",
@@ -547,6 +622,7 @@ export function useProviderModelCatalog(input: {
       "pi",
       "devin",
       "omp",
+      "cline",
     ] as const) {
       const discovery = dynamicSources[provider];
       const dynamicModels = discovery?.models;
@@ -585,6 +661,7 @@ export function useProviderModelCatalog(input: {
     openCodeDynamicModelsQuery.data,
     piDynamicModelsQuery.data,
     devinDynamicModelsQuery.data,
+    clineDynamicModelsQuery.data,
     ompDynamicModelsQuery.data,
     ompDiscoveryFailed,
   ]);
@@ -646,6 +723,7 @@ export function useProviderModelCatalog(input: {
       pi: piModelDiscoveryPending,
       devin: devinModelDiscoveryPending,
       omp: ompModelDiscoveryPending,
+      cline: clineModelDiscoveryPending,
     }),
     [
       antigravityModelDiscoveryPending,
@@ -655,14 +733,27 @@ export function useProviderModelCatalog(input: {
       piModelDiscoveryPending,
       devinModelDiscoveryPending,
       ompModelDiscoveryPending,
+      clineModelDiscoveryPending,
     ],
   );
+
+  const claudeCatalogInstanceId = modelQueryOptionsByProvider.claudeAgent.queryKey[3];
+  const claudeRuntimeModels = useMemo(() => {
+    const instance = providerInstances.find(
+      (candidate) =>
+        candidate.provider === "claudeAgent" && candidate.instanceId === claudeCatalogInstanceId,
+    );
+    return withConfiguredClaudeModels(
+      claudeDynamicModelsQuery.data?.models ?? [],
+      instance ? getCustomModelsForProviderInstance(settings, instance) : [],
+    );
+  }, [claudeCatalogInstanceId, claudeDynamicModelsQuery.data?.models, providerInstances, settings]);
 
   const runtimeModelsByProvider = useMemo<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>
   >(
     () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
+      claudeAgent: claudeRuntimeModels,
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       antigravity: antigravityModelsQuery.data?.models ?? [],
@@ -672,10 +763,12 @@ export function useProviderModelCatalog(input: {
       pi: piDynamicModelsQuery.data?.models ?? [],
       devin: devinDynamicModelsQuery.data?.models ?? [],
       omp: ompDynamicModelsQuery.data?.models ?? [],
+      cline: clineDynamicModelsQuery.data?.models ?? [],
+      external: [],
     }),
     [
       antigravityModelsQuery.data?.models,
-      claudeDynamicModelsQuery.data?.models,
+      claudeRuntimeModels,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
@@ -684,6 +777,7 @@ export function useProviderModelCatalog(input: {
       piDynamicModelsQuery.data?.models,
       devinDynamicModelsQuery.data?.models,
       ompDynamicModelsQuery.data?.models,
+      clineDynamicModelsQuery.data?.models,
     ],
   );
 
@@ -691,13 +785,19 @@ export function useProviderModelCatalog(input: {
     const byInstance: Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>> =
       {};
     for (const instance of providerInstances) {
-      // A configured account without discovery must not fall back to a sibling's
-      // runtime metadata. Its static/custom model options remain available above.
+      // A configured account without discovery must not borrow a sibling's
+      // metadata. Its own explicit custom controls can be available immediately.
+      const discoveredModels = dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
       byInstance[instance.instanceId] =
-        dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
+        instance.provider === "claudeAgent"
+          ? withConfiguredClaudeModels(
+              discoveredModels,
+              getCustomModelsForProviderInstance(settings, instance),
+            )
+          : discoveredModels;
     }
     return byInstance;
-  }, [dynamicModelsByProviderInstance, providerInstances]);
+  }, [dynamicModelsByProviderInstance, providerInstances, settings]);
 
   const selectedRuntimeModel = useMemo(
     () =>
@@ -739,6 +839,10 @@ export function useProviderModelCatalog(input: {
         devinDynamicModelsQuery.data?.error,
         devinDynamicModelsQuery.error,
       ),
+      cline: modelDiscoveryError(
+        clineDynamicModelsQuery.data?.error,
+        clineDynamicModelsQuery.error,
+      ),
       antigravity: modelDiscoveryError(
         antigravityModelsQuery.data?.error,
         antigravityModelsQuery.error,
@@ -763,7 +867,9 @@ export function useProviderModelCatalog(input: {
       cursorDynamicModelsQuery.data?.error,
       cursorDynamicModelsQuery.error,
       devinDynamicModelsQuery.data?.error,
+      clineDynamicModelsQuery.data?.error,
       devinDynamicModelsQuery.error,
+      clineDynamicModelsQuery.error,
       droidDynamicModelsQuery.data?.error,
       droidDynamicModelsQuery.error,
       grokDynamicModelsQuery.data?.error,
@@ -798,7 +904,9 @@ export function useProviderModelCatalog(input: {
                     ? piDynamicModelsQuery
                     : selectedProvider === "omp"
                       ? ompDynamicModelsQuery
-                      : devinDynamicModelsQuery;
+                      : selectedProvider === "cline"
+                        ? clineDynamicModelsQuery
+                        : devinDynamicModelsQuery;
   const selectedProviderModelsLoading =
     selectedProviderRuntimeModelDiscoveryPending ||
     (loadingModelProviders[selectedProvider] === undefined &&

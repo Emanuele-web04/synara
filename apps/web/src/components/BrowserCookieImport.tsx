@@ -1,3 +1,5 @@
+import { BrowserCookieSource } from "@synara/contracts";
+import { Schema } from "effect";
 import { useEffect, useRef, useState } from "react";
 import type { BrowserCookieImportResult, BrowserVaultMethods, ThreadId } from "@synara/contracts";
 import { Button } from "./ui/button";
@@ -112,11 +114,10 @@ export function BrowserCookieImport({
     if (
       busy ||
       !profile ||
-      !["chrome", "safari", "edge"].includes(source) ||
+      !Schema.is(BrowserCookieSource)(source) ||
       (scope === "profile" && !confirmed)
     )
       return;
-    if (source !== "chrome" && source !== "safari" && source !== "edge") return;
     const request = ++generation.current;
     setBusy(true);
     setStatus(null);

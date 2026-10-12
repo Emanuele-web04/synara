@@ -34,7 +34,7 @@ it("updates hover effort and Fast from the selected account's cached catalog", a
           title="Review hover metadata"
           timeLabel="now"
           projectName={null}
-          projectCwd={null}
+          projectId={null}
           projectAppearance={null}
           sourceProjectName={null}
           branch={null}

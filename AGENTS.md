@@ -31,6 +31,9 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Transcript and UI safeguards
 
+- UI changes require explicit user authorization. This includes changes to layout, styling, typography, visible text, controls, navigation, animations, and user-facing interaction behavior on any surface. A general request to fix, refactor, or improve something does not authorize incidental UI changes.
+- If a task needs a UI change that the user has not explicitly requested or approved, notify the user of the proposed visible or interaction change and why it is needed, then wait for authorization before implementing that part. Continue independent work within the authorized scope. An explicit UI request authorizes that scope; do not ask again unless the scope expands.
+- Before committing, pushing, or opening/updating a PR, review the diff for UI changes and exclude any that lack explicit authorization. Tests, screenshots, and passing checks do not substitute for authorization. Report authorized UI changes clearly in the completion summary and PR description.
 - Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
@@ -59,3 +62,7 @@ Run `bun run windows-runtime:check` for platform/process-boundary changes and `b
 Finish the authorized scope, synchronize affected documentation, and report actual checks, failures, and unverified platform/runtime behavior. Do not equate mocks with live provider success or a local build with a signed release. Publishing, production operations, and changes to provider/model choices require the corresponding task authorization.
 
 Keep personal model rankings, pricing assumptions, and machine-specific wrapper recipes in operator configuration rather than shared project policy. Honor explicit operator model restrictions; do not use Haiku.
+
+## Git remotes
+
+- Never push `main` directly; push a branch to the fork remote and open a pull request.

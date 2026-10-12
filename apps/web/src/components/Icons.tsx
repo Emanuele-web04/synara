@@ -19,6 +19,8 @@ import {
 } from "react-icons/si";
 import { AntigravityBrandIcon } from "./AntigravityIcon";
 
+export { ClineIcon } from "./ClineIcon";
+
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
 
 // Adapts Simple Icons components to the app's SVG icon shape without changing call sites.

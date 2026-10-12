@@ -8,6 +8,7 @@ import {
   hasUnseenCompletion,
   hasUnseenSnoozeReturn,
   isThreadActivelyWorking,
+  type ThreadStatusPill,
 } from "./Sidebar.logic";
 
 export function isThreadRunningForActivity(
@@ -355,6 +356,33 @@ export function resolveActivityScope(
   return { scope: scopeSelection, projectFilterIds: new Set([scopeSelection]) };
 }
 
+/** Status pills of a chat whose agent is still busy; Activity folds those chats under Working. */
+const ACTIVITY_WORKING_STATUS_LABELS: ReadonlySet<ThreadStatusPill["label"]> = new Set([
+  "Working",
+  "Connecting",
+  "Preparing worktree",
+]);
+
+/**
+ * Moves chats whose agent is still busy out of the feed, so it lists only chats waiting
+ * on the user. A pending approval or question outranks Working in the status pill, so
+ * those chats stay in the feed.
+ */
+export function splitWorkingActivityThreads(
+  threads: readonly SidebarThreadSummary[],
+  resolveStatus: (thread: SidebarThreadSummary) => Pick<ThreadStatusPill, "label"> | null,
+): { working: SidebarThreadSummary[]; rest: SidebarThreadSummary[] } {
+  const working: SidebarThreadSummary[] = [];
+  const rest: SidebarThreadSummary[] = [];
+  for (const thread of threads) {
+    const label = resolveStatus(thread)?.label;
+    (label !== undefined && ACTIVITY_WORKING_STATUS_LABELS.has(label) ? working : rest).push(
+      thread,
+    );
+  }
+  return { working, rest };
+}
+
 export const ACTIVITY_RECENT_LIMIT = 5;
 
 /**
@@ -440,12 +468,15 @@ export function collectVisibleActivityThreadIds(input: {
   earlierOpen: boolean;
   earlier: readonly SidebarThreadSummary[];
   projectGroups: readonly (readonly SidebarThreadSummary[])[];
+  workingOpen: boolean;
+  working: readonly SidebarThreadSummary[];
   settledOpen: boolean;
   settled: readonly SidebarThreadSummary[];
   /** The open thread shown under a collapsed header; mounted whatever the section state. */
   revealed?: {
     pinned: readonly SidebarThreadSummary[];
     earlier: readonly SidebarThreadSummary[];
+    working: readonly SidebarThreadSummary[];
     settled: readonly SidebarThreadSummary[];
   };
 }): ThreadId[] {
@@ -459,6 +490,8 @@ export function collectVisibleActivityThreadIds(input: {
     if (input.earlierOpen) visible.push(...input.earlier);
     if (input.revealed) visible.push(...input.revealed.earlier);
   }
+  if (input.workingOpen) visible.push(...input.working);
+  if (input.revealed) visible.push(...input.revealed.working);
   if (input.settledOpen) visible.push(...input.settled);
   if (input.revealed) visible.push(...input.revealed.settled);
   return [...new Set(visible.map((thread) => thread.id))];

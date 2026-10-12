@@ -81,7 +81,11 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "claudeAgent": {
       const providerOptions = modelOptions?.claudeAgent;
       rawEffort = trimOrNull(providerOptions?.effort);
-      normalizedOptions = normalizeClaudeModelOptions(model, providerOptions);
+      normalizedOptions = normalizeClaudeModelOptions(
+        model,
+        providerOptions,
+        runtimeModel?.isConfiguredCustomModel === true ? [model] : [],
+      );
       break;
     }
     case "cursor": {
@@ -143,6 +147,9 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "cline":
+      normalizedOptions = undefined;
+      break;
     case "devin": {
       const providerOptions = modelOptions?.devin;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);

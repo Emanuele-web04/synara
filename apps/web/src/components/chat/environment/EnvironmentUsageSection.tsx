@@ -1,18 +1,14 @@
 // FILE: EnvironmentUsageSection.tsx
-// Purpose: "Usage" section of the Environment panel — a compact menu per account of the active provider.
+// Purpose: "Usage" section of the Environment panel — a compact menu per enabled provider account.
 
-import {
-  DEFAULT_SERVER_SETTINGS_VIEW,
-  type ProviderKind,
-  type ServerProviderUsageSnapshot,
-} from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
 import {
   deriveProviderInstances,
   type ResolvedProviderInstance,
 } from "@synara/shared/providerInstances";
-import { providerUsageDisplayName } from "@synara/shared/providerUsage";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
+import { getRailUsageAccounts } from "~/components/AppRailUsage.logic";
 import {
   ProviderUsageMenuPopup,
   useProviderUsageMenuModel,
@@ -20,11 +16,18 @@ import {
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { MenuTrigger } from "~/components/ui/menu";
 import {
+  findProviderUsageAccountSnapshot,
+  providerUsageAccountFallbackQueryOptions,
+} from "~/lib/providerUsageAccountQueries";
+import {
   serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 
-import { resolveEnvironmentProviderUsageSummary } from "./EnvironmentUsageSection.logic";
+import {
+  resolveEnvironmentProviderUsageSummary,
+  selectEnvironmentUsageAccounts,
+} from "./EnvironmentUsageSection.logic";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -52,6 +55,7 @@ function EnvironmentUsageAccountRow({
     rows: model.rows,
     snapshot,
     hasUsageLines: model.usageLines.length > 0,
+    hasResetCredits: (model.resetCredits?.availableCount ?? 0) > 0,
   });
 
   return (
@@ -103,46 +107,56 @@ function EnvironmentUsageAccountRow({
   );
 }
 
-export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+export function EnvironmentUsageSection() {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = deriveProviderInstances(
     settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW,
-  ).filter((instance) => instance.enabled && instance.driver === provider);
-  const accounts = providerInstances.flatMap((instance) => {
-    const snapshot = usageQuery.data?.find(
-      (entry) =>
-        entry.provider === provider && (entry.instanceId ?? entry.provider) === instance.instanceId,
+  );
+  const enabledAccounts = getRailUsageAccounts(providerInstances);
+  const batchSnapshots = usageQuery.data ?? [];
+  const missingProviders = [
+    ...new Set(
+      enabledAccounts.flatMap(({ instance }) =>
+        findProviderUsageAccountSnapshot(batchSnapshots, instance.driver, instance.instanceId)
+          ? []
+          : [instance.driver],
+      ),
+    ),
+  ];
+  const recoverMissingAccounts =
+    settingsQuery.isSuccess && !usageQuery.isPending && !usageQuery.isFetching;
+  const fallbackQueries = useQueries({
+    queries: missingProviders.map((provider) =>
+      providerUsageAccountFallbackQueryOptions({ provider, enabled: recoverMissingAccounts }),
+    ),
+  });
+  const fallbackSnapshots = fallbackQueries.flatMap((query, index) => {
+    // Cached recovery stays readable during a new shared batch; disabling its
+    // request must not make an otherwise meaningful account row blink away.
+    if (!query.isError) return query.data ?? [];
+    // A failed recovery is an actual unavailable check, not a signed-in account
+    // and not permission to borrow provider-wide archives or another account.
+    return enabledAccounts.flatMap(({ instance }) =>
+      instance.driver === missingProviders[index]
+        ? [
+            {
+              provider: instance.driver,
+              instanceId: instance.instanceId,
+              updatedAt: new Date(query.errorUpdatedAt).toISOString(),
+              limits: [],
+              usageLines: [],
+              source: "usage-query",
+              status: "error" as const,
+              detail: "Usage could not be read for this account.",
+            },
+          ]
+        : [],
     );
-    if (!snapshot) return [];
-    const hasUsage =
-      snapshot.limits.length > 0 ||
-      snapshot.usageLines.length > 0 ||
-      (snapshot.resetCredits?.availableCount ?? 0) > 0;
-    // Unused default providers should not crowd the panel. Configured extra
-    // accounts stay visible so an expired login or failed usage check is clear.
-    if (
-      instance.isDefault &&
-      providerInstances.length === 1 &&
-      !instance.raw.displayName &&
-      !hasUsage &&
-      (snapshot.status === "needs-auth" || (snapshot.status ?? "ok") === "ok")
-    )
-      return [];
-    const providerName = providerUsageDisplayName(provider);
-    const showAccountName =
-      !instance.isDefault || providerInstances.length > 1 || instance.displayName !== providerName;
-    const accountName =
-      instance.isDefault && instance.displayName === providerName
-        ? "Default"
-        : instance.displayName;
-    return [
-      {
-        instance,
-        snapshot,
-        label: showAccountName ? `${providerName} · ${accountName}` : providerName,
-      },
-    ];
+  });
+  const accounts = selectEnvironmentUsageAccounts({
+    instances: providerInstances,
+    snapshots: [...batchSnapshots, ...fallbackSnapshots],
   });
 
   if (accounts.length === 0) return null;

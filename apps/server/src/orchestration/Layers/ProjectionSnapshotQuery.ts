@@ -117,6 +117,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     isProjectImport: Schema.Number,
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
+    manualTitlePinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
@@ -141,6 +142,7 @@ const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFiel
     isProjectImport: Schema.Number,
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
+    manualTitlePinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
@@ -227,6 +229,12 @@ const ThreadIdLookupInput = Schema.Struct({
 const StaleInFlightThreadLookupInput = Schema.Struct({
   updatedBefore: IsoDateTime,
   limit: Schema.Number,
+  after: Schema.NullOr(
+    Schema.Struct({
+      observedAt: IsoDateTime,
+      threadId: ThreadId,
+    }),
+  ),
 });
 const ThreadTurnLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -514,6 +522,7 @@ function toProjectedProject(row: ProjectionProjectDbRow): OrchestrationProject {
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
+    titleRefreshMode: row.titleRefreshMode ?? null,
     spaceId: row.spaceId,
     additionalFolders: row.additionalFolders,
     createdAt: row.createdAt,
@@ -704,6 +713,7 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
+    titleRefreshMode: row.titleRefreshMode ?? null,
     spaceId: row.spaceId,
     additionalFolders: row.additionalFolders,
     createdAt: row.createdAt,
@@ -733,6 +743,9 @@ function toProjectedThreadShellFromStoredSummary(input: {
     associatedWorktreeRef: threadRow.associatedWorktreeRef,
     createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     isPinned: threadRow.isPinned > 0,
+    manualTitlePinned: threadRow.manualTitlePinned > 0,
+    titleRefreshMode: threadRow.titleRefreshMode ?? null,
+    pendingSuggestedTitle: threadRow.pendingSuggestedTitle ?? null,
     parentThreadId: threadRow.parentThreadId ?? null,
     creationSource: threadRow.creationSource ?? null,
     sourceThreadId: threadRow.sourceThreadId ?? null,
@@ -803,6 +816,9 @@ function toProjectedThread(input: {
     associatedWorktreeRef: threadRow.associatedWorktreeRef,
     createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     isPinned: threadRow.isPinned > 0,
+    manualTitlePinned: threadRow.manualTitlePinned > 0,
+    titleRefreshMode: threadRow.titleRefreshMode ?? null,
+    pendingSuggestedTitle: threadRow.pendingSuggestedTitle ?? null,
     parentThreadId: threadRow.parentThreadId ?? null,
     creationSource: threadRow.creationSource ?? null,
     sourceThreadId: threadRow.sourceThreadId ?? null,
@@ -995,6 +1011,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
           additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
@@ -1032,6 +1049,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          manual_title_pinned AS "manualTitlePinned",
+          title_refresh_mode AS "titleRefreshMode",
+          pending_suggested_title AS "pendingSuggestedTitle",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -1096,6 +1116,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          manual_title_pinned AS "manualTitlePinned",
+          title_refresh_mode AS "titleRefreshMode",
+          pending_suggested_title AS "pendingSuggestedTitle",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
           source_thread_id AS "sourceThreadId",
@@ -1156,8 +1179,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const listStaleInFlightThreadIdRows = SqlSchema.findAll({
     Request: StaleInFlightThreadLookupInput,
-    Result: ProjectionThreadIdLookupRowSchema,
-    execute: ({ updatedBefore, limit }) =>
+    Result: Schema.Struct({ threadId: ThreadId, observedAt: IsoDateTime }),
+    execute: ({ updatedBefore, limit, after }) =>
       sql`
         WITH in_flight AS (
           SELECT
@@ -1217,13 +1240,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
             )
         )
-        SELECT thread_id AS "threadId"
+        SELECT thread_id AS "threadId", observed_at AS "observedAt"
         FROM in_flight
         -- The message projection already advances on every assistant delta.
         -- Read activity only from turns that still appear in flight: a newer
         -- settled message can have a higher sequence while an older concurrent
         -- turn continues streaming.
         WHERE observed_at <= ${updatedBefore}
+          AND (
+            ${after?.observedAt ?? null} IS NULL
+            OR observed_at > ${after?.observedAt ?? null}
+            OR (
+              observed_at = ${after?.observedAt ?? null}
+              AND thread_id > ${after?.threadId ?? null}
+            )
+          )
         ORDER BY observed_at ASC, thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
       `,
@@ -1692,6 +1723,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
           additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
@@ -1753,6 +1785,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
           additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
@@ -1778,6 +1811,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
           additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
@@ -1828,6 +1862,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          manual_title_pinned AS "manualTitlePinned",
+          title_refresh_mode AS "titleRefreshMode",
+          pending_suggested_title AS "pendingSuggestedTitle",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -1894,6 +1931,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          manual_title_pinned AS "manualTitlePinned",
+          title_refresh_mode AS "titleRefreshMode",
+          pending_suggested_title AS "pendingSuggestedTitle",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -2338,6 +2378,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_ref AS "associatedWorktreeRef",
           create_branch_flow_completed AS "createBranchFlowCompleted",
           is_pinned AS "isPinned",
+          manual_title_pinned AS "manualTitlePinned",
+          title_refresh_mode AS "titleRefreshMode",
+          pending_suggested_title AS "pendingSuggestedTitle",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -3100,7 +3143,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const listStaleInFlightThreadIds: ProjectionSnapshotQueryShape["listStaleInFlightThreadIds"] = (
     input,
   ) =>
-    listStaleInFlightThreadIdRows(input).pipe(
+    listStaleInFlightThreadIdRows({ ...input, after: null }).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.listStaleInFlightThreadIds:query",
@@ -3108,6 +3151,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       ),
       Effect.map((rows) => rows.map((row) => row.threadId)),
+    );
+
+  const listStaleInFlightThreadPage: ProjectionSnapshotQueryShape["listStaleInFlightThreadPage"] = (
+    input,
+  ) =>
+    listStaleInFlightThreadIdRows({ ...input, after: input.after ?? null }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listStaleInFlightThreadPage:query",
+          "ProjectionSnapshotQuery.listStaleInFlightThreadPage:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => ({
+        threadIds: rows.map((row) => row.threadId),
+        nextCursor: rows.at(-1) ?? null,
+      })),
     );
 
   const listManagedWorktreeThreads: ProjectionSnapshotQueryShape["listManagedWorktreeThreads"] =
@@ -3191,6 +3250,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               defaultModelSelection: row.defaultModelSelection,
               scripts: row.scripts,
               isPinned: row.isPinned > 0,
+              titleRefreshMode: row.titleRefreshMode ?? null,
               spaceId: row.spaceId,
               additionalFolders: row.additionalFolders,
               createdAt: row.createdAt,
@@ -3928,6 +3988,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getSnapshotSequence,
     listStaleInFlightThreadIds,
+    listStaleInFlightThreadPage,
     listManagedWorktreeThreads,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,

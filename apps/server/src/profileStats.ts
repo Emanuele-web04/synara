@@ -46,6 +46,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "pi",
   "devin",
   "omp",
+  "cline",
 ]);
 
 type HeatmapCell = ProfileStats["activity"]["heatmap"][number];

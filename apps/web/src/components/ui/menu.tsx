@@ -108,7 +108,10 @@ function MenuPopupBase({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
-        className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
+        className={cn(
+          "z-50 min-w-32 [-webkit-app-region:no-drag]",
+          isComposerSurface ? undefined : className,
+        )}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}

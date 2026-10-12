@@ -78,12 +78,16 @@ export function formatShortDate(day: string | null): string | null {
 
 export function formatProviderLabel(provider: ProviderKind): string {
   switch (provider) {
+    case "external":
+      return "External agent";
     case "codex":
       return "Codex";
     case "claudeAgent":
       return "Claude";
     case "cursor":
       return "Cursor";
+    case "cline":
+      return "Cline";
     case "devin":
       return "Devin";
     case "antigravity":

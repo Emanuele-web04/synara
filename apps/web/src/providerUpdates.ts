@@ -107,7 +107,11 @@ function isProviderEnabled(
     return false;
   }
   const driver = provider.driver ?? provider.provider;
-  if (!isProviderKind(driver) || serverSettings.providers[driver]?.enabled === false) {
+  if (
+    !isProviderKind(driver) ||
+    driver === "external" ||
+    serverSettings.providers[driver]?.enabled === false
+  ) {
     return false;
   }
   const instanceId = provider.instanceId ?? provider.provider;

@@ -334,6 +334,43 @@ describe("providerStartOptionsFromInstance codex account isolation", () => {
 });
 
 describe("providerStartOptionsFromInstance Claude profile paths", () => {
+  it("carries only the resolved instance's trimmed custom model membership", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          customModels: ["default-proxy"],
+        },
+      },
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent" as const,
+          config: { customModels: [" work-proxy ", "work-proxy", ""] },
+        },
+        claude_empty: { driver: "claudeAgent" as const, config: { customModels: [] } },
+      },
+    };
+    const options = (instanceId: string) =>
+      providerStartOptionsFromInstance(
+        resolveProviderInstance(settings, {
+          provider: "claudeAgent",
+          instanceId: providerInstanceId(instanceId),
+        })!,
+      );
+    expect(options("claudeAgent")?.claudeAgent?.customModels).toEqual(["default-proxy"]);
+    expect(options("claude_work")?.claudeAgent?.customModels).toEqual(["work-proxy"]);
+    expect(options("claude_empty")?.claudeAgent?.customModels).toBeUndefined();
+    expect(
+      providerStartOptionsFromInstance(
+        resolveProviderInstance(DEFAULT_SERVER_SETTINGS, {
+          provider: "claudeAgent",
+        })!,
+      ),
+    ).toBeUndefined();
+  });
+
   it("maps first-class config and secure-storage directories into the Claude environment", () => {
     const resolved = resolveProviderInstance(
       {

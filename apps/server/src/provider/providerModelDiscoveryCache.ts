@@ -53,6 +53,8 @@ export interface ProviderModelDiscoveryCacheKey {
   readonly cwd: string | null;
   /** Claude catalogs depend on the installed CLI version, even at the same path. */
   readonly runtimeVersion?: string | null;
+  /** Explicit Claude model options change when instance configuration changes. */
+  readonly customModels?: readonly string[];
 }
 
 function hashCacheComponent(value: string): string {
@@ -123,6 +125,9 @@ export function providerModelDiscoveryCacheKey(
     experimentalWebSockets: input.experimentalWebSockets === true,
     environmentKey: environmentFingerprint(input.environment),
     cwd: input.cwd ?? null,
+    ...(input.provider === "claudeAgent" && input.customModels?.length
+      ? { customModels: [...new Set(input.customModels)].sort() }
+      : {}),
   };
 }
 
@@ -150,6 +155,7 @@ export const serializeProviderModelDiscoveryCacheKey = (
     key.environmentKey,
     key.cwd,
     ...(key.runtimeVersion !== undefined ? [key.runtimeVersion] : []),
+    ...(key.customModels?.length ? [{ customModels: key.customModels }] : []),
   ]);
 
 /**

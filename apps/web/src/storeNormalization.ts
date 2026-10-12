@@ -11,6 +11,7 @@ import {
   type OrchestrationSessionStatus,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadActivity,
+  type ModelSelection,
   type ProviderKind,
   ThreadId,
   type TurnId,
@@ -61,6 +62,7 @@ export type ProjectNormalizationInput = Pick<
   | "defaultModelSelection"
   | "scripts"
   | "isPinned"
+  | "titleRefreshMode"
   | "spaceId"
   | "createdAt"
   | "updatedAt"
@@ -185,6 +187,9 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
+    (left.manualTitlePinned ?? false) === (right.manualTitlePinned ?? false) &&
+    (left.titleRefreshMode ?? null) === (right.titleRefreshMode ?? null) &&
+    (left.pendingSuggestedTitle ?? null) === (right.pendingSuggestedTitle ?? null) &&
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -376,11 +381,15 @@ export function deepEqualJson(left: unknown, right: unknown): boolean {
   return true;
 }
 
-export function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
-  value: T,
-  previous: T | null | undefined,
-): T {
-  const normalizedModel = normalizeModelSlug(value.model, value.provider) ?? value.model;
+export function normalizeModelSelection<
+  T extends { provider: ModelSelection["provider"]; model: string },
+>(value: T, previous: T | null | undefined): T {
+  // External agent selections carry connector-owned model strings; the
+  // built-in slug normalization does not apply to them.
+  const normalizedModel =
+    value.provider === "external"
+      ? value.model
+      : (normalizeModelSlug(value.model, value.provider) ?? value.model);
   const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
   return previous && deepEqualJson(previous, next) ? previous : next;
 }
@@ -454,6 +463,7 @@ export function normalizeProject(
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    (previous.titleRefreshMode ?? null) === (incoming.titleRefreshMode ?? null) &&
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
@@ -475,6 +485,7 @@ export function normalizeProject(
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
     spaceId: incoming.spaceId ?? null,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
@@ -1937,6 +1948,9 @@ export function normalizeThreadFromReadModel(
     previous.snoozeSequence === snoozeSequence &&
     previous.updatedAt === incoming.updatedAt &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    (previous.manualTitlePinned ?? false) === (incoming.manualTitlePinned ?? false) &&
+    (previous.titleRefreshMode ?? null) === (incoming.titleRefreshMode ?? null) &&
+    (previous.pendingSuggestedTitle ?? null) === (incoming.pendingSuggestedTitle ?? null) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
     previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
@@ -2004,6 +2018,9 @@ export function normalizeThreadFromReadModel(
     ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
+    manualTitlePinned: incoming.manualTitlePinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
+    pendingSuggestedTitle: incoming.pendingSuggestedTitle ?? null,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
     ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
@@ -2155,6 +2172,9 @@ export function normalizeThreadShellSnapshot(
     ...(snoozeSequence !== undefined ? { snoozeSequence } : {}),
     updatedAt: incoming.updatedAt,
     isPinned: incoming.isPinned ?? false,
+    manualTitlePinned: incoming.manualTitlePinned ?? false,
+    titleRefreshMode: incoming.titleRefreshMode ?? null,
+    pendingSuggestedTitle: incoming.pendingSuggestedTitle ?? null,
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
@@ -2301,7 +2321,8 @@ export function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "opencode" ||
     providerName === "pi" ||
     providerName === "devin" ||
-    providerName === "omp"
+    providerName === "omp" ||
+    providerName === "cline"
   ) {
     return providerName;
   }

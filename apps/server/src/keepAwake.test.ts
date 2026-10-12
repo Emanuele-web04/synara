@@ -1,4 +1,8 @@
 import { once } from "node:events";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
 import { resolveExecutable } from "@synara/shared/executable";
 import {
@@ -411,21 +415,34 @@ it.runIf(process.platform === "darwin")(
   async () => {
     const bun = resolveExecutable("bun");
     expect(bun).not.toBeNull();
-    const moduleUrl = new URL("./keepAwake.ts", import.meta.url).href;
-    const owner = spawnProcess(
-      bun!,
-      [
-        "--eval",
-        `
-    const { defaultKeepAwakeRuntime } = await import(${JSON.stringify(moduleUrl)});
-    const child = defaultKeepAwakeRuntime.spawnCaffeinate();
-    child.once('error', error => { console.error(error); process.exit(1); });
-    console.log(child.pid);
-    setInterval(() => {}, 1000);
-  `,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+    const fixtureDirectory = mkdtempSync(join(tmpdir(), "synara-keep-awake-"));
+    const fixtureSource = join(fixtureDirectory, "owner.ts");
+    const fixtureBundle = join(fixtureDirectory, "owner.mjs");
+    writeFileSync(
+      fixtureSource,
+      `import { defaultKeepAwakeRuntime } from ${JSON.stringify(fileURLToPath(new URL("./keepAwake.ts", import.meta.url)))};
+const child = defaultKeepAwakeRuntime.spawnCaffeinate();
+child.once('error', error => { console.error(error); process.exit(1); });
+console.log(child.pid);
+setInterval(() => {}, 1000);
+`,
     );
+    try {
+      const build = spawnProcessSync(
+        bun!,
+        ["build", fixtureSource, "--target=node", "--outfile", fixtureBundle],
+        { encoding: "utf8" },
+      );
+      expect(build.error).toBeUndefined();
+      expect(build.status, build.stderr).toBe(0);
+    } catch (error) {
+      rmSync(fixtureDirectory, { recursive: true, force: true });
+      throw error;
+    }
+    // The runtime PID must be the process that owns the wake assertion.
+    const owner = spawnProcess(process.execPath, [fixtureBundle], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let caffeinatePid: number | undefined;
     const alive = () => {
       const result = spawnProcessSync("/bin/ps", ["-o", "stat=", "-p", String(caffeinatePid)], {
@@ -449,6 +466,7 @@ it.runIf(process.platform === "darwin")(
     } finally {
       owner.kill("SIGKILL");
       if (caffeinatePid && alive()) process.kill(caffeinatePid, "SIGTERM");
+      rmSync(fixtureDirectory, { recursive: true, force: true });
     }
   },
   10000,

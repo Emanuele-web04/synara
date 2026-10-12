@@ -50,7 +50,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: .
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium

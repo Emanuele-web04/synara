@@ -1,3 +1,5 @@
+import { AgentProfileServiceLive } from "../externalAgents/AgentProfileService";
+import { AgentProfileRepositoryLive } from "../externalAgents/AgentProfileRepository";
 import { Effect, Layer } from "effect";
 
 import { AgentGatewayCredentialsWithSecretsLive } from "../agentGateway/Layers/AgentGatewayCredentials";
@@ -12,10 +14,13 @@ import { ServerSettingsService } from "../serverSettings";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
+import { makeClineAdapterLive } from "./Layers/ClineAdapter";
 import { makeDevinAdapterLive } from "./Layers/DevinAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeAntigravityAdapterLive } from "./Layers/AntigravityAdapter";
 import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
+import { CliConnectorLive } from "./cli/CliConnector";
+import { makeExternalAgentAdapterLive } from "./Layers/ExternalAgentAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
@@ -85,6 +90,10 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const clineAdapterLayer = makeClineAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const piAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
@@ -92,17 +101,27 @@ export function makeServerProviderLayer(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const externalAgentAdapterLayer = makeExternalAgentAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(
+      Layer.provide(agentGatewayCredentialsLayer),
+      Layer.provide(AgentProfileServiceLive.pipe(Layer.provide(AgentProfileRepositoryLive))),
+      Layer.provide(CliConnectorLive),
+      Layer.provide(ServerSecretStoreLive),
+    );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
       Layer.provide(cursorAdapterLayer),
       Layer.provide(devinAdapterLayer),
+      Layer.provide(clineAdapterLayer),
       Layer.provide(antigravityAdapterLayer),
       Layer.provide(grokAdapterLayer),
       Layer.provide(droidAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
       Layer.provide(ompAdapterLayer),
+      Layer.provide(externalAgentAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );

@@ -198,6 +198,46 @@ describe("browser saved logins", () => {
     await expect.element(page.getByRole("status")).toHaveTextContent(message);
     await expect.element(page.getByRole("status")).not.toHaveTextContent("Windows");
   });
+  it.each(["helium", "aside", "arc", "dia"] as const)(
+    "imports %s through the existing picker and renews whole-profile consent",
+    async (browser) => {
+      const api = harness.api!;
+      vi.mocked(api.cookieSources).mockResolvedValue([{ id: browser, name: browser }]);
+      vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Default" }]);
+      const destination = {
+        threadId: ThreadId.makeUnsafe("cookie-test"),
+        tabId: "tab",
+        origin: "https://example.test",
+      };
+      await render(<BrowserCookieImport api={api} destination={destination} />);
+      await page.getByRole("button", { name: "Import browser cookies" }).click();
+      await page.getByRole("button", { name: "Import for this site" }).click();
+      expect(api.importCookies).toHaveBeenCalledExactlyOnceWith({
+        ...destination,
+        browser,
+        profile: "Default",
+        scope: "site",
+      });
+      const scope = document.querySelector<HTMLSelectElement>(
+        '[aria-label="Cookie import scope"]',
+      )!;
+      scope.value = "profile";
+      scope.dispatchEvent(new Event("change", { bubbles: true }));
+      await expect.element(page.getByRole("button", { name: "Import all sites" })).toBeDisabled();
+      await page.getByRole("checkbox").click();
+      await page.getByRole("button", { name: "Import all sites" }).click();
+      expect(api.importCookies).toHaveBeenLastCalledWith({
+        threadId: destination.threadId,
+        tabId: "tab",
+        browser,
+        profile: "Default",
+        scope: "profile",
+        confirmed: true,
+      });
+      await expect.element(page.getByRole("button", { name: "Import all sites" })).toBeDisabled();
+    },
+  );
+
   it("requires the master password for reveal and hides the secret on blur", async () => {
     state = {
       ...state,

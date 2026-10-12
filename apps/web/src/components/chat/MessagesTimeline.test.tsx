@@ -6,10 +6,12 @@
 import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { MessageDeliveryCheckIcon } from "~/lib/icons";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
 import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
 import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 // Every settled turn opens with a header carrying its final state.
@@ -782,6 +784,43 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain(">Working for <");
     expect(markup).not.toContain("h-px flex-1 bg-border");
+  });
+
+  it("uses the Synara mark for the default Thinking status", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Thinking"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).toContain('data-synara-working-loader="true"');
+    expect(markup).toContain("synara-working-loader__mark");
+    expect(markup).toMatch(/data-synara-working-loader="true"[^>]*><svg\b/);
+  });
+
+  it("keeps semantic status icons when the working label is not Thinking", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Checking message delivery…"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-synara-working-loader="true"');
+    expect(markup).toContain(
+      renderToStaticMarkup(<MessageDeliveryCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />),
+    );
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {

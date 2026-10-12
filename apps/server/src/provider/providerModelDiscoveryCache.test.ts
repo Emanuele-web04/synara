@@ -13,6 +13,7 @@ import {
   makeProviderModelDiscoveryCache,
   type PersistedModelCatalogEntryInput,
   type ProviderModelDiscoveryCacheKey,
+  providerModelDiscoveryCacheKey,
   serializeProviderModelDiscoveryCacheKey,
 } from "./providerModelDiscoveryCache.ts";
 
@@ -54,6 +55,56 @@ function makeClock(start = 1_000_000) {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe("makeProviderModelDiscoveryCache", () => {
+  it("isolates Claude catalog entries by resolved custom model membership", async () => {
+    const configured = providerModelDiscoveryCacheKey({
+      provider: "claudeAgent",
+      customModels: ["work-proxy"],
+    });
+    const unconfigured = providerModelDiscoveryCacheKey({ provider: "claudeAgent" });
+    const other = providerModelDiscoveryCacheKey({
+      provider: "claudeAgent",
+      customModels: ["other-proxy"],
+    });
+    expect(serializeProviderModelDiscoveryCacheKey(configured)).not.toBe(
+      serializeProviderModelDiscoveryCacheKey(unconfigured),
+    );
+    expect(serializeProviderModelDiscoveryCacheKey(configured)).not.toBe(
+      serializeProviderModelDiscoveryCacheKey(other),
+    );
+    expect(
+      serializeProviderModelDiscoveryCacheKey(
+        providerModelDiscoveryCacheKey({
+          provider: "claudeAgent",
+          customModels: ["other-proxy", "work-proxy", "work-proxy"],
+        }),
+      ),
+    ).toBe(
+      serializeProviderModelDiscoveryCacheKey(
+        providerModelDiscoveryCacheKey({
+          provider: "claudeAgent",
+          customModels: ["work-proxy", "other-proxy"],
+        }),
+      ),
+    );
+    expect(
+      serializeProviderModelDiscoveryCacheKey(
+        providerModelDiscoveryCacheKey({
+          provider: "claudeAgent",
+          customModels: [],
+        }),
+      ),
+    ).toBe(serializeProviderModelDiscoveryCacheKey(unconfigured));
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
+    const synthetic = {
+      ...CATALOG,
+      models: [{ slug: "work-proxy", name: "Work", isConfiguredCustomModel: true }],
+    };
+    await Effect.runPromise(cache.lookup(configured, Effect.succeed(synthetic)));
+    const next = await Effect.runPromise(cache.lookup(unconfigured, Effect.succeed(CATALOG)));
+    expect(next.cached).toBe(false);
+    expect(next.models).toEqual(CATALOG.models);
+  });
+
   it("serves a fresh catalog without re-running discovery", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({

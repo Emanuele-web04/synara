@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,8 +6,46 @@ import {
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
+import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
+
+const require = createRequire(import.meta.url);
+const requireFromBuilder = createRequire(require.resolve("electron-builder/package.json"));
+const { AppInfo } = requireFromBuilder("app-builder-lib/out/appInfo.js");
+const { default: FpmTarget } = requireFromBuilder("app-builder-lib/out/targets/FpmTarget.js");
 
 describe("desktop artifact identity", () => {
+  it.each(["production", "beta"] as const)(
+    "supplies valid staged %s metadata to the real Debian package validator",
+    async (flavor) => {
+      const identity = createDesktopArtifactIdentity({ platform: "linux", flavor });
+      const config = createDesktopPlatformBuildConfig({
+        platform: "linux",
+        target: "AppImage,deb",
+        flavor,
+      });
+      // The generated staging directory has no Git checkout or development
+      // package metadata from which electron-builder could infer these fields.
+      const info = {
+        metadata: { ...identity.packageMetadata, version: "1.0.1" },
+        devMetadata: {},
+        config: identity.buildConfig,
+        repositoryInfo: Promise.resolve(null),
+      };
+      const metadata = await FpmTarget.prototype.computeFpmMetaInfoOptions.call({
+        options: config.linux,
+        packager: { info, appInfo: new AppInfo(info) },
+      });
+
+      expect(metadata).toEqual({
+        name: flavor === "production" ? "synara-desktop" : "synara-desktop-beta",
+        maintainer: "Emanuele Di Pietro <127427797+Emanuele-web04@users.noreply.github.com>",
+        vendor: "Emanuele Di Pietro <127427797+Emanuele-web04@users.noreply.github.com>",
+        url: "https://github.com/Emanuele-web04/synara",
+      });
+      expect(config.linux?.target).toEqual(["AppImage", "deb"]);
+    },
+  );
+
   it.each(["mac", "win"] as const)(
     "preserves the production %s package and artifact names",
     (platform) => {
@@ -15,6 +54,11 @@ describe("desktop artifact identity", () => {
         name: "synara-desktop",
         productName: "Synara",
         synaraDesktopFlavor: "production",
+        homepage: "https://github.com/Emanuele-web04/synara",
+        author: {
+          name: "Emanuele Di Pietro",
+          email: "127427797+Emanuele-web04@users.noreply.github.com",
+        },
       });
       expect(result.buildConfig).toEqual({
         appId: "com.emanueledipietro.synara",

@@ -21,6 +21,15 @@ import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
+  buildDevinPairingPatch,
+  currentDevinPairing,
+  type DevinPairingParts,
+  devinPairingLeadEfforts,
+  devinPairingLeadHasFast,
+  devinPairingSidekicksForLead,
+  resolveDevinPairingUid,
+} from "./devinFusionPairing";
+import {
   getComposerTraitSelection,
   planComposerEffortChange,
   resolveComposerTraitStatusLabel,
@@ -109,12 +118,78 @@ export function ComposerModelPickerTraitRows(props: {
   const contextWindowTraitId = selection.contextWindowDescriptor?.id ?? "contextWindow";
   const contextWindowValue = selection.contextWindow ?? selection.defaultContextWindow ?? "";
 
-  const usesEffortSlider = props.effortControl === "slider" && selection.effortLevels.length > 0;
+  const pairing = selection.pairing;
+  const pairingParts = pairing ? currentDevinPairing(pairing, modelOptions).parts : null;
+  const commitPairing = (part: Partial<DevinPairingParts>) => {
+    if (!pairing || !pairingParts) return;
+    const uid = resolveDevinPairingUid(pairing, { ...pairingParts, ...part });
+    if (uid) commitTrait(buildDevinPairingPatch(uid));
+  };
+
+  const usesEffortSlider =
+    props.effortControl === "slider" && !pairing && selection.effortLevels.length > 0;
   // Only a requested fast mode can be refused; otherwise there is nothing to explain.
-  const fastModeNotice = showsComposerFastModeBadge(selection) ? props.fastModeNotice : null;
+  const fastModeNotice =
+    !pairing && showsComposerFastModeBadge(selection) ? props.fastModeNotice : null;
 
   const rows: ReactNode[] = [];
-  if (selection.thinkingEnabled !== null) {
+  if (pairing && pairingParts) {
+    const leadEfforts = devinPairingLeadEfforts(pairing, pairingParts.lead);
+    const sidekickOptions = devinPairingSidekicksForLead(pairing, pairingParts.lead);
+    rows.push(
+      <TraitRow
+        key="lead"
+        label="Lead"
+        value={pairingParts.lead}
+        valueLabel={
+          pairing.leads.find((option) => option.value === pairingParts.lead)?.label ??
+          pairingParts.lead
+        }
+        options={pairing.leads.map((option) => ({ ...option }))}
+        onValueChange={(value) => commitPairing({ lead: value })}
+      />,
+      <TraitRow
+        key="lead-effort"
+        label="Effort"
+        value={pairingParts.effort}
+        valueLabel={
+          leadEfforts.find((option) => option.value === pairingParts.effort)?.label ??
+          pairingParts.effort
+        }
+        options={leadEfforts.map((option) => ({ ...option }))}
+        onValueChange={(value) => commitPairing({ effort: value })}
+      />,
+    );
+    if (devinPairingLeadHasFast(pairing, pairingParts.lead)) {
+      rows.push(
+        <TraitRow
+          key="speed"
+          label="Speed"
+          value={pairingParts.fast ? "on" : "off"}
+          valueLabel={pairingParts.fast ? "Fast" : "Standard"}
+          options={[
+            { value: "off", label: "Standard" },
+            { value: "on", label: "Fast" },
+          ]}
+          onValueChange={(value) => commitPairing({ fast: value === "on" })}
+        />,
+      );
+    }
+    rows.push(
+      <TraitRow
+        key="sidekick"
+        label="Sidekick"
+        value={pairingParts.sidekick}
+        valueLabel={
+          sidekickOptions.find((option) => option.value === pairingParts.sidekick)?.label ??
+          pairingParts.sidekick
+        }
+        options={sidekickOptions.map((option) => ({ ...option }))}
+        onValueChange={(value) => commitPairing({ sidekick: value })}
+      />,
+    );
+  }
+  if (!pairing && selection.thinkingEnabled !== null) {
     rows.push(
       <TraitRow
         key="thinking"
@@ -129,7 +204,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.contextWindowOptions.length > 1) {
+  if (!pairing && selection.contextWindowOptions.length > 1) {
     rows.push(
       <TraitRow
         key="context"
@@ -148,7 +223,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.effortLevels.length > 0 && !usesEffortSlider) {
+  if (!pairing && selection.effortLevels.length > 0 && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="effort"
@@ -174,7 +249,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (supportsComposerFastModeControl(selection) && !usesEffortSlider) {
+  if (!pairing && supportsComposerFastModeControl(selection) && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="speed"

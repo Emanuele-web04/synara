@@ -201,6 +201,8 @@ export function useChatProviderModels({
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
       omp: resolveHint("omp"),
+      cline: resolveHint("cline"),
+      external: resolveHint("external"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -304,6 +306,16 @@ export function useChatProviderModels({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
+    if (selectedProvider === "external") {
+      const pinned = [
+        draftModelSelectionForSelectedProvider,
+        activeThread?.modelSelection,
+        activeProject?.defaultModelSelection,
+      ].find((selection) => selection?.provider === "external");
+      if (!pinned)
+        throw new Error("This external agent selection is missing its profile revision.");
+      return pinned;
+    }
     if (
       (selectedProvider === "pi" || selectedProvider === "omp") &&
       draftModelSelectionForSelectedProvider?.provider === selectedProvider
@@ -323,6 +335,8 @@ export function useChatProviderModels({
       { instanceId: selectedProviderInstanceId },
     );
   }, [
+    activeThread?.modelSelection,
+    activeProject?.defaultModelSelection,
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
@@ -377,7 +391,8 @@ export function useChatProviderModels({
     selectedProvider === "opencode" ||
     selectedProvider === "pi" ||
     selectedProvider === "devin" ||
-    selectedProvider === "omp";
+    selectedProvider === "omp" ||
+    selectedProvider === "cline";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,

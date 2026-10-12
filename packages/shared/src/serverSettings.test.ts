@@ -14,6 +14,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.codex,
           binaryPath: "",
           homePath: "",
+          launchArgs: "",
         },
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
@@ -56,6 +57,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "",
           agentDir: "",
         },
+        cline: { ...DEFAULT_SERVER_SETTINGS.providers.cline, binaryPath: "" },
       },
     };
 
@@ -79,6 +81,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
     expect(providerOptions.omp).toEqual({});
+    expect(providerOptions.cline).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -90,6 +93,7 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.codex,
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
+          launchArgs: '-c model_provider="apitoken"',
         },
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
@@ -114,6 +118,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.codex).toEqual({
       binaryPath: "/custom/bin/codex",
       homePath: "/custom/codex-home",
+      launchArgs: '-c model_provider="apitoken"',
     });
     expect(providerOptions.claudeAgent).toEqual({
       binaryPath: "/custom/bin/claude",
@@ -157,4 +162,30 @@ describe("providerStartOptionsFromServerSettings", () => {
       accountId: "work",
     });
   });
+});
+
+it("preserves escaped whitespace through server settings and the provider request codec", () => {
+  const launchArgs = "--value trailing\\ ";
+  const providerOptions = providerStartOptionsFromServerSettings({
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, launchArgs },
+    },
+  });
+  const decoded = decodeProviderSessionStartInput({
+    threadId: "launch-args-round-trip",
+    provider: "codex",
+    runtimeMode: "full-access",
+    providerOptions,
+  });
+  expect(decoded.providerOptions?.codex?.launchArgs).toBe(launchArgs);
+  expect(() =>
+    decodeProviderSessionStartInput({
+      threadId: "launch-args-limit",
+      provider: "codex",
+      runtimeMode: "full-access",
+      providerOptions: { codex: { launchArgs: "x".repeat(4097) } },
+    }),
+  ).toThrow();
 });

@@ -194,6 +194,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Search the current transcript and jump to each matching message.",
   },
   {
+    command: "file.find",
+    label: "Find in file",
+    description: "Search the open file preview and jump between matching text.",
+  },
+  {
     command: "search.files",
     label: "Search files",
     description: "Open the workspace file-name search palette.",
@@ -438,6 +443,21 @@ export function shortcutSheetCommandLabel(command: KeybindingCommand): string | 
   return null;
 }
 
+function sheetLookupContextForCommand(
+  command: KeybindingCommand,
+  context: ShortcutSheetContext,
+): ShortcutSheetContext {
+  // Find commands share mod+F but are scoped to different focused surfaces.
+  // Force the relevant focus flag so the sheet can list both bindings together.
+  if (command === "file.find") {
+    return { ...context, filePreviewFocus: true };
+  }
+  if (command === "chat.find") {
+    return { ...context, filePreviewFocus: false, terminalFocus: false };
+  }
+  return context;
+}
+
 function definitionToEntry(
   definition: ShortcutDefinition,
   keybindings: ResolvedKeybindingsConfig,
@@ -447,7 +467,11 @@ function definitionToEntry(
   const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
   const binding = commands.reduce<ResolvedKeybindingRule | null>(
     (resolved, command) =>
-      resolved ?? resolveKeybindingForCommand(keybindings, command, { platform, context }),
+      resolved ??
+      resolveKeybindingForCommand(keybindings, command, {
+        platform,
+        context: sheetLookupContextForCommand(command, context),
+      }),
     null,
   );
   if (!binding) return null;

@@ -114,7 +114,9 @@ describe("OMP role-era persisted selections", () => {
     droid: [],
     opencode: [],
     pi: [],
+    cline: [],
     omp: [],
+    external: [],
   };
   const catalog = {
     omp: [{ slug: "upstream/catalog-model", name: "Catalog Model" }],
@@ -599,6 +601,8 @@ describe("composerDraftStore modelSelection", () => {
         pi: [],
         devin: [],
         omp: [],
+        cline: [],
+        external: [],
       },
       availableModelOptionsByProvider: {
         opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
@@ -641,7 +645,9 @@ describe("composerDraftStore modelSelection", () => {
         opencode: [],
         pi: [],
         devin: [],
+        cline: [],
         omp: [],
+        external: [],
       },
     });
 
@@ -669,6 +675,8 @@ describe("composerDraftStore modelSelection", () => {
         pi: [],
         devin: [],
         omp: [],
+        cline: [],
+        external: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -703,6 +711,8 @@ describe("composerDraftStore modelSelection", () => {
         pi: [],
         devin: [],
         omp: [],
+        cline: [],
+        external: [],
       },
       availableModelOptionsByProvider: {
         opencode: [
@@ -737,6 +747,8 @@ describe("composerDraftStore modelSelection", () => {
         pi: [],
         devin: [],
         omp: [],
+        cline: [],
+        external: [],
       },
       availableModelOptionsByProvider: {
         pi: [

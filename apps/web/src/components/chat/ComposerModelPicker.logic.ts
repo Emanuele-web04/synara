@@ -18,6 +18,7 @@ import {
   planComposerEffortChange,
   supportsComposerFastModeControl,
 } from "./composerTraits";
+import { buildDevinPairingPatch } from "./devinFusionPairing";
 
 type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 
@@ -42,6 +43,7 @@ export const MODEL_PICKER_SHORTCUT_ROW_LIMIT = 9;
 
 // Snapshot the traits a star should restore. Controls the model does not expose stay
 // `null` so applying the preset never invents an option the provider would reject.
+// Pairing families pin their concrete variant UID instead of trait fields.
 export function resolveStarredTraits(
   selection: Pick<
     ComposerTraitSelection,
@@ -51,12 +53,24 @@ export function resolveStarredTraits(
     | "fastModeDescriptor"
     | "fastModeEnabled"
     | "thinkingEnabled"
+    | "pairing"
+    | "pairingVariantUid"
   >,
-): Pick<StarredModel, "effort" | "fastMode" | "thinking"> {
+): Pick<StarredModel, "effort" | "fastMode" | "thinking" | "modelVariant" | "variantLabel"> {
+  const pairing = selection.pairing;
   return {
-    effort: selection.effortLevels.length > 0 ? selection.effort : null,
-    fastMode: supportsComposerFastModeControl(selection) ? selection.fastModeEnabled : null,
-    thinking: selection.thinkingEnabled,
+    effort: pairing ? null : selection.effortLevels.length > 0 ? selection.effort : null,
+    fastMode: pairing
+      ? null
+      : supportsComposerFastModeControl(selection)
+        ? selection.fastModeEnabled
+        : null,
+    thinking: pairing ? null : selection.thinkingEnabled,
+    modelVariant: pairing ? selection.pairingVariantUid : null,
+    variantLabel: pairing
+      ? (pairing.variants.find((variant) => variant.uid === selection.pairingVariantUid)?.label ??
+        null)
+      : null,
   };
 }
 
@@ -65,10 +79,16 @@ export function resolveStarredTraits(
 export function buildStarredModelOptionsPatch(input: {
   provider: ProviderKind;
   selection: ComposerTraitSelection;
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">;
+  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking" | "modelVariant">;
 }): Record<string, unknown> {
   const { provider, selection, starred } = input;
   const patch: Record<string, unknown> = {};
+  if (starred.modelVariant !== null && starred.modelVariant !== undefined) {
+    // A pinned pairing variant carries its own effort/speed; generic trait keys
+    // would only compete with it, so the patch clears them.
+    Object.assign(patch, buildDevinPairingPatch(starred.modelVariant));
+    return patch;
+  }
   if (starred.effort !== null) {
     const plan = planComposerEffortChange({
       provider,
@@ -90,9 +110,10 @@ export function buildStarredModelOptionsPatch(input: {
   return patch;
 }
 
-// "High · Fast" style summary of a preset, labelled through the target model's ladder.
+// "High · Fast" style summary of a preset, labelled through the target model's
+// ladder. Pairing presets show the variant's own label instead.
 export function formatStarredTraitsLabel(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
+  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking" | "variantLabel">,
   effortLevels: ComposerTraitSelection["effortLevels"],
 ): string {
   const effortLabel =
@@ -100,6 +121,7 @@ export function formatStarredTraitsLabel(
       ? (effortLevels.find((level) => level.value === starred.effort)?.label ?? starred.effort)
       : null;
   return [
+    starred.variantLabel ?? null,
     effortLabel,
     effortLabel === null && starred.thinking !== null
       ? `Thinking ${starred.thinking ? "On" : "Off"}`
@@ -112,13 +134,16 @@ export function formatStarredTraitsLabel(
 
 // A preset counts as "current" when every trait it pins matches the composer's.
 export function starredTraitsMatch(
-  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
-  current: Pick<StarredModel, "effort" | "fastMode" | "thinking">,
+  starred: Pick<StarredModel, "effort" | "fastMode" | "thinking" | "modelVariant">,
+  current: Pick<StarredModel, "effort" | "fastMode" | "thinking" | "modelVariant">,
 ): boolean {
   return (
     (starred.effort === null || starred.effort === current.effort) &&
     (starred.fastMode === null || starred.fastMode === current.fastMode) &&
-    (starred.thinking === null || starred.thinking === current.thinking)
+    (starred.thinking === null || starred.thinking === current.thinking) &&
+    (starred.modelVariant === null ||
+      starred.modelVariant === undefined ||
+      starred.modelVariant === current.modelVariant)
   );
 }
 
@@ -191,7 +216,7 @@ export function buildStarredTabRows(input: {
   query: string;
   current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
     StarredModel,
-    "effort" | "fastMode" | "thinking"
+    "effort" | "fastMode" | "thinking" | "modelVariant"
   >;
   effortLevelsFor: (
     provider: ProviderKind,

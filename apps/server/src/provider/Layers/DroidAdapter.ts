@@ -40,7 +40,6 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as Acp from "@agentclientprotocol/sdk";
 
-import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import {
   type SynaraHarnessPolicyDeliveryState,
   takeSynaraHarnessPolicyTextPartForProviderSession,
@@ -77,6 +76,7 @@ import {
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
+  buildAcpGatewayMcpServers,
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
@@ -856,16 +856,10 @@ export function makeDroidAdapter(
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientCapabilities: { elicitation: { form: {} } },
             clientInfo: { name: "Synara", version: "0.0.0" },
-            ...(agentGatewayCredentials
-              ? {
-                  buildMcpServers: (initializeResult: Acp.InitializeResponse) =>
-                    buildAcpSynaraMcpServers({
-                      connection: gatewaySessionLease!.connection,
-                      initializeResult,
-                      stdioProxy: agentGatewayCredentials.stdioProxy,
-                    }),
-                }
-              : {}),
+            ...buildAcpGatewayMcpServers({
+              gatewaySessionLease,
+              agentGatewayCredentials,
+            }),
             ...acpRuntimeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),

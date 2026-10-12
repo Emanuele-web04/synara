@@ -1,7 +1,10 @@
-import {
-  synaraDesktopIdentity,
-  type SynaraPackagedDesktopFlavor,
-} from "@synara/shared/desktopIdentity";
+import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
+
+// Native checkpoint qualification runs without an installed workspace graph.
+// Keep the canonical identity implementation while resolving its source directly.
+const { synaraDesktopIdentity }: typeof import("@synara/shared/desktopIdentity") = await import(
+  new URL("../../packages/shared/src/desktopIdentity.ts", import.meta.url).href
+);
 
 export function createDesktopArtifactIdentity(input: {
   readonly platform: "mac" | "linux" | "win";
@@ -21,6 +24,12 @@ export function createDesktopArtifactIdentity(input: {
       name: `synara-desktop${suffix}`,
       productName: identity.displayName,
       synaraDesktopFlavor: input.flavor,
+      // Debian packaging cannot infer these from the isolated staging tree.
+      homepage: "https://github.com/Emanuele-web04/synara",
+      author: {
+        name: "Emanuele Di Pietro",
+        email: "127427797+Emanuele-web04@users.noreply.github.com",
+      },
     },
     buildConfig: {
       appId: identity.bundleId,

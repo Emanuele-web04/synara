@@ -7,6 +7,7 @@ import type {
   AuthWebSocketTokenResult,
 } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
+import { buildPairingUrl } from "@synara/shared/pairingUrl";
 
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
@@ -392,13 +393,7 @@ export const makeServerAuth = Effect.gen(function* () {
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
     issuePairingCredential({ role: "owner" }).pipe(
-      Effect.map((issued) => {
-        const url = new URL(baseUrl);
-        url.pathname = "/pair";
-        url.searchParams.delete("token");
-        url.hash = new URLSearchParams([["token", issued.credential]]).toString();
-        return url.toString();
-      }),
+      Effect.map((issued) => buildPairingUrl(baseUrl, issued.credential)),
     );
 
   return {

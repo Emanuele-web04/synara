@@ -23,12 +23,41 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceQueryResult,
+  CapabilityEvidenceRecordInput,
+  CapabilityEvidenceRecordResult,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
+} from "./capabilityEvidence";
+import type {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpCreateIntegrationResult,
   ExternalMcpIntegration,
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import type {
+  ExternalAgentProfileCreateInput,
+  ExternalAgentProfileCreateResult,
+  ExternalAgentProfileGetInput,
+  ExternalAgentProfileGetResult,
+  ExternalAgentProfileListResult,
+  ExternalAgentProfileTombstoneInput,
+  ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUpdateInput,
+  ExternalAgentProfileUpdateResult,
+} from "./externalAgent";
+import type {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -263,8 +292,6 @@ import type {
   ComputerInputClickInput,
   ComputerInputKeyInput,
   ComputerInputScrollInput,
-  ComputerListWindowsInput,
-  ComputerListWindowsResult,
   ComputerProvisionInput,
   ComputerProvisionResult,
   ComputerSetControlEnabledInput,
@@ -369,7 +396,7 @@ import type {
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
-import type { ProviderCompactThreadInput } from "./provider";
+import type { ProviderCompactThreadInput, ProviderStopSessionInput } from "./provider";
 import type {
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
@@ -1302,6 +1329,40 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listExternalAgentProfiles: () => Promise<ExternalAgentProfileListResult>;
+    getExternalAgentProfile: (
+      input: ExternalAgentProfileGetInput,
+    ) => Promise<ExternalAgentProfileGetResult>;
+    createExternalAgentProfile: (
+      input: ExternalAgentProfileCreateInput,
+    ) => Promise<ExternalAgentProfileCreateResult>;
+    updateExternalAgentProfile: (
+      input: ExternalAgentProfileUpdateInput,
+    ) => Promise<ExternalAgentProfileUpdateResult>;
+    tombstoneExternalAgentProfile: (
+      input: ExternalAgentProfileTombstoneInput,
+    ) => Promise<ExternalAgentProfileTombstoneResult>;
+    queryCapabilityEvidence: (
+      input: CapabilityEvidenceQuery,
+    ) => Promise<CapabilityEvidenceQueryResult>;
+    recordCapabilityEvidence: (
+      input: CapabilityEvidenceRecordInput,
+    ) => Promise<CapabilityEvidenceRecordResult>;
+    demoteCapabilityEvidence: (
+      input: CapabilityEvidenceDemoteInput,
+    ) => Promise<CapabilityEvidenceDemoteResult>;
+    queryCapabilityEvidenceBadge: (
+      input: CapabilityEvidenceBadge,
+    ) => Promise<CapabilityEvidenceBadgeResult>;
+    recordRuntimeTurnFeedback: (
+      input: RuntimeTurnFeedbackInput,
+    ) => Promise<RuntimeTurnFeedbackResult>;
+    listConnectionCandidates: (
+      input: ConnectionCandidateListInput,
+    ) => Promise<ConnectionCandidateListResult>;
+    resolveConnectionPlan: (
+      input: ConnectionPlanResolveInput,
+    ) => Promise<ConnectionPlanResolveResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -1345,6 +1406,7 @@ export interface NativeApi {
       input: ProviderGetComposerCapabilitiesInput,
     ) => Promise<ProviderComposerCapabilities>;
     compactThread: (input: ProviderCompactThreadInput) => Promise<void>;
+    stopIdleRuntimeSession: (input: ProviderStopSessionInput) => Promise<void>;
     listCommands: (input: ProviderListCommandsInput) => Promise<ProviderListCommandsResult>;
     listSkills: (input: ProviderListSkillsInput) => Promise<ProviderListSkillsResult>;
     listSkillsCatalog: (input: ProviderSkillsCatalogInput) => Promise<ProviderSkillsCatalogResult>;

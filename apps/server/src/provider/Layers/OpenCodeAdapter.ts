@@ -1368,9 +1368,12 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
 
   yield* runOpenCodeSdk("session.abort", () =>
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
-
-  yield* releaseOpenCodeSessionResources(context, beforeRelease);
+  ).pipe(
+    Effect.ignore({ log: true }),
+    // A cancelled abort still retires the stopped context before recovery can
+    // replace it. Otherwise its managed server and gateway lease are abandoned.
+    Effect.ensuring(releaseOpenCodeSessionResources(context, beforeRelease)),
+  );
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -4541,7 +4544,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.sync(() => [...sessions.values()].map((context) => context.session));
 
       const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
-        Effect.sync(() => sessions.has(threadId));
+        Effect.sync(() => {
+          const context = sessions.get(threadId);
+          return context !== undefined && !Ref.getUnsafe(context.stopped);
+        });
 
       const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
         function* (threadId) {
@@ -4935,7 +4941,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+        const requestedCwd = input.cwd?.trim();
         return Effect.gen(function* () {
+          // A requested cwd that no longer exists makes both the OpenCode server
+          // spawn and `opencode models` fail (ENOENT). Retry the CLI listing
+          // without a cwd so it runs in the server's own (valid) working
+          // directory; otherwise the picker would error out and fall back to a
+          // single static model instead of the full catalog.
           const cliModelsEffect = openCodeRuntime
             .listOpenCodeCliModels({
               binaryPath,
@@ -4953,6 +4965,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   detail: openCodeRuntimeErrorDetail(error),
                 }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
               ),
+            )
+            .pipe(
+              Effect.flatMap((cliModels) => {
+                if (cliModels.length > 0 || !requestedCwd) {
+                  return Effect.succeed(cliModels);
+                }
+                return openCodeRuntime
+                  .listOpenCodeCliModels({
+                    binaryPath,
+                    cliSpec: adapterConfig.cliSpec,
+                  })
+                  .pipe(
+                    Effect.catch((error) =>
+                      Effect.logDebug(
+                        `${adapterConfig.displayName} CLI model discovery retry without cwd failed`,
+                        {
+                          binaryPath,
+                          detail: openCodeRuntimeErrorDetail(error),
+                        },
+                      ).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
+                    ),
+                  );
+              }),
             );
           const inventoryEffect = withDiscoveryInventory(
             {

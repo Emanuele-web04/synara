@@ -1,6 +1,7 @@
 import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { NativeApi } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
 import { type ComponentProps, useState } from "react";
@@ -11,10 +12,26 @@ import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
 
 const searchThreads = vi.hoisted(() => vi.fn());
+const searchEntries = vi.hoisted(() => vi.fn());
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
-  readNativeApi: () => ({ orchestration: { searchThreads } }),
+  readNativeApi: () => ({ orchestration: { searchThreads }, projects: { searchEntries } }),
 }));
+
+function installNativeApi(api: NativeApi): () => void {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
+  Object.defineProperty(window, "nativeApi", {
+    configurable: true,
+    value: api,
+  });
+  return () => {
+    if (previousDescriptor) {
+      Object.defineProperty(window, "nativeApi", previousDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "nativeApi");
+    }
+  };
+}
 
 const thread: SidebarSearchThread = {
   id: "thread-1",
@@ -35,33 +52,42 @@ async function renderPalette(
   const onOpenThread = vi.fn();
   const onOpenSettings = vi.fn();
   const onOpenChange = vi.fn();
-  await render(
-    <QueryClientProvider client={new QueryClient()}>
-      <SidebarSearchPalette
-        open
-        mode="search"
-        onModeChange={vi.fn()}
-        onOpenChange={onOpenChange}
-        actions={[]}
-        projects={[]}
-        threads={[searchThread]}
-        onCreateChat={vi.fn()}
-        onCreateThread={vi.fn()}
-        onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
-        homeDir={null}
-        onOpenSettings={onOpenSettings}
-        onOpenFeedback={vi.fn()}
-        onOpenUsageSettings={vi.fn()}
-        onOpenProject={vi.fn()}
-        onOpenThread={onOpenThread}
-        importTargets={[]}
-        onImportThread={vi.fn().mockResolvedValue(undefined)}
-        onImportProjects={vi.fn()}
-        {...overrides}
-      />
-    </QueryClientProvider>,
+  const queryClient = new QueryClient();
+  const paletteProps = {
+    open: true,
+    mode: "search",
+    onModeChange: vi.fn(),
+    onOpenChange,
+    actions: [],
+    projects: [],
+    threads: [searchThread],
+    onCreateChat: vi.fn(),
+    onCreateThread: vi.fn(),
+    onAddProjectPath: vi.fn().mockResolvedValue(undefined),
+    homeDir: null,
+    onOpenSettings,
+    onOpenFeedback: vi.fn(),
+    onOpenUsageSettings: vi.fn(),
+    onOpenProject: vi.fn(),
+    onOpenThread,
+    importTargets: [],
+    onImportThread: vi.fn().mockResolvedValue(undefined),
+    onImportProjects: vi.fn(),
+    ...overrides,
+  } satisfies ComponentProps<typeof SidebarSearchPalette>;
+  const content = (updates: Partial<ComponentProps<typeof SidebarSearchPalette>> = {}) => (
+    <QueryClientProvider client={queryClient}>
+      <SidebarSearchPalette {...paletteProps} {...updates} />
+    </QueryClientProvider>
   );
-  return { onOpenThread, onOpenSettings, onOpenChange };
+  const screen = await render(content());
+  return {
+    onOpenThread,
+    onOpenSettings,
+    onOpenChange,
+    rerender: (updates: Partial<ComponentProps<typeof SidebarSearchPalette>>) =>
+      screen.rerender(content(updates)),
+  };
 }
 
 it("searches settings and opens the matching section and row", async () => {
@@ -86,6 +112,129 @@ it("announces no results when nothing matches", async () => {
   await page.getByPlaceholder("Search chats or run a command").fill("zzzzunmatchedzzzz");
   await expect.element(page.getByRole("status")).toHaveTextContent("No results");
   expect(page.getByRole("option").length).toBe(0);
+});
+
+it("searches active project files and opens the selected file", async () => {
+  searchEntries.mockResolvedValue({
+    entries: [{ path: "src/auth/session.ts", kind: "file" }],
+    truncated: false,
+  });
+  const restoreNativeApi = installNativeApi({
+    projects: { searchEntries },
+  } as unknown as NativeApi);
+  const onOpenFile = vi.fn();
+  try {
+    const { onOpenChange } = await renderPalette(thread, {
+      activeProjectCwd: "/workspace/project",
+      activeThreadId: thread.id,
+      onOpenFile,
+    });
+
+    await page.getByPlaceholder("Search chats or run a command").fill("session");
+    const result = page.getByRole("option", { name: /session.ts/ });
+    await expect.element(result).toBeVisible();
+    await expect.element(result).toHaveTextContent("src/auth");
+    await result.click();
+
+    expect(onOpenFile).toHaveBeenCalledWith("src/auth/session.ts");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(searchEntries).toHaveBeenCalledWith({
+      cwd: "/workspace/project",
+      query: "session",
+      limit: 30,
+      kind: "file",
+    });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("clears active file matches when the search query is emptied", async () => {
+  searchThreads.mockResolvedValue({ matches: [] });
+  searchEntries.mockResolvedValue({
+    entries: [{ path: "src/auth/session.ts", kind: "file" }],
+    truncated: false,
+  });
+  const restoreNativeApi = installNativeApi({
+    projects: { searchEntries },
+  } as unknown as NativeApi);
+  try {
+    await renderPalette(thread, {
+      activeProjectCwd: "/workspace/project",
+      activeThreadId: thread.id,
+      onOpenFile: vi.fn(),
+    });
+    const input = page.getByPlaceholder("Search chats or run a command");
+    await input.fill("session");
+    await expect.element(page.getByRole("option", { name: /session.ts/ })).toBeVisible();
+
+    await input.fill("");
+    expect(page.getByRole("option", { name: /session.ts/ }).length).toBe(0);
+  } finally {
+    restoreNativeApi();
+  }
+});
+
+it("does not offer the previous workspace's files while the focused workspace loads", async () => {
+  searchThreads.mockResolvedValue({ matches: [] });
+  let resolveCurrent!: (result: {
+    entries: { path: string; kind: "file" }[];
+    truncated: boolean;
+  }) => void;
+  const currentResult = new Promise<{
+    entries: { path: string; kind: "file" }[];
+    truncated: boolean;
+  }>((resolve) => {
+    resolveCurrent = resolve;
+  });
+  searchEntries.mockImplementation(({ cwd }: { cwd: string }) =>
+    cwd === "/workspace/first"
+      ? Promise.resolve({ entries: [{ path: "first/session.ts", kind: "file" }], truncated: false })
+      : currentResult,
+  );
+  const restoreNativeApi = installNativeApi({
+    projects: { searchEntries },
+  } as unknown as NativeApi);
+  const onOpenPreviousFile = vi.fn();
+  const onOpenCurrentFile = vi.fn();
+  try {
+    const { rerender } = await renderPalette(thread, {
+      activeProjectCwd: "/workspace/first",
+      activeThreadId: thread.id,
+      onOpenFile: onOpenPreviousFile,
+    });
+    await page.getByPlaceholder("Search chats or run a command").fill("session");
+    await expect
+      .element(page.getByRole("option", { name: /session\.ts/ }))
+      .toHaveTextContent("first");
+
+    await rerender({
+      activeProjectCwd: "/workspace/second",
+      activeThreadId: "thread-2",
+      onOpenFile: onOpenCurrentFile,
+    });
+    await vi.waitFor(() =>
+      expect(searchEntries).toHaveBeenCalledWith({
+        cwd: "/workspace/second",
+        query: "session",
+        limit: 30,
+        kind: "file",
+      }),
+    );
+    expect(page.getByRole("option", { name: /session\.ts/ }).length).toBe(0);
+    expect(onOpenCurrentFile).not.toHaveBeenCalled();
+
+    resolveCurrent({ entries: [{ path: "second/session.ts", kind: "file" }], truncated: false });
+    const currentFile = page.getByRole("option", { name: /session\.ts/ });
+    await expect.element(currentFile).toBeVisible();
+    await expect.element(currentFile).toHaveTextContent("second");
+    await currentFile.click();
+    expect(onOpenPreviousFile).not.toHaveBeenCalled();
+    expect(onOpenCurrentFile).toHaveBeenCalledExactlyOnceWith("second/session.ts");
+  } finally {
+    resolveCurrent({ entries: [], truncated: false });
+    restoreNativeApi();
+  }
 });
 
 it("runs a space command and closes the palette", async () => {

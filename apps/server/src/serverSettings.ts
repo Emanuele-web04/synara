@@ -216,10 +216,10 @@ export function gateBetaOnlyProviders(
   // A Record view for the write: the fixed Struct keys each keep their own
   // settings shape at runtime, which index assignment cannot express.
   const providers = { ...settings.providers } as Record<
-    ProviderKind,
-    ServerSettings["providers"][ProviderKind]
+    Exclude<ProviderKind, "external">,
+    ServerSettings["providers"][Exclude<ProviderKind, "external">]
   >;
-  for (const provider of Object.keys(providers) as ProviderKind[]) {
+  for (const provider of Object.keys(providers) as Exclude<ProviderKind, "external">[]) {
     const current = providers[provider];
     if (!current.enabled || isEnabled(provider)) continue;
     providers[provider] = { ...current, enabled: false };

@@ -6,6 +6,7 @@
 import type {
   AssistantDeliveryMode,
   ModelSlug,
+  ModelSelection,
   ProjectId,
   ProviderInteractionMode,
   ProviderInstanceId,
@@ -120,15 +121,28 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       storedModelSelection?.provider === "claudeAgent"
         ? storedModelSelection.supportsAutoMode
         : undefined;
-    const modelSelection = buildModelSelection(
-      selectedProvider,
-      storedModelSelection?.model ?? selectedModel,
-      storedModelSelection?.options,
-      selectedProvider === "claudeAgent"
-        ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
-        : undefined,
-      { instanceId: selectedProviderInstanceId },
-    );
+    let modelSelection: ModelSelection;
+    if (selectedProvider === "external") {
+      if (storedModelSelection?.provider !== "external") {
+        toastManager.add({
+          type: "error",
+          title: "Select an external agent profile before starting this task.",
+        });
+        isCreatingRef.current = false;
+        return;
+      }
+      modelSelection = storedModelSelection;
+    } else {
+      modelSelection = buildModelSelection(
+        selectedProvider,
+        storedModelSelection?.model ?? selectedModel,
+        storedModelSelection?.options,
+        selectedProvider === "claudeAgent"
+          ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
+          : undefined,
+        { instanceId: selectedProviderInstanceId },
+      );
+    }
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,

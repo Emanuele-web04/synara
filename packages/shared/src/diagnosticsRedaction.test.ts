@@ -138,6 +138,12 @@ describe("redactDiagnosticText", () => {
       "hunter2please",
     ],
     ["colon-style password", "config password: hunter2 loaded", "password: [redacted]", "hunter2"],
+    [
+      "colon-style bearer",
+      "rotate bearer: synthetic_value",
+      "bearer: [redacted]",
+      "synthetic_value",
+    ],
     ["header-style api key", "X-Api-Key: abc123xyz rejected", "X-Api-Key: [redacted]", "abc123xyz"],
     ["base64-ish secret value", "AccountKey=abc/+= stored", "AccountKey=[redacted]", "abc/+"],
     [

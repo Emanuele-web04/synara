@@ -1308,12 +1308,28 @@ describe("AppSnap window picker requests", () => {
 
   it("captures a specific window and keeps a pending record until acknowledged", async () => {
     const { manager, watchChild, captureDirectory, dispose } = await createEnabledManager();
+    const capturePath = join(captureDirectory, "req-capture.png");
+    const originalUnlink = FS.promises.unlink;
+    let markHelperUnlinkStarted!: () => void;
+    const helperUnlinkStarted = new Promise<void>((resolve) => {
+      markHelperUnlinkStarted = resolve;
+    });
+    let releaseHelperUnlink!: () => void;
+    const helperUnlinkRelease = new Promise<void>((resolve) => {
+      releaseHelperUnlink = resolve;
+    });
+    const unlinkSpy = vi.spyOn(FS.promises, "unlink").mockImplementation(async (path) => {
+      if (path.toString() === capturePath) {
+        markHelperUnlinkStarted();
+        await helperUnlinkRelease;
+      }
+      return originalUnlink(path);
+    });
     try {
       const capturing = manager.captureWindow(77);
       await flushPromises();
       const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
       expect(requestId).toMatch(/^picker-[a-f0-9-]+$/);
-      const capturePath = join(captureDirectory, "req-capture.png");
       const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
       writeFileSync(capturePath, captureBytes);
       watchChild.stdout.write(`${JSON.stringify({ type: "triggered", id: requestId })}\n`);
@@ -1326,17 +1342,122 @@ describe("AppSnap window picker requests", () => {
           sourceAppName: "Safari",
         })}\n`,
       );
+      await helperUnlinkStarted;
+      let requestSettled = false;
+      void capturing.then(
+        () => {
+          requestSettled = true;
+        },
+        () => {
+          requestSettled = true;
+        },
+      );
+      await flushPromises();
+      expect(requestSettled).toBe(false);
+      releaseHelperUnlink();
       const capture = await capturing;
       expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
-      // The durable capture resolves before asynchronous helper-file cleanup.
-      await expect.poll(() => FS.existsSync(capturePath)).toBe(false);
+      expect(FS.existsSync(capturePath)).toBe(false);
       expect(await manager.listPendingCaptures()).toHaveLength(1);
       await manager.acknowledgeCapture(capture.id);
       expect(await manager.listPendingCaptures()).toHaveLength(0);
     } finally {
+      releaseHelperUnlink();
+      unlinkSpy.mockRestore();
       dispose();
     }
   });
+
+  it.each(["timeout", "disable", "helper exit"] as const)(
+    "keeps a capture cancelable while helper cleanup is pending (%s)",
+    async (cancellation) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { manager, watchChild, captureDirectory, onCaptured, onError, dispose } =
+        await createEnabledManager();
+      const capturePath = join(captureDirectory, "held-cleanup.png");
+      const originalUnlink = FS.promises.unlink;
+      let markUnlinkStarted!: () => void;
+      const unlinkStarted = new Promise<void>((resolve) => {
+        markUnlinkStarted = resolve;
+      });
+      let releaseUnlink!: () => void;
+      const unlinkRelease = new Promise<void>((resolve) => {
+        releaseUnlink = resolve;
+      });
+      const unlinkSpy = vi.spyOn(FS.promises, "unlink").mockImplementation(async (path) => {
+        if (path.toString() === capturePath) {
+          markUnlinkStarted();
+          await unlinkRelease;
+        }
+        return originalUnlink(path);
+      });
+      const resolved = vi.fn();
+      const rejected = vi.fn();
+      const capturing = manager.captureWindow(77).then(resolved, rejected);
+      try {
+        await flushPromises();
+        const requestId = lastStdinLine(watchChild).slice("capture-window ".length, -3);
+        writeFileSync(
+          capturePath,
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]),
+        );
+        watchChild.stdout.write(
+          `${JSON.stringify({
+            type: "captured",
+            id: requestId,
+            path: capturePath,
+            name: "held-cleanup.png",
+          })}\n`,
+        );
+        await unlinkStarted;
+        expect(resolved).not.toHaveBeenCalled();
+        expect(rejected).not.toHaveBeenCalled();
+
+        if (cancellation === "timeout") {
+          await vi.advanceTimersByTimeAsync(20_000);
+        } else if (cancellation === "disable") {
+          await manager.setEnabled(false);
+        } else {
+          watchChild.emit("exit", 1, null);
+        }
+        await flushPromises();
+        expect(rejected).toHaveBeenCalledExactlyOnceWith(
+          new Error(
+            cancellation === "timeout"
+              ? "Timed out while capturing the requested window."
+              : "AppSnap stopped listening while a request was in flight.",
+          ),
+        );
+        expect(resolved).not.toHaveBeenCalled();
+        expect(await manager.listPendingCaptures()).toHaveLength(0);
+
+        releaseUnlink();
+        await capturing;
+        await vi.waitFor(() => expect(FS.existsSync(capturePath)).toBe(false));
+        await vi.waitFor(() =>
+          expect(
+            FS.readdirSync(captureDirectory).filter((entry) => entry.startsWith("pending-")),
+          ).toHaveLength(0),
+        );
+        expect(await manager.listPendingCaptures()).toHaveLength(0);
+        expect(onCaptured).not.toHaveBeenCalled();
+        if (cancellation === "helper exit") {
+          expect(onError).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ code: "helper-stopped" }),
+            false,
+          );
+        } else {
+          expect(onError).not.toHaveBeenCalled();
+        }
+      } finally {
+        releaseUnlink();
+        await capturing;
+        unlinkSpy.mockRestore();
+        dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("rejects values outside the macOS window id range before writing to the helper", async () => {
     const { manager, watchChild, dispose } = await createEnabledManager();

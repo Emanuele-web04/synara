@@ -105,6 +105,12 @@ asking.
 
 A project is the folder Synara works with.
 
+Project rows can use a local favicon or logo as their primary icon. The server resolves the
+saved project ID to its workspace and confines icon discovery to that workspace; the client
+does not supply a filesystem path. A folder icon remains visible while an image loads, when
+none is available, or after a load failure. An explicit emoji, icon, or color choice takes
+precedence over the discovered image.
+
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
 that folder visible with its path.
@@ -336,6 +342,13 @@ capabilities from the installed runtime and account.
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) lets another supported
 provider continue the same task and working environment using the context Synara passes to it.
+
+Enable **Settings → Continue handoffs here** to add **Continue here** alongside
+**New conversation** in the Hand off menu. This setting is off by default and changes only
+explicit handoff actions, not ordinary model-picker switching. Continue here preserves the
+conversation and workspace while starting the target provider with a bounded recap; it does
+not transfer a provider-native session or hidden reasoning. The compact header path derives
+from saved handoff events, marks return visits, and offers the full route on hover or focus.
 
 Use a handoff when:
 

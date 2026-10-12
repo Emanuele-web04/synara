@@ -73,6 +73,9 @@ import {
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
+  EMPTY_MODEL_CAPABILITIES,
+  getClaudeModelOptionCapabilities,
+  isConfiguredCustomClaudeModel,
   getProviderOptionDescriptors,
   hasEffortLevel,
   normalizeClaudeModelOptions,
@@ -463,6 +466,7 @@ interface ClaudeSessionContext {
   interruptRequestedTurnId: TurnId | undefined;
   lastKnownContextWindow: number | undefined;
   currentAutoCompactWindow: number | undefined;
+  readonly configuredCustomModels: readonly string[];
   currentAlwaysThinkingEnabled: boolean | undefined;
   currentEffort: ClaudeApiEffort | null;
   currentUltracode: boolean;
@@ -1159,13 +1163,23 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
   }
 }
 
-function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+function mapClaudeModelInfo(
+  model: ModelInfo,
+  configuredCustomModels: readonly string[] = [],
+): ProviderListModelsResult["models"][number] {
+  const known = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
+  const configuredCustomModel =
+    known === EMPTY_MODEL_CAPABILITIES &&
+    isConfiguredCustomClaudeModel(model.value, configuredCustomModels);
   const optionDescriptors = getProviderOptionDescriptors({
     provider: PROVIDER,
-    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+    caps: configuredCustomModel
+      ? getClaudeModelOptionCapabilities(model.value, configuredCustomModels)
+      : known,
   });
   return {
     slug: model.value,
+    ...(configuredCustomModel ? { isConfiguredCustomModel: true } : {}),
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
     ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
@@ -1575,6 +1589,7 @@ function isClaudeNativeSlashCommand(
 function buildPromptText(
   input: ProviderSendTurnInput,
   nativeCommandNames?: ReadonlySet<string>,
+  configuredCustomModels: readonly string[] = [],
 ): string {
   // Native slash commands (`/compact`, `/design`, plugin commands) must start
   // the payload, including in Plan mode or with a prompt-based effort option.
@@ -1586,7 +1601,7 @@ function buildPromptText(
   const requestedEffort = trimOrNull(rawEffort);
   const claudeModel =
     input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.model : undefined;
-  const caps = getModelCapabilities("claudeAgent", claudeModel);
+  const caps = getClaudeModelOptionCapabilities(claudeModel, configuredCustomModels);
   const promptEffort =
     requestedEffort === "ultrathink" && caps.promptInjectedEffortLevels.includes("ultrathink")
       ? "ultrathink"
@@ -1633,10 +1648,15 @@ function buildUserMessageEffect(
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly nativeCommandNames?: ReadonlySet<string> | undefined;
+    readonly configuredCustomModels?: readonly string[];
   },
 ): Effect.Effect<SDKUserMessage, ProviderAdapterRequestError> {
   return Effect.gen(function* () {
-    const text = buildPromptText(input, dependencies.nativeCommandNames);
+    const text = buildPromptText(
+      input,
+      dependencies.nativeCommandNames,
+      dependencies.configuredCustomModels,
+    );
     const sdkContent: Array<Record<string, unknown>> = [];
 
     if (text.length > 0) {
@@ -3844,6 +3864,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : undefined,
         context: {
           session: context.session,
+          configuredCustomModels: context.configuredCustomModels,
           commandDiscoveryKey: context.commandDiscoveryKey,
           accountDiscoveryKey: context.accountDiscoveryKey,
           ...(context.lifecycleGeneration === undefined
@@ -6969,6 +6990,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
 
         const providerOptions = input.providerOptions?.claudeAgent;
+        const configuredCustomModels = [...(providerOptions?.customModels ?? [])];
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
         const providerInstanceId = input.providerInstanceId ?? modelSelection?.instanceId;
@@ -6990,14 +7012,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const requestedAutoCompactWindow = normalizeClaudeModelOptions(
           modelSelection?.model,
           modelSelection?.options,
+          configuredCustomModels,
         )?.autoCompactWindow;
         const effectiveClaudeModel = modelSelection?.model ?? getDefaultModel("claudeAgent");
-        const caps = getModelCapabilities("claudeAgent", effectiveClaudeModel);
+        const caps = getClaudeModelOptionCapabilities(effectiveClaudeModel, configuredCustomModels);
         const requestedAutoCompactWindowTokens = resolveSelectedClaudeAutoCompactWindow(
           effectiveClaudeModel,
           requestedAutoCompactWindow,
+          configuredCustomModels,
         );
-        const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+        const apiModelId = modelSelection
+          ? resolveApiModelId(modelSelection, configuredCustomModels)
+          : undefined;
         const effort =
           requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
         const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
@@ -7274,6 +7300,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               apiModelId ?? effectiveClaudeModel,
             ),
             currentAutoCompactWindow: requestedAutoCompactWindowTokens,
+            configuredCustomModels,
             currentAlwaysThinkingEnabled: thinking,
             currentEffort: effectiveEffort,
             currentUltracode: ultracode,
@@ -7605,8 +7632,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : undefined;
         const requestedAutoCompactWindow = resolveSelectedClaudeAutoCompactWindow(
           modelSelection?.model,
-          normalizeClaudeModelOptions(modelSelection?.model, modelSelection?.options)
-            ?.autoCompactWindow,
+          normalizeClaudeModelOptions(
+            modelSelection?.model,
+            modelSelection?.options,
+            context.configuredCustomModels,
+          )?.autoCompactWindow,
+          context.configuredCustomModels,
         );
 
         if (context.turnState) {
@@ -7622,7 +7653,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         let apiModelChanged = false;
         if (modelSelection?.model) {
-          const apiModelId = resolveApiModelId(modelSelection);
+          const apiModelId = resolveApiModelId(modelSelection, context.configuredCustomModels);
           if (apiModelId !== context.currentApiModelId) {
             apiModelChanged = true;
             if (context.session.runtimeMode === "auto") {
@@ -7695,7 +7726,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // `max` effort has no Settings equivalent; transitions involving it
         // restart upstream (claudeSelectionRequiresRestart) before this runs.
         if (modelSelection) {
-          const turnCaps = getModelCapabilities("claudeAgent", modelSelection.model);
+          const turnCaps = getClaudeModelOptionCapabilities(
+            modelSelection.model,
+            context.configuredCustomModels,
+          );
           const requestedEffortOption = trimOrNull(modelSelection.options?.effort ?? null);
           const validEffort =
             requestedEffortOption && hasEffortLevel(turnCaps, requestedEffortOption)
@@ -7846,6 +7880,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const message = yield* buildUserMessageEffect(input, {
           fileSystem,
           attachmentsDir: serverConfig.attachmentsDir,
+          configuredCustomModels: context.configuredCustomModels,
           // Compaction already validated these commands before turn admission.
           nativeCommandNames:
             nativeCommandNames ?? (yield* resolveNativeCommandNames(context, input.input)),
@@ -7911,7 +7946,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           selection?.provider === "claudeAgent" &&
           resolveSelectedClaudeAutoCompactWindow(
             selection.model,
-            normalizeClaudeModelOptions(selection.model, selection.options)?.autoCompactWindow,
+            normalizeClaudeModelOptions(
+              selection.model,
+              selection.options,
+              context.configuredCustomModels,
+            )?.autoCompactWindow,
+            context.configuredCustomModels,
           ) !== context.currentAutoCompactWindow
         ) {
           return yield* new ProviderAdapterValidationError({
@@ -8011,6 +8051,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const message = yield* buildUserMessageEffect(input, {
             fileSystem,
             attachmentsDir: serverConfig.attachmentsDir,
+            configuredCustomModels: context.configuredCustomModels,
             nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
           });
           yield* Queue.offer(context.promptQueue, {
@@ -8549,9 +8590,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       cwd: string,
       env: NodeJS.ProcessEnv,
       binaryPath: string,
+      configuredCustomModels: readonly string[] = [],
     ): Promise<ProviderListModelsResult> =>
       discoverViaTemporaryProcess(cwd, env, binaryPath, async (queryRuntime) => ({
-        models: (await queryRuntime.supportedModels()).map(mapClaudeModelInfo),
+        models: (await queryRuntime.supportedModels()).map((model) =>
+          mapClaudeModelInfo(model, configuredCustomModels),
+        ),
         source: "sdk",
         cached: false,
       }));
@@ -8735,6 +8779,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               input.cwd ?? serverConfig.cwd,
               claudeSdkEnv,
               input.binaryPath ?? "claude",
+              input.customModels,
             ),
           catch: (cause) =>
             new ProviderAdapterProcessError({

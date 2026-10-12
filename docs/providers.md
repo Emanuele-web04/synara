@@ -86,9 +86,12 @@ show their attempt count and reported delay. Authentication displays its latest 
 between turns, with a Settings hint when attention is required; raw login output is not shown.
 These rows use events already supplied by the provider and do not trigger extra model requests.
 
-The Environment panel's Usage section shows enabled accounts for the active provider, with a
+The Environment panel's Usage section shows accounts across all enabled providers, with a
 separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
+Rows with no meaningful usage or account status stay hidden, and an empty Usage section is omitted.
+The panel shares its initial batch request; account-specific recovery requests wait for that
+batch to settle and never use another account's snapshot.
 In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
 two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
 hover card identifies the account and shows its own usage. The rings use the same account color
@@ -685,3 +688,35 @@ computer awake either for the server lifetime or while an agent turn is running.
 The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
 shutting down terminates it, deleting the last active thread releases its agent
 lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.
+
+## Cline
+
+Cline is an installed CLI provider, connected through `cline --acp`. Install the
+current CLI with `npm install -g cline`, run `cline auth` in a terminal, then select
+Cline in Synara. Settings → Providers supports a custom executable path, provider
+enablement, and custom model IDs. A successful `--version` check proves only that
+the CLI is installed; authentication is verified by Cline when a session starts.
+
+The model picker discovers the configured upstream provider's model catalog from
+ACP `configOptions`. IDs are preserved verbatim. **Cline configured model** follows
+the CLI's default at session startup; no specific hosted model, quota, or reasoning
+setting is assumed. Configure the upstream provider/account in Cline itself (or
+with Cline's documented environment variables), not with another Synara provider's
+credentials. Discovery failures are shown rather than replaced with an invented
+model catalog.
+
+Synara uses native Plan/Act modes and routes ACP permission requests through its
+existing approval controls. It explicitly disables Cline auto-approval even for
+Full Access sessions: Synara decides how to answer each request. Configuration
+failures prevent prompt dispatch. Text, images, file attachments, streamed replies,
+tool calls, plans, usage events, cancellation, and session load/resume are supported.
+Cancellation retires the child process to isolate late events; the next session can
+resume from the saved cursor. Scoped Synara MCP tools use the existing gateway.
+
+Native rollback, compaction, thread import, skills/plugins, command discovery,
+turn steering, and quota polling are not advertised. Rollback uses Synara's
+restart-with-history path. Git text generation is unchanged. Cline's official icon
+is included with attribution under `third-party/cline-icon`.
+
+References: [Cline ACP](https://docs.cline.bot/usage/acp),
+[Cline CLI reference](https://docs.cline.bot/cli/cli-reference).

@@ -1392,6 +1392,261 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect(
+    "forwards the complete configured custom effort ladder without a fabricated default",
+    () =>
+      Effect.gen(function* () {
+        for (const effort of [
+          undefined,
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultrathink",
+          "ultracode",
+        ] as const) {
+          const harness = makeHarness();
+          yield* Effect.gen(function* () {
+            const adapter = yield* ClaudeAdapter;
+            const model = "my-proxy/custom-opus";
+            yield* adapter.startSession({
+              threadId: THREAD_ID,
+              provider: "claudeAgent",
+              providerOptions: { claudeAgent: { customModels: [model] } },
+              modelSelection: {
+                provider: "claudeAgent",
+                model,
+                ...(effort ? { options: { effort } } : {}),
+              },
+              runtimeMode: "full-access",
+            });
+            const createInput = harness.getLastCreateQueryInput();
+            assert.equal(createInput?.options.model, model);
+            assert.equal(createInput?.options.effort, effort === "max" ? "max" : undefined);
+            assert.equal(
+              effortLevelFromOptions(createInput?.options),
+              effort === "ultracode"
+                ? "xhigh"
+                : effort === "max" || effort === "ultrathink"
+                  ? undefined
+                  : effort,
+            );
+            assert.equal(autoCompactWindowFromOptions(createInput?.options), undefined);
+            const settings = createInput?.options.settings as Record<string, unknown>;
+            assert.equal(settings.ultracode, effort === "ultracode" ? true : undefined);
+            assert.equal(settings.fastMode, undefined);
+            assert.equal(settings.alwaysThinkingEnabled, undefined);
+            if (effort === "ultrathink") {
+              yield* adapter.sendTurn({
+                threadId: THREAD_ID,
+                input: "Investigate the proxy edge cases",
+                attachments: [],
+                modelSelection: { provider: "claudeAgent", model, options: { effort } },
+              });
+              assert.equal(
+                yield* Effect.promise(() => readFirstPromptText(createInput)),
+                "Ultrathink:\nInvestigate the proxy edge cases",
+              );
+            }
+          }).pipe(Effect.provide(harness.layer));
+        }
+      }).pipe(Effect.provideService(Random.Random, makeDeterministicRandomService())),
+  );
+
+  it.effect("forwards configured proxy budgets while retaining the literal API model ID", () =>
+    Effect.gen(function* () {
+      for (const autoCompactWindow of ["200k", "1m"] as const) {
+        const harness = makeHarness();
+        yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const model = "claude-enterprise-west";
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            providerOptions: { claudeAgent: { customModels: [model] } },
+            modelSelection: {
+              provider: "claudeAgent",
+              model,
+              options: { autoCompactWindow, effort: "high", fastMode: true, thinking: false },
+            },
+          });
+          const createInput = harness.getLastCreateQueryInput();
+          assert.equal(createInput?.options.model, model);
+          assert.equal(
+            autoCompactWindowFromOptions(createInput?.options),
+            autoCompactWindow === "1m" ? 1_000_000 : 200_000,
+          );
+          assert.equal(effortLevelFromOptions(createInput?.options), "high");
+          const settings = createInput?.options.settings as Record<string, unknown>;
+          assert.equal(settings.fastMode, undefined);
+          assert.equal(settings.alwaysThinkingEnabled, undefined);
+        }).pipe(Effect.provide(harness.layer));
+      }
+    }).pipe(Effect.provideService(Random.Random, makeDeterministicRandomService())),
+  );
+
+  it.effect("keeps unconfigured and recognizable legacy IDs on the original empty fallback", () =>
+    Effect.gen(function* () {
+      for (const [model, customModels] of [
+        ["my-proxy/custom-opus", []],
+        ["my-proxy/custom-opus", ["another-instance-proxy"]],
+        ["claude-opus-4-1", ["claude-opus-4-1"]],
+      ] as const) {
+        const harness = makeHarness();
+        yield* Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            providerOptions: { claudeAgent: { customModels } },
+            modelSelection: {
+              provider: "claudeAgent",
+              model,
+              options: { effort: "high", autoCompactWindow: "1m", fastMode: true },
+            },
+          });
+          const createInput = harness.getLastCreateQueryInput();
+          assert.equal(createInput?.options.model, model);
+          assert.equal(createInput?.options.effort, undefined);
+          assert.deepEqual(createInput?.options.settings, { autoCompactEnabled: true });
+        }).pipe(Effect.provide(harness.layer));
+      }
+    }).pipe(Effect.provideService(Random.Random, makeDeterministicRandomService())),
+  );
+
+  it.effect(
+    "updates and clears configured custom effort live without pinning the native window",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const model = "my-proxy/custom-opus";
+        const secondModel = "claude-enterprise-west";
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { customModels: [model, secondModel] } },
+          modelSelection: { provider: "claudeAgent", model, options: { effort: "high" } },
+        });
+        assert.equal(effortLevelFromOptions(harness.getLastCreateQueryInput()?.options), "high");
+        for (const effort of ["low", "ultracode", undefined] as const) {
+          yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input: "continue",
+            attachments: [],
+            modelSelection: {
+              provider: "claudeAgent",
+              model,
+              ...(effort ? { options: { effort } } : {}),
+            },
+          });
+        }
+        assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+          { effortLevel: "low" },
+          { effortLevel: "xhigh", ultracode: true },
+          { effortLevel: null, ultracode: null },
+        ]);
+        // The author's custom-model live-switch requirement keeps native Auto
+        // unpinned; current main requires a resumed restart for budget changes.
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "switch proxy",
+          attachments: [],
+          modelSelection: { provider: "claudeAgent", model: secondModel },
+        });
+        assert.deepEqual(harness.query.setModelCalls, [secondModel]);
+        assert.equal(harness.query.applyFlagSettingsCalls.length, 3);
+        assert.equal(harness.query.closeCalls, 0);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  for (const [previous, next] of [
+    [undefined, "200k"],
+    ["200k", undefined],
+  ] as const) {
+    it.effect(`keeps configured proxy auto-compact ${previous} -> ${next} spawn-fixed`, () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const model = "my-proxy/custom-opus";
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { customModels: [model] } },
+          modelSelection: {
+            provider: "claudeAgent",
+            model,
+            ...(previous ? { options: { autoCompactWindow: previous } } : {}),
+          },
+        });
+        const result = yield* adapter
+          .sendTurn({
+            threadId: THREAD_ID,
+            input: "must not send",
+            attachments: [],
+            modelSelection: {
+              provider: "claudeAgent",
+              model,
+              ...(next ? { options: { autoCompactWindow: next } } : {}),
+            },
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.deepEqual(harness.query.setModelCalls, []);
+        assert.deepEqual(harness.query.applyFlagSettingsCalls, []);
+        assert.equal(harness.query.closeCalls, 0);
+        assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  it.effect(
+    "preserves a configured proxy's SDK setting rejection and does not mark a turn active",
+    () => {
+      const harness = makeHarness();
+      const failure = new Error("proxy refuses selected effort");
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const model = "my-proxy/custom-opus";
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { customModels: [model] } },
+          modelSelection: { provider: "claudeAgent", model },
+        });
+        vi.spyOn(harness.query, "applyFlagSettings").mockRejectedValueOnce(failure);
+        const result = yield* adapter
+          .sendTurn({
+            threadId: THREAD_ID,
+            input: "must fail visibly",
+            attachments: [],
+            modelSelection: { provider: "claudeAgent", model, options: { effort: "high" } },
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.instanceOf(result.failure, ProviderAdapterRequestError);
+          if (result.failure instanceof ProviderAdapterRequestError) {
+            assert.equal(result.failure.method, "turn/applyFlagSettings");
+            assert.strictEqual(result.failure.cause, failure);
+          }
+        }
+        assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("forwards every Sonnet 5 API effort unchanged", () =>
     Effect.gen(function* () {
       for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
@@ -6395,6 +6650,66 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
         yield* adapter.stopAll();
         assert.equal(teardownCalls, 3);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "discovers configured proxy controls without changing known SDK metadata or sibling models",
+    () => {
+      const query = new FakeClaudeQuery();
+      (query as unknown as { supportedModels: () => Promise<ModelInfo[]> }).supportedModels =
+        async () => [
+          { value: "work-proxy", displayName: "Work", description: "Configured" },
+          { value: "other-proxy", displayName: "Other", description: "Not configured here" },
+          {
+            value: "team-model",
+            resolvedModel: "claude-haiku-4-5",
+            displayName: "Team",
+            description: "SDK-known",
+            supportsAutoMode: false,
+          },
+          {
+            value: "claude-opus-4-1",
+            displayName: "Legacy",
+            description: "Unsupported native model",
+          },
+        ];
+      const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const result = yield* adapter.listModels!({
+          provider: "claudeAgent",
+          customModels: ["work-proxy", "team-model", "claude-opus-4-1"],
+        });
+        const proxy = result.models.find((model) => model.slug === "work-proxy")!;
+        assert.isTrue(proxy.isConfiguredCustomModel);
+        assert.deepEqual(
+          proxy.optionDescriptors?.map((option) => option.id),
+          ["effort", "autoCompactWindow"],
+        );
+        assert.isUndefined(proxy.supportedReasoningEfforts);
+        assert.isUndefined(proxy.defaultReasoningEffort);
+        assert.isUndefined(proxy.supportsFastMode);
+        assert.isUndefined(proxy.supportsThinkingToggle);
+        assert.isUndefined(proxy.contextWindowOptions);
+        const sibling = result.models.find((model) => model.slug === "other-proxy")!;
+        assert.isUndefined(sibling.isConfiguredCustomModel);
+        assert.isUndefined(sibling.optionDescriptors);
+        const known = result.models.find((model) => model.slug === "team-model")!;
+        assert.equal(known.resolvedModel, "claude-haiku-4-5");
+        assert.isUndefined(known.isConfiguredCustomModel);
+        assert.equal(known.supportsAutoMode, false);
+        assert.deepEqual(
+          known.optionDescriptors?.map((option) => option.id),
+          ["thinking"],
+        );
+        const legacy = result.models.find((model) => model.slug === "claude-opus-4-1")!;
+        assert.isUndefined(legacy.isConfiguredCustomModel);
+        assert.isUndefined(legacy.optionDescriptors);
       }).pipe(Effect.provide(layer));
     },
   );

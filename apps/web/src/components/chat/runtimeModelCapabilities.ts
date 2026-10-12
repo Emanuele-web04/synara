@@ -11,6 +11,7 @@ import type {
 } from "@synara/contracts";
 import {
   getClaudeContextWindowSuffix,
+  getClaudeModelOptionCapabilities,
   getDefaultEffort,
   getModelCapabilities,
   normalizeModelSlug,
@@ -91,7 +92,13 @@ export function getRuntimeAwareModelCapabilities(input: {
   model: string | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
 }): ModelCapabilities {
-  const staticCapabilities = getModelCapabilities(input.provider, input.model);
+  const staticCapabilities =
+    input.provider === "claudeAgent"
+      ? getClaudeModelOptionCapabilities(
+          input.model,
+          input.runtimeModel?.isConfiguredCustomModel === true && input.model ? [input.model] : [],
+        )
+      : getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
     (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&

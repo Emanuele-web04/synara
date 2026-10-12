@@ -2,9 +2,11 @@ import {
   EXTERNAL_MCP_DEFAULT_WAIT_MS,
   EXTERNAL_MCP_MAX_MESSAGE_CHARS,
   EXTERNAL_MCP_MAX_PROMPT_CHARS,
+  EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH,
   EXTERNAL_MCP_MAX_WAIT_MS,
   ExternalMcpCreateTaskInput,
   ExternalMcpReadTaskInput,
+  ExternalMcpSendTaskMessageInput,
   ExternalMcpWaitTaskInput,
   ProjectId,
   ThreadId,
@@ -23,6 +25,10 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  makeProviderAccountUsageReader,
+  PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
+} from "../../providerUsage/agentReader.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { makeCreateThreadsHandler } from "../../agentGateway/creationCoordinator.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../../agentGateway/startupRecovery.ts";
@@ -81,6 +87,11 @@ import {
 import { makeExternalMcpAuditCompletion } from "../auditCompletion.ts";
 import { verifyExternalMcpTransportCredential } from "../credentialVerification.ts";
 import {
+  isExternalMcpFollowupRunId,
+  makeSendTaskMessageHandler,
+  requireExternalMcpFollowupRun,
+} from "../taskFollowup.ts";
+import {
   buildExternalMcpOverviewNextSteps,
   buildExternalMcpOverviewProjects,
 } from "../overview.ts";
@@ -90,7 +101,7 @@ import {
 } from "../Services/ExternalMcpGateway.ts";
 
 const EXTERNAL_MCP_INSTRUCTIONS =
-  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Call synara_capabilities with a projectId to choose an exact provider instanceId and model from the advertised catalog. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
+  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Call synara_capabilities with a projectId to choose an exact provider instanceId and model from the advertised catalog. Tools are restricted to the integration's allowed projects and scopes. When usage:read is granted, check synara_get_usage before starting parallel work; only fresh, available quotaWindows are actionable. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
 const MCP_MAX_BATCH_MESSAGES = 50;
 
 const providerInstanceAvailability = (
@@ -131,6 +142,7 @@ export function filterExternalMcpTools(
 const decodeExternalCreateTask = Schema.decodeUnknownEffect(ExternalMcpCreateTaskInput);
 const decodeExternalReadTask = Schema.decodeUnknownEffect(ExternalMcpReadTaskInput);
 const decodeExternalWaitTask = Schema.decodeUnknownEffect(ExternalMcpWaitTaskInput);
+const decodeExternalSendTaskMessage = Schema.decodeUnknownEffect(ExternalMcpSendTaskMessageInput);
 
 function externalErrorResult(error: unknown) {
   if (error instanceof GatewayToolError) return gatewayToolErrorResult(error);
@@ -182,7 +194,21 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   const git = yield* GitCore;
   const serverConfig = yield* ServerConfig;
   const operationRepository = yield* AgentGatewayOperationRepository;
+  const loadProviderUsage = makeProviderAccountUsageReader({
+    getSettings: settings.getSettings,
+    context: {
+      homeDir: serverConfig.homeDir,
+      env: process.env,
+      platform: process.platform,
+    },
+    stateDir: serverConfig.stateDir,
+    baseDir: serverConfig.baseDir,
+  });
 
+  // No external requests are admitted until this layer finishes. Drain command
+  // commits before classifying attempts left by the previous process.
+  yield* orchestrationEngine.drain;
+  yield* externalRepository.recoverFollowups();
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository: {
       listNonTerminal: externalRepository.listNonTerminalOperations,
@@ -195,6 +221,12 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     snapshotQuery,
     orchestrationEngine,
     git,
+  });
+
+  const runSendTaskMessage = makeSendTaskMessageHandler({
+    repository: externalRepository,
+    service: externalMcp,
+    orchestrationEngine,
   });
 
   const loadProviderAvailabilities = Effect.gen(function* () {
@@ -429,6 +461,25 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
+  const usageTool: ExternalTool = {
+    requiredCapability: "usage:read",
+    definition: {
+      name: "synara_get_usage",
+      description:
+        "Read cached quota for all configured provider accounts, optionally filtered by provider and instanceId. Requires the explicit usage:read scope, independent of project grants. This never refreshes providers; missing, stale, disabled, and unsupported accounts remain explicit. Only fresh authoritative quotaWindows have actionable remaining percentages.",
+      inputSchema: PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
+      annotations: { title: "Get provider usage", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const usage = yield* loadProviderUsage(args);
+        // Credential-context checks can be asynchronous. Do not return account
+        // data if the integration was revoked or expired while they settled.
+        yield* context.assertActive();
+        return mcpToolResultJson({ usage });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
   const createTaskTool: ExternalTool = {
     requiredCapability: "tasks:create",
     definition: {
@@ -623,6 +674,46 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
+  const sendTaskMessageTool: ExternalTool = {
+    requiredCapability: "tasks:create",
+    definition: {
+      name: "synara_send_task_message",
+      description:
+        "Send a follow-up to a task successfully created by this integration, preserving its provider and workspace. Use a stable requestId for retries. Queue is the default; steer uses the provider's existing steering/queue rules. Project read grants do not allow writes. The returned runId identifies this exact request for synara_wait_for_task.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: {
+            type: "string",
+            minLength: 1,
+            maxLength: EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH,
+          },
+          threadId: { type: "string", minLength: 1 },
+          message: { type: "string", minLength: 1, maxLength: EXTERNAL_MCP_MAX_PROMPT_CHARS },
+          mode: { type: "string", enum: ["queue", "steer"], default: "queue" },
+        },
+        required: ["requestId", "threadId", "message"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Continue an owned Synara task",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const input = yield* decodeExternalSendTaskMessage(args).pipe(
+          Effect.mapError((cause) => new ToolInputError(errorText(cause))),
+        );
+        return mcpToolResultJson(
+          yield* runSendTaskMessage(input, context.client, context.assertActive),
+        );
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
   const waitTaskTool: ExternalTool = {
     requiredCapability: "tasks:wait",
     definition: {
@@ -656,6 +747,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         yield* externalMcp.assertTaskRead(context.client, input.threadId);
         const initial = yield* requireThreadShell(input.threadId);
         const runId = requestedExternalMcpRunId(input, initial.latestTurn?.turnId ?? null);
+        const followupRunId = isExternalMcpFollowupRunId(runId) ? runId : null;
         const terminalSessionState = terminalExternalMcpSessionStateForRun(initial, runId);
         const initialState: "idle" | "pending" | "running" | "completed" | "error" | "interrupted" =
           terminalSessionState !== null
@@ -672,6 +764,17 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           timeoutMs: input.timeoutMs ?? EXTERNAL_MCP_DEFAULT_WAIT_MS,
           assertActive: context.assertActive,
           projectionTurns,
+          ...(followupRunId === null
+            ? {}
+            : {
+                resolveRequestRun: () =>
+                  requireExternalMcpFollowupRun({
+                    repository: externalRepository,
+                    integrationId: context.client.integration.integrationId,
+                    threadId: input.threadId,
+                    runId: followupRunId,
+                  }),
+              }),
           resolveLatestTurn: () =>
             requireThreadShell(input.threadId).pipe(Effect.map(latestExternalMcpWaitState)),
         });
@@ -688,20 +791,32 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
               }),
             ),
           );
-          const assistant = waited.runId
+          const assistant = waited.turnId
             ? detail.messages.findLast(
-                (message) => message.role === "assistant" && message.turnId === waited.runId,
+                (message) => message.role === "assistant" && message.turnId === waited.turnId,
               )
             : undefined;
           const summarized = summarizeWaitThreadText(assistant?.text);
           summary = summarized.summary;
           summaryTruncated = summarized.truncated;
-          failure = waited.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null;
+          failure =
+            waited.state === "error"
+              ? followupRunId === null
+                ? (detail.session?.lastError ?? "Turn failed.")
+                : `The requested follow-up failed (${waited.errorCode ?? "turn_failed"}).`
+              : null;
         }
         yield* context.assertActive();
         return mcpToolResultJson({
           threadId: input.threadId,
           runId: waited.runId,
+          ...(followupRunId === null
+            ? {}
+            : {
+                turnId: waited.turnId,
+                blocked: waited.blocked,
+                errorCode: waited.errorCode,
+              }),
           state: waited.state,
           terminal: waited.terminal,
           timedOut: waited.timedOut,
@@ -720,7 +835,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     overviewTool,
     capabilitiesTool,
     projectsTool,
+    usageTool,
     createTaskTool,
+    sendTaskMessageTool,
     waitTaskTool,
     readTaskTool,
   ];

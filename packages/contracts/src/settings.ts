@@ -1,7 +1,12 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import {
+  ModelSelection,
+  ProviderKind,
+  ThreadEnvironmentMode,
+  ThreadTitleRefreshMode,
+} from "./orchestration";
 import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
@@ -46,6 +51,9 @@ export const CodexServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "codex")),
   homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withDecodingDefault(() => ""),
+  ),
   accounts: CodexAccountConfigs,
   selectedAccountId: CodexAccountId.pipe(
     Schema.withDecodingDefault(() => DEFAULT_CODEX_ACCOUNT_ID),
@@ -123,9 +131,24 @@ export const DevinServerProviderSettings = Schema.Struct({
 });
 export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
 
+export const ClineServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cline")),
+});
+export type ClineServerProviderSettings = typeof ClineServerProviderSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
+
+/** Global default plus trigger thresholds for opt-in automatic title refresh (#1041). */
+export const ThreadTitleRefreshSettings = Schema.Struct({
+  mode: ThreadTitleRefreshMode.pipe(Schema.withDecodingDefault(() => "off" as const)),
+  minNewUserTurns: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 5)),
+  minElapsedMillis: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 10 * 60 * 1_000)),
+  maxAttemptsPerWindow: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 3)),
+});
+export type ThreadTitleRefreshSettings = typeof ThreadTitleRefreshSettings.Type;
 
 // User-level skill toggles. Skills are keyed by lowercased name because the
 // unified catalog dedupes provider copies of the same skill by name.
@@ -140,11 +163,21 @@ export const KeepAwakeMode = Schema.Literals(["always", "agent", "off"]);
 export type KeepAwakeMode = typeof KeepAwakeMode.Type;
 export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
 
+export const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 10;
+export const MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES = 24 * 60;
+export const ProviderRuntimeIdleStopMinutes = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(MAX_PROVIDER_RUNTIME_IDLE_STOP_MINUTES),
+);
+export type ProviderRuntimeIdleStopMinutes = typeof ProviderRuntimeIdleStopMinutes.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  // Missing/null inherits the server's environment override or default; 0 disables.
+  providerRuntimeIdleStopMinutes: Schema.optionalKey(Schema.NullOr(ProviderRuntimeIdleStopMinutes)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
@@ -157,6 +190,14 @@ export const ServerSettings = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(
     Schema.withDecodingDefault(() => ""),
   ),
+  titleRefresh: ThreadTitleRefreshSettings.pipe(
+    Schema.withDecodingDefault(() => ({
+      mode: "off" as const,
+      minNewUserTurns: 5,
+      minElapsedMillis: 10 * 60 * 1_000,
+      maxAttemptsPerWindow: 3,
+    })),
+  ),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(() => ({
       provider: "codex" as const,
@@ -168,6 +209,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     devin: DevinServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    cline: ClineServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -212,12 +254,21 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
   lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
+  providerRuntimeIdleStopMinutes: Schema.optionalKey(Schema.NullOr(ProviderRuntimeIdleStopMinutes)),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
   sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
+  titleRefresh: Schema.optionalKey(
+    Schema.Struct({
+      mode: Schema.optionalKey(ThreadTitleRefreshMode),
+      minNewUserTurns: Schema.optionalKey(NonNegativeInt),
+      minElapsedMillis: Schema.optionalKey(NonNegativeInt),
+      maxAttemptsPerWindow: Schema.optionalKey(NonNegativeInt),
+    }),
+  ),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   providers: Schema.optionalKey(
     Schema.Struct({
@@ -225,6 +276,7 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           homePath: Schema.optionalKey(StringSetting),
+          launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
           accounts: Schema.optionalKey(CodexAccountConfigs),
           selectedAccountId: Schema.optionalKey(CodexAccountId),
         }),
@@ -270,6 +322,7 @@ export const ServerSettingsPatch = Schema.Struct({
           agentDir: Schema.optionalKey(StringSetting),
         }),
       ),
+      cline: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
     }),
   ),
   providerInstances: Schema.optionalKey(ProviderInstanceConfigMap),

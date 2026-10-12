@@ -14,7 +14,7 @@ import type { Project, SidebarThreadSummary } from "../types";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
-import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -109,6 +109,7 @@ function renderActivity(input: {
 function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   return (
     <SidebarActivityView
       threads={input.threads}
@@ -119,6 +120,8 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       threadsHydrated={input.threadsHydrated ?? true}
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
+      groupMode={groupMode}
+      onChangeGroupMode={setGroupMode}
       prByThreadId={input.prByThreadId ?? new Map()}
       threadJumpLabelByThreadId={new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
@@ -786,6 +789,53 @@ describe("SidebarActivityView", () => {
     await mounted.rerender(renderActivity({ ...input, activeThreadId: recent.id }));
     await vi.waitFor(() => expect(oldRows()).toHaveLength(0));
     await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id]));
+    await mounted.unmount();
+  });
+
+  it("folds working chats under a collapsed Working section and returns them when they finish", async () => {
+    const idle = makeThread(700);
+    const busy = makeThread(701);
+    const workingPill: ThreadStatusPill = {
+      label: "Working",
+      colorClass: "",
+      dotClass: "",
+      pulse: true,
+    };
+    const onVisibleThreadIdsChange = vi.fn();
+    const busyRows = () => document.querySelectorAll(`[data-testid="activity-thread-${busy.id}"]`);
+    const input = {
+      threads: [idle, busy],
+      onVisibleThreadIdsChange,
+      resolveThreadStatus: (thread: SidebarThreadSummary) =>
+        thread.id === busy.id ? workingPill : null,
+    };
+    const mounted = await render(renderActivity(input));
+
+    const working = page.getByRole("button", { name: "Working", exact: true });
+    await expect.element(working).toHaveAttribute("aria-expanded", "false");
+    await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([idle.id]));
+    expect(busyRows()).toHaveLength(0);
+
+    // The open chat stays on screen under the folded header while it works.
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: busy.id }));
+    await vi.waitFor(() => expect(busyRows()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([idle.id, busy.id]),
+    );
+
+    await working.click();
+    await expect.element(working).toHaveAttribute("aria-expanded", "true");
+    expect(busyRows()).toHaveLength(1);
+    await working.click();
+
+    await mounted.rerender(
+      renderActivity({ ...input, activeThreadId: null, resolveThreadStatus: () => null }),
+    );
+    await expect.element(working).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(busyRows()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([busy.id, idle.id]),
+    );
     await mounted.unmount();
   });
 });

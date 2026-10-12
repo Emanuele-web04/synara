@@ -9,7 +9,9 @@ export type ProviderChildKind =
   | "codex"
   | "cursor"
   | "devin"
+  | "cline"
   | "droid"
+  | "external"
   | "grok"
   | "opencode"
   | "pi"
@@ -31,6 +33,7 @@ const PROVIDER_CREDENTIAL_KEYS = new Set([
   "FACTORY_API_KEY",
   "CURSOR_API_KEY",
   "DEVIN_API_KEY",
+  "CLINE_API_KEY",
   "WINDSURF_API_KEY",
   "DOCKER_AUTH_CONFIG",
 ]);
@@ -68,7 +71,10 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
+  cline: "all",
   codex: "all",
+  // External bundles may proxy to arbitrary upstreams, so they inherit the full env.
+  external: "all",
   opencode: "all",
   pi: "all",
   omp: "all",
@@ -88,7 +94,10 @@ const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
 ]);
 
 const isTestHarnessKey = (key: string, env: NodeJS.ProcessEnv): boolean =>
-  Boolean(env.VITEST) && (key.startsWith("SYNARA_FAKE_") || key.startsWith("SYNARA_ACP_"));
+  Boolean(env.VITEST) &&
+  (key.startsWith("SYNARA_FAKE_") ||
+    key.startsWith("SYNARA_ACP_") ||
+    key.startsWith("SYNARA_CLI_"));
 
 export function buildProviderChildEnvironment(input: {
   readonly provider: ProviderChildKind;

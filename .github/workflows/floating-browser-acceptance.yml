@@ -1,0 +1,71 @@
+name: Floating Browser Acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/floating-browser-acceptance.yml"
+      - ".github/actions/setup-workspace/**"
+      - "apps/desktop/src/browser*"
+      - "apps/desktop/src/browser*/**"
+      - "apps/desktop/src/floatingBrowserChromePreload.ts"
+      - "apps/web/e2e/**"
+      - "apps/web/playwright.electron.config.ts"
+      - "apps/web/src/components/BrowserPanel*"
+      - "apps/web/src/components/chat/*loatingBrowser*"
+      - "packages/shared/src/browserSession.ts"
+      - "bun.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  electron:
+    name: Native Electron browser acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+        with:
+          electron: "true"
+          scope: "runtime"
+
+      - name: Configure Electron sandbox helper
+        run: |
+          sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+
+      - name: Install interaction recording runtime
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install ffmpeg
+
+      - name: Verify native handoff, input, zoom, popups and annotations
+        timeout-minutes: 10
+        run: xvfb-run -a bun run --cwd apps/web test:electron:e2e
+
+      - name: Record tested revision
+        if: always()
+        run: |
+          mkdir -p apps/web/test-results
+          git rev-parse HEAD > apps/web/test-results/tested-head.txt
+
+      - name: Upload native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: floating-browser-acceptance-${{ github.event.pull_request.head.sha }}
+          path: apps/web/test-results
+          if-no-files-found: warn
+          retention-days: 14

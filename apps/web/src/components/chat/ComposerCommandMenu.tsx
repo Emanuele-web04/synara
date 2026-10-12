@@ -1,3 +1,5 @@
+import type { DisplayProvider } from "~/lib/providerIdentity";
+
 import {
   type ProjectEntry,
   type ModelSlug,
@@ -214,7 +216,7 @@ export type ComposerCommandItem =
       id: string;
       type: "thread";
       threadId: string;
-      provider: ProviderKind;
+      provider: DisplayProvider;
       mention: ProviderMentionReference;
       label: string;
       description: string;

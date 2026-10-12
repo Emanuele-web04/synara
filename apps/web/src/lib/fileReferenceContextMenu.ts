@@ -2,23 +2,20 @@
 // Purpose: Right-click menu shared by file rows, file previews, and chat file
 //          links (editor explorer, changed-file lists, dock file pane).
 // Layer: Web UI helpers
-// Exports: showFileReferenceContextMenu, getRevealInFolderLabel
+// Exports: showFileReferenceContextMenu
 
 import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
+} from "@synara/shared/path";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { getNavigatorPlatform, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
-import { readNativeApi } from "~/nativeApi";
+import { contextMenuGroup } from "~/lib/contextMenuGroup";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
+import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import { toastManager } from "~/components/ui/toast";
-
-export function getRevealInFolderLabel(platform: string): string {
-  if (isWindowsPlatform(platform)) {
-    return "Open in Explorer";
-  }
-  if (isMacPlatform(platform)) {
-    return "Reveal in Finder";
-  }
-  return "Show in folder";
-}
+import { readNativeApi } from "~/nativeApi";
 
 // Right-click menu shared by explorer rows, changed-file rows, and the file
 // preview. Falls back to a DOM menu outside the desktop app.
@@ -27,6 +24,14 @@ export async function showFileReferenceContextMenu(input: {
   /** Absolute path to reveal in the platform file manager. Omit when the
    * surface only knows a repository-relative path. */
   revealPath?: string;
+  /** Explorer paths stay workspace-relative; the server still authorizes every file read. */
+  workspaceRoot?: string | null;
+  kind?: "file" | "directory";
+  onCopyFileContents?: (
+    contents: string,
+    fileName: string,
+    options?: { partial?: boolean },
+  ) => void;
   position: { x: number; y: number };
   /** Line/column range from source views, or a quoted snippet from surfaces
    * without stable source lines (rendered markdown preview). */
@@ -48,6 +53,14 @@ export async function showFileReferenceContextMenu(input: {
   };
   const rangeLabel = formatSelectionLabel(reference);
   const hasSnippet = typeof reference.snippet === "string" && reference.snippet.trim().length > 0;
+  const workspaceRoot =
+    input.workspaceRoot &&
+    isLocalAbsolutePath(input.workspaceRoot) &&
+    isWorkspaceRelativePathSafe(input.path)
+      ? input.workspaceRoot
+      : null;
+  const absolutePath = workspaceRoot ? joinWorkspaceRelativePath(workspaceRoot, input.path) : null;
+  const canCopyFileContents = workspaceRoot && input.kind === "file" && input.onCopyFileContents;
   const clicked = await api.contextMenu.show(
     [
       ...(input.onReferenceInChat
@@ -74,11 +87,19 @@ export async function showFileReferenceContextMenu(input: {
         ? [
             {
               id: "reveal-in-folder" as const,
-              label: getRevealInFolderLabel(getNavigatorPlatform()),
+              label: resolveFileManagerActionLabel("file"),
             },
           ]
         : []),
-      { id: "copy-path" as const, label: "Copy path" },
+      ...contextMenuGroup({ id: "copy", label: "Copy" }, [
+        {
+          id: "copy-path",
+          label: absolutePath ? "Relative path" : "Path",
+          standaloneLabel: "Copy path",
+        },
+        ...(absolutePath ? [{ id: "copy-absolute-path", label: "Absolute path" }] : []),
+        ...(canCopyFileContents ? [{ id: "copy-file-content", label: "File content" }] : []),
+      ]),
     ],
     input.position,
   );
@@ -94,16 +115,32 @@ export async function showFileReferenceContextMenu(input: {
     try {
       await api.shell.showInFolder(revealPath);
     } catch (error) {
+      showFileManagerErrorToast({ kind: "file", error });
+    }
+    return;
+  }
+  if (clicked === "copy-file-content" && canCopyFileContents && workspaceRoot) {
+    try {
+      const file = await api.projects.readFile({ cwd: workspaceRoot, relativePath: input.path });
+      input.onCopyFileContents?.(file.contents, input.path, { partial: file.truncated });
+    } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Unable to reveal file",
-        description:
-          error instanceof Error ? error.message : "An unknown error occurred opening the file.",
+        title: "Unable to copy file content",
+        description: error instanceof Error ? error.message : "Could not read the file.",
       });
     }
     return;
   }
-  if (clicked === "copy-path") {
-    await copyTextToClipboard(input.path);
+  if (clicked === "copy-path" || (clicked === "copy-absolute-path" && absolutePath)) {
+    try {
+      await copyTextToClipboard(clicked === "copy-path" ? input.path : absolutePath!);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to copy path",
+        description: error instanceof Error ? error.message : "Clipboard is unavailable.",
+      });
+    }
   }
 }

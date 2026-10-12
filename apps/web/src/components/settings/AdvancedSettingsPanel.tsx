@@ -21,6 +21,7 @@ import { SETTINGS_INSET_LIST_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "~/storeSelectors";
 import { useSettingsRestoreSignal } from "./SettingControls";
+import { PairDeviceCard } from "./PairDeviceCard";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 export function AdvancedSettingsPanel(props: {
@@ -154,6 +155,7 @@ export function AdvancedSettingsPanel(props: {
               </Button>
             }
           />
+          {authSessionQuery.data.role === "owner" ? <PairDeviceCard /> : null}
         </SettingsSection>
       ) : null}
 

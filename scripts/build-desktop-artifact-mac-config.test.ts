@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { basename } from "node:path";
+import { createRequire } from "node:module";
 import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
 import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
@@ -32,6 +33,60 @@ describe("createDesktopPlatformBuildConfig", () => {
     }
   });
 
+  it("emits every requested Linux package from one builder pass", () => {
+    const linux = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage, deb ,rpm",
+    }).linux as Record<string, unknown>;
+    assert.deepStrictEqual(linux.target, ["AppImage", "deb", "rpm"]);
+    // A single AppImage still resolves to one target, so the existing path
+    // cannot silently regress into a list-shaped config.
+    assert.deepStrictEqual(
+      (
+        createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }).linux as Record<
+          string,
+          unknown
+        >
+      ).target,
+      ["AppImage"],
+    );
+  });
+
+  it("gives only AppImage events updater authority in the pinned builder", async () => {
+    const requireScripts = createRequire(new URL("./package.json", import.meta.url));
+    const requireBuilder = createRequire(requireScripts.resolve("electron-builder"));
+    const requireAppBuilder = createRequire(requireBuilder.resolve("app-builder-lib"));
+    const { getPublishConfigs } = requireAppBuilder("./publish/PublishManager.js");
+    const config = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage,deb,rpm",
+    });
+    const publish = [{ provider: "generic", url: "https://example.invalid/updates" }];
+    const packager = {
+      config: { publish, ...config },
+      platformSpecificBuildOptions: config.linux,
+      info: { config: { detectUpdateChannel: false } },
+      expandMacro: (value: string) => value,
+    };
+    assert.deepStrictEqual(await getPublishConfigs(packager, config.deb, 1, false), null);
+    assert.deepStrictEqual(await getPublishConfigs(packager, config.rpm, 1, false), null);
+    assert.deepStrictEqual(await getPublishConfigs(packager, {}, 1, false), publish);
+    for (const target of ["deb", "rpm", "deb,rpm"]) {
+      const standalone = createDesktopPlatformBuildConfig({ platform: "linux", target });
+      assert.equal(standalone.publish, null);
+    }
+    for (const target of [
+      "",
+      "AppImage,",
+      "AppImage,,deb",
+      "deb,deb",
+      "rpm,rpm",
+      "AppImage,snap",
+    ]) {
+      assert.throws(() => createDesktopPlatformBuildConfig({ platform: "linux", target }));
+    }
+  });
+
   it("adds explicit microphone entitlements to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
@@ -44,6 +99,7 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.deepStrictEqual(mac.target, ["dmg"]);
     assert.equal(mac.icon, "icon.icns");
+    assert.equal(mac.minimumSystemVersion, "13.0");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, false);
@@ -130,6 +186,7 @@ describe("createDesktopPlatformBuildConfig", () => {
       writeUpdateInfo: false,
     });
     assert.equal(config.mac?.identity, undefined);
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
   });
 
   it("seals isolated local app bundles with the existing nested signing policy", () => {
@@ -141,6 +198,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(config.mac?.identity, "-");
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
     assert.equal(config.mac?.timestamp, "none");
     assert.equal(config.mac?.hardenedRuntime, false);
     assert.equal(config.mac?.notarize, false);
@@ -158,6 +216,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(config.mac?.identity, undefined);
+    assert.equal(config.mac?.minimumSystemVersion, "13.0");
     assert.equal(config.mac?.timestamp, undefined);
     assert.equal(config.mac?.hardenedRuntime, true);
     assert.equal(config.mac?.notarize, false);
@@ -194,6 +253,15 @@ describe("createDesktopPlatformBuildConfig", () => {
         },
       },
     });
+
+    const linuxInstallers = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage,deb",
+    });
+    assert.deepStrictEqual((linuxInstallers.linux as Record<string, unknown>).target, [
+      "AppImage",
+      "deb",
+    ]);
 
     assert.equal(win.mac, undefined);
     assert.equal(win.extraFiles, undefined);

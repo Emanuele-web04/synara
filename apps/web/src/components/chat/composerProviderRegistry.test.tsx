@@ -549,6 +549,63 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each(["low", "medium", "high", "xhigh", "max", "ultrathink", "ultracode"] as const)(
+    "dispatches explicit configured custom Claude %s without pinning a guessed default",
+    (effort) => {
+      const state = getComposerProviderState({
+        provider: "claudeAgent",
+        model: "enterprise-model",
+        prompt: "Investigate this",
+        runtimeModel: {
+          slug: "enterprise-model",
+          name: "Enterprise",
+          isConfiguredCustomModel: true,
+        },
+        modelOptions: { claudeAgent: { effort, autoCompactWindow: "200k", fastMode: true } },
+      });
+      expect(state.modelOptionsForDispatch).toEqual({ effort, autoCompactWindow: "200k" });
+      expect(state.promptEffort).toBe(effort === "ultrathink" ? null : effort);
+    },
+  );
+
+  it("keeps Auto unpinned and offers no controls for an unconfigured proxy hint", () => {
+    const runtimeModel = {
+      slug: "enterprise-model",
+      name: "Enterprise",
+      isConfiguredCustomModel: true,
+    };
+    const selection = getComposerTraitSelection(
+      "claudeAgent",
+      "enterprise-model",
+      "",
+      undefined,
+      runtimeModel,
+    );
+    expect(selection.defaultEffort).toBe("auto");
+    expect(selection.effort).toBe("auto");
+    expect(selection.contextWindow).toBe("auto");
+    expect(selection.fastModeDescriptor).toBeNull();
+    expect(selection.thinkingDescriptor).toBeNull();
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "enterprise-model",
+        prompt: "",
+        runtimeModel,
+        modelOptions: { claudeAgent: {} },
+      }),
+    ).toMatchObject({ promptEffort: null, modelOptionsForDispatch: undefined });
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "enterprise-model",
+        prompt: "",
+        runtimeModel: { slug: "enterprise-model", name: "Enterprise" },
+        modelOptions: { claudeAgent: { effort: "high", autoCompactWindow: "1m" } },
+      }),
+    ).toMatchObject({ promptEffort: null, modelOptionsForDispatch: undefined });
+  });
+
   it("treats descriptor prompt-injected choices like legacy prompt-controlled efforts", () => {
     const selection = getComposerTraitSelection(
       "claudeAgent",
