@@ -22,6 +22,232 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.3",
+    date: "Oct 11",
+    features: [
+      {
+        id: "hubs-navigation",
+        title: "Hubs is easier to find and manage",
+        description:
+          "Hubs now appears in the main rail by default, with coordinator rows aligned with your project sidebar.",
+        details:
+          "Existing settings reveal Hubs once; hiding it again from Customize is respected. Expand worker chats, pin the coordinator or open Hub settings from its row.",
+      },
+      {
+        id: "conversation-recovery",
+        title: "A simpler conversation reload",
+        description:
+          "Native chats restore their full projected conversation from the server, including rollbacks made while you were disconnected.",
+        details:
+          "The recent-history pager and private detail cache introduced in 1.0.2 have been removed. Ordinary refreshes still preserve newer streamed text, while recovery snapshots remove reverted messages. Imported provider history keeps its Load earlier messages control.",
+      },
+      {
+        id: "provider-recovery",
+        title: "Recover without replaying abandoned work",
+        description:
+          "Restart recovery avoids resending child-agent commands when their owning chat is missing or deleted.",
+        details:
+          "Unsent work is blocked, uncertain delivery remains uncertain, and unrelated chats remain usable. Claude compaction reviews with a missing owner stay held. Deleting a chat clears queued work before optional computer cleanup.",
+      },
+      {
+        id: "mac-http",
+        title: "More reliable desktop requests on macOS",
+        description:
+          "Desktop HTTP requests use a maintained runtime dispatcher to avoid the Electron socket crash on macOS.",
+        details:
+          "The desktop keeps the existing fetch API and error behavior while initializing the dispatcher before requests begin.",
+      },
+      {
+        id: "work-labels",
+        title: "Cleaner work labels in the transcript",
+        description:
+          "Working for and Worked for use compact text labels, with a disclosure for finished tools and narration.",
+        details:
+          "The labels follow your chat font size and remove model badges and completion icons. Finished work can still be expanded, and disabling finished-turn folding keeps it visible.",
+      },
+    ],
+  },
+  {
+    version: "1.0.2",
+    date: "Oct 11",
+    features: [
+      {
+        id: "hubs-stable",
+        title: "Hubs comes to Stable",
+        description:
+          "Bring a coordinator, parallel worker chats, shared instructions and a versioned Library together in one Hub.",
+        details:
+          "Work across linked repositories or use a Hub for research, writing and planning. New Hubs run up to three workers at once; choose one to eight in Hub settings. Excess work waits in a persistent queue. Resolve worker approvals from the coordinator chat, pause or archive the Hub, and keep delivered files in the Library. Only you can approve worker requests. Stable and Beta retain separate Hubs and data; Beta data is not copied back.",
+      },
+      {
+        id: "subagents",
+        title: "Follow subagents without losing the conversation",
+        description:
+          "Claude and Codex child agents now have their own conversations, with compact launch cards and a roster in Environment and the right dock.",
+        details:
+          "Inspect available briefs, current steps, elapsed time and result; open, message, background or stop supported runs. Nested and repeated invocations keep their own identity. Codex children with encrypted briefs show their task name instead. Background results remain visible after the parent finishes; stopped work is shown as stopped rather than completed.",
+      },
+      {
+        id: "todos",
+        title: "Ask your agent to maintain Tasks",
+        description:
+          "Supported agent sessions can create, list and update the to-dos in your Tasks list directly from a chat.",
+        details:
+          "Set notes, priority, due date and project, mark a to-do complete or reopen it. Retried creates use a request ID to avoid duplicates. These tools maintain the list; they do not dispatch the to-do to an agent. Synara permissions still apply.",
+      },
+      {
+        id: "mcp-accounts",
+        title: "Choose the account your integrations use",
+        description:
+          "Agent gateway and External MCP callers can discover and select a configured provider account when creating work.",
+        details:
+          "Account-specific model discovery and validation use the selected instance. Calls without an instance keep the default account, and completed tasks release their concurrency capacity after restart.",
+      },
+      {
+        id: "thread-tabs",
+        title: "Choose a simpler chat header",
+        description:
+          "Turn Thread tabs off in Settings to show just the current conversation title in the desktop chat header.",
+        details:
+          "Tabs remain on by default. When enabled, readable widths and an overflow menu keep open conversations accessible without repeating the parent title.",
+      },
+      {
+        id: "turns",
+        title: "A clearer record of each turn",
+        description:
+          "Turn headers and compact work groups make long conversations easier to scan, including interrupted turns and background tasks.",
+        details:
+          "Claude Monitor wake-ups appear as compact disclosures. Tool groups use clearer action summaries and icons, while assistant text and activity retain their chronological order. Live follow survives layout changes and thread switches; scrolling away keeps you in control.",
+      },
+      {
+        id: "history",
+        title: "Reopen long conversations faster",
+        description:
+          "Recent messages load first, with Load earlier messages for older history and a private local cache for quicker reopening.",
+        details:
+          "Search, pinned messages and message links load the pages they need. Cached approvals, questions and queued sends wait for authoritative synchronization. Paging does not truncate saved history or exports; unavailable browser storage falls back to normal loading.",
+      },
+      {
+        id: "queue",
+        title: "Stop also pauses your queued follow-ups",
+        description:
+          "Queued messages stay put after you stop a turn, encounter an error or hit a usage limit.",
+        details:
+          "Use Resume when you are ready. The pause survives reload, and an older rate-limit event does not pause an unrelated turn. Draft edits, attachments and failed sends remain recoverable instead of disappearing during thread creation or synchronization.",
+      },
+      {
+        id: "fork-diff",
+        title: "Branch from the message you chose",
+        description:
+          "Provider session forks now respect the selected message, and each chat remembers its own stacked or split diff layout.",
+        details:
+          "Choose a default Diff layout in Settings without overwriting existing chat choices. Checkpoint initialization survives restart; Undo refuses to run while another chat is editing the same workspace. Detached Git status and automatic branch publication are handled more reliably.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "OpenCode v2 reconnects avoid duplicate text, Pi gets more time for its first startup, and Claude shows whether Fast mode is actually serving.",
+        details:
+          "Oh My Pi preserves explicit model choices and hides internal roles. Droid custom answers, Cursor prompt usage and completed OpenCode reasoning are retained. Antigravity reports quota and OAuth failures accurately and uses discovered effort levels. Claude resumes long-idle sessions without a review by default; an optional Providers setting offers summary or full-session resume. Nested Codex sessions keep their own gateway and user configuration.",
+      },
+      {
+        id: "recovery",
+        title: "Recover connections without duplicating work",
+        description:
+          "Socket recovery restores subscriptions while keeping uncertain sends visible and avoiding automatic request replay.",
+        details:
+          "Provider recovery distinguishes abandoned starts from live connecting sessions and active message streams. Settled messages, buffered text, late image results and pending interactions retain their turn ownership after reconnects, stops and restarts.",
+      },
+      {
+        id: "polish",
+        title: "Small improvements throughout the workspace",
+        description:
+          "Readable chat tabs, higher-contrast light terminals, a steadier context gauge and a working Create project action improve everyday use.",
+        details:
+          "Composer panels align with the input and keep the transcript readable on glass. Folder names stay visible in Activity, linked right-to-left text keeps its direction, and voice waveforms fill wide tracks. Hidden browser panels release stale bounds. Changing access on an idle chat no longer starts its provider or expands finished work.",
+      },
+    ],
+  },
+  {
+    version: "1.0.2-beta.1",
+    date: "Oct 11",
+    features: [
+      {
+        id: "subagents",
+        title: "Follow subagents without losing the conversation",
+        description:
+          "Claude and Codex child agents now have their own conversations, with compact launch cards and a roster in Environment and the right dock.",
+        details:
+          "Inspect each brief, current step, elapsed time and result; open, message, background or stop supported runs. Nested and repeated invocations keep their own identity. Background results remain visible after the parent finishes; stopped work is shown as stopped rather than completed.",
+      },
+      {
+        id: "turns",
+        title: "A clearer record of each turn",
+        description:
+          "Turn headers and compact work groups make long conversations easier to scan, including interrupted turns and background tasks.",
+        details:
+          "Claude Monitor wake-ups appear as compact disclosures. Tool groups use clearer action summaries and icons, while assistant text and activity retain their chronological order. Live follow survives layout changes and thread switches; scrolling away keeps you in control.",
+      },
+      {
+        id: "history",
+        title: "Reopen long conversations faster",
+        description:
+          "Recent messages load first, with Load earlier messages for older history and a private local cache for quicker reopening.",
+        details:
+          "Search, pinned messages and message links load the pages they need. Cached approvals, questions and queued sends wait for authoritative synchronization. Paging does not truncate saved history or exports; unavailable browser storage falls back to normal loading.",
+      },
+      {
+        id: "queue",
+        title: "Stop also pauses your queued follow-ups",
+        description:
+          "Queued messages stay put after you stop a turn, encounter an error or hit a usage limit.",
+        details:
+          "Use Resume when you are ready. The pause survives reload, and an older rate-limit event does not pause an unrelated turn. Draft edits, attachments and failed sends remain recoverable instead of disappearing during thread creation or synchronization.",
+      },
+      {
+        id: "todos",
+        title: "Ask your agent to maintain Tasks",
+        description:
+          "Supported agent sessions can create, list and update the to-dos in your Tasks list directly from a chat.",
+        details:
+          "Set notes, priority, due date and project, mark a to-do complete or reopen it. Retried creates use a request ID to avoid duplicates. These tools maintain the list; they do not dispatch the to-do to an agent. Synara permissions still apply.",
+      },
+      {
+        id: "hub-approvals",
+        title: "Resolve Hub worker approvals in one place",
+        description:
+          "In Synara Beta, pending worker approvals appear above the coordinator composer, with links to the worker conversation.",
+        details:
+          "Approve once, allow the session when supported, decline or cancel the worker turn. Answering in either conversation clears the request in both. Only you can approve; the coordinator has no approval tool. Queued Hub tasks inherit the coordinator access mode unless explicitly overridden.",
+      },
+      {
+        id: "fork-diff",
+        title: "Branch from the message you chose",
+        description:
+          "Provider session forks now respect the selected message, and each chat remembers its own stacked or split diff layout.",
+        details:
+          "Choose a default Diff layout in Settings without overwriting existing chat choices. Checkpoint initialization survives restart; Undo refuses to run while another chat is editing the same workspace. Detached Git status and automatic branch publication are handled more reliably.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "OpenCode v2 reconnects avoid duplicate text, Pi gets more time for its first startup, and Claude shows whether Fast mode is actually serving.",
+        details:
+          "Oh My Pi preserves explicit model choices and hides internal roles. Droid custom answers, Cursor prompt usage and completed OpenCode reasoning are retained. Antigravity preserves quota and OAuth failures, bounds helper cleanup and chooses effort only from discovered capabilities.",
+      },
+      {
+        id: "polish",
+        title: "Small improvements throughout the workspace",
+        description:
+          "Readable chat tabs, higher-contrast light terminals, a steadier context gauge and a working Create project action improve everyday use.",
+        details:
+          "Composer panels no longer cover the transcript on glass. Linked right-to-left text keeps its direction, the voice waveform fills wide tracks, and hidden browser panels release stale bounds. Beta data import preserves this installation’s runtime identity.",
+      },
+    ],
+  },
+  {
     version: "1.0.1",
     date: "Oct 8",
     features: [

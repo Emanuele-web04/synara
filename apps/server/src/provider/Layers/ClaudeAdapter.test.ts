@@ -1219,6 +1219,37 @@ describe("ClaudeAdapterLive", () => {
     });
   }
 
+  it.effect("bounds a stalled Auto preflight without retiring the usable session", () => {
+    const query = new FakeClaudeQuery();
+    const requested = vi.fn(() => new Promise<string>(() => {}));
+    const layer = makeClaudeAdapterLiveBase({
+      readClaudeCliVersion: requested,
+      createQuery: () => query,
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      const preparing = yield* adapter.prepareSessionReplacement!({
+        threadId: THREAD_ID,
+        runtimeMode: "auto",
+      }).pipe(Effect.result, Effect.forkChild);
+      yield* Effect.yieldNow;
+      assert.equal(requested.mock.calls.length, 1);
+      yield* TestClock.adjust("61 seconds");
+      assert.isDefined(preparing.pollUnsafe());
+      assert.equal((yield* Fiber.join(preparing))._tag, "Failure");
+      assert.equal(query.closeCalls, 0);
+      assert.isTrue(yield* adapter.hasSession(THREAD_ID));
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "still usable", attachments: [] });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("rechecks background work that arrives during the Auto version probe", () => {
     const query = new FakeClaudeQuery();
     let releaseProbe: (() => void) | undefined;
@@ -5557,6 +5588,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
     ["account_on_hold", /account is on hold/i],
+    ["verification_required", /organization verification/i],
+    ["cloud_credential_error", /cloud provider credentials/i],
   ] as const) {
     it.effect(`restarts the Claude process after ${error}`, () => {
       const harness = makeMultiQueryHarness();
@@ -13976,8 +14009,8 @@ describe("Claude cache preflight", () => {
           const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
           assert.equal(observation?.contextTokens, 120_000);
           assert.equal(
-            assessClaudeCache(observation, Date.parse(observation!.observedAt) + 1000)
-              .requiresConfirmation,
+            assessClaudeCache(observation, Date.parse(observation!.observedAt) + 1000).state ===
+              "likely-expired",
             response === "same",
           );
           const cursor = (yield* adapter.listSessions())[0]!.resumeCursor;
@@ -13989,8 +14022,8 @@ describe("Claude cache preflight", () => {
           });
           const restored = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
           assert.equal(
-            assessClaudeCache(restored, Date.parse(restored!.observedAt) + 1000)
-              .requiresConfirmation,
+            assessClaudeCache(restored, Date.parse(restored!.observedAt) + 1000).state ===
+              "likely-expired",
             response === "same",
           );
         }).pipe(
@@ -14049,7 +14082,7 @@ describe("Claude cache preflight", () => {
             );
             assert.equal(
               assessClaudeCache(claudeCacheForModel(observation, "claude-sonnet-4-6"), now)
-                .requiresConfirmation,
+                .state === "likely-expired",
               model !== undefined,
             );
             assert.deepEqual(harness.query.setModelCalls, []);

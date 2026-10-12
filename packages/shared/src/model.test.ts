@@ -398,6 +398,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
     expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("grok", "grok-4.7-build-fast")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 });
 
@@ -449,6 +450,8 @@ describe("resolveGrokEffortFamily", () => {
     expect(resolveGrokEffortFamily("grok-4.5")).toBe("4.5");
     expect(resolveGrokEffortFamily("grok-4.6")).toBe("4.6");
     expect(resolveGrokEffortFamily("grok-4.7")).toBe("4.6");
+    expect(resolveGrokEffortFamily("grok-4.7-build-fast")).toBe("4.6");
+    expect(resolveGrokEffortFamily("grok-4.3-build")).toBe("build");
     expect(resolveGrokEffortFamily("custom/grok-fast")).toBe("build");
   });
 });
@@ -1017,6 +1020,9 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toBeUndefined();
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "high" })).toBeUndefined();
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "xhigh" })).toEqual({
+      reasoningEffort: "xhigh",
+    });
+    expect(normalizeGrokModelOptions("grok-4.7-build-fast", { reasoningEffort: "xhigh" })).toEqual({
       reasoningEffort: "xhigh",
     });
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "none" })).toBeUndefined();

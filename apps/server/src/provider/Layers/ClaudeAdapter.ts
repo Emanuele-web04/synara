@@ -1822,6 +1822,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude authentication succeeded, but this organization does not allow Claude Code.";
     case "account_on_hold":
       return "The active Claude account is on hold. Resolve the account issue, then retry.";
+    case "verification_required":
+      return "Claude requires organization verification for this account. Complete it, then retry.";
     case "billing_error":
       return "Claude billing or subscription access failed. Check the active Claude account, then retry.";
     case "rate_limit":
@@ -1838,6 +1840,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude reached the maximum output length before completing the turn.";
     case "unknown":
       return "Claude failed to complete the turn.";
+    case "cloud_credential_error":
+      return "Claude could not use the cloud provider credentials. Check or refresh them, then retry.";
   }
 }
 
@@ -1846,7 +1850,9 @@ function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageEr
     error === "authentication_failed" ||
     error === "oauth_org_not_allowed" ||
     error === "account_on_hold" ||
-    error === "billing_error"
+    error === "verification_required" ||
+    error === "billing_error" ||
+    error === "cloud_credential_error"
   );
 }
 
@@ -6479,6 +6485,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const context = sessions.get(input.threadId);
           if (!context) return undefined;
           const preflight = yield* resolveClaudeStartPreflight(input).pipe(
+            // Only preflight is reversible. Never abandon process retirement
+            // under a deadline while its persisted binding still claims ownership.
+            Effect.timeoutOrElse({
+              duration: Duration.seconds(60),
+              onTimeout: () =>
+                Effect.fail(
+                  new ProviderAdapterValidationError({
+                    provider: PROVIDER,
+                    operation: "session/reconfigure",
+                    issue:
+                      "Claude session preparation timed out. Check the provider runtime and try again.",
+                  }),
+                ),
+            }),
             Effect.mapError(
               (error) =>
                 new ProviderAdapterValidationError({

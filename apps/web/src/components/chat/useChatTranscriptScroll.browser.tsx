@@ -99,6 +99,74 @@ describe("transcript follow after switching threads", () => {
     }
   });
 
+  it.each([false, true])(
+    "keeps live follow during the scroll guard (switch while pending: %s)",
+    async (switchWhilePending) => {
+      let controls: ReturnType<typeof useChatTranscriptScroll> | undefined;
+      const node = document.createElement("div");
+      node.style.cssText = "height: 200px; overflow: auto";
+      const content = document.createElement("div");
+      content.style.height = "1000px";
+      node.append(content);
+      document.body.append(node);
+      let lastEndScrollTime = 0;
+      const listRef = {
+        current: {
+          scrollToEnd: async () => {
+            lastEndScrollTime = performance.now();
+            node.scrollTop = node.scrollHeight;
+          },
+          getScrollableNode: () => node,
+        } as unknown as LegendListRef,
+      };
+      function Harness({ threadId }: { threadId: string }) {
+        controls = useChatTranscriptScroll({
+          activeThreadId: ThreadId.makeUnsafe(threadId),
+          legendListRef: listRef,
+          timelineEntries: EMPTY_TIMELINE,
+          hasStreamingAssistantText: true,
+          composerTranscriptInsetPx: 0,
+          isInactiveSplitPane: false,
+        });
+        return null;
+      }
+      const screen = await render(<Harness threadId="first" />);
+      try {
+        await waitForFrames();
+        await screen.rerender(<Harness threadId="second" />);
+        await waitForFrames();
+        expect(node.scrollHeight - node.clientHeight - node.scrollTop).toBe(0);
+        // A newly measured row can grow before the native scroll guard expires.
+        // The list reports this geometry change without a reader gesture.
+        content.style.height = "1600px";
+        // Control only this notification's timestamp so a stalled test runner
+        // cannot accidentally put it outside the native-scroll protection window.
+        const notifyLayoutChange = () => {
+          const clock = vi.spyOn(performance, "now").mockReturnValue(lastEndScrollTime);
+          try {
+            controls!.onIsAtEndChange(false);
+          } finally {
+            clock.mockRestore();
+          }
+        };
+        notifyLayoutChange();
+        if (switchWhilePending) {
+          await screen.rerender(<Harness threadId="third" />);
+          await waitForFrames();
+          content.style.height = "2000px";
+          notifyLayoutChange();
+        }
+        await vi.waitFor(() =>
+          expect(node.scrollHeight - node.clientHeight - node.scrollTop).toBe(0),
+        );
+        expect(controls!.isUserScrollDetached).toBe(false);
+      } finally {
+        await screen.unmount();
+        node.remove();
+      }
+    },
+  );
+
   it("preserves send-anchor ownership when an idle destination starts streaming", async () => {
     const node = document.createElement("div");
     const scrollToEnd = vi.fn(async () => {});

@@ -72,7 +72,6 @@ import {
   NewThreadIcon,
   PinIcon,
   SteerIcon,
-  StopIcon,
   ThinkingIcon,
   Undo2Icon,
   WorktreeIcon,
@@ -128,6 +127,7 @@ import {
   deriveMessagesTimelineRows,
   formatTurnHeaderLabel,
   findLastLiveWorkGroupId,
+  isPinnedBackgroundTaskEntry,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   MIN_BACKGROUND_TASK_GROUP_SIZE,
   planWorkEntryRenderChunks,
@@ -432,8 +432,6 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   workingLabel?: WorkingLabel | undefined;
   activeTurnInProgress: boolean;
-  /** Restored detail may display a turn, but cannot establish a witnessed live completion. */
-  allowLiveTurnTransitions?: boolean;
   /** Keeps the latest turn expanded while background subagents are still running. */
   subagentsRunning?: boolean;
   /** User setting: false keeps every finished turn expanded instead of folding it. */
@@ -573,7 +571,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   workingLabel: workingLabelProp,
   activeTurnInProgress,
-  allowLiveTurnTransitions,
   subagentsRunning,
   collapseFinishedTurns,
   activeTurnStartedAt,
@@ -987,10 +984,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return ids;
   }, [rows, subagentThread]);
-  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(
-    rows,
-    allowLiveTurnTransitions !== false,
-  );
+  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
@@ -2020,13 +2014,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "user" &&
         row.turnHeader &&
+        row.turnHeader.outcome !== "completed" &&
         !conversationOnly && (
           <div className="pt-2">
             <TurnHeaderLine
               kind="settled"
               header={row.turnHeader}
               fontSize={chatTypographyStyle.fontSize}
-              timestampFormat={timestampFormat}
             />
           </div>
         )}
@@ -2169,10 +2163,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
-          // Background tasks stay visible under the header while the turn is
-          // folded: each is one row whose status is the turn's lasting result.
+          // Background tasks that outlived the turn stay visible under the header
+          // while it is folded; ones the turn settled itself fold with its work.
+          const turnEndedAt = row.turnHeader?.endedAt ?? null;
           const pinnedBackgroundEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
-            item.kind === "work" && item.entry.backgroundTask ? [item.entry] : [],
+            item.kind === "work" && isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
+              ? [item.entry]
+              : [],
           );
           const collapsedTurnItems = row.collapsedTurnItems?.filter(
             (item) =>
@@ -2181,7 +2178,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 item.entry.synaraThreadCreation ||
                 item.entry.computerSetupRequired ||
                 item.entry.computerControlDenied ||
-                item.entry.backgroundTask
+                isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
               ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
@@ -2462,86 +2459,90 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </DisclosureRegion>
                 </div>
               )}
-              {row.turnHeader && !conversationOnly && (
-                <div className="mb-3">
-                  {hasCollapsedWork ? (
-                    <Collapsible
-                      className="group/collapsed-work"
-                      open={isCollapsedWorkExpanded}
-                      onOpenChange={(open) => {
-                        setCollapsedWorkExpanded(row.message.id, open);
-                      }}
-                    >
+              {row.turnHeader &&
+                (hasCollapsedWork ||
+                  pinnedBackgroundEntries.length > 0 ||
+                  row.turnHeader.outcome !== "completed") &&
+                !conversationOnly && (
+                  <div className="mb-3">
+                    {hasCollapsedWork ? (
+                      <Collapsible
+                        className="group/collapsed-work"
+                        open={isCollapsedWorkExpanded}
+                        onOpenChange={(open) => {
+                          setCollapsedWorkExpanded(row.message.id, open);
+                        }}
+                      >
+                        <TurnHeaderLine
+                          kind="settled"
+                          header={row.turnHeader}
+                          fontSize={chatTypographyStyle.fontSize}
+                          disclosure={{
+                            open: isCollapsedWorkExpanded,
+                            renderTrigger: (content) => (
+                              <CollapsibleTrigger
+                                // ChatView's click anchor preserves this trigger's screen position
+                                // while the disclosure height animates, so opening it should not tail-scroll.
+                                className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
+                              >
+                                {content}
+                              </CollapsibleTrigger>
+                            ),
+                          }}
+                        />
+                        <CollapsiblePanel>
+                          <div
+                            className={disclosureContentClassName(
+                              isCollapsedWorkExpanded,
+                              "mb-2.5 space-y-1.5",
+                            )}
+                          >
+                            {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
+                              renderCollapsedTurnChunk(chunk, "collapsed-panel"),
+                            )}
+                          </div>
+                        </CollapsiblePanel>
+                        <div className="h-px w-full bg-border" />
+                      </Collapsible>
+                    ) : row.turnHeader.outcome !== "completed" ? (
                       <TurnHeaderLine
                         kind="settled"
                         header={row.turnHeader}
                         fontSize={chatTypographyStyle.fontSize}
-                        timestampFormat={timestampFormat}
-                        disclosure={{
-                          open: isCollapsedWorkExpanded,
-                          renderTrigger: (content) => (
-                            <CollapsibleTrigger
-                              // ChatView's click anchor preserves this trigger's screen position
-                              // while the disclosure height animates, so opening it should not tail-scroll.
-                              className="inline-flex min-w-0 items-center text-left transition-colors duration-200 hover:text-foreground"
-                            >
-                              {content}
-                            </CollapsibleTrigger>
-                          ),
-                        }}
                       />
-                      <CollapsiblePanel>
-                        <div
-                          className={disclosureContentClassName(
-                            isCollapsedWorkExpanded,
-                            "mb-2.5 space-y-1.5",
-                          )}
-                        >
-                          {chunkCollapsedTurnItems(collapsedTurnItems!).map((chunk) =>
-                            renderCollapsedTurnChunk(chunk, "collapsed-panel"),
-                          )}
-                        </div>
-                      </CollapsiblePanel>
-                    </Collapsible>
-                  ) : (
-                    <TurnHeaderLine
-                      kind="settled"
-                      header={row.turnHeader}
-                      fontSize={chatTypographyStyle.fontSize}
-                      timestampFormat={timestampFormat}
-                    />
-                  )}
-                  {pinnedBackgroundEntries.length > 0 ? (
-                    <div className="space-y-0.5">
-                      {pinnedBackgroundEntries.length >= MIN_BACKGROUND_TASK_GROUP_SIZE ? (
-                        <BackgroundTaskGroupRow
-                          entries={pinnedBackgroundEntries}
-                          open={
-                            toolGroupSummaryOverrides[`turn:${row.message.id}:background`] ?? false
-                          }
-                          onToggle={(open) =>
-                            setToolGroupSummaryOpen(`turn:${row.message.id}:background`, open)
-                          }
-                          fontSizePx={normalizedChatFontSizePx}
-                          renderEntry={(entry) =>
+                    ) : null}
+                    {pinnedBackgroundEntries.length > 0 ? (
+                      <div className="space-y-0.5">
+                        {pinnedBackgroundEntries.length >= MIN_BACKGROUND_TASK_GROUP_SIZE ? (
+                          <BackgroundTaskGroupRow
+                            entries={pinnedBackgroundEntries}
+                            open={
+                              toolGroupSummaryOverrides[`turn:${row.message.id}:background`] ??
+                              false
+                            }
+                            onToggle={(open) =>
+                              setToolGroupSummaryOpen(`turn:${row.message.id}:background`, open)
+                            }
+                            fontSizePx={normalizedChatFontSizePx}
+                            renderEntry={(entry) =>
+                              renderCollapsedTurnItem(
+                                { kind: "work", id: entry.id, entry },
+                                "pinned-background",
+                              )
+                            }
+                          />
+                        ) : (
+                          pinnedBackgroundEntries.map((entry) =>
                             renderCollapsedTurnItem(
                               { kind: "work", id: entry.id, entry },
                               "pinned-background",
-                            )
-                          }
-                        />
-                      ) : (
-                        pinnedBackgroundEntries.map((entry) =>
-                          renderCollapsedTurnItem(
-                            { kind: "work", id: entry.id, entry },
-                            "pinned-background",
-                          ),
-                        )
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              )}
+                            ),
+                          )
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               <div className="group min-w-0 py-0.5">
                 {conversationOnly ? null : renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {row.message.asyncUserInput ? (
@@ -2920,24 +2921,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {(row.kind === "work" || row.kind === "message") &&
         row.turnEndMarker !== undefined &&
         !conversationOnly && (
-          // Turn-end marker for a stopped turn that has no header of its own:
-          // a centered hairline label, muted rather than alarming.
           <div
-            className={cn("flex items-center gap-2 pt-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("-ml-0.5 pt-1", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
             data-stopped-turn={row.turnEndMarker.outcome === "stopped" ? "true" : undefined}
             data-interrupted-turn={row.turnEndMarker.outcome === "interrupted" ? "true" : undefined}
           >
-            <div aria-hidden className="h-px flex-1 bg-border" />
-            <span className="inline-flex shrink-0 items-center gap-1.5">
-              {row.turnEndMarker.outcome === "stopped" ? (
-                <StopIcon className="size-3 shrink-0" />
-              ) : (
-                <CircleAlertIcon className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300/90" />
-              )}
-              {formatTurnHeaderLabel({ ...row.turnEndMarker, resumedBy: null })}
-            </span>
-            <div aria-hidden className="h-px flex-1 bg-border" />
+            {formatTurnHeaderLabel({ ...row.turnEndMarker, resumedBy: null })}
           </div>
         )}
 
@@ -2948,10 +2938,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           kind="live"
           startedAt={row.createdAt}
           nowLabel={nowIso ? (formatClockElapsed(row.createdAt, nowIso) ?? "0s") : null}
-          modelChange={row.modelChange ?? null}
           resumedBy={row.resumedBy ?? null}
           fontSize={chatTypographyStyle.fontSize}
-          timestampFormat={timestampFormat}
         />
       )}
 
@@ -3024,7 +3012,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
           {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
           maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
-          maintainScrollAtEndThreshold={0.1}
+          maintainScrollAtEndThreshold={
+            followLiveOutput && !tailAnchorSlideInFlight ? Number.POSITIVE_INFINITY : 0.1
+          }
           {...(tailAnchorMessageId !== null
             ? { maintainVisibleContentPosition: false }
             : !followLiveOutput
@@ -3279,7 +3269,6 @@ function reconcileWorktreeSetupPresentation(params: {
 // animation, so settled turns do not disappear in one height recalculation.
 function useSettledTurnCollapseTransitions(
   rows: readonly MessagesTimelineRow[],
-  allowLiveTurnTransitions: boolean,
 ): Readonly<Record<string, SettledTurnCollapseTransition>> {
   const [transitions, setTransitions] = useState<Record<string, SettledTurnCollapseTransition>>({});
   const previousAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
@@ -3342,7 +3331,6 @@ function useSettledTurnCollapseTransitions(
   useLayoutEffect(() => {
     applySettledTurnCollapseTransitions({
       rows,
-      allowLiveTurnTransitions,
       previousAssistantMessageIdsRef,
       previousCollapsedSignaturesRef,
       watchedLiveMessageIdsRef,
@@ -3350,7 +3338,7 @@ function useSettledTurnCollapseTransitions(
       scheduleTransitionClose,
       setTransitions,
     });
-  }, [allowLiveTurnTransitions, clearTransitionTimer, rows, scheduleTransitionClose]);
+  }, [clearTransitionTimer, rows, scheduleTransitionClose]);
 
   useEffect(
     () => () => {
@@ -3370,7 +3358,6 @@ function useSettledTurnCollapseTransitions(
 // before it schedules the closing rAF — is preserved exactly.
 function applySettledTurnCollapseTransitions(params: {
   rows: readonly MessagesTimelineRow[];
-  allowLiveTurnTransitions: boolean;
   previousAssistantMessageIdsRef: RefObject<ReadonlySet<string>>;
   previousCollapsedSignaturesRef: RefObject<ReadonlyMap<string, string>>;
   watchedLiveMessageIdsRef: RefObject<Set<string>>;
@@ -3380,7 +3367,6 @@ function applySettledTurnCollapseTransitions(params: {
 }): void {
   const {
     rows,
-    allowLiveTurnTransitions,
     previousAssistantMessageIdsRef,
     previousCollapsedSignaturesRef,
     watchedLiveMessageIdsRef,
@@ -3394,7 +3380,6 @@ function applySettledTurnCollapseTransitions(params: {
     { signature: string; items: readonly CollapsedTurnItem[] }
   >();
   const watchedLiveMessageIds = watchedLiveMessageIdsRef.current;
-  if (!allowLiveTurnTransitions) watchedLiveMessageIds.clear();
 
   for (const row of rows) {
     if (row.kind !== "message" || row.message.role !== "assistant") {
@@ -3405,7 +3390,7 @@ function applySettledTurnCollapseTransitions(params: {
     // Only the assistant row belonging to the live turn has an expanded layout
     // on screen worth animating away. Thread-wide working state also covers
     // reconnects, approvals, and newer turns, so it must not qualify history.
-    if (allowLiveTurnTransitions && (row.assistantTurnInProgress || row.message.streaming)) {
+    if (row.assistantTurnInProgress || row.message.streaming) {
       watchedLiveMessageIds.add(messageId);
     }
     if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
@@ -3431,7 +3416,6 @@ function applySettledTurnCollapseTransitions(params: {
 
   for (const [messageId, collapsed] of currentCollapsed) {
     if (
-      allowLiveTurnTransitions &&
       watchedLiveMessageIds.has(messageId) &&
       previousAssistantMessageIds.has(messageId) &&
       !previousCollapsedSignatures.has(messageId)
@@ -3453,7 +3437,7 @@ function applySettledTurnCollapseTransitions(params: {
     };
 
     for (const messageId of Object.keys(current)) {
-      if (!allowLiveTurnTransitions || !currentCollapsed.has(messageId)) {
+      if (!currentCollapsed.has(messageId)) {
         clearTransitionTimer(messageId);
         delete ensureNext()[messageId];
       }

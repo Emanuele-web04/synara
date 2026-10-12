@@ -77,10 +77,7 @@ import {
   tryBeginQueuedComposerAutoDispatch,
 } from "../lib/queuedComposerDrain";
 import { useKanbanUiStore } from "../kanbanUiStore";
-import {
-  resetThreadDetailResumeCursors,
-  setThreadDetailResumeCursor,
-} from "../threadDetailResumeCursors";
+import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
@@ -99,7 +96,6 @@ import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { getAppTypographyScale } from "../lib/appTypography";
 import { threadJumpCommandForIndex } from "../keybindings";
 import { useStore } from "../store";
-import { clearThreadDetailCache, writeThreadDetailCache } from "../lib/threadDetailCache";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -177,7 +173,6 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let threadDetailSnapshotBarrier: Promise<void> | null = null;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -1522,17 +1517,13 @@ const worker = setupWorker(
         if (!thread) {
           return;
         }
-        const detailSnapshot = {
+        sendEffectRpcChunk(client, parsed.request.id, {
           kind: "snapshot",
           snapshot: {
             snapshotSequence: fixture.snapshot.snapshotSequence,
             thread,
           },
-        };
-        const sendDetailSnapshot = () =>
-          sendEffectRpcChunk(client, parsed.request.id, detailSnapshot);
-        if (threadDetailSnapshotBarrier) void threadDetailSnapshotBarrier.then(sendDetailSnapshot);
-        else sendDetailSnapshot();
+        });
         return;
       }
       if (method === WS_METHODS.subscribeServerProviderStatuses) {
@@ -2142,19 +2133,6 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
-async function waitForSplitChatReady(threadIds: readonly ThreadId[]): Promise<void> {
-  // Empty secondary threads have a composer before detail hydration. Capture
-  // DOM identity after their loading layout has become the real empty landing.
-  await vi.waitFor(() => {
-    const state = useStore.getState();
-    for (const threadId of threadIds) {
-      expect(state.threadDetailSyncById?.[threadId]).toBe("synced");
-    }
-    expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(threadIds.length);
-  });
-  await waitForLayout();
-}
-
 async function waitForMountedChatReady(options: {
   host: HTMLElement;
   snapshot: OrchestrationReadModel;
@@ -2335,11 +2313,8 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
-    resetThreadDetailResumeCursors();
-    await clearThreadDetailCache();
     await resetHomeChatProjectPrewarmStateForTests();
     attachmentResponseDelayMs = 0;
-    threadDetailSnapshotBarrier = null;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
@@ -2380,8 +2355,6 @@ describe("ChatView transcript geometry (full app)", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       threadDetailSyncById: {},
-      threadDetailAppliedSequenceById: {},
-      threadHistoryById: {},
       deletedProjectIdsById: {},
       deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
@@ -2782,6 +2755,76 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("keeps the sidebar rows in place while a thread row is pressed", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("subagent-press"),
+      targetText: "Review the sidebar rows",
+    });
+    const parent = { ...base.threads[0]!, title: "Parent thread" };
+    const olderIso = "2026-03-01T12:00:00.000Z";
+    const subagents = ["Atlas", "Nova"].map((nickname, index) => {
+      const id = ThreadId.makeUnsafe(`subagent-press-${index}`);
+      return {
+        ...parent,
+        id,
+        title: `${nickname} task`,
+        messages: [],
+        session: { ...parent.session!, threadId: id },
+        parentThreadId: THREAD_ID,
+        subagentNickname: nickname,
+      };
+    });
+    const other = {
+      ...parent,
+      id: OTHER_THREAD_ID,
+      title: "Other thread",
+      createdAt: olderIso,
+      updatedAt: olderIso,
+      latestTurn: null,
+      messages: [],
+      session: { ...parent.session!, threadId: OTHER_THREAD_ID, updatedAt: olderIso },
+    };
+    localStorage.setItem("synara:sidebar-ui:v1", JSON.stringify({ activityViewEnabled: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...base, threads: [parent, ...subagents, other] },
+    });
+    try {
+      const subagentDots = () =>
+        document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]').length;
+      const otherRowButton = await waitForElement(
+        () =>
+          [...document.querySelectorAll<HTMLElement>("[data-thread-item]")]
+            .find((row) => row.textContent?.includes("Other thread"))
+            ?.querySelector<HTMLElement>('[role="button"]') ?? null,
+        "Unable to find the other thread's sidebar row.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(2));
+      const pressedTop = otherRowButton.getBoundingClientRect().top;
+
+      // The press highlights the row at once, but the open thread's subagent rows
+      // stay until the route changes, so the release lands on the same row.
+      otherRowButton.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }),
+      );
+      await waitForLayout();
+      expect(otherRowButton.getAttribute("data-active")).toBe("true");
+      expect(subagentDots()).toBe(2);
+      expect(otherRowButton.getBoundingClientRect().top).toBe(pressedTop);
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+      await userEvent.click(otherRowButton);
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${OTHER_THREAD_ID}`,
+        "The pressed sidebar row did not open its thread.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(0));
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(["user", "assistant"] as const)(
     "opens the linked PR number from a %s message when the repository path also contains pull",
     async (role) => {
@@ -3046,7 +3089,10 @@ describe("ChatView transcript geometry (full app)", () => {
           search: () => ({ splitViewId }),
         });
       await openSplit();
-      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+      );
+      await waitForLayout();
       const editors = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')];
       const divider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
       const frame = divider.parentElement!.getBoundingClientRect();
@@ -3147,7 +3193,10 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
+        );
+        await waitForLayout();
         const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3220,7 +3269,10 @@ describe("ChatView transcript geometry (full app)", () => {
         params: { threadId: THREAD_ID },
         search: () => ({ splitViewId }),
       });
-      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
+      );
+      await waitForLayout();
       const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
       if (
         split.root.kind !== "split" ||
@@ -3301,7 +3353,10 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID, thirdId]);
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(3),
+        );
+        await waitForLayout();
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3397,9 +3452,10 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await waitForSplitChatReady(
-          panes === 3 ? [THREAD_ID, OTHER_THREAD_ID, thirdId] : [THREAD_ID, OTHER_THREAD_ID],
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
         );
+        await waitForLayout();
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
         const editorForThread = (threadId: ThreadId) => {
@@ -3927,12 +3983,7 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
       await page.getByRole("button", { name: /Approve once/u }).click();
-      await vi.waitFor(() =>
-        expect(subscribeThread).toHaveBeenCalledWith({
-          threadId: THREAD_ID,
-          messageWindow: { limit: 100 },
-        }),
-      );
+      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
       await expect
         .element(page.getByRole("button", { name: /Approve once/u }))
         .not.toBeInTheDocument();
@@ -4320,12 +4371,7 @@ describe("ChatView transcript geometry (full app)", () => {
           answers: {},
         }),
       );
-      await vi.waitFor(() =>
-        expect(subscribeThread).toHaveBeenCalledWith({
-          threadId: THREAD_ID,
-          messageWindow: { limit: 100 },
-        }),
-      );
+      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
@@ -6238,7 +6284,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("Thinking");
           const liveHeader = document.querySelector("[data-turn-header='live']");
           expect(liveHeader).not.toBeNull();
-          expect(liveHeader?.textContent).toMatch(/^Working \d/);
+          expect(liveHeader?.textContent).toMatch(/^Working for \d/);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -6858,15 +6904,10 @@ describe("ChatView transcript geometry (full app)", () => {
           container.dispatchEvent(new Event("scroll"));
         }
         await vi.waitFor(
-          () => {
-            if (action === "thread switch") {
-              expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
-              expect(isTranscriptContentVisible(container)).toBe(true);
-            }
+          () =>
             expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
               action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
-            );
-          },
+            ),
           { timeout: 3_000 },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -6874,21 +6915,6 @@ describe("ChatView transcript geometry (full app)", () => {
       for (let index = 0; index < 8; index += 1) {
         grow();
         await waitForLayout();
-      }
-      if (action === "thread switch") {
-        // The reveal still drains after delivery. Verify follow at the painted
-        // end, rather than during the first frames of the final text batch.
-        await vi.waitFor(
-          () => {
-            const paragraphs = container
-              .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
-              ?.querySelectorAll("p");
-            expect(paragraphs?.length).toBe(24);
-            expect(paragraphs?.[23]?.textContent).toBe("More streaming output. ".repeat(35).trim());
-          },
-          { timeout: 10_000, interval: 20 },
-        );
-        await waitForTranscriptLayoutToSettle(container);
       }
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
@@ -12052,14 +12078,8 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       try {
-        // A shell with no messages is not the authoritative empty detail yet.
-        await expect
-          .poll(() => useStore.getState().threadDetailSyncById?.[THREAD_ID])
-          .toBe("synced");
-        await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
-        await expect
-          .poll(() => document.querySelector('[data-empty-landing-composer-block="true"]'))
-          .not.toBeNull();
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
+        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
@@ -14725,7 +14745,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("aligns the inline plan card with the composer input", async () => {
+  it("shows the skinny inline plan card for active turn plans", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithActiveInlinePlan(),
@@ -14755,11 +14775,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the composer column width while the input keeps its
-      // rounded top corners. The stacked frame must stay aligned at every viewport size.
+      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
+      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
@@ -14879,7 +14899,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -14928,7 +14948,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14955,75 +14975,6 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
-
-  it.each([
-    { streaming: false, confirmedRunning: false },
-    { streaming: true, confirmedRunning: false },
-    { streaming: true, confirmedRunning: true },
-  ])(
-    "only animates later live settlement after cached running detail confirms (streaming=$streaming, confirmedRunning=$confirmedRunning)",
-    async ({ streaming, confirmedRunning }) => {
-      await clearThreadDetailCache();
-      const originalCached = createSnapshotWithInlineToolOverflow({ active: true });
-      const cached = {
-        ...originalCached,
-        threads: originalCached.threads.map((thread) => ({
-          ...thread,
-          messages: thread.messages.map((message) =>
-            message.id === MessageId.makeUnsafe("msg-assistant-inline-tools")
-              ? { ...message, streaming }
-              : message,
-          ),
-        })),
-      };
-      await writeThreadDetailCache(
-        { origin: location.origin, serverInstanceId: "browser-test-server" },
-        { snapshotSequence: cached.snapshotSequence, thread: cached.threads[0]! },
-      );
-      let releaseSnapshot!: () => void;
-      threadDetailSnapshotBarrier = new Promise<void>((resolve) => {
-        releaseSnapshot = resolve;
-      });
-      const authoritative = createSnapshotWithInlineToolOverflow({ active: confirmedRunning });
-      const mounted = await mountChatView({
-        viewport: DEFAULT_VIEWPORT,
-        snapshot: { ...authoritative, snapshotSequence: cached.snapshotSequence + 1 },
-      });
-      try {
-        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("cached");
-        expect(useStore.getState().threadTurnStateById?.[THREAD_ID]?.latestTurn?.state).toBe(
-          "running",
-        );
-        releaseSnapshot();
-        if (confirmedRunning) {
-          await vi.waitFor(() => {
-            expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
-          });
-          await nextFrame();
-          useStore.getState().syncServerReadModel({
-            ...createSnapshotWithInlineToolOverflow({ active: false }),
-            snapshotSequence: cached.snapshotSequence + 2,
-          });
-        }
-        let transitionFrames = 0;
-        const startedAt = performance.now();
-        while (performance.now() - startedAt < 1_000) {
-          await nextFrame();
-          if (document.querySelector("[data-settled-turn-collapse-transition='true']"))
-            transitionFrames += 1;
-        }
-        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
-        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-        if (confirmedRunning) expect(transitionFrames).toBeGreaterThan(0);
-        else expect(transitionFrames).toBe(0);
-      } finally {
-        releaseSnapshot();
-        threadDetailSnapshotBarrier = null;
-        await mounted.cleanup();
-        await clearThreadDetailCache();
-      }
-    },
-  );
 
   // Thread detail does not always land in one write: a thread can paint its
   // transcript before the record that says its last turn already completed. Until
@@ -15086,7 +15037,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // The turn must land folded, in one step, with no animated close replay.
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -15130,9 +15081,9 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked for \d+m \d+s$/);
       expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
-        /^Working \d/,
+        /^Working for \d/,
       );
       expect(transitionFrames).toBe(0);
     } finally {

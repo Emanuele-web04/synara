@@ -1,7 +1,5 @@
 import {
-  CONTEXT_WINDOW_METER_GEOMETRY,
   type ContextWindowSnapshot,
-  contextWindowMeterSectorPath,
   deriveContextWindowMeterDisplay,
   formatContextWindowTokens,
   formatCostUsd,
@@ -29,10 +27,9 @@ export function ContextWindowMeter(props: {
   const [open, setOpen] = useState(false);
   const nowMs = useNowMs(open && usage.claudeCache != null, 10_000);
   const display = deriveContextWindowMeterDisplay(usage);
-  // Never an empty dial once anything is used: a sliver keeps "some" distinct from "none".
-  const sectorPath = contextWindowMeterSectorPath(
-    display.normalizedPercentage > 0 ? Math.max(display.normalizedPercentage, 4) : 0,
-  );
+  const radius = 6;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference - (display.normalizedPercentage / 100) * circumference;
 
   return (
     <Popover
@@ -55,34 +52,30 @@ export function ContextWindowMeter(props: {
             <span className="relative flex h-4 w-4 items-center justify-center">
               <svg
                 viewBox="0 0 16 16"
-                className="absolute inset-0 h-full w-full"
+                className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
                 aria-hidden="true"
-                data-context-window-meter-glyph=""
               >
                 <circle
-                  cx={CONTEXT_WINDOW_METER_GEOMETRY.center}
-                  cy={CONTEXT_WINDOW_METER_GEOMETRY.center}
-                  r={CONTEXT_WINDOW_METER_GEOMETRY.outlineRadius}
+                  cx="8"
+                  cy="8"
+                  r={radius}
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="1.5"
-                  className="text-muted-foreground/45 dark:text-muted-foreground/55"
+                  strokeWidth="2"
+                  className="text-muted-foreground/25 dark:text-muted-foreground/40"
                 />
-                {/* The faint disc is the remaining window, so the sector reads as a share of it. */}
                 <circle
-                  cx={CONTEXT_WINDOW_METER_GEOMETRY.center}
-                  cy={CONTEXT_WINDOW_METER_GEOMETRY.center}
-                  r={CONTEXT_WINDOW_METER_GEOMETRY.pieRadius}
-                  fill="currentColor"
-                  className="text-muted-foreground/20 dark:text-muted-foreground/30"
+                  cx="8"
+                  cy="8"
+                  r={radius}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={dashOffset}
+                  className="text-primary transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none dark:text-[var(--color-text-foreground)]"
                 />
-                {sectorPath ? (
-                  <path
-                    d={sectorPath}
-                    fill="currentColor"
-                    className="text-primary dark:text-[var(--color-text-foreground)]"
-                  />
-                ) : null}
               </svg>
             </span>
           </button>

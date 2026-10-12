@@ -426,6 +426,19 @@ describe("GrokAdapter runtime event scoping", () => {
     ]);
   });
 
+  it("stamps Grok 4.7 Build Fast with Extra High instead of the grok-build ladder", () => {
+    const [model] = mergeGrokModelDescriptors([
+      [{ slug: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast" }],
+    ]);
+    expect(model?.defaultReasoningEffort).toBe("high");
+    expect(model?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
   it("stamps Grok 4.6 with Extra High instead of the grok-build None ladder", () => {
     const [model] = mergeGrokModelDescriptors([[{ slug: "grok-4.6", name: "Grok 4.6" }]]);
     expect(model?.defaultReasoningEffort).toBe("high");

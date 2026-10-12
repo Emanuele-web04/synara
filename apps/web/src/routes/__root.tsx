@@ -1,4 +1,3 @@
-import { hydrateCachedThreadDetail, startThreadDetailCachePersistence } from "../threadDetailCache";
 import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
@@ -131,7 +130,6 @@ import {
   createPreSnapshotThreadEventBuffer,
   drainPreSnapshotThreadEvents,
   shouldApplyThreadStreamSnapshot,
-  isCompleteAppliedThreadReplay,
   type PreSnapshotThreadEventBuffer,
 } from "./-threadDetailSnapshotOrdering";
 import {
@@ -499,9 +497,8 @@ function ProviderModelDiscoveryWarmer() {
   // provider that doesn't render instantly when the model picker opens. Warm it
   // at app startup — ahead of the picker opening — so the catalog is ready by
   // the time the user browses to OMP. The server caches that catalog globally
-  // (keyed by binary path + agent dir), so any warm primes it for every later
-  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
-  // cwd-scoped query key then only pays for the config reads on top.
+  // (keyed by account, binary path and agent dir), and the picker shares this
+  // account-global query across projects.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");
@@ -1337,7 +1334,6 @@ function EventRouter() {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
-    const stopThreadDetailCachePersistence = startThreadDetailCachePersistence();
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
@@ -1487,12 +1483,6 @@ function EventRouter() {
       return THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS * 2 ** entry.reconcileNoopStreak;
     };
 
-    const cachedThreadVerificationTimers = new Map<ThreadId, number>();
-    const clearCachedVerificationTimer = (threadId: ThreadId) => {
-      const timer = cachedThreadVerificationTimers.get(threadId);
-      if (timer !== undefined) window.clearTimeout(timer);
-      cachedThreadVerificationTimers.delete(threadId);
-    };
     const beginThreadSubscription = (threadId: ThreadId) => {
       // Cursor resume delivers no snapshot: the stream replays only the gap on
       // top of the cached detail. Seed the live cursor so gap/live events apply
@@ -1517,26 +1507,6 @@ function EventRouter() {
       threadCatchupBackoffById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
-      clearCachedVerificationTimer(threadId);
-      if (useStore.getState().threadDetailSyncById?.[threadId] === "cached") {
-        const generation = nextThreadSubscriptionGeneration;
-        // Older servers suppress an empty batched replay. A scoped authoritative
-        // snapshot verifies restored controls even when no stream item arrives.
-        cachedThreadVerificationTimers.set(
-          threadId,
-          window.setTimeout(() => {
-            cachedThreadVerificationTimers.delete(threadId);
-            if (
-              !disposed &&
-              subscribedThreadIds.has(threadId) &&
-              threadSubscriptionGenerationById.get(threadId) === generation &&
-              useStore.getState().threadDetailSyncById?.[threadId] === "cached"
-            ) {
-              void reconcileThreadProjection(threadId).catch(() => undefined);
-            }
-          }, 2000),
-        );
-      }
       nextThreadProjectionReconcileAtById.set(
         threadId,
         Date.now() + THREAD_DETAIL_PROJECTION_RECONCILE_INTERVAL_MS,
@@ -1640,7 +1610,6 @@ function EventRouter() {
         threadProjectionReconcilePendingById.delete(threadId);
         clearThreadProjectionTerminalFence(threadId);
         threadSubscriptionGenerationById.delete(threadId);
-        clearCachedVerificationTimer(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
         subscribedThreadIds.delete(threadId);
@@ -1656,8 +1625,6 @@ function EventRouter() {
         ),
       );
 
-      await Promise.all(additions.map((threadId) => hydrateCachedThreadDetail(threadId)));
-      if (disposed) return;
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
         subscribedThreadIds.add(threadId);
@@ -1732,9 +1699,7 @@ function EventRouter() {
         // never-synced detail), so a cursor resume would skip exactly the
         // snapshot being requested.
         clearThreadDetailResumeCursor(threadId);
-        await api.orchestration
-          .subscribeThread(buildThreadSubscribeInput(threadId))
-          .catch(() => undefined);
+        await api.orchestration.subscribeThread({ threadId }).catch(() => undefined);
       }).finally(() => {
         threadSnapshotRequestInFlight.delete(threadId);
         if (!threadSnapshotRefreshPending.delete(threadId)) {
@@ -1876,8 +1841,6 @@ function EventRouter() {
           .catch(() => loadBootstrapShellSnapshotIfMissing(generation));
         await enqueueThreadSubscriptionOperation(async () => {
           threadSnapshotSequenceById.clear();
-          for (const threadId of cachedThreadVerificationTimers.keys())
-            clearCachedVerificationTimer(threadId);
           threadResumeSeedSequenceById.clear();
           pendingThreadEventsById.clear();
           threadSnapshotRequestInFlight.clear();
@@ -2120,10 +2083,7 @@ function EventRouter() {
       let projectionSatisfiesTerminalFence = false;
       let projectionAttemptFailed = false;
       try {
-        const snapshot = await api.orchestration.getThreadDetailSnapshot({
-          threadId,
-          messageWindow: { limit: 100 },
-        });
+        const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
         if (
           snapshot === null ||
           disposed ||
@@ -2176,7 +2136,11 @@ function EventRouter() {
         // authoritative and can repair a client that advanced its cursor while
         // dropping or failing to reduce one of the corresponding live events.
         const stateBeforeProjectionApply = useStore.getState();
-        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence, snapshot.history);
+        syncServerThreadDetailHotPath(
+          snapshot.thread,
+          snapshot.snapshotSequence,
+          snapshot.historyRevisionSequence,
+        );
         threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
@@ -2406,7 +2370,7 @@ function EventRouter() {
         syncServerThreadDetailHotPath(
           item.snapshot.thread,
           item.snapshot.snapshotSequence,
-          item.snapshot.history,
+          item.snapshot.historyRevisionSequence,
         );
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
@@ -2420,7 +2384,6 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
-        clearCachedVerificationTimer(threadId);
         threadResumeSeedSequenceById.delete(threadId);
         toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
@@ -2450,30 +2413,6 @@ function EventRouter() {
         }
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
-        const replayThreadId =
-          item.threadId ??
-          (item.events[0]?.aggregateKind === "thread"
-            ? (item.events[0].aggregateId as ThreadId)
-            : undefined);
-        if (
-          replayThreadId &&
-          subscribedThreadIds.has(replayThreadId) &&
-          threadResumeSeedSequenceById.has(replayThreadId) &&
-          item.events.every((event) => isThreadDetailEventFor(event, replayThreadId))
-        ) {
-          if (
-            isCompleteAppliedThreadReplay({
-              threadId: replayThreadId,
-              resumeSeedSequence: threadResumeSeedSequenceById.get(replayThreadId),
-              appliedSequence:
-                useStore.getState().threadDetailAppliedSequenceById?.[replayThreadId],
-              events: item.events,
-            })
-          ) {
-            useStore.getState().confirmThreadDetailReplay(replayThreadId);
-            clearCachedVerificationTimer(replayThreadId);
-          }
-        }
         return;
       }
       applyThreadStreamEvent(item.event);
@@ -2839,9 +2778,6 @@ function EventRouter() {
 
     return () => {
       flushPendingDomainEvents();
-      stopThreadDetailCachePersistence();
-      for (const threadId of cachedThreadVerificationTimers.keys())
-        clearCachedVerificationTimer(threadId);
       disposed = true;
       if (shellSnapshotFallbackTimer !== null) {
         window.clearTimeout(shellSnapshotFallbackTimer);
