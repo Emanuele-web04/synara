@@ -4,34 +4,43 @@ import { ThreadId } from "@synara/contracts";
 import { nativeTheme, type WebContents } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { browserSession, fromId, webContentsViewConstructor, willDownloadListener } = vi.hoisted(
-  () => {
-    const willDownloadListener = {
-      current: null as null | ((event: object, item: object, webContents: object) => void),
-    };
-    return {
-      browserSession: {
-        setUserAgent: vi.fn(),
-        webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
-        protocol: { handle: vi.fn(), unhandle: vi.fn() },
-        on: vi.fn((event: string, listener: typeof willDownloadListener.current) => {
-          if (event === "will-download") willDownloadListener.current = listener;
-        }),
-        removeListener: vi.fn(),
-      },
-      fromId: vi.fn(),
-      webContentsViewConstructor: vi.fn(),
-      willDownloadListener,
-    };
-  },
-);
+const {
+  browserSession,
+  browserWindowConstructor,
+  fromId,
+  webContentsViewConstructor,
+  willDownloadListener,
+} = vi.hoisted(() => {
+  const willDownloadListener = {
+    current: null as null | ((event: object, item: object, webContents: object) => void),
+  };
+  return {
+    browserWindowConstructor: vi.fn(),
+    browserSession: {
+      setUserAgent: vi.fn(),
+      webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
+      protocol: { handle: vi.fn(), unhandle: vi.fn() },
+      on: vi.fn((event: string, listener: typeof willDownloadListener.current) => {
+        if (event === "will-download") willDownloadListener.current = listener;
+      }),
+      removeListener: vi.fn(),
+    },
+    fromId: vi.fn(),
+    webContentsViewConstructor: vi.fn(),
+    willDownloadListener,
+  };
+});
 vi.mock("electron", async () => ({
   app: {
     getName: () => "Synara",
     getPreferredSystemLanguages: () => ["en-US"],
     userAgentFallback: "Mozilla/5.0 Electron/40.0.0",
   },
-  BrowserWindow: class {},
+  BrowserWindow: class {
+    constructor(options: Electron.BrowserWindowConstructorOptions) {
+      return browserWindowConstructor(options);
+    }
+  },
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn() },
   nativeTheme: Object.assign(new (await import("node:events")).EventEmitter(), {
@@ -85,6 +94,70 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("creates a hidden profile-import target in the persistent browser partition and disposes it", async () => {
+    const contents = new FakeWebContents(811);
+    const window = Object.assign(new EventEmitter(), {
+      webContents: contents,
+      isDestroyed: vi.fn(() => false),
+      loadURL: vi.fn(async () => {}),
+      destroy: vi.fn(),
+    });
+    browserWindowConstructor.mockReturnValueOnce(window);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({ isDestroyed: vi.fn(() => false) } as never);
+
+    const runtime = await manager.createProfileCookieImportRuntime();
+
+    expect(runtime.webContents).toBe(contents);
+    expect(browserWindowConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        show: false,
+        skipTaskbar: true,
+        webPreferences: expect.objectContaining({
+          partition: "persist:synara-browser",
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+        }),
+      }),
+    );
+    expect(window.loadURL).toHaveBeenCalledWith("about:blank");
+    runtime.dispose();
+    runtime.dispose();
+    expect(window.destroy).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it("destroys profile-import targets when the owning app window closes", async () => {
+    const window = Object.assign(new EventEmitter(), {
+      webContents: new FakeWebContents(812),
+      isDestroyed: vi.fn(() => false),
+      loadURL: vi.fn(async () => {}),
+      destroy: vi.fn(),
+    });
+    browserWindowConstructor.mockReturnValueOnce(window);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({ isDestroyed: vi.fn(() => false) } as never);
+    await manager.createProfileCookieImportRuntime();
+
+    manager.setWindow(null);
+
+    expect(window.destroy).toHaveBeenCalledTimes(1);
+    manager.dispose();
+    expect(window.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create a profile-import target without an owning app window", async () => {
+    browserWindowConstructor.mockClear();
+    const manager = new DesktopBrowserManager();
+
+    await expect(manager.createProfileCookieImportRuntime()).rejects.toThrow(
+      "Browser manager is unavailable.",
+    );
+    expect(browserWindowConstructor).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   it.each([false, true])(
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
     (initialDark) => {

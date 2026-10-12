@@ -101,12 +101,18 @@ export const BrowserCookieImportInput = Schema.Union([
     ...CookieImportDestination,
     scope: Schema.Literal("site"),
     origin: Schema.String.check(Schema.isMaxLength(2048)),
-  }),
+  }).annotate({ parseOptions: { onExcessProperty: "error" } }),
   Schema.Struct({
     ...CookieImportDestination,
     scope: Schema.Literal("profile"),
     confirmed: Schema.Literal(true),
-  }),
+  }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+  Schema.Struct({
+    browser: BrowserCookieSource,
+    profile: Schema.String.check(Schema.isMaxLength(4096)),
+    scope: Schema.Literal("profile"),
+    confirmed: Schema.Literal(true),
+  }).annotate({ parseOptions: { onExcessProperty: "error" } }),
 ]);
 export type BrowserCookieImportInput = typeof BrowserCookieImportInput.Type;
 export const BrowserPasswordImportInput = Schema.Struct({

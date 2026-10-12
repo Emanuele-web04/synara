@@ -103,9 +103,14 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
     },
   });
   const releaseHumanOperation = vi.fn();
+  const disposeProfileRuntime = vi.fn();
   const waitForAgents = vi.fn(async () => {});
   const manager = {
     beginHumanBrowserOperation: vi.fn(() => releaseHumanOperation),
+    createProfileCookieImportRuntime: vi.fn(async () => ({
+      webContents: contents,
+      dispose: disposeProfileRuntime,
+    })),
     getCookieImportRuntime: vi.fn(async () => ({ webContents: contents })),
   };
   return {
@@ -117,6 +122,7 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
     ),
     contents,
     manager,
+    disposeProfileRuntime,
     releaseHumanOperation,
     waitForAgents,
     rememberSessionImport,
@@ -380,6 +386,71 @@ describe("human-only cookie import", () => {
     await expect(importer.import(input)).rejects.toThrow("destination changed");
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
+  });
+
+  it("imports an explicitly confirmed whole profile through a hidden shared-session target", async () => {
+    const { importer, manager, disposeProfileRuntime, rememberSessionImport } = fixture();
+    const request = Schema.decodeUnknownSync(BrowserCookieImportInput)({
+      browser: "chrome",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    expect(await importer.import(request)).toEqual({
+      ok: true,
+      imported: 2,
+      skipped: 1,
+      warnings: [{ code: "unsupported", count: 1 }],
+    });
+    expect(manager.createProfileCookieImportRuntime).toHaveBeenCalledTimes(1);
+    expect(manager.createProfileCookieImportRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.profiles.mock.invocationCallOrder[0]!,
+    );
+    expect(manager.getCookieImportRuntime).not.toHaveBeenCalled();
+    expect(disposeProfileRuntime).toHaveBeenCalledTimes(1);
+    expect(rememberSessionImport).toHaveBeenCalledWith(["example.test"]);
+  });
+
+  it("disposes a profile target when setup fails before the reader starts", async () => {
+    const { importer, waitForAgents, disposeProfileRuntime } = fixture();
+    waitForAgents.mockRejectedValue(new Error("setup failed"));
+    await expect(
+      importer.import({
+        browser: "chrome",
+        profile: "Default",
+        scope: "profile",
+        confirmed: true,
+      }),
+    ).rejects.toThrow("setup failed");
+    expect(disposeProfileRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed targeted requests instead of treating them as destinationless", () => {
+    const targeted = {
+      threadId: input.threadId,
+      browser: input.browser,
+      profile: input.profile,
+      scope: "profile",
+      confirmed: true,
+    };
+    expect(() => Schema.decodeUnknownSync(BrowserCookieImportInput)(targeted)).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({
+        ...targeted,
+        tabId: input.tabId,
+        threadId: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({
+        tabId: input.tabId,
+        browser: input.browser,
+        profile: input.profile,
+        scope: "profile",
+        confirmed: true,
+      }),
+    ).toThrow();
   });
 
   it("requires explicit profile consent and permits all-sites import from a blank tab", async () => {

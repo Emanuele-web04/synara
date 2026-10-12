@@ -54,9 +54,21 @@ export class BrowserCookieImport {
     if (this.busy) throw new Error("Another cookie import is running.");
     this.busy = true;
     let releaseHumanOperation: (() => void) | undefined;
+    let profileRuntime:
+      | Awaited<ReturnType<DesktopBrowserManager["createProfileCookieImportRuntime"]>>
+      | undefined;
     try {
       releaseHumanOperation = this.manager.beginHumanBrowserOperation();
-      const runtime = await this.manager.getCookieImportRuntime(input);
+      const destination = "threadId" in input ? input : undefined;
+      profileRuntime = destination
+        ? undefined
+        : await this.manager.createProfileCookieImportRuntime();
+      const profiles = await this.profiles(input.browser);
+      if (!profiles.some(({ id }) => id === input.profile))
+        throw new Error("Choose an available browser profile.");
+      const runtime =
+        profileRuntime ??
+        (await this.manager.getCookieImportRuntime(destination as NonNullable<typeof destination>));
       const origin = input.scope === "site" ? new URL(input.origin) : null;
       if (input.scope === "profile" && input.confirmed !== true)
         throw new Error("Confirm whole-profile session access.");
@@ -69,12 +81,16 @@ export class BrowserCookieImport {
       ) {
         throw new Error("Cookie import must match the visible site.");
       }
-      const profiles = await this.profiles(input.browser);
-      if (!profiles.some(({ id }) => id === input.profile))
-        throw new Error("Choose an available browser profile.");
       const assertTarget = async () => {
+        if (profileRuntime) {
+          if (runtime.webContents.isDestroyed())
+            throw new Error("The profile import target is unavailable.");
+          return;
+        }
         if (
-          (await this.manager.getCookieImportRuntime(input)).webContents !== runtime.webContents ||
+          !destination ||
+          (await this.manager.getCookieImportRuntime(destination)).webContents !==
+            runtime.webContents ||
           (origin && new URL(runtime.webContents.getURL()).origin !== origin.origin)
         )
           throw new Error("The cookie import destination changed.");
@@ -259,8 +275,15 @@ export class BrowserCookieImport {
         await browser?.close();
       }
     } finally {
-      releaseHumanOperation?.();
-      this.busy = false;
+      try {
+        profileRuntime?.dispose();
+      } finally {
+        try {
+          releaseHumanOperation?.();
+        } finally {
+          this.busy = false;
+        }
+      }
     }
   }
 }
