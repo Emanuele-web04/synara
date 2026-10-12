@@ -7,7 +7,7 @@ import { CentralIcon } from "../lib/central-icons";
 
 export function BrowserImportAnnouncementDialog() {
   const navigate = useNavigate();
-  const { visible, markSeen, inspectionFailed } = useBrowserImportAnnouncement();
+  const { visible, markSeen } = useBrowserImportAnnouncement();
 
   return (
     <AnnouncementSheet
@@ -18,11 +18,7 @@ export function BrowserImportAnnouncementDialog() {
         </span>
       }
       title="Bring your browsers"
-      description={
-        inspectionFailed
-          ? "Synara could not inspect browser profiles automatically. Open Settings to review browser import and refresh the browser list."
-          : `${BROWSER_IMPORT_DESCRIPTION} You choose what Synara imports.`
-      }
+      description={`${BROWSER_IMPORT_DESCRIPTION} You choose what Synara imports.`}
       dismissLabel="Not now"
       confirmLabel="Review browser import"
       onDismiss={markSeen}
