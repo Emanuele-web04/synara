@@ -488,6 +488,21 @@ export function deriveTurnTimingByTurnId(input: {
   return timings;
 }
 
+// A background task still running when its turn ended stays pinned under the
+// folded turn's header: its status is the turn's lasting result. One the turn
+// started and settled itself (a dev server it stopped) folds with its work.
+export function isPinnedBackgroundTaskEntry(
+  entry: WorkLogEntry,
+  turnEndedAt: string | null,
+): boolean {
+  const task = entry.backgroundTask;
+  if (!task) return false;
+  if (task.completedAt === null || turnEndedAt === null) return true;
+  const completedMs = Date.parse(task.completedAt);
+  const endedMs = Date.parse(turnEndedAt);
+  return Number.isNaN(completedMs) || Number.isNaN(endedMs) || completedMs > endedMs;
+}
+
 // "“Run delayed echo” finished", or a count when several tasks woke the turn.
 export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): string {
   if (resumedBy.length === 1) {
@@ -981,8 +996,7 @@ export function deriveMessagesTimelineRows(input: {
   const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
     entry.kind === "message"
       ? [entry.message]
-      : entry.kind === "work" &&
-          (entry.entry.backgroundTaskCompletion || entry.entry.monitorNotification)
+      : entry.kind === "work" && wakesAgent(entry.entry)
         ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
         : [],
   );
@@ -1091,11 +1105,7 @@ export function deriveMessagesTimelineRows(input: {
             createdAt: runEntry.createdAt,
             entry: { ...runEntry.entry, userInputExchange },
           });
-        } else if (
-          isStandaloneWorkEntry(runEntry.entry) ||
-          runEntry.entry.backgroundTaskCompletion ||
-          runEntry.entry.monitorNotification
-        ) {
+        } else if (isStandaloneWorkEntry(runEntry.entry) || wakesAgent(runEntry.entry)) {
           flushPendingWorkGroup();
           nextRows.push({
             kind: "work",
@@ -1389,9 +1399,15 @@ function findLiveTurnHeaderInsertion(
 // Returns the terminal assistant only when it is still the transcript tail.
 // A newer user message means the next turn has begun but has not produced text yet.
 function isBackgroundTaskCompletionRow(row: MessagesTimelineRow): boolean {
-  return (
-    row.kind === "work" &&
-    row.groupedEntries.some((entry) => entry.backgroundTaskCompletion || entry.monitorNotification)
+  return row.kind === "work" && row.groupedEntries.some(wakesAgent);
+}
+
+// A finished background task or Monitor event that woke the idle agent. One
+// that arrived mid-turn is ordinary work inside that turn.
+function wakesAgent(entry: WorkLogEntry): boolean {
+  return Boolean(
+    entry.backgroundTaskCompletion ||
+    (entry.monitorNotification && !entry.monitorNotification.midTurn),
   );
 }
 
@@ -1667,9 +1683,9 @@ function collectResumedBy(
     const row = rows[scan]!;
     if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
     for (const entry of row.groupedEntries.toReversed()) {
+      if (!wakesAgent(entry)) continue;
       const completion = entry.backgroundTaskCompletion;
       const monitor = entry.monitorNotification;
-      if (!completion && !monitor) continue;
       resumedBy.unshift({
         description: completion?.description ?? monitor?.name ?? null,
         outcome:

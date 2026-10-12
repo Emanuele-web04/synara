@@ -2757,6 +2757,76 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("keeps the sidebar rows in place while a thread row is pressed", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("subagent-press"),
+      targetText: "Review the sidebar rows",
+    });
+    const parent = { ...base.threads[0]!, title: "Parent thread" };
+    const olderIso = "2026-03-01T12:00:00.000Z";
+    const subagents = ["Atlas", "Nova"].map((nickname, index) => {
+      const id = ThreadId.makeUnsafe(`subagent-press-${index}`);
+      return {
+        ...parent,
+        id,
+        title: `${nickname} task`,
+        messages: [],
+        session: { ...parent.session!, threadId: id },
+        parentThreadId: THREAD_ID,
+        subagentNickname: nickname,
+      };
+    });
+    const other = {
+      ...parent,
+      id: OTHER_THREAD_ID,
+      title: "Other thread",
+      createdAt: olderIso,
+      updatedAt: olderIso,
+      latestTurn: null,
+      messages: [],
+      session: { ...parent.session!, threadId: OTHER_THREAD_ID, updatedAt: olderIso },
+    };
+    localStorage.setItem("synara:sidebar-ui:v1", JSON.stringify({ activityViewEnabled: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...base, threads: [parent, ...subagents, other] },
+    });
+    try {
+      const subagentDots = () =>
+        document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]').length;
+      const otherRowButton = await waitForElement(
+        () =>
+          [...document.querySelectorAll<HTMLElement>("[data-thread-item]")]
+            .find((row) => row.textContent?.includes("Other thread"))
+            ?.querySelector<HTMLElement>('[role="button"]') ?? null,
+        "Unable to find the other thread's sidebar row.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(2));
+      const pressedTop = otherRowButton.getBoundingClientRect().top;
+
+      // The press highlights the row at once, but the open thread's subagent rows
+      // stay until the route changes, so the release lands on the same row.
+      otherRowButton.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }),
+      );
+      await waitForLayout();
+      expect(otherRowButton.getAttribute("data-active")).toBe("true");
+      expect(subagentDots()).toBe(2);
+      expect(otherRowButton.getBoundingClientRect().top).toBe(pressedTop);
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+      await userEvent.click(otherRowButton);
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${OTHER_THREAD_ID}`,
+        "The pressed sidebar row did not open its thread.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(0));
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(["user", "assistant"] as const)(
     "opens the linked PR number from a %s message when the repository path also contains pull",
     async (role) => {

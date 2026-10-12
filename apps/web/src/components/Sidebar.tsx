@@ -1730,6 +1730,10 @@ export default function Sidebar() {
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
 
+  // Row layout (the open thread's subagent rows, a collapsed folder's open row,
+  // the preview cap's forced reveal) follows the route, not the pointer-down
+  // optimistic id. Rebuilding the list between press and release moves the row
+  // out from under the pointer, so the click never fires and the thread never opens.
   const routeActiveSidebarThreadId = routeThreadId;
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
@@ -4470,13 +4474,13 @@ export default function Sidebar() {
         chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
         appSettings.sidebarThreadSortOrder,
       ),
-      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      forceVisibleThreadId: routeActiveSidebarThreadId ?? undefined,
     });
   }, [
-    activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
     chatSectionExpanded,
     chatProjects,
+    routeActiveSidebarThreadId,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
@@ -4493,9 +4497,10 @@ export default function Sidebar() {
     [visibleChatThreadRows],
   );
   const activeChatPreviewEntry =
-    activeSidebarThreadId === undefined
+    routeActiveSidebarThreadId === null
       ? null
-      : (visibleChatPreviewEntries.find((entry) => entry.rowId === activeSidebarThreadId) ?? null);
+      : (visibleChatPreviewEntries.find((entry) => entry.rowId === routeActiveSidebarThreadId) ??
+        null);
   const {
     canShowLessChatThreads,
     canShowMoreChatThreads,
@@ -4599,13 +4604,13 @@ export default function Sidebar() {
         pinnedThreadIds,
         threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
-        activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+        activeSidebarThreadId: routeActiveSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
-      activeSidebarThreadId,
+      routeActiveSidebarThreadId,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
@@ -4671,13 +4676,13 @@ export default function Sidebar() {
       pinnedThreadIds,
       threadListExtraPagesByProjectCwd,
       normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
-      activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+      activeSidebarThreadId: routeActiveSidebarThreadId ?? undefined,
       previewLimit: THREAD_PREVIEW_LIMIT,
       previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
       resolveThreadStatus: resolveThreadStatusForSidebar,
     });
   }, [
-    activeSidebarThreadId,
+    routeActiveSidebarThreadId,
     isOnGroups,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
@@ -4730,16 +4735,16 @@ export default function Sidebar() {
         pinnedThreadIds,
         threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
-        activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+        activeSidebarThreadId: routeActiveSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }).get(railSpacesProject.id) ?? null
     );
   }, [
-    activeSidebarThreadId,
     pinnedThreadIds,
     railSpacesProject,
+    routeActiveSidebarThreadId,
     resolveThreadStatusForSidebar,
     sortedSidebarThreadsByProjectId,
     threadListExtraPagesByProjectCwd,

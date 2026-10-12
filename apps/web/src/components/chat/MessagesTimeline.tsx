@@ -127,6 +127,7 @@ import {
   deriveMessagesTimelineRows,
   formatTurnHeaderLabel,
   findLastLiveWorkGroupId,
+  isPinnedBackgroundTaskEntry,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   MIN_BACKGROUND_TASK_GROUP_SIZE,
   planWorkEntryRenderChunks,
@@ -2162,10 +2163,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
-          // Background tasks stay visible under the header while the turn is
-          // folded: each is one row whose status is the turn's lasting result.
+          // Background tasks that outlived the turn stay visible under the header
+          // while it is folded; ones the turn settled itself fold with its work.
+          const turnEndedAt = row.turnHeader?.endedAt ?? null;
           const pinnedBackgroundEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
-            item.kind === "work" && item.entry.backgroundTask ? [item.entry] : [],
+            item.kind === "work" && isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
+              ? [item.entry]
+              : [],
           );
           const collapsedTurnItems = row.collapsedTurnItems?.filter(
             (item) =>
@@ -2174,7 +2178,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 item.entry.synaraThreadCreation ||
                 item.entry.computerSetupRequired ||
                 item.entry.computerControlDenied ||
-                item.entry.backgroundTask
+                isPinnedBackgroundTaskEntry(item.entry, turnEndedAt)
               ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);

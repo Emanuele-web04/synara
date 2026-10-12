@@ -101,6 +101,18 @@ will stop and offers to resume it automatically on the next launch. On macOS and
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
 
+After an unexpected server shutdown, Synara automatically continues ordinary chats that
+were actively running, using their saved conversation and provider selection. The continuation
+asks the agent to verify existing operations before repeating them. Chats waiting for approval
+or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
+and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
+still apply. This starts a guarded continuation, not a replay of an in-flight tool call.
+
+To keep working on another provider account, add and sign in to it under **Settings → Providers**,
+then use **Hand off thread → Continue in a new thread** and select that account. The new thread
+carries the conversation history and uses the destination account's own credentials. A started
+thread's model picker cannot change its account in place.
+
 ## Projects
 
 A project is the folder Synara works with.

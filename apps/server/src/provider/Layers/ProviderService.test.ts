@@ -680,6 +680,45 @@ const replacementRouting = makeProviderServiceLayer({
     }),
 });
 replacementRouting.layer("Claude replacement preparation", (it) => {
+  it.effect(
+    "finishes an already-started retirement instead of timing out with a live binding",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("slow-retirement");
+        const input = {
+          threadId,
+          provider: "claudeAgent" as const,
+          runtimeMode: "full-access" as const,
+        };
+        yield* provider.startSession(threadId, input);
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+          replacementRouting.claude
+            .stopSession(threadId)
+            .pipe(
+              Effect.andThen(Deferred.succeed(entered, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(undefined),
+            ),
+        );
+        const pending = yield* provider
+          .startSession(threadId, input)
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("61 seconds");
+        assert.isUndefined(pending.pollUnsafe());
+        assert.isFalse(yield* replacementRouting.claude.hasSession(threadId));
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(pending))._tag, "Success");
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.notEqual(after.lifecycleGeneration, before.lifecycleGeneration);
+        assert.isTrue(yield* replacementRouting.claude.hasSession(threadId));
+      }),
+  );
   for (const failure of ["background", "unsupported-auto"] as const) {
     it.effect(
       `preserves events and generation when preparation rejects (${failure}), then resumes idle`,
