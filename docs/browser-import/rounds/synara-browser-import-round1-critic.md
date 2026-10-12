@@ -10,11 +10,11 @@ File: `packages/contracts/src/browserImportCatalog.ts`, lines 37, 39, 41.
 
 The catalog explicitly represents published desktop availability, rather than importer support. These entries contradict current official publisher evidence:
 
-| ID | Catalog | Required published platforms | Evidence |
-| --- | --- | --- | --- |
-| `opera-gx` | macOS, Windows | macOS, Windows, Linux | [Opera official Linux launch, March 19 2026](https://press.opera.com/2026/03/19/opera-gx-gaming-browser-lands-on-linux/) |
-| `helium` | macOS | macOS, Windows, Linux | [Official Helium downloads](https://helium.computer/download), [official site FAQ](https://helium.computer/) |
-| `aside` | macOS | macOS, Windows | [Official Aside download page](https://aside.com/download) |
+| ID         | Catalog        | Required published platforms | Evidence                                                                                                                 |
+| ---------- | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `opera-gx` | macOS, Windows | macOS, Windows, Linux        | [Opera official Linux launch, March 19 2026](https://press.opera.com/2026/03/19/opera-gx-gaming-browser-lands-on-linux/) |
+| `helium`   | macOS          | macOS, Windows, Linux        | [Official Helium downloads](https://helium.computer/download), [official site FAQ](https://helium.computer/)             |
+| `aside`    | macOS          | macOS, Windows               | [Official Aside download page](https://aside.com/download)                                                               |
 
 Any future discovery/UI that filters candidates by `desktopPlatforms` will incorrectly exclude installed browsers on those platforms. Fix these metadata entries without expanding the cookie runtime allowlist. Dia's macOS/Windows entry was independently confirmed by [its official homepage](https://www.diabrowser.com/).
 
@@ -38,17 +38,17 @@ The test only requires a nonempty array composed of recognized OS strings. Every
 
 All commands ran from `/Users/user/.codex/worktrees/browser-cookie-import/synara`.
 
-| Command/check | Actual result |
-| --- | --- |
-| `git status --short`, `git diff --stat`, actual new files and index diff | Only the three reported catalog files changed/untracked. |
-| `git diff --check` | Passed. |
-| `bunx oxfmt --check packages/contracts/src/index.ts packages/contracts/src/browserImportCatalog.ts packages/contracts/src/browserImportCatalog.test.ts` | Passed, 3 files. |
-| `bun run --filter @synara/contracts test src/browserImportCatalog.test.ts` in sandbox | Failed before test startup: `listen EPERM: operation not permitted 127.0.0.1`. |
-| Same focused test via approved escalation | Passed: 1 file, 2 tests. |
-| `bun run --filter @synara/contracts typecheck` in sandbox | Failed before startup with the same listener EPERM. |
-| Same contracts typecheck via approved escalation | Passed, exit 0. Existing Effect diagnostic suggestions were emitted; no blocking errors. |
-| `bun run --filter @synara/desktop test src/browserVaultIpc.test.ts src/browserAutomation/browserCookieImport.test.ts` via approved escalation | Passed: 2 files, 23 tests. These are mocked regression tests, not live browser-import qualification. |
-| Official publisher availability lookup | Confirmed the three errors above and Dia's two platforms. Did not independently requalify every other browser/platform combination. |
+| Command/check                                                                                                                                           | Actual result                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `git status --short`, `git diff --stat`, actual new files and index diff                                                                                | Only the three reported catalog files changed/untracked.                                                                            |
+| `git diff --check`                                                                                                                                      | Passed.                                                                                                                             |
+| `bunx oxfmt --check packages/contracts/src/index.ts packages/contracts/src/browserImportCatalog.ts packages/contracts/src/browserImportCatalog.test.ts` | Passed, 3 files.                                                                                                                    |
+| `bun run --filter @synara/contracts test src/browserImportCatalog.test.ts` in sandbox                                                                   | Failed before test startup: `listen EPERM: operation not permitted 127.0.0.1`.                                                      |
+| Same focused test via approved escalation                                                                                                               | Passed: 1 file, 2 tests.                                                                                                            |
+| `bun run --filter @synara/contracts typecheck` in sandbox                                                                                               | Failed before startup with the same listener EPERM.                                                                                 |
+| Same contracts typecheck via approved escalation                                                                                                        | Passed, exit 0. Existing Effect diagnostic suggestions were emitted; no blocking errors.                                            |
+| `bun run --filter @synara/desktop test src/browserVaultIpc.test.ts src/browserAutomation/browserCookieImport.test.ts` via approved escalation           | Passed: 2 files, 23 tests. These are mocked regression tests, not live browser-import qualification.                                |
+| Official publisher availability lookup                                                                                                                  | Confirmed the three errors above and Dia's two platforms. Did not independently requalify every other browser/platform combination. |
 
 Full workspace lint, formatting, typecheck, and tests were not run for this focused review. No live browser credentials, production state, or databases were accessed. No native importer qualification was attempted.
 

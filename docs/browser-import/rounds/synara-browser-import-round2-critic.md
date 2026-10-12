@@ -54,15 +54,15 @@ Reviewed the uncommitted browser inventory slice in `/Users/user/.codex/worktree
 
 ## Exact checks and results
 
-| Check | Result |
-| --- | --- |
-| `git status --short`, `git diff --stat`, `git diff` | Inspected eight changed/untracked files; final status unchanged by reviewer |
+| Check                                                                                                                                                                  | Result                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git status --short`, `git diff --stat`, `git diff`                                                                                                                    | Inspected eight changed/untracked files; final status unchanged by reviewer                                                                           |
 | `bun run --cwd apps/desktop test src/browserAutomation/chromiumProfileInventory.test.ts src/browserVaultIpc.test.ts src/browserAutomation/browserCookieImport.test.ts` | First sandbox attempt failed: `listen EPERM: operation not permitted 127.0.0.1`; authorized normal-permission retry passed: 3 files, 29 tests, 1.29 s |
-| `/opt/homebrew/bin/node /private/tmp/synara-round2-probe.mjs` | Exit 0; reproduced Opera false no_profiles, EACCES global rejection, inaccessible peer erasure; WAL count 2 and DB unchanged |
-| `ELECTRON_RUN_AS_NODE=1 apps/desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron /private/tmp/synara-round2-probe.mjs` | Exit 0; same four outcomes |
-| Electron `-e` version/SQLite read-only timeout query | Exit 0; SELECT returned 1; Electron 43.4.1 / Node 24.18.1 / SQLite 3.53.1 |
-| Root notice vs Cedar LICENSE | Copyright/full MIT text match; no staging reference found |
-| App Info.plist and data-root existence checks | Chrome/Helium/Aside conventional app paths verified; only path existence inspected |
+| `/opt/homebrew/bin/node /private/tmp/synara-round2-probe.mjs`                                                                                                          | Exit 0; reproduced Opera false no_profiles, EACCES global rejection, inaccessible peer erasure; WAL count 2 and DB unchanged                          |
+| `ELECTRON_RUN_AS_NODE=1 apps/desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron /private/tmp/synara-round2-probe.mjs`                             | Exit 0; same four outcomes                                                                                                                            |
+| Electron `-e` version/SQLite read-only timeout query                                                                                                                   | Exit 0; SELECT returned 1; Electron 43.4.1 / Node 24.18.1 / SQLite 3.53.1                                                                             |
+| Root notice vs Cedar LICENSE                                                                                                                                           | Copyright/full MIT text match; no staging reference found                                                                                             |
+| App Info.plist and data-root existence checks                                                                                                                          | Chrome/Helium/Aside conventional app paths verified; only path existence inspected                                                                    |
 
 Electron commands emitted a macOS `task_name_for_pid` codesign diagnostic but exited 0. Direct TS probes emitted MODULE_TYPELESS_PACKAGE_JSON warnings. These were not query failures.
 
