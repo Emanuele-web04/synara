@@ -11,7 +11,7 @@
 // stay closed for the rest of this launch instead of covering that flow; they are not
 // acknowledged, so they come back on the next one.
 
-import { useId, useLayoutEffect } from "react";
+import { useEffect, useId } from "react";
 import { create } from "zustand";
 
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
@@ -67,11 +67,11 @@ export function useAnnouncementSheetSlot(
   const eligible = wantsOpen && (!waitForOnboarding || !onboardingBlocking);
 
   // Re-runs when the owner changes, so a waiting sheet claims the slot once it frees.
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (eligible) claim(id, priority, allowAfterHandOff);
     else release(id);
   }, [allowAfterHandOff, claim, eligible, id, owner, priority, release]);
-  useLayoutEffect(() => () => release(id), [id, release]);
+  useEffect(() => () => release(id), [id, release]);
 
   return { open: eligible && owner === id, handOff };
 }

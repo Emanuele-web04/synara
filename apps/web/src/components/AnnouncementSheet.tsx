@@ -49,6 +49,8 @@ export function AnnouncementSheet(props: {
   // Omitted on single-action sheets; the confirm button still closes via onConfirm.
   dismissLabel?: string;
   confirmLabel: string;
+  /** Render from `open` even before the shared startup-sheet slot has claimed. */
+  bypassSlot?: boolean;
   // Fired by the dismiss button and by Escape / backdrop closes.
   onDismiss: () => void;
   onConfirm: () => void;
@@ -57,11 +59,14 @@ export function AnnouncementSheet(props: {
   // Announcements probe independently at startup; only the slot holder is shown so two
   // sheets never stack. The other opens once this one is dismissed, but not after a
   // confirm, whose follow-on flow it would cover.
-  const { open, handOff } = useAnnouncementSheetSlot(
+  const { open: slotOpen, handOff } = useAnnouncementSheetSlot(
     props.open,
     props.allowAfterHandOff,
     props.waitForOnboarding,
   );
+  // Keep this prompt visible from its own eligibility state if slot registration is
+  // delayed. It still registers with the slot when effects are available.
+  const open = props.bypassSlot ? props.open : slotOpen;
   return (
     <Dialog
       open={open}

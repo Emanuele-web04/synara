@@ -12,6 +12,7 @@ export function BrowserImportAnnouncementDialog() {
   return (
     <AnnouncementSheet
       open={visible}
+      bypassSlot
       hero={
         <span className="flex size-16 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--color-border)] bg-muted/30 text-foreground">
           <CentralIcon name="browser" className="size-8" />

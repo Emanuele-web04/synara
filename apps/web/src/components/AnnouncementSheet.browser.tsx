@@ -9,11 +9,12 @@ import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 
-function Sheet(props: { title: string }) {
+function Sheet(props: { title: string; bypassSlot?: boolean }) {
   const [open, setOpen] = useState(true);
   return (
     <AnnouncementSheet
       open={open}
+      {...(props.bypassSlot ? { bypassSlot: true } : {})}
       hero={null}
       title={props.title}
       description="Body"
@@ -67,6 +68,17 @@ describe("AnnouncementSheet", () => {
       await page.getByRole("button", { name: "Dismiss First" }).click();
       await expect.element(page.getByRole("dialog", { name: "Second" })).toBeVisible();
       await expect.element(page.getByRole("dialog", { name: "First" })).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("renders the browser announcement when shared slot registration has not completed", async () => {
+    useAnnouncementSheetSlotStore.setState({ owner: "other-announcement", ownerPriority: 1 });
+    const screen = await render(<Sheet title="Browser import" bypassSlot />);
+    try {
+      await expect.element(page.getByRole("dialog", { name: "Browser import" })).toBeVisible();
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("other-announcement");
     } finally {
       await screen.unmount();
     }
