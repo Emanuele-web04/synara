@@ -225,15 +225,28 @@ async function hasProfileStore(folder: string) {
   );
 }
 
+export async function isBoundedChromiumDatabase(
+  path: string,
+  limit = MAX_CHROMIUM_DATABASE_BYTES,
+): Promise<boolean> {
+  for (const file of [path, `${path}-wal`, `${path}-journal`]) {
+    try {
+      const stat = await lstat(file);
+      if (!stat.isFile() || stat.size > limit) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || file === path) return false;
+    }
+  }
+  return true;
+}
+
 async function countRows(
   path: string,
   query: string,
 ): Promise<{ count: number | null; status: "available" | "unavailable" | "locked" }> {
   let database: DatabaseSync | undefined;
   try {
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.size > MAX_CHROMIUM_DATABASE_BYTES)
-      return { count: null, status: "unavailable" };
+    if (!(await isBoundedChromiumDatabase(path))) return { count: null, status: "unavailable" };
     database = new DatabaseSync(path, { readOnly: true, timeout: 100 });
     database.exec("BEGIN");
     const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
@@ -243,7 +256,7 @@ async function countRows(
     const row = database.prepare(query).get() as { count?: number | bigint } | undefined;
     if (row?.count === undefined) return { count: null, status: "unavailable" };
     const value = Number(row.count);
-    return Number.isSafeInteger(value) && value >= 0
+    return Number.isSafeInteger(value) && value >= 0 && value <= 100_000
       ? { count: value, status: "available" }
       : { count: null, status: "unavailable" };
   } catch (error) {
@@ -295,24 +308,37 @@ async function readLocalState(
     } finally {
       await file.close();
     }
-    const state = JSON.parse(contents) as {
-      profile?: {
-        info_cache?: Record<string, { name?: unknown }>;
-        last_used?: unknown;
-        last_active_profiles?: unknown;
-      };
-    };
+    const state: unknown = JSON.parse(contents);
+    const record = (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!record(state) || !record(state.profile)) return { names: {}, last: [] };
     const profile = state.profile;
     const names: Record<string, string> = {};
-    for (const [id, info] of Object.entries(profile?.info_cache ?? {})) {
-      if (typeof info.name === "string" && info.name.length > 0) names[id] = info.name;
+    const cache = profile.info_cache;
+    if (record(cache)) {
+      let entries = 0;
+      for (const id in cache) {
+        if (++entries > MAX_SOURCE_ENTRIES) break;
+        const info = cache[id];
+        if (
+          id.length <= 256 &&
+          id !== "__proto__" &&
+          record(info) &&
+          typeof info.name === "string" &&
+          info.name.length > 0 &&
+          info.name.length <= 256
+        )
+          names[id] = info.name;
+      }
     }
+    const active = Array.isArray(profile.last_active_profiles)
+      ? profile.last_active_profiles.slice(0, MAX_SOURCE_ENTRIES)
+      : [];
     return {
       names,
-      last: [
-        profile?.last_used,
-        ...(Array.isArray(profile?.last_active_profiles) ? profile.last_active_profiles : []),
-      ].filter((value): value is string => typeof value === "string"),
+      last: [profile.last_used, ...active].filter(
+        (value): value is string => typeof value === "string" && value.length <= 256,
+      ),
     };
   } catch {
     return { names: {}, last: [] };
@@ -356,7 +382,10 @@ export async function listChromiumProfileInventory(
         try {
           const cookies = await cookieStore(folder);
           cookie = cookies
-            ? await countRows(cookies, "SELECT COUNT(*) AS count FROM cookies")
+            ? await countRows(
+                cookies,
+                "SELECT COUNT(*) AS count FROM (SELECT 1 FROM cookies LIMIT 100001)",
+              )
             : { count: null, status: "unavailable" };
         } catch {
           cookie = { count: null, status: "unavailable" };
@@ -367,7 +396,7 @@ export async function listChromiumProfileInventory(
           password = (await isRealFile(loginStore))
             ? await countRows(
                 loginStore,
-                "SELECT COUNT(*) AS count FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0",
+                "SELECT COUNT(*) AS count FROM (SELECT 1 FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0 LIMIT 100001)",
               )
             : { count: null, status: "unavailable" };
         } catch {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   resolveChromiumProfileFolder,
   MAX_CHROMIUM_DATABASE_BYTES,
+  isBoundedChromiumDatabase,
   type ChromiumInventorySourceId,
 } from "./chromiumProfileInventory";
 
@@ -72,7 +73,8 @@ export async function readChromiumProfilePasswords(
   const folder = await resolveChromiumProfileFolder(home, browser, profile);
   if (!folder) throw new BrowserPasswordReadError("source_missing");
   const path = join(folder, "Login Data");
-  if (!(await isFile(path))) throw new BrowserPasswordReadError("source_missing");
+  if (!(await isFile(path)) || !(await isBoundedChromiumDatabase(path)))
+    throw new BrowserPasswordReadError("source_missing");
   const key = pbkdf2Sync(passphrase, "saltysalt", 1003, 16, "sha1");
 
   let database: DatabaseSync;

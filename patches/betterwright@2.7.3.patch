@@ -2,7 +2,7 @@ diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-sourc
 new file mode 100644
 --- /dev/null
 +++ b/dist/src/chromium-cookie-source.js
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,317 @@
 +// macOS Chromium-family sources for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -193,12 +193,25 @@ new file mode 100644
 +    // live Chromium write can never be observed as a torn database + WAL pair.
 +    let database;
 +    try {
++        for (const file of [databasePath, `${databasePath}-wal`, `${databasePath}-journal`]) {
++            try {
++                const info = await lstat(file);
++                if (!info.isFile() || info.size > 64 * 1024 * 1024)
++                    throw chromiumError("resource_exhausted", "acquisition");
++            } catch (error) {
++                if (!isMissingError(error) || file === databasePath) throw error;
++            }
++        }
 +        database = new DatabaseSync(databasePath, { readOnly: true });
 +        database.exec("PRAGMA busy_timeout = 1000");
 +    } catch (error) {
 +        throw classifySqliteError(error, "acquisition");
 +    }
 +    try {
++        const pages = database.prepare("PRAGMA page_count").get();
++        const size = database.prepare("PRAGMA page_size").get();
++        if (pages.page_count * size.page_size > 64 * 1024 * 1024)
++            throw chromiumError("resource_exhausted", "acquisition");
 +        const copyPath = join(workspace, "Cookies");
 +        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
 +        return copyPath;

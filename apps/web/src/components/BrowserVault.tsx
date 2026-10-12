@@ -223,7 +223,14 @@ export function BrowserVaultDialog() {
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <CentralIcon name="keyhole" className="size-7 text-muted-foreground/60" />
                     <p className="text-ui leading-snug text-muted-foreground">No saved logins.</p>
-                    <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!busyRef.current) setOpen(false);
+                      }}
+                    >
                       Back to browser
                     </Button>
                   </div>

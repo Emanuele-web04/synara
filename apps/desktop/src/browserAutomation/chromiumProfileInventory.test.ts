@@ -429,3 +429,35 @@ it("bounds profile-directory discovery before inspecting stores", async () => {
     profiles: [],
   });
 });
+
+it.each(["string", "array", "null", "oversized-name"])(
+  "ignores malformed Local State cache: %s",
+  async (kind) => {
+    const source = CHROMIUM_INVENTORY_SOURCES[0];
+    await install(source);
+    const cache =
+      kind === "string"
+        ? "x".repeat(100_000)
+        : kind === "array"
+          ? [{ name: "Bad" }]
+          : kind === "null"
+            ? null
+            : { Default: { name: "x".repeat(257) } };
+    await writeFile(
+      join(dataRoot(source.data), "Local State"),
+      JSON.stringify({ profile: { info_cache: cache } }),
+    );
+    expect((await scan()).find(({ id }) => id === source.id)?.profiles[0]?.name).toBe("Default");
+  },
+);
+it.each(["cookiePath", "loginPath"] as const)(
+  "rejects oversized WAL before counting %s",
+  async (key) => {
+    const source = CHROMIUM_INVENTORY_SOURCES[0];
+    const stores = await install(source);
+    await writeFile(`${stores[key]}-wal`, "");
+    await truncate(`${stores[key]}-wal`, 512 * 1024 * 1024 + 1);
+    const found = (await scan()).find(({ id }) => id === source.id)?.profiles[0];
+    expect(key === "cookiePath" ? found?.cookieStatus : found?.passwordStatus).toBe("unavailable");
+  },
+);

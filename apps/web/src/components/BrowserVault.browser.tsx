@@ -126,6 +126,7 @@ describe("browser saved logins", () => {
     await page.getByRole("checkbox", { name: /I authorize Synara/ }).click();
     await page.getByRole("button", { name: "Import selected passwords" }).click();
     await expect.element(page.getByRole("button", { name: "Lock saved logins" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Back to browser" })).toBeDisabled();
     await expect
       .element(page.getByRole("switch", { name: "Allow agents to find saved accounts" }))
       .toBeDisabled();
@@ -139,6 +140,11 @@ describe("browser saved logins", () => {
     await expect.element(page.getByRole("dialog")).toBeVisible();
     finish!();
     await expect.element(page.getByRole("button", { name: "Lock saved logins" })).toBeEnabled();
+    await expect.element(page.getByRole("button", { name: "Back to browser" })).toBeEnabled();
+    await page.getByRole("button", { name: "Back to browser" }).click();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Saved logins" }).click();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
     expect(api.lock).not.toHaveBeenCalled();
     expect(api.importCookies).not.toHaveBeenCalled();
   });

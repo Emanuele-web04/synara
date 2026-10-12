@@ -304,6 +304,17 @@ describe("macOS Chromium-family cookie sources", () => {
     });
     expect(keychainPassword).not.toHaveBeenCalled();
   });
+  it("rejects oversized WAL before snapshot allocation", async () => {
+    const file = await profile(browsers[0]);
+    await writeFile(`${file}-wal`, "");
+    await truncate(`${file}-wal`, 64 * 1024 * 1024 + 1);
+    await expect(
+      reader.readChromiumCookieSnapshot(options("helium"), { home, keychainPassword }),
+    ).rejects.toMatchObject({
+      cookieReaderCode: "resource_exhausted",
+      cookieReaderStage: "acquisition",
+    });
+  });
   it("fails closed for malformed database metadata and never exposes raw database diagnostics", async () => {
     const file = await profile(browsers[0]);
     const db = new DatabaseSync(file);
