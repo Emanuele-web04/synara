@@ -2,11 +2,12 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { useBrowserImportAnnouncement } from "./useBrowserImportAnnouncement";
 import { AnnouncementSheet } from "./AnnouncementSheet";
+import { BROWSER_IMPORT_DESCRIPTION } from "./BrowserImportPanel";
 import { CentralIcon } from "../lib/central-icons";
 
 export function BrowserImportAnnouncementDialog() {
   const navigate = useNavigate();
-  const { visible, markSeen } = useBrowserImportAnnouncement();
+  const { visible, markSeen, inspectionFailed } = useBrowserImportAnnouncement();
 
   return (
     <AnnouncementSheet
@@ -17,7 +18,11 @@ export function BrowserImportAnnouncementDialog() {
         </span>
       }
       title="Bring your browsers"
-      description="Import signed-in sessions and saved passwords from browser profiles on this device. You choose what Synara imports."
+      description={
+        inspectionFailed
+          ? "Synara could not inspect browser profiles automatically. Open Settings to review browser import and refresh the browser list."
+          : `${BROWSER_IMPORT_DESCRIPTION} You choose what Synara imports.`
+      }
       dismissLabel="Not now"
       confirmLabel="Review browser import"
       onDismiss={markSeen}

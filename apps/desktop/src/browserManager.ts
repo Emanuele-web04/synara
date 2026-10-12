@@ -1488,10 +1488,11 @@ export class DesktopBrowserManager {
    * Creates a hidden target in the shared persistent browser partition for an explicitly
    * confirmed whole-profile import started outside a browser tab (for example, onboarding).
    */
-  async createProfileCookieImportRuntime(): Promise<{
+  async createProfileCookieImportRuntime(signal?: AbortSignal): Promise<{
     webContents: WebContents;
     dispose(): void;
   }> {
+    signal?.throwIfAborted();
     if (this.disposed || !this.window) throw new Error("Browser manager is unavailable.");
     const window = new BrowserWindow({
       show: false,
@@ -1507,27 +1508,31 @@ export class DesktopBrowserManager {
     });
     this.profileCookieImportWindows.add(window);
     window.once("closed", () => this.profileCookieImportWindows.delete(window));
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      this.profileCookieImportWindows.delete(window);
+      if (!window.isDestroyed()) window.destroy();
+    };
+    const onAbort = () => dispose();
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await window.loadURL("about:blank");
+      signal?.throwIfAborted();
     } catch (error) {
-      this.profileCookieImportWindows.delete(window);
-      if (!window.isDestroyed()) window.destroy();
+      dispose();
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
     if (this.disposed || !this.window || window.isDestroyed()) {
-      this.profileCookieImportWindows.delete(window);
-      if (!window.isDestroyed()) window.destroy();
+      dispose();
       throw new Error("Browser manager is unavailable.");
     }
-    let disposed = false;
     return {
       webContents: window.webContents,
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        this.profileCookieImportWindows.delete(window);
-        if (!window.isDestroyed()) window.destroy();
-      },
+      dispose,
     };
   }
 

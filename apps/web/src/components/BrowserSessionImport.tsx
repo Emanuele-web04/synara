@@ -1,7 +1,7 @@
 import type { BrowserCookieImportResult, BrowserVaultMethods } from "@synara/contracts";
 import { BrowserCookieSource } from "@synara/contracts";
 import { Schema } from "effect";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Button } from "./ui/button";
 
@@ -30,12 +30,22 @@ function failureMessage(result: Extract<BrowserCookieImportResult, { ok: false }
       return "The operating system denied access to this browser profile.";
     case "reader_unavailable":
       return "Synara's browser cookie reader is unavailable.";
+    case "source_too_large":
+      return "Synara stopped safely because this profile exceeds the secure cookie transfer limit. Choose a smaller profile or import cookies for one site from a chat.";
+    case "redaction_capacity":
+      return "Synara stopped because the secure cookie cleanup limit was reached and restarted its browser worker. Retry after reopening the target, then sign in directly if needed.";
+    case "target_capacity":
+      return "Synara stopped because this target profile has reached Chromium's safe cookie capacity. Existing target cookies were preserved.";
+    case "target_eviction":
+      return "Synara stopped because Chromium removed existing target cookies during transfer. Review the target profile before retrying.";
+    case "target_failed":
+      return "Synara could not add these cookies to the target profile. Existing sessions may have changed; review the profile before retrying.";
     case "timed_out":
       return "The browser profile could not be read before the operation timed out.";
     case "source_missing":
       return "This browser profile is no longer available. Refresh the list and retry.";
-    case "persistence_failed":
-      return `${result.imported} imported, ${result.skipped} skipped. Synara could not save these sessions for future launches.`;
+    case "cancelled":
+      return "Import cancelled. Some cookies may already have been copied; review the session before retrying.";
     case "reader_failed":
       return "Synara could not read or decrypt this browser profile.";
     case "transfer_failed":
@@ -46,7 +56,20 @@ function failureMessage(result: Extract<BrowserCookieImportResult, { ok: false }
 function resultMessage(result: BrowserCookieImportResult): string {
   if (!result.ok) return failureMessage(result);
   const warningCount = result.warnings.reduce((sum, warning) => sum + warning.count, 0);
-  return `${result.imported} imported, ${result.skipped} skipped${warningCount ? `, ${warningCount} could not be transferred` : ""}.`;
+  const appBoundSkipped =
+    result.platform === "windows" &&
+    (result.browser === "chrome" || result.browser === "edge") &&
+    result.warnings.some((warning) => warning.code === "decrypt_failed");
+  const warningSummary = appBoundSkipped
+    ? `, ${warningCount} could not be transferred. Some Chrome/Edge cookies could not be decrypted. Synara does not use App-Bound injection, so App-Bound cookies cannot be imported; sign in within Synara for those sites.`
+    : warningCount
+      ? `, ${warningCount} could not be transferred`
+      : "";
+  const sessionRestoreWarning =
+    result.sessionRestore === "unavailable"
+      ? " Secure restoration of session-only cookies is unavailable; some sign-ins may not survive restart."
+      : "";
+  return `${result.imported} imported, ${result.skipped} skipped${warningSummary}.${sessionRestoreWarning}`;
 }
 
 export function BrowserSessionImport({
@@ -62,6 +85,8 @@ export function BrowserSessionImport({
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancelRequested = useRef(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, string>>({});
   const [refreshCount, setRefreshCount] = useState(0);
@@ -122,11 +147,14 @@ export function BrowserSessionImport({
   const run = async () => {
     if (busy || !confirmed || selectedProfiles.length === 0) return;
     setBusy(true);
+    setCancelling(false);
+    cancelRequested.current = false;
     onBusyChange?.(true);
     setConfirmed(false);
     setResults({});
     try {
       for (const { browser, profile } of selectedProfiles) {
+        if (cancelRequested.current) break;
         const key = `${browser.id}:${profile.id}`;
         try {
           const result = await api.importCookies({
@@ -136,15 +164,21 @@ export function BrowserSessionImport({
             confirmed: true,
           });
           setResults((current) => ({ ...current, [key]: resultMessage(result) }));
+          if (!result.ok && result.code === "cancelled") break;
         } catch {
           setResults((current) => ({
             ...current,
-            [key]: "Import stopped before Synara could verify the result. Retry this profile.",
+            [key]: cancelRequested.current
+              ? "Import cancelled. Some cookies may already have been copied; review the session before retrying."
+              : "Import stopped before Synara could verify the result. Retry this profile.",
           }));
+          if (cancelRequested.current) break;
         }
       }
     } finally {
       setBusy(false);
+      setCancelling(false);
+      cancelRequested.current = false;
       onBusyChange?.(false);
     }
   };
@@ -278,13 +312,28 @@ export function BrowserSessionImport({
             </span>
           </label>
           <div className="flex justify-end">
-            <Button
-              size="sm"
-              disabled={busy || !confirmed || selectedProfiles.length === 0}
-              onClick={() => void run()}
-            >
-              {busy ? "Importing sessions…" : "Import selected sessions"}
-            </Button>
+            {busy ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={cancelling}
+                onClick={() => {
+                  cancelRequested.current = true;
+                  setCancelling(true);
+                  void api.cancelCookieImport().catch(() => {});
+                }}
+              >
+                {cancelling ? "Cancelling…" : "Cancel import"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={!confirmed || selectedProfiles.length === 0}
+                onClick={() => void run()}
+              >
+                Import selected sessions
+              </Button>
+            )}
           </div>
         </>
       ) : null}

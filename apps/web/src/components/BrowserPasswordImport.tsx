@@ -2,6 +2,12 @@ import type { BrowserPasswordImportResult, BrowserVaultMethods } from "@synara/c
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { Button } from "./ui/button";
+import {
+  getNavigatorPlatform,
+  isLinuxPlatform,
+  isMacPlatform,
+  isWindowsPlatform,
+} from "~/lib/utils";
 
 type Inventory = Awaited<ReturnType<BrowserVaultMethods["inventoryChromiumProfiles"]>>;
 
@@ -41,6 +47,8 @@ export function BrowserPasswordImport({
   api: BrowserVaultMethods;
   onBusyChange?: (busy: boolean) => void;
 }) {
+  const platform = getNavigatorPlatform();
+  const passwordImportSupported = isMacPlatform(platform);
   const [inventory, setInventory] = useState<Inventory>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [confirmed, setConfirmed] = useState(false);
@@ -93,6 +101,7 @@ export function BrowserPasswordImport({
   }, [api]);
 
   useEffect(() => {
+    if (!passwordImportSupported) return;
     void loadInventory();
     void refreshVaultAccess();
     const unsubscribe = api.onChanged(() => void refreshVaultAccess());
@@ -101,7 +110,7 @@ export function BrowserPasswordImport({
       vaultRequest.current++;
       unsubscribe();
     };
-  }, [api, loadInventory, refreshVaultAccess]);
+  }, [api, loadInventory, passwordImportSupported, refreshVaultAccess]);
 
   const selectedProfiles = useMemo(
     () =>
@@ -153,7 +162,13 @@ export function BrowserPasswordImport({
       aria-label="Import saved passwords"
     >
       <h3 className="font-medium text-muted-foreground">Import saved passwords</h3>
-      {inventoryStatus === "loading" ? (
+      {!passwordImportSupported ? (
+        <p className="text-ui-sm text-muted-foreground">
+          {isLinuxPlatform(platform) || isWindowsPlatform(platform)
+            ? "Saved-password import is not supported on Linux or Windows yet."
+            : "Saved-password import is not available on this platform yet."}
+        </p>
+      ) : inventoryStatus === "loading" ? (
         <p role="status" className="text-ui-sm text-muted-foreground">
           Looking for installed Chromium browsers…
         </p>
@@ -168,7 +183,7 @@ export function BrowserPasswordImport({
         </div>
       ) : inventory.length === 0 ? (
         <p className="text-ui-sm text-muted-foreground">
-          No supported installed Chromium browsers were found.
+          No installed Chromium browser profiles are available for password import.
         </p>
       ) : (
         <ul className="space-y-3">
@@ -218,7 +233,7 @@ export function BrowserPasswordImport({
           ))}
         </ul>
       )}
-      {vaultAction ? (
+      {passwordImportSupported && vaultAction ? (
         <div className="space-y-2 rounded-md border p-3">
           <p className="text-ui-sm text-muted-foreground">
             {vaultAction === "setup"
@@ -241,11 +256,11 @@ export function BrowserPasswordImport({
           )}
         </div>
       ) : null}
-      {vaultStatus === "loading" ? (
+      {passwordImportSupported && vaultStatus === "loading" ? (
         <p role="status" className="text-ui-sm text-muted-foreground">
           Checking Saved Logins protection…
         </p>
-      ) : vaultStatus === "error" ? (
+      ) : passwordImportSupported && vaultStatus === "error" ? (
         <Button size="sm" variant="outline" onClick={() => void refreshVaultAccess()}>
           Retry Saved Logins check
         </Button>

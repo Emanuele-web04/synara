@@ -26,9 +26,19 @@ describe("browser vault IPC", () => {
       reveal: vi.fn(),
       onChanged: () => () => {},
     };
-    const cookies = { profiles: vi.fn(async () => [{ id: "Default", name: "Default" }]) };
+    const cookies = {
+      profiles: vi.fn(async () => [{ id: "Default", name: "Default" }]),
+      cancel: vi.fn(async () => {}),
+    };
     const passwords = {
-      import: vi.fn(async () => ({ ok: true, imported: 1, skipped: 0, warnings: [] })),
+      import: vi.fn(async () => ({
+        ok: true,
+        imported: 1,
+        skipped: 0,
+        browser: "chrome" as const,
+        platform: "macos" as const,
+        warnings: [],
+      })),
     };
     const manager = { isTrustedRenderer: (id: number) => id === 1 };
     const dispose = registerBrowserVaultIpc(
@@ -60,6 +70,7 @@ describe("browser vault IPC", () => {
       BROWSER_IPC_CHANNELS.vault.unlock,
       BROWSER_IPC_CHANNELS.vault.reveal,
       BROWSER_IPC_CHANNELS.vault.importCookies,
+      BROWSER_IPC_CHANNELS.vault.cancelCookieImport,
       BROWSER_IPC_CHANNELS.vault.importPasswords,
       BROWSER_IPC_CHANNELS.vault.cookieProfiles,
     ]) {

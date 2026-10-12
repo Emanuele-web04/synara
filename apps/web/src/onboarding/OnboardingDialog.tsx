@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { SynaraLogo } from "~/components/SynaraLogo";
-import { BrowserImportPanel } from "~/components/BrowserImportPanel";
+import { BROWSER_IMPORT_DESCRIPTION, BrowserImportPanel } from "~/components/BrowserImportPanel";
 import { useAnnouncementSheetSlot } from "~/components/announcementSheetSlot";
 import {
   Dialog,
@@ -63,7 +63,7 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
 const STEP_DESCRIPTIONS: Record<Exclude<OnboardingStep, "done">, string> = {
   welcome: "A local-first workspace for coding agents. Setup takes about a minute.",
   tour: "",
-  "browser-import": "Import signed-in sessions and saved passwords from browsers on this device.",
+  "browser-import": BROWSER_IMPORT_DESCRIPTION,
   providers: `Detected on this machine. Uncheck any you don't want ${APP_BASE_NAME} to use.`,
   theme: "Applies live behind this window. Change it anytime in Settings → Appearance.",
   project: `A project is a folder ${APP_BASE_NAME} works in. Git repositories unlock branches, worktrees, diffs and pull requests.`,

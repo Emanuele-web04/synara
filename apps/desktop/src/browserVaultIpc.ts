@@ -68,6 +68,7 @@ export function registerBrowserVaultIpc(
   handle(channels.importCookies, (input) =>
     requireCookies().import(Schema.decodeUnknownSync(BrowserCookieImportInput)(input)),
   );
+  handle(channels.cancelCookieImport, () => requireCookies().cancel());
   handle(channels.importPasswords, (input) => {
     if (!passwords) throw new Error("Password import is unavailable.");
     return passwords.import(Schema.decodeUnknownSync(BrowserPasswordImportInput)(input));

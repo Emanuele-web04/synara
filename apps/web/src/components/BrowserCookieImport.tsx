@@ -29,6 +29,16 @@ function importFailure(
     return "The selected profile is no longer available. Choose another profile or open the source browser first.";
   if (result.code === "reader_unavailable")
     return "The native cookie reader is unavailable. Reinstall Synara with its optional native dependencies, or sign in directly.";
+  if (result.code === "source_too_large")
+    return "Synara stopped safely because this profile exceeds the secure cookie transfer limit. Use the chat cookie control to import one site, or sign in directly.";
+  if (result.code === "redaction_capacity")
+    return "Synara stopped because the secure cookie cleanup limit was reached and restarted its browser worker. Reopen the target and retry, or sign in directly.";
+  if (result.code === "target_capacity")
+    return "Synara stopped because this target profile has reached Chromium's safe cookie capacity. Existing target cookies were preserved.";
+  if (result.code === "target_eviction")
+    return "Synara stopped because Chromium removed existing target cookies during transfer. Review the target profile before retrying.";
+  if (result.code === "target_failed")
+    return "Synara could not add these cookies to the target profile. Existing sessions may have changed; review the profile before retrying.";
   if (result.code === "reader_failed" && result.stage === "acquisition")
     return "The native reader could not open or acquire the source cookie store. A permission denial was not confirmed. Check that the source profile is available and Synara has access to it.";
   if (result.code === "reader_failed" && (result.stage === "parse" || result.stage === "decode"))
@@ -135,10 +145,8 @@ export function BrowserCookieImport({
       if (request === generation.current && result)
         setStatus(
           result.ok
-            ? `${result.imported} ${result.imported === 1 ? "cookie" : "cookies"} imported. ${result.skipped} skipped.${result.warnings.length ? " Some cookies could not be transferred; you may need to sign in again." : ""}`
-            : result.code === "persistence_failed"
-              ? `${result.imported} ${result.imported === 1 ? "cookie was" : "cookies were"} imported; ${result.skipped} skipped. Secure storage could not save these sessions for future launches, so you may need to sign in again after restarting Synara.`
-              : importFailure(result, source),
+            ? `${result.imported} ${result.imported === 1 ? "cookie" : "cookies"} imported. ${result.skipped} skipped.${result.warnings.length ? " Some cookies could not be transferred; you may need to sign in again." : ""}${result.sessionRestore === "unavailable" ? " Secure restoration of session-only cookies is unavailable; some sign-ins may not survive restart." : ""}`
+            : importFailure(result, source),
         );
     } catch {
       if (request === generation.current)

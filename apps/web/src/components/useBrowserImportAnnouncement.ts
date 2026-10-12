@@ -10,6 +10,7 @@ import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 export const BROWSER_IMPORT_ANNOUNCEMENT_STORAGE_KEY = "synara:browser-import-announcement:v1";
 const AnnouncementSchema = Schema.Array(Schema.String);
 const EMPTY_INSTALLATIONS: readonly string[] = [];
+const PROFILE_PROBE_RETRY_DELAYS_MS = [250, 750] as const;
 
 export function useBrowserImportAnnouncement() {
   const installation = useQuery({
@@ -28,6 +29,7 @@ export function useBrowserImportAnnouncement() {
   );
   const api = readNativeApi()?.browser.vault;
   const [profilesAvailable, setProfilesAvailable] = useState(false);
+  const [inspectionFailed, setInspectionFailed] = useState(false);
   const [probedInstallation, setProbedInstallation] = useState<string | null>(null);
 
   const markSeen = useCallback(() => {
@@ -40,25 +42,39 @@ export function useBrowserImportAnnouncement() {
     if (!startupSettled || onboardingOpen || !installation || seen.includes(installation) || !api)
       return;
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setProfilesAvailable(false);
-    void api
-      .cookieSources()
-      .then(async (sources) => {
+    setInspectionFailed(false);
+    const inspect = async (attempt: number): Promise<void> => {
+      try {
+        const sources = await api.cookieSources();
         if (!active) return;
-        const profiles = await Promise.all(
-          sources.map((source) => api.cookieProfiles(source.id).catch(() => [])),
+        const results = await Promise.allSettled(
+          sources.map((source) => api.cookieProfiles(source.id)),
         );
-        if (active) setProfilesAvailable(profiles.some((items) => items.length > 0));
-      })
-      .catch((error) => {
-        // A failed inspection must not acknowledge the announcement; retry next launch.
-        console.warn("[browser-import] Could not inspect profiles for the welcome prompt", error);
-      })
-      .finally(() => {
-        if (active) setProbedInstallation(installation);
-      });
+        if (!active) return;
+        const profilesAvailable = results.some(
+          (result) => result.status === "fulfilled" && result.value.length > 0,
+        );
+        const inspectionFailed = results.some((result) => result.status === "rejected");
+        if (!profilesAvailable && inspectionFailed) throw new Error("Profile inspection failed.");
+        setProfilesAvailable(profilesAvailable);
+        setProbedInstallation(installation);
+      } catch {
+        if (!active) return;
+        const delay = PROFILE_PROBE_RETRY_DELAYS_MS[attempt];
+        if (delay !== undefined) {
+          retryTimer = setTimeout(() => void inspect(attempt + 1), delay);
+        } else {
+          setInspectionFailed(true);
+          setProbedInstallation(installation);
+        }
+      }
+    };
+    void inspect(0);
     return () => {
       active = false;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
   }, [api, installation, onboardingOpen, seen, startupSettled]);
 
@@ -79,10 +95,11 @@ export function useBrowserImportAnnouncement() {
       installation &&
       api &&
       probedInstallation === installation &&
-      profilesAvailable &&
+      (profilesAvailable || inspectionFailed) &&
       !seen.includes(installation) &&
       !onboardingOpen,
     ),
+    inspectionFailed,
     markSeen,
   };
 }

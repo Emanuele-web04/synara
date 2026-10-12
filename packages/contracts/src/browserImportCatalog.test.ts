@@ -9,7 +9,19 @@ import {
 } from "./index";
 
 describe("browser import candidate catalog", () => {
-  const currentRuntimeSources = ["chrome", "safari", "edge", "helium", "aside", "arc", "dia"];
+  const currentRuntimeSources = [
+    "chrome",
+    "safari",
+    "edge",
+    "brave",
+    "chromium",
+    "opera",
+    "vivaldi",
+    "helium",
+    "aside",
+    "arc",
+    "dia",
+  ];
   const expectedDesktopPlatforms: Record<
     (typeof BROWSER_IMPORT_CATALOG_IDS)[number],
     ReadonlyArray<BrowserDesktopPlatform>

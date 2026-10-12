@@ -319,12 +319,17 @@ diff --git a/dist/src/client.js b/dist/src/client.js
 -            consentTarget = cookieSyncConsentTarget(this.provider);
 +            consentTarget = this.hostTarget ? null : cookieSyncConsentTarget(this.provider);
              if (consentTarget && normalized.cloudConsent !== consentTarget) {
-@@ -1051,3 +1052,3 @@
+@@ -1048,1 +1049,3 @@
+-                cookieReaderCode: error?.cookieReaderCode || "reader_unavailable",
++                cookieReaderCode: /Cookie Sync selected more than \d+ cookies|Cookie Sync selected more data than the secure transfer limit/i.test(String(error?.message || ""))
++                    ? "source_too_large"
++                    : error?.cookieReaderCode || "reader_unavailable",
+@@ -1051,3 +1054,3 @@
          if (!extracted.cookies.length) {
 -            return {
 +            const empty = {
                  ok: true,
-@@ -1057,5 +1058,7 @@
+@@ -1057,5 +1060,7 @@
                  source: extracted.source,
 -                target: consentTarget || "local",
 +                target: consentTarget || (this.hostTarget ? "host" : "local"),
@@ -333,7 +338,7 @@ diff --git a/dist/src/client.js b/dist/src/client.js
 +            if (this.hostTarget) empty.cookieImportDomains = [];
 +            return empty;
          }
-@@ -1075,3 +1078,3 @@
+@@ -1075,3 +1080,3 @@
      _extractCookieSync(options) {
 -        return extractCookieSync(options);
 +        return extractCookieSync(options, undefined, { keychainPassword: this.chromiumKeychainPassword });
@@ -388,17 +393,30 @@ diff --git a/dist/src/worker.js b/dist/src/worker.js
 +                ? null
 +                : cookieSyncConsentTarget(message.config?.provider);
          }
-@@ -6900,3 +6903,3 @@
+@@ -6867,5 +6870,12 @@
+                 type: "result",
+                 id: message.id,
+                 ok: false,
++                cookieSyncFailureCode: capacity
++                    ? "redaction_capacity"
++                    : targetCapacity
++                        ? "target_capacity"
++                        : targetEviction
++                            ? "target_eviction"
++                            : "target_failed",
+                 error: capacity
+                     ? "Cookie Sync redaction capacity was reached; the browser worker was restarted."
+@@ -6900,3 +6910,3 @@
          }
 -        sendResult({
 +        const result = {
              type: "result",
-@@ -6908,3 +6911,3 @@
+@@ -6908,3 +6918,3 @@
              source,
 -            target: target || "local",
 +            target: target || (hostOwnedTarget ? "host" : "local"),
              warnings: [
-@@ -6914,3 +6917,7 @@
+@@ -6914,3 +6924,7 @@
              profileMode,
 -        });
 +        };
@@ -419,7 +437,17 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +       */
 +      cookieImportDomains?: string[];
        warnings?: CookieSyncWarning[];
-@@ -124,2 +130,4 @@
+@@ -116,1 +122,8 @@
+-  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
++  | {
++      ok: false;
++      error: string;
++      cookieReaderCode?: string;
++      cookiePermissionDenied?: boolean;
++      cookieReaderStage?: string;
++      cookieSyncFailureCode?: "redaction_capacity" | "target_capacity" | "target_eviction" | "target_failed";
++    };
+@@ -124,2 +137,4 @@
  export interface BetterWrightOptions {
 +  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
 +  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;

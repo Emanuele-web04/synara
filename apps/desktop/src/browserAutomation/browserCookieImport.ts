@@ -22,8 +22,33 @@ const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
   dia: { account: "Dia", service: "Dia Safe Storage" },
 };
 
+function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error("Cookie import cancelled."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 export class BrowserCookieImport {
   private busy = false;
+  private activeInterrupt: AbortController | undefined;
+  private activeStop: ((cancel?: boolean) => void) | undefined;
+  private cancellationRequested = false;
 
   constructor(
     private readonly home: string,
@@ -53,6 +78,9 @@ export class BrowserCookieImport {
   async import(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult> {
     if (this.busy) throw new Error("Another cookie import is running.");
     this.busy = true;
+    this.cancellationRequested = false;
+    const interrupt = new AbortController();
+    this.activeInterrupt = interrupt;
     let releaseHumanOperation: (() => void) | undefined;
     let profileRuntime:
       | Awaited<ReturnType<DesktopBrowserManager["createProfileCookieImportRuntime"]>>
@@ -62,13 +90,22 @@ export class BrowserCookieImport {
       const destination = "threadId" in input ? input : undefined;
       profileRuntime = destination
         ? undefined
-        : await this.manager.createProfileCookieImportRuntime();
-      const profiles = await this.profiles(input.browser);
+        : await waitForAbortable(
+            this.manager.createProfileCookieImportRuntime(interrupt.signal),
+            interrupt.signal,
+          );
+      interrupt.signal.throwIfAborted();
+      const profiles = await waitForAbortable(this.profiles(input.browser), interrupt.signal);
+      interrupt.signal.throwIfAborted();
       if (!profiles.some(({ id }) => id === input.profile))
         throw new Error("Choose an available browser profile.");
       const runtime =
         profileRuntime ??
-        (await this.manager.getCookieImportRuntime(destination as NonNullable<typeof destination>));
+        (await waitForAbortable(
+          this.manager.getCookieImportRuntime(destination as NonNullable<typeof destination>),
+          interrupt.signal,
+        ));
+      interrupt.signal.throwIfAborted();
       const origin = input.scope === "site" ? new URL(input.origin) : null;
       if (input.scope === "profile" && input.confirmed !== true)
         throw new Error("Confirm whole-profile session access.");
@@ -95,12 +132,12 @@ export class BrowserCookieImport {
         )
           throw new Error("The cookie import destination changed.");
       };
-      await assertTarget();
-      await this.waitForAgents();
-      await assertTarget();
+      await waitForAbortable(assertTarget(), interrupt.signal);
+      await waitForAbortable(this.waitForAgents(), interrupt.signal);
+      interrupt.signal.throwIfAborted();
+      await waitForAbortable(assertTarget(), interrupt.signal);
       // Revoke transport and cancel host-owned Keychain acquisition together.
       // Upstream syncCookies itself has no AbortSignal.
-      const interrupt = new AbortController();
       const hostTarget = synaraHostTarget(runtime.webContents, {
         cookieImport: true,
         signal: interrupt.signal,
@@ -117,6 +154,7 @@ export class BrowserCookieImport {
         );
         void close.catch(() => {});
       };
+      this.activeStop = stop;
       const navigation = (
         _event: unknown,
         _url: string,
@@ -213,19 +251,25 @@ export class BrowserCookieImport {
             "discovery",
           ] as const;
           const stage = stages.find((stage) => stage === result.cookieReaderStage);
-          const code = result.cookiePermissionDenied
-            ? "permission_denied"
-            : result.cookieReaderCode === "timed_out"
-              ? "timed_out"
-              : ["no_selected_source", "no_discovered_source"].includes(
-                    result.cookieReaderCode ?? "",
-                  )
-                ? "source_missing"
-                : result.cookieReaderCode === "reader_unavailable"
-                  ? "reader_unavailable"
-                  : result.cookieReaderCode
-                    ? "reader_failed"
-                    : "transfer_failed";
+          const transferCode = result.cookieSyncFailureCode;
+          let code: Extract<BrowserCookieImportResult, { ok: false }>["code"];
+          if (result.cookiePermissionDenied) code = "permission_denied";
+          else if (result.cookieReaderCode === "source_too_large") code = "source_too_large";
+          else if (
+            transferCode === "redaction_capacity" ||
+            transferCode === "target_capacity" ||
+            transferCode === "target_eviction" ||
+            transferCode === "target_failed"
+          ) {
+            code = transferCode;
+          } else if (result.cookieReaderCode === "timed_out") code = "timed_out";
+          else if (
+            ["no_selected_source", "no_discovered_source"].includes(result.cookieReaderCode ?? "")
+          )
+            code = "source_missing";
+          else if (result.cookieReaderCode === "reader_unavailable") code = "reader_unavailable";
+          else if (result.cookieReaderCode) code = "reader_failed";
+          else code = "transfer_failed";
           return {
             ok: false,
             code,
@@ -241,29 +285,30 @@ export class BrowserCookieImport {
         await assertTarget();
         interrupt.signal.throwIfAborted();
         await runtime.webContents.session.cookies.flushStore();
+        let sessionRestore: "available" | "unavailable" = "available";
         try {
           if (!Array.isArray(result.cookieImportDomains))
             throw new Error("Import scope metadata is unavailable.");
           await this.rememberSessionImport(result.cookieImportDomains);
         } catch {
-          return {
-            ok: false,
-            code: "persistence_failed",
-            platform:
-              process.platform === "darwin"
-                ? "macos"
-                : process.platform === "win32"
-                  ? "windows"
-                  : "linux",
-            imported: result.synced,
-            skipped: result.skipped,
-          };
+          // Cookie sync and the persistent partition flush already succeeded. The
+          // session-only restoration checkpoint is an additional capability, so
+          // report it as a warning instead of masking the verified transfer.
+          sessionRestore = "unavailable";
         }
         interrupt.signal.throwIfAborted();
         return {
           ok: true,
           imported: result.synced,
           skipped: result.skipped,
+          sessionRestore,
+          browser: input.browser,
+          platform:
+            process.platform === "darwin"
+              ? "macos"
+              : process.platform === "win32"
+                ? "windows"
+                : "linux",
           warnings: (result.warnings ?? []).map(({ code, count }) => ({ code, count })),
         };
       } finally {
@@ -274,7 +319,22 @@ export class BrowserCookieImport {
         await close;
         await browser?.close();
       }
+    } catch (error) {
+      if (!this.cancellationRequested) throw error;
+      return {
+        ok: false,
+        code: "cancelled",
+        platform:
+          process.platform === "darwin"
+            ? "macos"
+            : process.platform === "win32"
+              ? "windows"
+              : "linux",
+      };
     } finally {
+      this.activeStop = undefined;
+      this.activeInterrupt = undefined;
+      this.cancellationRequested = false;
       try {
         profileRuntime?.dispose();
       } finally {
@@ -285,5 +345,12 @@ export class BrowserCookieImport {
         }
       }
     }
+  }
+
+  async cancel(): Promise<void> {
+    if (!this.busy) return;
+    this.cancellationRequested = true;
+    this.activeStop?.(true);
+    this.activeInterrupt?.abort(new Error("Cookie import cancelled."));
   }
 }

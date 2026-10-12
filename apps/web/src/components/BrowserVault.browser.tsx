@@ -1,5 +1,9 @@
 import "../index.css";
-import type { BrowserVaultMethods, BrowserVaultSnapshot } from "@synara/contracts";
+import type {
+  BrowserCookieImportResult,
+  BrowserVaultMethods,
+  BrowserVaultSnapshot,
+} from "@synara/contracts";
 import { ThreadId } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,8 +45,12 @@ beforeEach(() => {
       ok: true as const,
       imported: 0,
       skipped: 0,
+      sessionRestore: "available" as const,
+      browser: "chrome" as const,
+      platform: "macos" as const,
       warnings: [],
     })),
+    cancelCookieImport: vi.fn(async () => {}),
     importPasswords: vi.fn(async () => ({
       ok: true as const,
       imported: 0,
@@ -125,6 +133,9 @@ describe("browser saved logins", () => {
       ok: true,
       imported: 2,
       skipped: 1,
+      sessionRestore: "available",
+      browser: "chrome",
+      platform: "macos",
       warnings: [],
     });
 
@@ -159,6 +170,78 @@ describe("browser saved logins", () => {
       scope: "profile",
       confirmed: true,
     });
+  });
+
+  it("explains Windows App-Bound cookie gaps when Chrome or Edge decryption warnings occur", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Personal" }]);
+    vi.mocked(api.importCookies).mockResolvedValue({
+      ok: true,
+      imported: 0,
+      skipped: 0,
+      sessionRestore: "unavailable",
+      browser: "chrome",
+      platform: "windows",
+      warnings: [{ code: "decrypt_failed", count: 1 }],
+    });
+
+    await render(<BrowserImportPanel api={api} />);
+    await page.getByRole("checkbox", { name: /I authorize Synara and its agents/ }).click();
+    await page.getByRole("button", { name: "Import selected sessions" }).click();
+
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Synara does not use App-Bound injection");
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("sign in within Synara for those sites");
+  });
+
+  it("distinguishes source cookie limits from target-profile capacity", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Personal" }]);
+    vi.mocked(api.importCookies).mockResolvedValue({
+      ok: false,
+      code: "target_capacity",
+      platform: "linux",
+    });
+
+    await render(<BrowserImportPanel api={api} />);
+    await page.getByRole("checkbox", { name: /I authorize Synara and its agents/ }).click();
+    await page.getByRole("button", { name: "Import selected sessions" }).click();
+
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Existing target cookies were preserved");
+  });
+
+  it("cancels the active profile and does not start later selected profiles", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([
+      { id: "Default", name: "Personal" },
+      { id: "Profile 1", name: "Work" },
+    ]);
+    let settleImport!: (result: BrowserCookieImportResult) => void;
+    vi.mocked(api.importCookies).mockImplementationOnce(
+      () => new Promise((resolve) => (settleImport = resolve)),
+    );
+    vi.mocked(api.cancelCookieImport).mockImplementationOnce(async () => {
+      settleImport({ ok: false, code: "cancelled", platform: "linux" });
+    });
+
+    await render(<BrowserImportPanel api={api} />);
+    await page.getByRole("checkbox", { name: /I authorize Synara and its agents/ }).click();
+    await page.getByRole("button", { name: "Import selected sessions" }).click();
+    await page.getByRole("button", { name: "Cancel import" }).click();
+
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Import cancelled. Some cookies may already have been copied");
+    expect(api.cancelCookieImport).toHaveBeenCalledOnce();
+    expect(api.importCookies).toHaveBeenCalledOnce();
   });
 
   it("preselects an installed profile and requires explicit password import consent", async () => {
@@ -206,6 +289,48 @@ describe("browser saved logins", () => {
       confirmed: true,
     });
   });
+
+  it("shows when no password-import profiles are available on macOS", async () => {
+    const api = harness.api!;
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([]);
+
+    await render(<BrowserPasswordImport api={api} />);
+
+    await expect
+      .element(
+        page.getByText("No installed Chromium browser profiles are available for password import."),
+      )
+      .toBeVisible();
+  });
+
+  it.each(["Linux x86_64", "Win32"])(
+    "explains saved-password import is unsupported on %s without offering vault setup",
+    async (platformValue) => {
+      const api = harness.api!;
+      vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([]);
+      state = {
+        ...state,
+        protection: { configured: false, locked: true, osProtected: false },
+      };
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue(platformValue);
+
+      try {
+        await render(<BrowserPasswordImport api={api} />);
+        await expect
+          .element(
+            page.getByText("Saved-password import is not supported on Linux or Windows yet."),
+          )
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: /Set up Saved Logins|Unlock Saved Logins/ }))
+          .not.toBeInTheDocument();
+        expect(api.snapshot).not.toHaveBeenCalled();
+        expect(api.inventoryChromiumProfiles).not.toHaveBeenCalled();
+      } finally {
+        platform.mockRestore();
+      }
+    },
+  );
 
   it("sets up a locked Saved Logins vault before allowing password import", async () => {
     const api = harness.api!;
@@ -410,29 +535,48 @@ describe("browser saved logins", () => {
   it.each([
     [{ code: "reader_failed", stage: "parse" }, "cookie-format failure"],
     [
-      { code: "persistence_failed", imported: 3, skipped: 2 },
-      "3 cookies were imported; 2 skipped. Secure storage could not save these sessions",
+      { sessionRestore: "unavailable", imported: 3, skipped: 2 },
+      "3 cookies imported. 2 skipped. Secure restoration of session-only cookies is unavailable",
     ],
-  ] as const)("distinguishes reader stages and persistence failure", async (failure, message) => {
-    const api = harness.api!;
-    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "safari", name: "Safari" }]);
-    vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "default", name: "default" }]);
-    vi.mocked(api.importCookies).mockResolvedValue({ ok: false, platform: "macos", ...failure });
-    await render(
-      <BrowserCookieImport
-        api={api}
-        destination={{
-          threadId: ThreadId.makeUnsafe("cookie-test"),
-          tabId: "tab",
-          origin: "https://example.test",
-        }}
-      />,
-    );
-    await page.getByRole("button", { name: "Import browser cookies" }).click();
-    await page.getByRole("button", { name: "Import for this site" }).click();
-    await expect.element(page.getByRole("status")).toHaveTextContent(message);
-    await expect.element(page.getByRole("status")).not.toHaveTextContent("Windows");
-  });
+  ] as const)(
+    "distinguishes reader errors and session restoration warnings",
+    async (failure, message) => {
+      const api = harness.api!;
+      vi.mocked(api.cookieSources).mockResolvedValue([{ id: "safari", name: "Safari" }]);
+      vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "default", name: "default" }]);
+      const result =
+        "sessionRestore" in failure
+          ? ({
+              ok: true,
+              imported: failure.imported,
+              skipped: failure.skipped,
+              sessionRestore: failure.sessionRestore,
+              browser: "safari",
+              platform: "macos",
+              warnings: [],
+            } satisfies BrowserCookieImportResult)
+          : ({
+              ok: false,
+              platform: "macos",
+              ...failure,
+            } satisfies BrowserCookieImportResult);
+      vi.mocked(api.importCookies).mockResolvedValue(result);
+      await render(
+        <BrowserCookieImport
+          api={api}
+          destination={{
+            threadId: ThreadId.makeUnsafe("cookie-test"),
+            tabId: "tab",
+            origin: "https://example.test",
+          }}
+        />,
+      );
+      await page.getByRole("button", { name: "Import browser cookies" }).click();
+      await page.getByRole("button", { name: "Import for this site" }).click();
+      await expect.element(page.getByRole("status")).toHaveTextContent(message);
+      await expect.element(page.getByRole("status")).not.toHaveTextContent("Windows");
+    },
+  );
   it.each(["helium", "aside", "arc", "dia"] as const)(
     "imports %s through the existing picker and renews whole-profile consent",
     async (browser) => {

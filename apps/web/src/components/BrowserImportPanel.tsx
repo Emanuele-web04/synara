@@ -4,6 +4,9 @@ import { readNativeApi } from "~/nativeApi";
 import { BrowserPasswordImport } from "./BrowserPasswordImport";
 import { BrowserSessionImport } from "./BrowserSessionImport";
 
+export const BROWSER_IMPORT_DESCRIPTION =
+  "Review installed browser profiles and choose what to import. Saved-password import is currently supported only on macOS.";
+
 export function BrowserImportPanel({
   api,
   onBusyChange,
@@ -31,8 +34,7 @@ export function BrowserImportPanel({
       <header className="space-y-1">
         <h2 className="text-ui-lg font-semibold">Import from browsers</h2>
         <p className="text-ui text-muted-foreground">
-          Bring signed-in sessions and saved passwords into Synara. Nothing is imported until you
-          confirm each type.
+          {BROWSER_IMPORT_DESCRIPTION} Nothing is imported until you confirm each type.
         </p>
       </header>
       <BrowserSessionImport api={browserApi} onBusyChange={setSessionsBusy} />

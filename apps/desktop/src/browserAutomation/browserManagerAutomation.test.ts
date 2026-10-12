@@ -128,6 +128,34 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
+  it("destroys a profile-import target immediately when setup is cancelled", async () => {
+    const contents = new FakeWebContents(813);
+    let finishLoad!: () => void;
+    let destroyed = false;
+    const window = Object.assign(new EventEmitter(), {
+      webContents: contents,
+      isDestroyed: vi.fn(() => destroyed),
+      loadURL: vi.fn(() => new Promise<void>((resolve) => (finishLoad = resolve))),
+      destroy: vi.fn(() => {
+        destroyed = true;
+      }),
+    });
+    browserWindowConstructor.mockReturnValueOnce(window);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({ isDestroyed: vi.fn(() => false) } as never);
+    const abort = new AbortController();
+    const pending = manager.createProfileCookieImportRuntime(abort.signal);
+
+    await vi.waitFor(() => expect(window.loadURL).toHaveBeenCalledOnce());
+    abort.abort(new Error("cancelled"));
+
+    expect(window.destroy).toHaveBeenCalledOnce();
+    finishLoad();
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(window.destroy).toHaveBeenCalledOnce();
+    manager.dispose();
+  });
+
   it("destroys profile-import targets when the owning app window closes", async () => {
     const window = Object.assign(new EventEmitter(), {
       webContents: new FakeWebContents(812),

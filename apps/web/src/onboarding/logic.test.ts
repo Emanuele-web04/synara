@@ -79,6 +79,23 @@ describe("resolveOnboardingGate", () => {
     // A local marker covers a completion whose server write failed.
     expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: COMPLETED_AT })).toBe("hidden");
   });
+
+  it("does not wait for project hydration after a scoped completion marker", () => {
+    expect(
+      resolveOnboardingGate({
+        ...GATE_BASE,
+        threadsHydrated: false,
+        serverCompletedAt: COMPLETED_AT,
+      }),
+    ).toBe("hidden");
+    expect(
+      resolveOnboardingGate({
+        ...GATE_BASE,
+        threadsHydrated: false,
+        localCompletedAt: COMPLETED_AT,
+      }),
+    ).toBe("hidden");
+  });
 });
 
 describe("resolveLocalOnboardingCompletion", () => {

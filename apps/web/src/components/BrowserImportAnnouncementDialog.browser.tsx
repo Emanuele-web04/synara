@@ -68,6 +68,13 @@ async function show() {
 
 it("routes existing users to the shared General settings panel and remembers the prompt", async () => {
   await show();
+  await expect
+    .element(
+      page.getByText(
+        "Review installed browser profiles and choose what to import. Saved-password import is currently supported only on macOS. You choose what Synara imports.",
+      ),
+    )
+    .toBeVisible();
   await page.getByRole("button", { name: "Review browser import" }).click();
 
   expect(harness.navigate).toHaveBeenCalledWith({
@@ -85,6 +92,40 @@ it("does not prompt when there are no browser profiles", async () => {
   await expect.poll(() => harness.api.cookieProfiles.mock.calls.length).toBe(1);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("retries the existing-user probe when profile discovery fails transiently", async () => {
+  harness.api.cookieProfiles
+    .mockRejectedValueOnce(new Error("synthetic profile probe failure"))
+    .mockResolvedValue([{ id: "Default", name: "Personal" }]);
+  await show();
+  await expect.poll(() => harness.api.cookieProfiles.mock.calls.length).toBe(2);
+  await expect.element(page.getByRole("button", { name: "Review browser import" })).toBeVisible();
+});
+
+it("does not retry a rejected profile probe after the announcement unmounts", async () => {
+  let rejectProbe!: (error: Error) => void;
+  harness.api.cookieSources.mockReturnValueOnce(
+    new Promise<Array<{ id: string; name: string }>>((_, reject) => {
+      rejectProbe = reject;
+    }),
+  );
+  const { screen } = await show();
+  await expect.poll(() => harness.api.cookieSources.mock.calls.length).toBe(1);
+  await screen.unmount();
+  rejectProbe(new Error("synthetic profile probe failure"));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(harness.api.cookieSources).toHaveBeenCalledTimes(1);
+});
+
+it("offers Settings review after browser-profile inspection keeps failing", async () => {
+  harness.api.cookieProfiles.mockRejectedValue(new Error("synthetic profile probe failure"));
+  await show();
+  await expect.poll(() => harness.api.cookieProfiles.mock.calls.length).toBe(3);
+  await expect
+    .element(page.getByText("Synara could not inspect browser profiles automatically."))
+    .toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Review browser import" })).toBeVisible();
 });
 
 it("keeps the prompt available when a provisional first-run tour auto-closes before the import step", async () => {

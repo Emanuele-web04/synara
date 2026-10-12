@@ -61,6 +61,8 @@ const input = {
   browser: "chrome",
   profile: "Default",
 } as const;
+const platform =
+  process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.sources.mockResolvedValue([
@@ -137,6 +139,27 @@ describe("human-only cookie import", () => {
     expect(mocks.inventory).not.toHaveBeenCalledWith("/synthetic-home");
   });
 
+  it("keeps native Linux Chromium sources available through the runtime gate", async () => {
+    mocks.sources.mockResolvedValue([
+      { id: "chrome", name: "Google Chrome" },
+      { id: "brave", name: "Brave" },
+      { id: "chromium", name: "Chromium" },
+      { id: "opera", name: "Opera" },
+      { id: "vivaldi", name: "Vivaldi" },
+      { id: "firefox", name: "Firefox" },
+    ]);
+
+    await expect(
+      new BrowserCookieImport("/home", {} as DesktopBrowserManager, async () => {}).sources(),
+    ).resolves.toEqual([
+      { id: "chrome", name: "Google Chrome" },
+      { id: "brave", name: "Brave" },
+      { id: "chromium", name: "Chromium" },
+      { id: "opera", name: "Opera" },
+      { id: "vivaldi", name: "Vivaldi" },
+    ]);
+  });
+
   it("imports only the selected visible site with app-bound injection disabled and returns counts", async () => {
     const { importer, contents } = fixture();
     expect(await importer.sources()).toEqual([{ id: "chrome", name: "Chrome" }]);
@@ -144,6 +167,9 @@ describe("human-only cookie import", () => {
       ok: true,
       imported: 2,
       skipped: 1,
+      sessionRestore: "available",
+      browser: "chrome",
+      platform,
       warnings: [{ code: "unsupported", count: 1 }],
     });
     expect(mocks.sync).toHaveBeenCalledWith({
@@ -304,19 +330,39 @@ describe("human-only cookie import", () => {
     expect(releaseHumanOperation).toHaveBeenCalledOnce();
   });
 
-  it("requires session restoration checkpointing before reporting import success", async () => {
+  it("reports verified cookie transfer when the optional session restoration checkpoint fails", async () => {
     const remember = vi.fn(async (_domains: readonly string[]) => {
       throw new Error("synthetic-checkpoint-failure");
     });
     const { importer, releaseHumanOperation } = fixture(remember);
     await expect(importer.import(input)).resolves.toMatchObject({
-      ok: false,
-      code: "persistence_failed",
+      ok: true,
+      sessionRestore: "unavailable",
       imported: 2,
       skipped: 1,
     });
     expect(remember).toHaveBeenCalledWith(["example.test"]);
     expect(releaseHumanOperation).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a profile import while it is waiting for browser agents", async () => {
+    let resume!: () => void;
+    const { importer, waitForAgents, disposeProfileRuntime, releaseHumanOperation } = fixture();
+    waitForAgents.mockImplementation(() => new Promise<void>((resolve) => (resume = resolve)));
+    const pending = importer.import({
+      browser: "chrome",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    await vi.waitFor(() => expect(waitForAgents).toHaveBeenCalledOnce());
+
+    await importer.cancel();
+    await expect(pending).resolves.toMatchObject({ ok: false, code: "cancelled", platform });
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(disposeProfileRuntime).toHaveBeenCalledOnce();
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
+    resume();
   });
 
   it("revokes the import connection on navigation and always cleans up after failure", async () => {
@@ -400,6 +446,9 @@ describe("human-only cookie import", () => {
       ok: true,
       imported: 2,
       skipped: 1,
+      sessionRestore: "available",
+      browser: "chrome",
+      platform,
       warnings: [{ code: "unsupported", count: 1 }],
     });
     expect(manager.createProfileCookieImportRuntime).toHaveBeenCalledTimes(1);
@@ -489,6 +538,11 @@ describe("human-only cookie import", () => {
     [{ cookieReaderCode: "source_extraction_failed" }, "reader_failed"],
     [{ cookieReaderCode: "timed_out" }, "timed_out"],
     [{ cookieReaderCode: "reader_unavailable" }, "reader_unavailable"],
+    [{ cookieReaderCode: "source_too_large" }, "source_too_large"],
+    [{ cookieSyncFailureCode: "redaction_capacity" }, "redaction_capacity"],
+    [{ cookieSyncFailureCode: "target_capacity" }, "target_capacity"],
+    [{ cookieSyncFailureCode: "target_eviction" }, "target_eviction"],
+    [{ cookieSyncFailureCode: "target_failed" }, "target_failed"],
     [{ cookieReaderCode: "no_selected_source" }, "source_missing"],
     [{}, "transfer_failed"],
   ])(

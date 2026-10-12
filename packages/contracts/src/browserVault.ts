@@ -45,6 +45,10 @@ export const BrowserCookieSource = Schema.Literals([
   "chrome",
   "safari",
   "edge",
+  "brave",
+  "chromium",
+  "opera",
+  "vivaldi",
   "helium",
   "aside",
   "arc",
@@ -142,21 +146,23 @@ export type BrowserCookieImportResult =
       ok: true;
       imported: number;
       skipped: number;
+      sessionRestore: "available" | "unavailable";
+      browser: typeof BrowserCookieSource.Type;
+      platform: "macos" | "windows" | "linux";
       warnings: Array<{ code: string; count: number }>;
     }
   | {
       ok: false;
-      code: "persistence_failed";
-      platform: "macos" | "windows" | "linux";
-      imported: number;
-      skipped: number;
-    }
-  | {
-      ok: false;
       code:
+        | "cancelled"
         | "permission_denied"
         | "reader_failed"
         | "reader_unavailable"
+        | "source_too_large"
+        | "redaction_capacity"
+        | "target_capacity"
+        | "target_eviction"
+        | "target_failed"
         | "timed_out"
         | "source_missing"
         | "transfer_failed";
@@ -177,6 +183,7 @@ export interface BrowserVaultMethods {
   cookieProfiles(browser: string): Promise<Array<{ id: string; name: string }>>;
   inventoryChromiumProfiles(): Promise<typeof BrowserInventoryList.Type>;
   importCookies(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult>;
+  cancelCookieImport(): Promise<void>;
   importPasswords(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult>;
   onChanged(listener: () => void): () => void;
 }
