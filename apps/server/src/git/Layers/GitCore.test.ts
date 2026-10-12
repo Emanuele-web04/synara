@@ -2,6 +2,7 @@
 // Purpose: Exercises GitCore repository operations, branch/worktree flows, and status summaries.
 // Layer: Server Git service tests
 // Depends on: Effect test layers plus real temporary Git repositories.
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -729,8 +730,30 @@ it.layer(TestLayer)("git integration", (it) => {
         const core = yield* GitCore;
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        yield* writeTextFile(path.join(tmp, "1:foo.txt"), "literal filename\n");
-        yield* git(tmp, ["add", "--", "1:foo.txt"]);
+        yield* writeTextFile(path.join(tmp, "fixture-content.txt"), "literal filename\n");
+        const object = yield* git(tmp, ["hash-object", "-w", "fixture-content.txt"]);
+        expect(object).toMatch(/^[a-f0-9]{40}$/);
+        // Import a valid stage-zero index entry: Windows rejects this drive-shaped
+        // working-tree path, but GitCore must still read an existing literal entry.
+        const name = Buffer.from("1:foo.txt", "utf8");
+        const header = Buffer.alloc(12);
+        header.write("DIRC", 0, "ascii");
+        header.writeUInt32BE(2, 4);
+        header.writeUInt32BE(1, 8);
+        const padding = 8 - ((62 + name.length) % 8);
+        const entry = Buffer.alloc(62 + name.length + padding);
+        entry.writeUInt32BE(0o100644, 24);
+        entry.writeUInt32BE(Buffer.byteLength("literal filename\n"), 36);
+        Buffer.from(object, "hex").copy(entry, 40);
+        entry.writeUInt16BE(name.length, 60);
+        name.copy(entry, 62);
+        const body = Buffer.concat([header, entry]);
+        yield* Effect.promise(() =>
+          fs.writeFile(
+            path.join(tmp, ".git", "index"),
+            Buffer.concat([body, createHash("sha1").update(body).digest()]),
+          ),
+        );
         expect(
           yield* core.readFileAtRev({
             cwd: tmp,
