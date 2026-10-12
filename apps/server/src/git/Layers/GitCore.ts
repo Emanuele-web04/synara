@@ -1742,8 +1742,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         // A clean porcelain result already determines the empty working-tree summary.
-        const numstatOutputs = yield* (hasWorkingTreeChanges
-          ? Effect.all(
+        const numstatOutputs: readonly [string, string] | null = hasWorkingTreeChanges
+          ? yield* Effect.all(
               [
                 runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
                   "diff",
@@ -1758,9 +1758,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 ]),
               ],
               { concurrency: "unbounded" },
-            )
-          : Effect.succeed(["", ""] as const)
-        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+            ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)))
+          : ["", ""];
         if (numstatOutputs === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
         }
