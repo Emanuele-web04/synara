@@ -332,7 +332,6 @@ export {
   ClockHour7Icon as ClockIcon,
   CollapseIcon as PanelCollapseIcon,
   DashboardCircleIcon as HubIcon,
-  DashboardCircleSolidIcon as HubActiveIcon,
   Download01Icon as UpdateDownloadIcon,
   ExpandIcon as PanelExpandIcon,
   Folder02Icon as FolderOpenIcon,

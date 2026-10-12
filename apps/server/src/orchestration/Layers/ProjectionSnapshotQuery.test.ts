@@ -35,6 +35,137 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("retains durable task state beyond the detail activity window", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("durable-task-state");
+      const now = "2026-10-11T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('durable-task-project', 'Tasks', '/tmp/durable-task-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${threadId}, 'durable-task-project', 'Tasks', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+      const activities = [
+        ["task-start", "task.started", { taskId: "task-1", taskType: "subagent" }],
+        ["task-background", "task.updated", { taskId: "task-1", isBackgrounded: true }],
+        ["task-patch", "task.updated", { taskId: "task-1", status: "running" }],
+        ["workflow-start", "task.started", { taskId: "workflow-1", taskType: "local_workflow" }],
+        [
+          "workflow-launch",
+          "task.updated",
+          { taskId: "workflow-1", workflowRunId: "run-1", workflowScriptPath: "/tmp/workflow.ts" },
+        ],
+        ["workflow-end", "task.completed", { taskId: "workflow-1", status: "completed" }],
+        [
+          "task-list",
+          "turn.tasks.updated",
+          { tasks: [{ task: "Unfinished", status: "inProgress" }] },
+        ],
+        [
+          "background-notice",
+          "runtime.warning",
+          { nativeEventType: "background_tasks_changed", data: { tasks: [{ task_id: "task-1" }] } },
+        ],
+        [
+          "z-sequence-background",
+          "task.updated",
+          { taskId: "sequence-task", isBackgrounded: true },
+        ],
+        ["a-sequence-completed", "task.completed", { taskId: "sequence-task" }],
+        [
+          "z-lifecycle-background",
+          "task.updated",
+          { taskId: "lifecycle-task", isBackgrounded: true },
+        ],
+        ["a-lifecycle-completed", "task.completed", { taskId: "lifecycle-task" }],
+      ] as const;
+      for (const [index, [id, kind, payload]] of activities.entries()) {
+        // Provider rows can share a timestamp, and imported rows can share a
+        // sequence too. Neither random event IDs nor arrival order determines
+        // whether a task is still running.
+        const sequence = id === "a-lifecycle-completed" ? index : index + 1;
+        const createdAt = new Date(Date.parse(now) + Math.min(index, 8) * 1000).toISOString();
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${id}, ${threadId}, 'info', ${kind}, 'Task state', ${JSON.stringify(payload)}, ${sequence}, ${createdAt})`;
+      }
+      yield* sql`WITH RECURSIVE filler(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM filler WHERE n < 2001
+      ) INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        SELECT 'task-filler-' || n, ${threadId}, 'tool', 'tool.completed', 'Work', '{}', n + 20, '2026-10-11T11:00:00.000Z' FROM filler`;
+      const detail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+      assert.deepEqual(
+        Object.fromEntries(
+          detail.thread.activities
+            .filter((activity) => !activity.id.startsWith("task-filler-"))
+            .map((activity) => [activity.id, activity.payload]),
+        ),
+        Object.fromEntries(activities.map(([id, , payload]) => [id, payload])),
+      );
+      assert.equal(
+        detail.thread.activities.filter((activity) => activity.kind === "tool.completed").length,
+        2000,
+      );
+
+      // New state replaces the old list/notice and ownership patch even when
+      // both are older than the history window; unrelated work is still capped.
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES
+          ('task-settled', ${threadId}, 'info', 'task.updated', 'Settled', '{"taskId":"task-1","isBackgrounded":false,"status":"completed"}', 9, '2026-10-11T10:01:00.000Z'),
+          ('empty-task-list', ${threadId}, 'info', 'turn.tasks.updated', 'No tasks', '{"tasks":[]}', 10, '2026-10-11T10:01:00.000Z'),
+          ('empty-background-notice', ${threadId}, 'info', 'runtime.warning', 'No background tasks', '{"nativeEventType":"background_tasks_changed","data":{"tasks":[]}}', 11, '2026-10-11T10:01:00.000Z')`;
+      const settled = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+      assert.isFalse(
+        settled.thread.activities.some((activity) =>
+          ["task-background", "task-patch", "task-list", "background-notice"].includes(activity.id),
+        ),
+      );
+      assert.deepEqual(
+        settled.thread.activities
+          .filter((activity) =>
+            ["task-settled", "empty-task-list", "empty-background-notice"].includes(activity.id),
+          )
+          .map((activity) => activity.payload),
+        [
+          { taskId: "task-1", isBackgrounded: false, status: "completed" },
+          { tasks: [] },
+          { nativeEventType: "background_tasks_changed", data: { tasks: [] } },
+        ],
+      );
+    }),
+  );
+
+  it.effect("recovers the stored fork cutoff from persisted rows on every continuation read", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-10T10:00:00.000Z";
+      const threadId = asThreadId("persisted-fork");
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('fork-project', 'Fork', '/tmp/fork-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, fork_source_thread_id, fork_source_message_id, created_at, updated_at)
+        VALUES (${threadId}, 'fork-project', 'Fork', '{"provider":"codex","model":"gpt-5"}', 'fork-source', 'selected-message', ${now}, ${now})`;
+      const detail = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+      const shell = Option.getOrThrow(yield* query.getThreadShellById(threadId));
+      const command = (yield* query.getCommandReadModel()).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      const snapshot = (yield* query.getSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      for (const thread of [detail, shell, command, snapshot]) {
+        assert.equal(thread.forkSourceThreadId, "fork-source");
+        assert.equal(thread.forkSourceMessageId, "selected-message");
+      }
+    }),
+  );
+
   it.effect("returns a multi-folder project's extra folders from every project read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -1459,6 +1590,136 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("links queued requests to their turns and labels the activity sequence source", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-turn-links");
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-turn-links', 'Turn links', '/tmp/project-turn-links',
+          '{"provider":"claudeAgent","model":"claude-haiku-5-5"}', '[]',
+          '2026-10-09T19:49:00.000Z', '2026-10-09T19:49:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-turn-links', 'project-turn-links', 'Turn links',
+          '{"provider":"claudeAgent","model":"claude-haiku-5-5"}', NULL, NULL, 'turn-2',
+          '2026-10-09T19:49:00.000Z', '2026-10-09T19:49:30.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, source,
+          sequence, created_at, updated_at
+        ) VALUES
+          ('request-1', 'thread-turn-links', NULL, 'user', 'first', 0, 'native', 1,
+            '2026-10-09T19:49:02.121Z', '2026-10-09T19:49:02.121Z'),
+          ('request-2', 'thread-turn-links', NULL, 'user', 'queued', 0, 'native', 2,
+            '2026-10-09T19:49:11.783Z', '2026-10-09T19:49:11.783Z'),
+          ('request-3', 'thread-turn-links', NULL, 'user', 'not started', 0, 'native', 3,
+            '2026-10-09T19:49:23.512Z', '2026-10-09T19:49:23.512Z'),
+          ('answer-1', 'thread-turn-links', 'turn-1', 'assistant', 'one', 0, 'native', 4,
+            '2026-10-09T19:49:16.419Z', '2026-10-09T19:49:16.534Z')
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id, assistant_message_id, state,
+          requested_at, started_at, completed_at, checkpoint_turn_count, checkpoint_ref,
+          checkpoint_status, checkpoint_files_json
+        ) VALUES
+          ('thread-turn-links', 'turn-1', 'request-1', 'answer-1', 'completed',
+            '2026-10-09T19:49:02.121Z', '2026-10-09T19:49:03.048Z', '2026-10-09T19:49:16.559Z',
+            1, 'refs/synara/checkpoints/turn-links/turn/1', 'ready', '[]'),
+          ('thread-turn-links', 'turn-2', 'request-2', NULL, 'interrupted',
+            '2026-10-09T19:49:11.783Z', '2026-10-09T19:49:16.839Z', '2026-10-09T19:49:26.006Z',
+            2, 'refs/synara/checkpoints/turn-links/turn/2', 'missing', '[]')
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        ) VALUES
+          ('activity-provider', 'thread-turn-links', 'turn-1', 'tool', 'tool.completed',
+            'Tool completed', '{}', 893, '2026-10-09T19:49:10.000Z'),
+          ('activity-server', 'thread-turn-links', 'turn-1', 'info', 'checkpoint.captured',
+            'Checkpoint captured', '{}', 929, '2026-10-09T19:49:16.559Z')
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (
+          sequence, event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id, actor_kind,
+          payload_json, metadata_json
+        ) VALUES (
+          929, 'event-server-activity', 'thread', 'thread-turn-links', 1,
+          'thread.activity-appended', '2026-10-09T19:49:16.559Z', NULL, NULL, NULL, 'server',
+          '{"threadId":"thread-turn-links","activity":{"id":"activity-server"}}', '{}'
+        )
+      `;
+
+      // Server commands keep the stored rows; only the client snapshot links
+      // each request to the turn it started.
+      const commandDetail = yield* snapshotQuery.getThreadDetailById(threadId);
+      assert.deepStrictEqual(
+        Option.isSome(commandDetail)
+          ? commandDetail.value.messages.map((message) => message.turnId)
+          : [],
+        [null, null, null, asTurnId("turn-1")],
+      );
+
+      const snapshot = yield* snapshotQuery.getThreadDetailSnapshotById(threadId);
+      assert.isTrue(Option.isSome(snapshot));
+      if (Option.isNone(snapshot)) return;
+      const detail = Option.some(snapshot.value.thread);
+      if (Option.isNone(detail)) return;
+
+      assert.deepStrictEqual(
+        detail.value.messages.map((message) => [message.id, message.turnId]),
+        [
+          [asMessageId("request-1"), asTurnId("turn-1")],
+          [asMessageId("request-2"), asTurnId("turn-2")],
+          [asMessageId("request-3"), null],
+          [asMessageId("answer-1"), asTurnId("turn-1")],
+        ],
+      );
+      assert.deepStrictEqual(
+        detail.value.checkpoints.map((checkpoint) => [
+          checkpoint.turnId,
+          checkpoint.startedAt,
+          checkpoint.completedAt,
+        ]),
+        [
+          [asTurnId("turn-1"), "2026-10-09T19:49:03.048Z", "2026-10-09T19:49:16.559Z"],
+          [asTurnId("turn-2"), "2026-10-09T19:49:16.839Z", "2026-10-09T19:49:26.006Z"],
+        ],
+      );
+      assert.deepStrictEqual(
+        detail.value.activities.map((activity) => [
+          activity.id,
+          activity.sequence,
+          activity.sequenceSource,
+        ]),
+        [
+          [asEventId("activity-provider"), 893, undefined],
+          [asEventId("activity-server"), 929, "orchestration"],
+        ],
+      );
+    }),
+  );
+
   it.effect("uses a settlement row when mixed activity counters replay a stale approval", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -2598,6 +2859,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
 
+      yield* sql`DELETE FROM projection_thread_messages`;
       yield* sql`DELETE FROM projection_thread_sessions`;
       yield* sql`DELETE FROM projection_turns`;
       yield* sql`DELETE FROM projection_threads`;
@@ -2647,6 +2909,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-queued-oldest', 'project-runtime-candidates', 'Queued',
             '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, 'turn-queued',
             '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-running-without-turn', 'project-runtime-candidates', 'Running no turn',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z', NULL, NULL
+          ),
+          (
+            'thread-fresh-queued', 'project-runtime-candidates', 'Fresh queued',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T09:59:00.000Z', NULL, NULL
           )
       `;
       yield* sql`
@@ -2689,6 +2961,34 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (
             'thread-queued-oldest', 'starting', 'codex', NULL, NULL,
             'full-access', NULL, NULL, '2026-07-21T00:00:00.000Z'
+          ),
+          (
+            'thread-running-without-turn', 'running', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-20T00:00:00.000Z'
+          ),
+          (
+            'thread-fresh-queued', 'starting', 'codex', NULL, NULL,
+            'full-access', NULL, NULL, '2026-07-23T09:59:00.000Z'
+          )
+      `;
+      // The thread/session lifecycle timestamps are old, but the active turn's
+      // assistant message is still advancing. A newer concurrent turn already
+      // settled and has the higher message sequence, so reconciliation must
+      // scope activity to in-flight turns instead of picking the latest row.
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          thread_id, message_id, turn_id, role, text, is_streaming, source,
+          sequence, created_at, updated_at
+        ) VALUES
+          (
+            'thread-stale-running', 'message-still-streaming', 'turn-stale',
+            'assistant', '', 1, 'provider', 100,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T09:30:00.000Z'
+          ),
+          (
+            'thread-stale-running', 'message-newer-settled-turn', 'turn-newer-settled',
+            'assistant', 'done', 0, 'provider', 101,
+            '2026-07-23T08:00:00.000Z', '2026-07-23T08:30:00.000Z'
           )
       `;
       yield* sql`
@@ -2724,17 +3024,33 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       });
 
       // Candidacy covers every thread whose projection still claims an active
-      // turn past the staleness cutoff, including threads whose runtime binding
-      // row is already gone (`thread-unbound-oldest`) and archived threads
-      // (`thread-archived-running`) - archiving does not settle a live turn.
-      // Excluded: `thread-fresh-running` (updated after the cutoff),
-      // `thread-settled` (no active turn), and `thread-queued-oldest` (a pending
-      // turn with no active turn id on either the session or the runtime row).
+      // lifecycle past the staleness cutoff, including starting/running sessions
+      // with no turn id, threads whose runtime binding row is already gone, and
+      // archived threads (archiving does not settle a live turn). Fresh running
+      // and starting sessions remain excluded by the combined timestamp guard,
+      // as does a long-running turn whose assistant message is still advancing.
       assert.deepEqual(candidates, [
+        ThreadId.makeUnsafe("thread-running-without-turn"),
+        ThreadId.makeUnsafe("thread-queued-oldest"),
         ThreadId.makeUnsafe("thread-unbound-oldest"),
         ThreadId.makeUnsafe("thread-archived-running"),
-        ThreadId.makeUnsafe("thread-stale-running"),
       ]);
+
+      const storedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.makeUnsafe("thread-stale-running"),
+      );
+      assert.equal(storedShell._tag, "Some");
+      if (storedShell._tag === "Some") {
+        assert.equal(storedShell.value.updatedAt, "2026-07-23T00:00:00.000Z");
+      }
+      const reconciliationShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.makeUnsafe("thread-stale-running"),
+        { includeLatestMessageActivity: true },
+      );
+      assert.equal(reconciliationShell._tag, "Some");
+      if (reconciliationShell._tag === "Some") {
+        assert.equal(reconciliationShell.value.updatedAt, "2026-07-23T09:30:00.000Z");
+      }
 
       // Oldest-first ordering, so a bounded sweep drains the longest-stuck
       // threads first.
@@ -2742,7 +3058,55 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         updatedBefore: "2026-07-23T09:00:00.000Z",
         limit: 1,
       });
-      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-unbound-oldest")]);
+      assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-running-without-turn")]);
+
+      // A binding can own the turn before the session projection acquires it.
+      // Both reconciliation reads must still observe that turn's message clock.
+      yield* sql`
+        UPDATE projection_thread_sessions
+        SET active_turn_id = NULL, status = 'starting'
+        WHERE thread_id = 'thread-stale-running'
+      `;
+      yield* sql`
+        UPDATE provider_session_runtime
+        SET runtime_payload_json = '{"activeTurnId":"turn-stale"}'
+        WHERE thread_id = 'thread-stale-running'
+      `;
+      const bindingOnlyThreadId = ThreadId.makeUnsafe("thread-stale-running");
+      const bindingOnlyCandidates = yield* snapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: "2026-07-23T09:00:00.000Z",
+        limit: 10,
+      });
+      assert.equal(bindingOnlyCandidates.includes(bindingOnlyThreadId), false);
+      const activityBatch = yield* snapshotQuery.getThreadShellsByIds(
+        [bindingOnlyThreadId, bindingOnlyThreadId, ThreadId.makeUnsafe("missing-runtime-thread")],
+        { includeLatestMessageActivity: true },
+      );
+      assert.equal(activityBatch.length, 1);
+      assert.equal(activityBatch[0]?.updatedAt, "2026-07-23T09:30:00.000Z");
+      const storedBatch = yield* snapshotQuery.getThreadShellsByIds([bindingOnlyThreadId]);
+      assert.equal(storedBatch[0]?.updatedAt, "2026-07-23T00:00:00.000Z");
+
+      // Unrelated, already-settled output must not postpone recovery of the
+      // bound turn. Its later timestamp and sequence do not establish liveness.
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET updated_at = '2026-07-23T10:30:00.000Z'
+        WHERE thread_id = 'thread-stale-running'
+          AND message_id = 'message-newer-settled-turn'
+      `;
+      const staleBoundTurnCandidates = yield* snapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: "2026-07-23T10:00:00.000Z",
+        limit: 10,
+      });
+      assert.equal(staleBoundTurnCandidates.includes(bindingOnlyThreadId), true);
+      const boundTurnActivity = yield* snapshotQuery.getThreadShellById(bindingOnlyThreadId, {
+        includeLatestMessageActivity: true,
+      });
+      assert.equal(boundTurnActivity._tag, "Some");
+      if (boundTurnActivity._tag === "Some") {
+        assert.equal(boundTurnActivity.value.updatedAt, "2026-07-23T09:30:00.000Z");
+      }
     }),
   );
 

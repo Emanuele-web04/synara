@@ -7,6 +7,7 @@ import {
   deriveAppliedContextWindowSelection,
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
+  deriveObservedClaudeContextBudget,
   deriveLatestContextWindowState,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowTokens,
@@ -344,4 +345,136 @@ describe("composer context budget label", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("observed Claude context budget", () => {
+  const model = "claude-haiku-5-5";
+  const cache = (observedModel: string) => ({
+    model: observedModel,
+    observedAt: "2026-10-09T21:29:36.000Z",
+    state: "unknown" as const,
+    source: "request-usage" as const,
+  });
+  // Recorded from a live Claude Haiku 5.5 turn: provisional catalog budgets, then the
+  // end-of-turn correction, then the next turn's provisional budget again.
+  const turnActivities = [
+    makeActivity("configured", "context-window.configured", { cleared: true }),
+    makeActivity("u1", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 200_000,
+      claudeCache: cache(model),
+    }),
+    makeActivity("u2", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 1_000_000,
+      claudeCache: cache(model),
+    }),
+    makeActivity("u3", "context-window.updated", {
+      usedTokens: 30115,
+      maxTokens: 200_000,
+      claudeCache: cache(model),
+    }),
+    // Task usage arrives without a cache observation.
+    makeActivity("task", "context-window.updated", { usedTokens: 4000, maxTokens: 200_000 }),
+  ];
+
+  it("keeps the largest budget reported for the model, so the label does not flip", () => {
+    expect(deriveObservedClaudeContextBudget(turnActivities)).toEqual({
+      model,
+      maxTokens: 1_000_000,
+    });
+    const status = deriveContextWindowSelectionStatus({
+      activeSnapshot: deriveLatestContextWindowState(turnActivities).snapshot,
+      appliedValue: "auto",
+      selectedValue: "auto",
+    });
+    const labels = [];
+    for (let count = 2; count <= turnActivities.length; count += 1) {
+      const activities = turnActivities.slice(0, count);
+      labels.push(
+        deriveComposerContextWindowLabel({
+          provider: "claudeAgent",
+          model,
+          snapshot: deriveLatestContextWindowState(activities).snapshot,
+          status,
+          observedBudget: deriveObservedClaudeContextBudget(activities),
+        }),
+      );
+    }
+    expect(labels).toEqual(["(200k)", "(1M)", "(1M)", "(1M)"]);
+  });
+
+  it("holds across session restarts and compaction under the same configuration", () => {
+    // Recorded: a restarted session reconfigures Auto again, reports cache-only usage,
+    // then the provisional 200k before its 1M correction.
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("compacted", "context-compaction", { state: "compacted" }),
+        makeActivity("restart", "context-window.configured", { cleared: true }),
+        makeActivity("cache-only", "context-window.updated", { claudeCache: cache(model) }),
+        makeActivity("u4", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 1_000_000 });
+  });
+
+  it("starts over after a completed account handoff even when the context configuration is unchanged", () => {
+    const handoff = makeActivity("handoff", "provider.handoff", {});
+    expect(deriveObservedClaudeContextBudget([...turnActivities, handoff])).toBeNull();
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("failed-handoff", "provider.handoff.failed", {}),
+      ]),
+    ).toEqual({ model, maxTokens: 1_000_000 });
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        handoff,
+        makeActivity("new-account", "context-window.configured", { cleared: true }),
+        makeActivity("new-usage", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 200_000 });
+  });
+
+  it("starts over when the configured context window changes", () => {
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("reconfigured", "context-window.configured", { maxTokens: 200_000 }),
+      ]),
+    ).toBeNull();
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("reconfigured", "context-window.configured", { maxTokens: 200_000 }),
+        makeActivity("u5", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 167_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 167_000 });
+  });
+
+  it("follows the newest observed model", () => {
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("other", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache("claude-sonnet-5"),
+        }),
+      ]),
+    ).toEqual({ model: "claude-sonnet-5", maxTokens: 200_000 });
+  });
 });

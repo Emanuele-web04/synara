@@ -308,6 +308,7 @@ export function makeModelSelection(
       return {
         provider,
         model,
+        ...(instance ? { instanceId: instance } : {}),
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "omp" }>["options"] }
           : {}),
@@ -831,6 +832,27 @@ export function deriveEffectiveComposerModelState(input: {
     input.selectedProvider,
     input.selectedProviderInstanceId,
   );
+  // OMP selections are explicit, potentially opaque selectors, not catalog
+  // rankings. Keep the requested model ahead of older selections and defaults,
+  // including obsolete picker-only role keys: the picker explains the required
+  // selection, and the OMP send boundary rejects them rather than substituting.
+  if (input.selectedProvider === "omp") {
+    const requestedSelection =
+      (selectionMatchesSelectedInstance(activeSelection) ? activeSelection : null) ??
+      (selectionMatchesSelectedInstance(input.threadModelSelection)
+        ? input.threadModelSelection
+        : null) ??
+      (selectionMatchesSelectedInstance(input.projectModelSelection)
+        ? input.projectModelSelection
+        : null);
+    if (requestedSelection) {
+      return {
+        selectedModel:
+          normalizeModelSlug(requestedSelection.model, "omp") ?? requestedSelection.model,
+        modelOptions: deriveEffectiveComposerModelOptions(input),
+      };
+    }
+  }
   const selectedDraftModel = activeSelection?.model
     ? resolveAppModelSelection(
         input.selectedProvider,
