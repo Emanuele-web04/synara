@@ -4145,14 +4145,16 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* git(remote, ["init", "--bare"]);
         yield* git(tmp, ["remote", "add", "origin", remote]);
-        yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "feature/core-push" });
-        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "feature/core-push" });
+        // Close the owned background-refresh scope before either repository directory.
+        const realGitCore = yield* GitCore;
+        const core = yield* makeIsolatedGitCore((input) => realGitCore.execute(input));
+        yield* core.createBranch({ cwd: tmp, branch: "feature/core-push" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/core-push" });
 
         const contents = `${"large change ".repeat(8)}\n`.repeat(12_000);
         expect(Buffer.byteLength(contents)).toBeGreaterThan(1_000_000);
         yield* writeTextFile(path.join(tmp, "feature.txt"), contents);
         const expectedBlob = yield* git(tmp, ["hash-object", "feature.txt"]);
-        const core = yield* GitCore;
         const context = yield* core.prepareCommitContext(tmp);
         expect(context).not.toBeNull();
         expect(context!.stagedSummary).toContain("feature.txt");

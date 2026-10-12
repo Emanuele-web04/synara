@@ -1601,7 +1601,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return branchLastCommit;
       });
 
-    const readStatusDetails = (cwd: string, refreshUpstream: boolean) =>
+    const readStatusDetails = (
+      cwd: string,
+      options: { refreshUpstream: boolean; includeRepositoryMetadata: boolean },
+    ) =>
       Effect.gen(function* () {
         const operation = "GitCore.statusDetails.isInsideWorkTree";
         const args = ["rev-parse", "--is-inside-work-tree"] as const;
@@ -1634,7 +1637,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return NON_REPOSITORY_STATUS_DETAILS;
         }
 
-        if (refreshUpstream) {
+        if (options.refreshUpstream) {
           yield* scheduleStatusUpstreamRefresh(cwd);
         }
 
@@ -1674,7 +1677,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           );
         }
 
-        const configuredPrBaseBranch = branch
+        const configuredPrBaseBranch = options.includeRepositoryMetadata && branch
           ? yield* runGitStdout(
               "GitCore.statusDetails.configuredPrBaseBranch",
               cwd,
@@ -1699,9 +1702,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         // helpers `listGitBranches` uses so the two stay consistent; each lookup degrades to a
         // safe default on failure so it never breaks the status read. `resolvePrimaryRemoteName`
         // returns "origin" only when that remote exists, so it doubles as the origin check.
-        const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
-          Effect.catch(() => Effect.succeed(null)),
-        );
+        const primaryRemoteName = options.includeRepositoryMetadata
+          ? yield* resolvePrimaryRemoteName(cwd).pipe(
+              Effect.catch(() => Effect.succeed(null)),
+            )
+          : null;
         const defaultBranchName =
           primaryRemoteName === null
             ? null
@@ -1736,21 +1741,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           };
         }
 
-        const numstatOutputs = yield* Effect.all(
-          [
-            runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
-              "diff",
-              "--numstat",
-              "-z",
-            ]),
-            runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
-              "diff",
-              "--cached",
-              "--numstat",
-              "-z",
-            ]),
-          ],
-          { concurrency: "unbounded" },
+        // A clean porcelain result already determines the empty working-tree summary.
+        const numstatOutputs = yield* (hasWorkingTreeChanges
+          ? Effect.all(
+              [
+                runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
+                  "diff",
+                  "--numstat",
+                  "-z",
+                ]),
+                runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
+                  "diff",
+                  "--cached",
+                  "--numstat",
+                  "-z",
+                ]),
+              ],
+              { concurrency: "unbounded" },
+            )
+          : Effect.succeed(["", ""] as const)
         ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
         if (numstatOutputs === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
@@ -1806,7 +1815,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const statusDetails: GitCoreShape["statusDetails"] = (cwd) => readStatusDetails(cwd, true);
+    const statusDetails: GitCoreShape["statusDetails"] = (cwd) =>
+      readStatusDetails(cwd, { refreshUpstream: true, includeRepositoryMetadata: true });
 
     const readActionStatus: GitCoreShape["readActionStatus"] = (cwd) =>
       Effect.gen(function* () {
@@ -1891,7 +1901,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const status: GitCoreShape["status"] = (input) =>
       Effect.gen(function* () {
-        const details = yield* readStatusDetails(input.cwd, false);
+        const details = yield* readStatusDetails(input.cwd, {
+          refreshUpstream: false,
+          includeRepositoryMetadata: false,
+        });
         if (details.hasUpstream) {
           yield* scheduleStatusUpstreamRefresh(input.cwd);
         }
