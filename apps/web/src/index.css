@@ -155,8 +155,9 @@
 
   /* Seam token, side-agnostic so the value lives in ONE place. The route separates from
      the sidebar with a flat 1px divider only — no depth shadow is cast onto the sidebar.
-       • --seam-line : color of the straight vertical divider; the content-seam
-                       SidebarRail intensifies it on hover (rule below). */
+       • --seam-line : color of the straight vertical divider. The rail layout draws the
+                       seam with the block's hairline instead; its hover state sits next to
+                       that rule (`.chat-content-card::after`, below). */
   .chat-content-card {
     /* The outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the route's outer
@@ -190,10 +191,6 @@
     box-shadow: inset 0.5px 0 0 var(--seam-line);
   }
 
-  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
-    --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
-  }
-
   /* Sidebar collapsed (offcanvas): drop the divider because the content fills the
      window edge-to-edge. Use the direct-child combinator so the nested right dock
      cannot drive the main content seam. */
@@ -220,6 +217,7 @@
        overlap on the rounded corners and draw them thicker than the straight edges. */
     --app-rail-inset-border-width: 0.5px;
     --app-rail-inset-border: color-mix(in srgb, black 10%, transparent);
+    --app-rail-inset-border-hover: color-mix(in srgb, black 20%, transparent);
     --app-rail-inset-radius: calc(var(--radius) * 1.3);
     --app-rail-inset-gap: 3px;
   }
@@ -228,6 +226,7 @@
     --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
     --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
     --app-rail-inset-border: color-mix(in srgb, white 9%, transparent);
+    --app-rail-inset-border-hover: color-mix(in srgb, white 18%, transparent);
   }
 
   /* The panel is the block's left end: border on its outer three sides only. */
@@ -3013,6 +3012,15 @@ diffs-container {
 [data-sidebar-layout="rail"] .chat-content-card::after {
   z-index: 30;
   border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+}
+
+/* Hovering the content-seam resize rail strengthens the seam slightly. Only while the panel is
+   open: collapsed, that rail is a toggle, not a resize handle. */
+[data-sidebar-layout="rail"]:has([data-placement="content-seam"]:hover):not(
+    :has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  )
+  .chat-content-card::after {
+  border-left-color: var(--app-rail-inset-border-hover);
 }
 
 /* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
