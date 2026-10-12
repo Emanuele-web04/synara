@@ -169,6 +169,8 @@ export const MarkAutomationRunStartedInput = Schema.Struct({
   threadCreateCommandId: Schema.NullOr(CommandId),
   turnStartCommandId: CommandId,
   startedAt: Schema.String,
+  /** Coordinator wakes resolve chat permissions at dispatch, after any queue wait. */
+  permissionSnapshot: Schema.optional(AutomationPermissionSnapshot),
 });
 export type MarkAutomationRunStartedInput = typeof MarkAutomationRunStartedInput.Type;
 
