@@ -223,12 +223,17 @@ import { registerThreadContextMenu, type ThreadContextMenuOptions } from "../lib
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { resolveComposerSlashRootBranch } from "../composerSlashCommands";
 import { dispatchThreadRename } from "../lib/threadRename";
+import {
+  setProjectTitleRefreshMode,
+  setThreadManualTitlePin,
+  setThreadTitleRefreshMode,
+} from "../lib/threadTitleRefresh";
+import { TitleRefreshModePicker } from "./TitleRefreshModePicker";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { useStableValue } from "~/hooks/useStableValue";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import {
   applyAutomationEvent,
-  automationAttentionCount,
   automationQueryKey,
   formatCadence,
   groupAutomationsByContinuedThread,
@@ -269,6 +274,7 @@ import {
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import {
+  type ActivityGroupMode,
   type ActivityScopeSelection,
   buildActivityViewModel,
   hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
@@ -408,6 +414,7 @@ import {
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
+  resolveAutomationCountBadge,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
@@ -442,14 +449,21 @@ import {
   DISCLOSURE_INNER_CLASS,
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
+import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
+  buildThreadHandoffContextMenuItems,
+  resolveContinueThreadHandoffTargets,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
   type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
+import {
+  getStopAgentProcessMenuItem,
+  stopIdleRuntimeSessionFromClient,
+} from "../lib/threadRuntimeStop";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -485,6 +499,7 @@ import {
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
 import { useThreadActionShortcuts } from "../hooks/useThreadActionShortcuts";
+import { useSettingsEscapeToHome } from "../hooks/useSettingsEscapeToHome";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
@@ -580,7 +595,7 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
   : null;
 
 type ProjectContextMenuId =
-  | "open-in-finder"
+  | "open-in-file-manager"
   | "open-in-kanban"
   | "copy-path"
   | "relocate"
@@ -1362,7 +1377,7 @@ export default function Sidebar() {
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
   const isOnInbox = pathname.startsWith("/inbox");
-  // Lightweight read of automations to drive the sidebar attention badge. Shares the
+  // Lightweight read of automations to drive the sidebar count badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
     queryKey: automationQueryKey,
@@ -1376,17 +1391,10 @@ export default function Sidebar() {
       );
     });
   }, [queryClient]);
-  const automationAttentionBadge = useMemo(() => {
-    const data = automationListQuery.data;
-    if (!data) return null;
-    const count = automationAttentionCount(data.runs);
-    return count > 0
-      ? {
-          text: String(count),
-          accessibleLabel: `${count} ${pluralize(count, "automation needs", "automations need")} attention`,
-        }
-      : null;
-  }, [automationListQuery.data]);
+  const automationCountBadge = useMemo(
+    () => resolveAutomationCountBadge(automationListQuery.data?.definitions.length),
+    [automationListQuery.data],
+  );
   // Subscribe to Tasks unless the connected server has refused it.
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
   useTodoEventSubscription(tasksSurfaceEnabled);
@@ -1564,7 +1572,13 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const {
+    activeProjectId: focusedProjectId,
+    focusedThreadId,
+    activeThread: focusedThread,
+    activeDraftThread: focusedDraftThread,
+  } = useFocusedChatContext();
+  const focusedWorkspaceThread = focusedThread ?? focusedDraftThread;
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   // Shared with the composer project picker, which opens this same dialog.
   const createProjectDialogOpen = useCreateProjectDialogStore((state) => state.isOpen);
@@ -1647,6 +1661,9 @@ export default function Sidebar() {
   const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
     () => readSidebarUiState().activityScope,
   );
+  const [activityGroupMode, setActivityGroupMode] = useState<ActivityGroupMode>(
+    () => readSidebarUiState().activityGroupMode,
+  );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const [classicSnoozedVisibleThreadIds, setClassicSnoozedVisibleThreadIds] = useState<
     readonly ThreadId[]
@@ -1677,6 +1694,7 @@ export default function Sidebar() {
         setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
         setActivityScope(state.activityScope);
+        setActivityGroupMode(state.activityGroupMode);
       }),
     [],
   );
@@ -2820,24 +2838,29 @@ export default function Sidebar() {
   }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   const handlePrimaryNewThread = useCallback(() => {
-    if (primaryNewThreadTarget) {
-      prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
-      void handleNewThread(primaryNewThreadTarget.projectId);
+    const liveState = useStore.getState();
+    // Hydration can change between rendering this button and handling its click.
+    // Wait before warming models or treating an empty snapshot as no projects.
+    if (!liveState.threadsHydrated) {
+      return;
+    }
+    const liveTarget =
+      primaryNewThreadTarget &&
+      liveState.projects.some((project) => project.id === primaryNewThreadTarget.projectId)
+        ? primaryNewThreadTarget
+        : null;
+    if (liveTarget) {
+      prefetchModelsForProjectNewThread(liveTarget.projectId, { includeDroid: true });
+      void handleNewThread(liveTarget.projectId);
       return;
     }
 
-    // The projects snapshot can be temporarily empty during startup. Wait for hydration
-    // before treating a missing target as a genuine no-project state.
-    if (!threadsHydrated) {
-      return;
-    }
     handleStartAddProject();
   }, [
     handleNewThread,
     handleStartAddProject,
     prefetchModelsForProjectNewThread,
     primaryNewThreadTarget,
-    threadsHydrated,
   ]);
 
   const handleImportThread = useCallback(
@@ -3077,6 +3100,7 @@ export default function Sidebar() {
 
   const continueHandoffInThread = useCallback(
     async (thread: Thread, target: ThreadHandoffTarget) => {
+      if (!appSettings.enableSameThreadHandoffs) return;
       try {
         await continueThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
@@ -3090,7 +3114,7 @@ export default function Sidebar() {
         });
       }
     },
-    [continueThreadHandoff],
+    [appSettings.enableSameThreadHandoffs, continueThreadHandoff],
   );
 
   const forkThread = useCallback(
@@ -3302,37 +3326,23 @@ export default function Sidebar() {
             providerStatuses,
           })
         : [];
-      const continueHandoffTargets = handoffTargets.filter((target) =>
-        canContinueThreadHandoff({
-          sourceProvider: thread.modelSelection.provider,
-          targetProvider: target.provider,
-        }),
-      );
+      const continueHandoffTargets = resolveContinueThreadHandoffTargets({
+        enabled: appSettings.enableSameThreadHandoffs,
+        sourceProvider: thread.modelSelection.provider,
+        targets: handoffTargets,
+      });
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
       const continueHandoffTargetById = new Map(
         continueHandoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
       );
-      const handoffItems = contextMenuGroup(
-        { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
-        [
-          ...continueHandoffTargets.map((target) => ({
-            id: `handoff-here:${target.instanceId}`,
-            label: `${target.label} in this thread`,
-            standaloneLabel: `Handoff to ${target.label} in this thread`,
-            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-          })),
-          ...handoffTargets.map((target, index) => ({
-            id: `handoff:${target.instanceId}`,
-            label:
-              continueHandoffTargets.length > 0 ? `${target.label} in a new thread` : target.label,
-            standaloneLabel: `Handoff to ${target.label}`,
-            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-            ...(index === 0 && continueHandoffTargets.length > 0 ? { separatorBefore: true } : {}),
-          })),
-        ],
-      );
+      const handoffItems = buildThreadHandoffContextMenuItems({
+        enabled: appSettings.enableSameThreadHandoffs,
+        targets: handoffTargets,
+        continueTargets: continueHandoffTargets,
+        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+      });
       // Same action as `/fork`.
       const canFork = canForkThread({ thread, handoffAvailability });
       const forkItems = canFork
@@ -3400,6 +3410,7 @@ export default function Sidebar() {
             ],
           )
         : [];
+      const stopAgentProcessItem = getStopAgentProcessMenuItem(thread);
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
@@ -3454,6 +3465,7 @@ export default function Sidebar() {
             : []),
           ...handoffItems,
           ...forkItems,
+          ...(stopAgentProcessItem ? [stopAgentProcessItem] : []),
           ...contextMenuGroup(
             {
               id: "copy",
@@ -3517,6 +3529,28 @@ export default function Sidebar() {
       }
       if (clicked === "rename") {
         openRenameThreadDialog(threadId);
+        return;
+      }
+      if (clicked === "stop-agent-process") {
+        const currentThread = getThreadFromState(useStore.getState(), threadId);
+        if (!currentThread) return;
+        try {
+          await stopIdleRuntimeSessionFromClient(api.provider, currentThread);
+          toastManager.add({
+            type: "success",
+            title: "Agent session stopped",
+            description: "This thread can resume with its next message.",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to stop agent process",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while stopping the agent process.",
+          });
+        }
         return;
       }
       if (clicked === "toggle-pin") {
@@ -3822,10 +3856,12 @@ export default function Sidebar() {
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
         activityScope,
+        activityGroupMode,
       });
     },
     [
       activityScope,
+      activityGroupMode,
       activityViewEnabled,
       chatSectionExpanded,
       chatThreadListExtraPages,
@@ -4054,18 +4090,11 @@ export default function Sidebar() {
       const project = projectById.get(projectId);
       if (!project) return;
 
-      if (clicked === "open-in-finder") {
+      if (clicked === "open-in-file-manager") {
         try {
           await api.shell.showInFolder(project.cwd);
         } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to open in Finder",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An unknown error occurred opening the folder.",
-          });
+          showFileManagerErrorToast({ kind: "folder", error });
         }
         return;
       }
@@ -4338,14 +4367,14 @@ export default function Sidebar() {
         icon: ClockIcon,
         label: "Automations",
         active: isOnAutomations,
-        badge: automationAttentionBadge,
+        badge: automationCountBadge,
         onClick: () => {
           void navigate({ to: "/automations" });
         },
       },
     }),
     [
-      automationAttentionBadge,
+      automationCountBadge,
       handlePrimaryNewThread,
       inboxBadge,
       isOnAutomations,
@@ -4773,9 +4802,11 @@ export default function Sidebar() {
       lastThreadRoute,
       activityViewEnabled,
       activityScope,
+      activityGroupMode,
     });
   }, [
     activityScope,
+    activityGroupMode,
     activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
@@ -5163,7 +5194,7 @@ export default function Sidebar() {
           title={thread.title}
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
-          projectCwd={hoverMetadata.projectCwd}
+          projectId={hoverProject?.id ?? null}
           projectAppearance={hoverProject?.appearance ?? null}
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
@@ -5203,7 +5234,7 @@ export default function Sidebar() {
       >
         <ProjectHoverCardContent
           name={project.name}
-          cwd={project.cwd}
+          projectId={project.id}
           appearance={project.appearance ?? null}
           isPinned={pinnedProjectIdSet.has(project.id)}
           chatCount={chatCount}
@@ -5727,7 +5758,8 @@ export default function Sidebar() {
                 className={projectFolderIconClassName}
               >
                 <ProjectSidebarIcon
-                  cwd={project.cwd}
+                  projectId={project.id}
+                  presentation="favicon"
                   expanded={project.expanded}
                   appearance={project.appearance}
                 />
@@ -5839,7 +5871,8 @@ export default function Sidebar() {
         >
           <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
             <ProjectSidebarIcon
-              cwd={project.cwd}
+              projectId={project.id}
+              presentation="favicon"
               expanded={false}
               appearance={project.appearance}
             />
@@ -6751,6 +6784,8 @@ export default function Sidebar() {
     ...railAvailability,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
+  // Escape leaves Settings exactly as the rail's Home item does, even when Home is hidden.
+  useSettingsEscapeToHome(isOnSettings, () => railItemFor("home").onSelect());
   const searchPaletteNavigationActions: SidebarSearchAction[] = (
     ["inbox", "kanban", "studio", "automations"] as const
   )
@@ -6804,7 +6839,7 @@ export default function Sidebar() {
     return [
       {
         id: shortcut.key,
-        glyphs: railProjectGlyphs(project.cwd, project.appearance ?? null),
+        glyphs: railProjectGlyphs(project.id, project.appearance ?? null),
         label: resolveSidebarProjectRowLabel(project),
         badge: null,
         active: activeRailShortcutKey === shortcut.key,
@@ -7176,6 +7211,8 @@ export default function Sidebar() {
                         threadsHydrated={threadsHydrated}
                         scopeSelection={activityScope}
                         onScopeSelectionChange={setActivityScope}
+                        groupMode={activityGroupMode}
+                        onChangeGroupMode={setActivityGroupMode}
                         resolveThreadStatus={resolveThreadStatusForSidebar}
                         onOpenThread={activateThreadFromSidebarIntent}
                         onOpenThreadPullRequest={openThreadPullRequest}
@@ -7557,12 +7594,12 @@ export default function Sidebar() {
                 onClick={() =>
                   void handleProjectContextMenuAction(
                     projectContextMenuState.projectId,
-                    "open-in-finder",
+                    "open-in-file-manager",
                   )
                 }
               >
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
-                <span>Open in Finder</span>
+                <span>{resolveFileManagerActionLabel("folder")}</span>
               </MenuItem>
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
@@ -7907,6 +7944,16 @@ export default function Sidebar() {
         currentTitle={
           renameDialogThreadId ? (sidebarThreadSummaryById[renameDialogThreadId]?.title ?? "") : ""
         }
+        refreshMode={
+          renameDialogThreadId
+            ? (sidebarThreadSummaryById[renameDialogThreadId]?.titleRefreshMode ?? null)
+            : null
+        }
+        manualTitlePinned={
+          renameDialogThreadId
+            ? (sidebarThreadSummaryById[renameDialogThreadId]?.manualTitlePinned ?? false)
+            : false
+        }
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setRenameDialogThreadId(null);
         }}
@@ -7915,6 +7962,26 @@ export default function Sidebar() {
           const target = sidebarThreadSummaryById[renameDialogThreadId];
           if (!target) return;
           void commitRename(target.id, newTitle, target.title);
+        }}
+        onRefreshModeChange={(mode) => {
+          if (renameDialogThreadId === null) return;
+          void setThreadTitleRefreshMode(renameDialogThreadId, mode).catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Could not update title setting",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          });
+        }}
+        onPinChange={(pinned) => {
+          if (renameDialogThreadId === null) return;
+          void setThreadManualTitlePin(renameDialogThreadId, pinned).catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Could not update title pin",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          });
         }}
       />
 
@@ -7931,7 +7998,7 @@ export default function Sidebar() {
       {editProjectDialogProject ? (
         <EditProjectDialog
           open={editProjectDialog?.open ?? false}
-          cwd={editProjectDialogProject.cwd}
+          projectId={editProjectDialogProject.id}
           folderName={editProjectDialogProject.folderName}
           initialValue={{
             name: editProjectDialogProject.localName ?? "",
@@ -7941,6 +8008,25 @@ export default function Sidebar() {
             if (!nextOpen)
               setEditProjectDialog((current) => current && { ...current, open: false });
           }}
+          belowField={
+            <div className="border-t border-border/60 pt-3">
+              <TitleRefreshModePicker
+                value={editProjectDialogProject?.titleRefreshMode ?? null}
+                onChange={(mode) => {
+                  if (!editProjectDialogProject) return;
+                  void setProjectTitleRefreshMode(editProjectDialogProject.id, mode).catch(
+                    (error) => {
+                      toastManager.add({
+                        type: "error",
+                        title: "Could not update title setting",
+                        description: error instanceof Error ? error.message : "An error occurred.",
+                      });
+                    },
+                  );
+                }}
+              />
+            </div>
+          }
           onSave={(next) =>
             handleEditProjectSave(
               editProjectDialogProject.id,
@@ -8025,6 +8111,21 @@ export default function Sidebar() {
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
+          activeProjectCwd={
+            focusedProjectId
+              ? resolveThreadWorkspaceCwd({
+                  projectCwd: projectCwdById.get(focusedProjectId) ?? null,
+                  envMode: focusedWorkspaceThread?.envMode,
+                  worktreePath: focusedWorkspaceThread?.worktreePath,
+                  workingDirectory: focusedWorkspaceThread?.workingDirectory,
+                })
+              : null
+          }
+          activeThreadId={focusedThreadId}
+          onOpenFile={(relativePath) => {
+            if (!focusedThreadId) return;
+            openRightDockPane(focusedThreadId, { kind: "file", filePath: relativePath });
+          }}
           onOpenSettings={(section, options) => {
             void navigate({
               to: "/settings",
@@ -8083,6 +8184,9 @@ function SidebarSearchPaletteController(props: {
   onCreateThread: () => void;
   onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
   homeDir: string | null;
+  activeProjectCwd?: string | null | undefined;
+  activeThreadId?: string | null | undefined;
+  onOpenFile?: ((relativePath: string) => void) | undefined;
   onOpenSettings: (section?: SettingsSectionId, options?: { target?: string }) => void;
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
@@ -8163,6 +8267,9 @@ function SidebarSearchPaletteController(props: {
       onCreateThread={props.onCreateThread}
       onAddProjectPath={props.onAddProjectPath}
       homeDir={props.homeDir}
+      activeProjectCwd={props.activeProjectCwd}
+      activeThreadId={props.activeThreadId}
+      onOpenFile={props.onOpenFile}
       onOpenSettings={props.onOpenSettings}
       onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}

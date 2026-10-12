@@ -3,6 +3,7 @@
 // Layer: Route-level screen
 // Exports: PluginLibrary
 
+import { builtInProviderOrNull } from "~/lib/providerIdentity";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -377,8 +378,8 @@ export function PluginLibrary(props?: {
   const activeProject = focusedProject ?? firstProject ?? null;
 
   const preferredProvider =
-    activeThread?.modelSelection.provider ??
-    activeProject?.defaultModelSelection?.provider ??
+    builtInProviderOrNull(activeThread?.modelSelection.provider) ??
+    builtInProviderOrNull(activeProject?.defaultModelSelection?.provider) ??
     "codex";
 
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind>(preferredProvider);
@@ -404,6 +405,7 @@ export function PluginLibrary(props?: {
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
+  const clineCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cline"));
   const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const ompCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("omp"));
 
@@ -419,6 +421,10 @@ export function PluginLibrary(props?: {
     cursor: {
       plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
+    },
+    cline: {
+      plugins: supportsPluginDiscovery(clineCapabilitiesQuery.data),
+      skills: supportsSkillDiscovery(clineCapabilitiesQuery.data),
     },
     devin: {
       plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
@@ -447,6 +453,10 @@ export function PluginLibrary(props?: {
     omp: {
       plugins: supportsPluginDiscovery(ompCapabilitiesQuery.data),
       skills: supportsSkillDiscovery(ompCapabilitiesQuery.data),
+    },
+    external: {
+      plugins: false,
+      skills: false,
     },
   };
 

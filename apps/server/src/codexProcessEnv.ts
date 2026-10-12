@@ -11,6 +11,7 @@ import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 
 import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
+import { buildCodexAppServerArgs as buildConfiguredCodexAppServerArgs } from "@synara/shared/providerLaunchArgs";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
@@ -189,13 +190,16 @@ export function hydrateCodexProviderCredentialEnvironment(input: {
   return env;
 }
 
-export function buildCodexAppServerArgs(sourceHomePath: string): readonly string[] {
+export function buildCodexAppServerArgs(
+  sourceHomePath: string,
+  launchArgs?: string,
+): readonly string[] {
   const absoluteSourceHomePath = path.resolve(sourceHomePath);
   // These are global clap options in the minimum supported Codex 0.105.0 and
   // remain valid after the app-server subcommand. Keeping them last gives the
   // managed values precedence over every user and project config layer.
   return [
-    "app-server",
+    ...buildConfiguredCodexAppServerArgs(launchArgs),
     "--config",
     `sqlite_home=${JSON.stringify(absoluteSourceHomePath)}`,
     "--config",

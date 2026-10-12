@@ -13,7 +13,7 @@ import { defaultInstanceIdForProvider, deriveProviderInstances } from "./provide
 function defaultModelForProvider(provider: ProviderKind): string | undefined {
   // OMP resolves its model through role config, so a provider switch keeps the
   // current model rather than inventing a default.
-  if (provider === "omp") return undefined;
+  if (provider === "omp" || provider === "external") return undefined;
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
@@ -96,6 +96,7 @@ export function providerStartOptionsFromServerSettings(
         ? { shadowHomePath: selectedCodexAccount.shadowHomePath }
         : {}),
       ...(selectedCodexAccount ? { accountId: selectedCodexAccount.id } : {}),
+      ...(providers.codex.launchArgs.trim() ? { launchArgs: providers.codex.launchArgs } : {}),
     },
     claudeAgent: {
       ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
@@ -125,6 +126,9 @@ export function providerStartOptionsFromServerSettings(
     pi: {
       ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
       ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
+    },
+    cline: {
+      ...(providers.cline.binaryPath ? { binaryPath: providers.cline.binaryPath } : {}),
     },
     devin: {
       ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),

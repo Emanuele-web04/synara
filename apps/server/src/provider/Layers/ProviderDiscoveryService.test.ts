@@ -14,6 +14,7 @@ import type {
   ProviderKind,
   ProviderListAgentsResult,
   ProviderListCommandsResult,
+  ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsResult,
   ProviderListSkillsResult,
@@ -102,7 +103,7 @@ const makeRegistryLayer = (adapter: Partial<ProviderAdapterShape<ProviderAdapter
 const runListSkills = (input: {
   adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
   disabled?: string[];
-  provider: ProviderKind;
+  provider: Exclude<ProviderKind, "external">;
 }) => {
   const baseLayer = Layer.mergeAll(
     makeConfigLayer(),
@@ -147,7 +148,7 @@ const runListModels = (input: {
 const runDiscovery = <A>(input: {
   adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
   settings?: Partial<ServerSettings>;
-  effect: Effect.Effect<A, unknown, ProviderDiscoveryService>;
+  effect: Effect.Effect<A, unknown, ProviderDiscoveryService | ServerSettingsService>;
 }) => {
   const baseLayer = Layer.mergeAll(
     makeConfigLayer(),
@@ -238,6 +239,89 @@ describe("ProviderDiscoveryService.listSkills", () => {
 });
 
 describe("ProviderDiscoveryService provider instances", () => {
+  it("overwrites caller custom model membership for default, named, and empty Claude instances", async () => {
+    const captured: Array<Pick<ProviderListModelsInput, "instanceId" | "customModels">> = [];
+    await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            captured.push(input);
+            return { models: [], source: "stub", cached: false } satisfies ProviderListModelsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          claudeAgent: { driver: "claudeAgent", config: { customModels: ["default-proxy"] } },
+          claude_work: { driver: "claudeAgent", config: { customModels: ["work-proxy"] } },
+          claude_empty: { driver: "claudeAgent", config: { customModels: [] } },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        for (const instanceId of [undefined, "claude_work", "claude_empty"]) {
+          yield* discovery.listModels({
+            provider: "claudeAgent",
+            ...(instanceId ? { instanceId } : {}),
+            customModels: ["forged-proxy"],
+          });
+        }
+      }),
+    });
+    expect(captured.map((input) => input.customModels)).toEqual([
+      ["default-proxy"],
+      ["work-proxy"],
+      undefined,
+    ]);
+    expect(captured[2]).not.toHaveProperty("customModels");
+  });
+
+  it("invalidates a running Claude discovery cache when configured membership is removed", async () => {
+    let calls = 0;
+    const result = await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            calls += 1;
+            return {
+              models: [
+                {
+                  slug: "work-proxy",
+                  name: "Work",
+                  ...(input.customModels?.includes("work-proxy")
+                    ? { isConfiguredCustomModel: true }
+                    : {}),
+                },
+              ],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          claude_work: { driver: "claudeAgent", config: { customModels: ["work-proxy"] } },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const settings = yield* ServerSettingsService;
+        const input = { provider: "claudeAgent" as const, instanceId: "claude_work", cwd };
+        const first = yield* discovery.listModels(input);
+        expect(first.models[0]?.isConfiguredCustomModel).toBe(true);
+        expect((yield* discovery.listModels(input)).cached).toBe(true);
+        yield* settings.updateSettings({
+          providerInstances: {
+            claude_work: { driver: "claudeAgent", config: { customModels: [] } },
+          },
+        });
+        return yield* discovery.listModels(input);
+      }),
+    });
+    expect(calls).toBe(2);
+    expect(result.cached).toBe(false);
+    expect(result.models[0]).not.toHaveProperty("isConfiguredCustomModel");
+  });
+
   it("clears stale Codex account fields when resolving the explicit default instance", async () => {
     let captured: Record<string, unknown> | undefined;
 

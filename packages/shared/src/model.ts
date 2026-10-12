@@ -40,6 +40,9 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
   devin: new Set<ModelSlug>(),
   omp: new Set<ModelSlug>(),
+  cline: new Set<ModelSlug>(),
+  // External model ids come from the profile's connector at runtime.
+  external: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -75,7 +78,7 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi" && provider !== "omp";
+  return provider !== "pi" && provider !== "omp" && provider !== "external";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -293,6 +296,14 @@ export function resolveDevinModelVariant(input: {
     return explicitVariant;
   }
 
+  // A pinned variant only means something for the model it was discovered on.
+  // An unknown UID here is a stale option leaking across model switches, so it
+  // is ignored rather than sent to the process as `--model`.
+  const knownExplicitVariant =
+    explicitVariant !== undefined && variants.some((variant) => variant.model === explicitVariant)
+      ? explicitVariant
+      : undefined;
+
   const reasoningEffort = trimOrNull(input.reasoningEffort);
   const contextWindow = trimOrNull(input.contextWindow);
   const mapsReasoningEffort =
@@ -306,7 +317,7 @@ export function resolveDevinModelVariant(input: {
   const mapsContextWindow =
     contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
   if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
-    return explicitVariant;
+    return knownExplicitVariant;
   }
 
   const effectiveReasoningEffort =
@@ -614,6 +625,85 @@ export function getModelCapabilities(
   return EMPTY_MODEL_CAPABILITIES;
 }
 
+// Explicitly configured proxy IDs expose Claude Code controls, not inferred
+// model capabilities. No effort is pinned until the user chooses one: a proxy
+// may have a different native default than a catalogued Claude model.
+const CLAUDE_CUSTOM_MODEL_OPTIONS: ModelCapabilities = {
+  ...EMPTY_MODEL_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low", controlSource: "api-effort" },
+    { value: "medium", label: "Medium", controlSource: "api-effort" },
+    { value: "high", label: "High", controlSource: "api-effort" },
+    { value: "xhigh", label: "Extra High", controlSource: "api-effort" },
+    { value: "max", label: "Max", controlSource: "api-effort" },
+    { value: "ultrathink", label: "Ultrathink", controlSource: "prompt-prefix" },
+    {
+      value: "ultracode",
+      label: "Ultracode",
+      controlSource: "provider-setting",
+      apiEffortValue: "xhigh",
+      description: "xhigh + workflows",
+    },
+  ],
+  promptInjectedEffortLevels: ["ultrathink"],
+  autoCompactWindowOptions: [
+    { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+    { value: "200k", label: "200k" },
+    { value: "1m", label: "1M" },
+  ],
+};
+const CLAUDE_CUSTOM_MODEL_OPTION_CAPABILITIES: ModelCapabilities = {
+  ...CLAUDE_CUSTOM_MODEL_OPTIONS,
+  optionDescriptors: legacyCapabilityDescriptors("claudeAgent", CLAUDE_CUSTOM_MODEL_OPTIONS).map(
+    (descriptor) =>
+      descriptor.id === "effort" && descriptor.type === "select"
+        ? {
+            ...descriptor,
+            currentValue: "auto",
+            options: [
+              { id: "auto", label: "Auto (Claude Code)", isDefault: true },
+              ...descriptor.options,
+            ],
+          }
+        : descriptor,
+  ),
+};
+
+// These are recognizable native/legacy model names, not opaque gateway IDs.
+// Catalogued and newer family releases are resolved before this exclusion.
+const CLAUDE_NATIVE_VERSIONED_MODEL_PATTERN =
+  /^claude-(?:(?:opus|sonnet|haiku|fable)-\d{1,2}(?:[-.]\d{1,2})?|\d{1,2}(?:[-.]\d{1,2})?(?:-(?:opus|sonnet|haiku|fable))?|instant-\d{1,2}(?:[-.]\d{1,2})?)(?:-\d{8}|-latest)?$/iu;
+
+export function isConfiguredCustomClaudeModel(
+  model: string | null | undefined,
+  configuredCustomModels: readonly string[] = [],
+): boolean {
+  const slug = normalizeModelSlug(model, "claudeAgent");
+  if (
+    !slug ||
+    getModelCapabilities("claudeAgent", slug) !== EMPTY_MODEL_CAPABILITIES ||
+    CLAUDE_NATIVE_VERSIONED_MODEL_PATTERN.test(stripClaudeContextWindowSuffix(slug))
+  ) {
+    return false;
+  }
+  return configuredCustomModels.some(
+    (candidate) => normalizeModelSlug(candidate, "claudeAgent") === slug,
+  );
+}
+
+/** Only use for explicit CLI options; token/capacity estimates use getModelCapabilities. */
+export function getClaudeModelOptionCapabilities(
+  model: string | null | undefined,
+  configuredCustomModels: readonly string[] = [],
+): ModelCapabilities {
+  const known = getModelCapabilities("claudeAgent", model);
+  return known !== EMPTY_MODEL_CAPABILITIES
+    ? known
+    : isConfiguredCustomClaudeModel(model, configuredCustomModels)
+      ? CLAUDE_CUSTOM_MODEL_OPTION_CAPABILITIES
+      : EMPTY_MODEL_CAPABILITIES;
+}
+
 // Claude Code ships new models before Synara's catalog lists them. Catalog
 // entries always win; only an id that is newer than every catalog model of its
 // family borrows that family's newest capabilities. Older or unrecognized ids
@@ -820,7 +910,13 @@ export function resolveModelSlug(
     provider === "claudeAgent" && normalizedModel
       ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
       : normalizedModel;
-  if (provider === "devin" || provider === "pi" || provider === "omp") {
+  if (
+    provider === "devin" ||
+    provider === "pi" ||
+    provider === "omp" ||
+    provider === "cline" ||
+    provider === "external"
+  ) {
     return normalized;
   }
   if (!normalized) {
@@ -853,8 +949,9 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
+  configuredCustomModels: readonly string[] = [],
 ): ClaudeModelOptions | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
+  const caps = getClaudeModelOptionCapabilities(model, configuredCustomModels);
   const defaultReasoningEffort = getDefaultEffort(caps);
   const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
@@ -863,7 +960,7 @@ export function normalizeClaudeModelOptions(
   const isPromptInjected = caps.promptInjectedEffortLevels.includes(resolvedEffort ?? "");
   const effort =
     resolvedEffort &&
-    !isPromptInjected &&
+    (!isPromptInjected || isConfiguredCustomClaudeModel(model, configuredCustomModels)) &&
     hasEffortLevel(caps, resolvedEffort) &&
     resolvedEffort !== defaultReasoningEffort
       ? resolvedEffort
@@ -886,11 +983,18 @@ export function normalizeClaudeModelOptions(
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
-export function resolveApiModelId(modelSelection: ModelSelection): string {
+export function resolveApiModelId(
+  modelSelection: ModelSelection,
+  configuredCustomModels: readonly string[] = [],
+): string {
   if (
     modelSelection.provider === "claudeAgent" &&
-    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
-      "1m" &&
+    !isConfiguredCustomClaudeModel(modelSelection.model, configuredCustomModels) &&
+    normalizeClaudeModelOptions(
+      modelSelection.model,
+      modelSelection.options,
+      configuredCustomModels,
+    )?.autoCompactWindow === "1m" &&
     getClaudeContextWindowSuffix(modelSelection.model) === null
   ) {
     return `${modelSelection.model}[1m]`;
@@ -919,8 +1023,11 @@ interface ClaudeSpawnProfile {
 
 // Claude's live flag settings do not refresh the runtime auto-compaction window.
 // Keep this profile aligned with the adapter's normalized spawn settings.
-function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
-  const caps = getModelCapabilities("claudeAgent", selection.model);
+function claudeSpawnProfile(
+  selection: Extract<ModelSelection, { provider: "claudeAgent" }>,
+  configuredCustomModels: readonly string[] = [],
+) {
+  const caps = getClaudeModelOptionCapabilities(selection.model, configuredCustomModels);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort =
     requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
@@ -928,8 +1035,11 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
       : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
-    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
-      ?.autoCompactWindow,
+    autoCompactWindow: normalizeClaudeModelOptions(
+      selection.model,
+      selection.options,
+      configuredCustomModels,
+    )?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
@@ -937,6 +1047,10 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
+  context: {
+    readonly previousCustomModels?: readonly string[];
+    readonly nextCustomModels?: readonly string[];
+  } = {},
 ): boolean {
   if (next.provider !== "claudeAgent") {
     return false;
@@ -952,8 +1066,8 @@ export function claudeSelectionRequiresRestart(
   // Normalize against each model before deciding a model-only switch is live:
   // a persisted `max` request may become spawn-fixed (or stop being so) as the
   // selected model's capabilities change.
-  const prev = claudeSpawnProfile(previous);
-  const desired = claudeSpawnProfile(next);
+  const prev = claudeSpawnProfile(previous, context.previousCustomModels);
+  const desired = claudeSpawnProfile(next, context.nextCustomModels);
   return (
     prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
   );

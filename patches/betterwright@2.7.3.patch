@@ -1,26 +1,330 @@
+diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-source.js
+new file mode 100644
+--- /dev/null
++++ b/dist/src/chromium-cookie-source.js
+@@ -0,0 +1,304 @@
++// macOS Chromium-family sources for hosts whose native reader does
++// not register the browser yet. Reads the same Chromium cookie database the
++// native reader would, decrypts v10 rows with the profile's Keychain secret,
++// and emits the same detailed-cookie snapshot shape as the native reader so
++// the regular Cookie Sync transfer pipeline stays in charge.
++import { createDecipheriv, createHash, timingSafeEqual, pbkdf2Sync } from "node:crypto";
++import { lstat, mkdtemp, readdir, realpath, rm, stat } from "node:fs/promises";
++import { homedir, tmpdir } from "node:os";
++import { join } from "node:path";
++import { DatabaseSync } from "node:sqlite";
++
++const SOURCES = {
++    helium: { name: "Helium", dataDir: "net.imput.helium" },
++    aside: { name: "Aside", dataDir: "Aside" },
++    dia: { name: "Dia", dataDir: "Dia/User Data" },
++};
++function sourceFor(browser) {
++    return Object.hasOwn(SOURCES, browser) ? SOURCES[browser] : null;
++}
++export function isChromiumCookieSource(browser) { return sourceFor(browser) !== null; }
++const CHROMIUM_PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,127}$/;
++const CHROMIUM_EPOCH_OFFSET_SECONDS = 11_644_473_600;
++const CHROMIUM_AES_IV = Buffer.alloc(16, 0x20);
++const CHROMIUM_KEYCHAIN_TIMEOUT_MS = 15_000;
++
++export function listChromiumCookieSources() {
++    return process.platform === "darwin"
++        ? Object.entries(SOURCES).map(([id, source]) => ({ id, name: source.name, engine: "chromium" }))
++        : [];
++}
++function chromiumProfileRoot(browser, home = homedir()) {
++    const source = sourceFor(browser);
++    if (!source) throw chromiumError("no_selected_source", "discovery");
++    return join(home, "Library", "Application Support", source.dataDir);
++}
++function chromiumError(code, stage, permissionDenied = false) {
++    const error = new Error("Cookie Sync could not read the selected Chromium profile.");
++    error.cookieReaderCode = code;
++    if (stage) error.cookieReaderStage = stage;
++    error.cookiePermissionDenied = permissionDenied === true;
++    return error;
++}
++
++function isMissingError(error) {
++    return error instanceof Error && (error.code === "ENOENT" || error.code === "ENAMETOOLONG");
++}
++
++function isPermissionError(error) {
++    if (!(error instanceof Error)) return false;
++    if (error.code === "EACCES" || error.code === "EPERM") return true;
++    const message = String(error.message);
++    return /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++}
++
++// Every failure while opening, snapshotting, or querying the SQLite store is
++// reported through the bounded reader contract: a fixed message, the failing
++// stage, and explicit permission markers only, never the raw diagnostic,
++// which can carry filesystem paths or parser internals.
++function classifySqliteError(error, stage) {
++    if (error instanceof Error && typeof error.cookieReaderCode === "string") return error;
++    const message = error instanceof Error ? String(error.message) : "";
++    const permissionDenied = /\b(?:permission denied|operation not permitted|eacces|eperm|os error (?:1|13))\b/i.test(message);
++    return chromiumError("source_extraction_failed", stage, permissionDenied);
++}
++
++function queryChromiumRows(database, sql) {
++    try {
++        return database.prepare(sql).all();
++    } catch (error) {
++        throw classifySqliteError(error, "query");
++    }
++}
++
++async function chromiumCookieDatabasePath(profileDir) {
++    // Chromium writes the legacy per-profile Cookies file today; probe it first so
++    // a future Network/Cookies layout never shadows the active legacy store.
++    for (const candidate of [join(profileDir, "Cookies"), join(profileDir, "Network", "Cookies")]) {
++        try {
++            const info = await lstat(candidate);
++            if (info.isSymbolicLink()) throw chromiumError("source_extraction_failed", "acquisition");
++            if (info.isFile()) {
++                if (info.size > 64 * 1024 * 1024) throw chromiumError("resource_exhausted", "acquisition");
++                return candidate;
++            }
++        } catch (error) {
++            if (error?.cookieReaderCode) throw error;
++            if (isMissingError(error)) continue;
++            throw chromiumError("source_extraction_failed", "acquisition", isPermissionError(error));
++        }
++    }
++    return null;
++}
++
++export async function listChromiumProfiles(browser, home = homedir()) {
++    if (process.platform !== "darwin") return [];
++    let entries;
++    try {
++        entries = await readdir(chromiumProfileRoot(browser, home), { withFileTypes: true });
++    } catch (error) {
++        if (isMissingError(error)) return [];
++        throw chromiumError("discovery_failed", "discovery", isPermissionError(error));
++    }
++    const profiles = [];
++    for (const entry of entries) {
++        if (!entry.isDirectory() || !CHROMIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
++        if (await chromiumCookieDatabasePath(join(chromiumProfileRoot(browser, home), entry.name)) === null) continue;
++        profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
++    }
++    return profiles.sort((left, right) => (right.isDefault ? 1 : 0) - (left.isDefault ? 1 : 0) || left.id.localeCompare(right.id));
++}
++
++function decryptChromiumValue(encrypted, key, version = 0, hostKey = "") {
++    if (!(encrypted instanceof Uint8Array) || encrypted.length <= 3) return null;
++    const blob = Buffer.from(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength);
++    const tag = blob.toString("latin1", 0, 3);
++    let body;
++    if (tag === "v10") body = blob.subarray(3);
++    else return null;
++    try {
++        const decipher = createDecipheriv("aes-128-cbc", key, CHROMIUM_AES_IV);
++        let plain = Buffer.concat([decipher.update(body), decipher.final()]);
++        if (version >= 24) {
++            if (plain.length < 32 || !timingSafeEqual(plain.subarray(0, 32), createHash("sha256").update(hostKey).digest())) return null;
++            plain = plain.subarray(32);
++        }
++        const value = plain.toString("utf8");
++        return Buffer.from(value, "utf8").equals(plain) ? value : null;
++    } catch {
++        return null;
++    }
++}
++
++function chromiumCookieRow(row, key, warnings, version) {
++    const name = typeof row.name === "string" ? row.name : "";
++    const domain = typeof row.host_key === "string" ? row.host_key.trim().toLowerCase() : "";
++    const path = typeof row.path === "string" ? row.path : "";
++    if (!name || !domain || !path.startsWith("/")) {
++        warnings.set("malformed", (warnings.get("malformed") ?? 0) + 1);
++        return null;
++    }
++    let value = typeof row.value === "string" ? row.value : "";
++    if (row.encrypted_value instanceof Uint8Array && row.encrypted_value.length > 0) {
++        value = decryptChromiumValue(row.encrypted_value, key, version, row.host_key);
++        if (value === null) {
++            warnings.set("decrypt_failed", (warnings.get("decrypt_failed") ?? 0) + 1);
++            return null;
++        }
++    }
++    // readBigInts surfaces every INTEGER column as bigint; widen the small ones.
++    const secure = Number(row.is_secure);
++    const httpOnly = Number(row.is_httponly);
++    const sameSite = Number(row.samesite);
++    const cookie = {
++        name,
++        value,
++        domain,
++        path,
++        secure: secure === 1,
++        httpOnly: httpOnly === 1,
++        sameSite: sameSite >= -1 && sameSite <= 2 ? sameSite : -1,
++    };
++    if (Number(row.has_expires) === 1 && typeof row.expires_utc === "bigint" && row.expires_utc > 0n) {
++        cookie.expires = Number(row.expires_utc / 1_000_000n) - CHROMIUM_EPOCH_OFFSET_SECONDS;
++    }
++    const context = {};
++    const sourceScheme = Number(row.source_scheme);
++    if (sourceScheme === 0 || sourceScheme === 1 || sourceScheme === 2) {
++        context.sourceScheme = sourceScheme;
++    }
++    const sourcePort = Number(row.source_port);
++    if (sourcePort === -1 || (sourcePort >= 1 && sourcePort <= 65_535)) {
++        context.sourcePort = sourcePort;
++    }
++    const topFrameSiteKey = typeof row.top_frame_site_key === "string" ? row.top_frame_site_key : "";
++    if (topFrameSiteKey) {
++        const hasCrossSiteAncestor = row.has_cross_site_ancestor;
++        const isCrossSite = hasCrossSiteAncestor !== undefined
++            ? Number(hasCrossSiteAncestor) === 1
++            : false;
++        context.topFrameSiteKey = topFrameSiteKey;
++        context.hasCrossSiteAncestor = isCrossSite;
++    }
++    return { cookie, context };
++}
++
++async function snapshotChromiumDatabase(databasePath, workspace) {
++    // VACUUM INTO takes one consistent snapshot under a read transaction, so a
++    // live Chromium write can never be observed as a torn database + WAL pair.
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readOnly: true });
++        database.exec("PRAGMA busy_timeout = 1000");
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    }
++    try {
++        const copyPath = join(workspace, "Cookies");
++        database.exec(`VACUUM INTO '${copyPath.replaceAll("'", "''")}'`);
++        return copyPath;
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    } finally {
++        database.close();
++    }
++}
++
++async function queryChromiumCookies(databasePath, key, warnings) {
++    let database;
++    try {
++        database = new DatabaseSync(databasePath, { readBigInts: true, readOnly: true });
++    } catch (error) {
++        throw classifySqliteError(error, "acquisition");
++    }
++    try {
++        const columns = new Set(
++            queryChromiumRows(database, "PRAGMA table_info(cookies)").map((column) => String(column.name)),
++        );
++        const secure = columns.has("is_secure") ? "is_secure" : "secure AS is_secure";
++        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly AS is_httponly";
++        const topFrameSiteKey = columns.has("top_frame_site_key") ? "top_frame_site_key" : null;
++        const hasCrossSiteAncestor = columns.has("has_cross_site_ancestor") ? "has_cross_site_ancestor" : null;
++        const selection = [
++            "host_key",
++            "name",
++            "value",
++            "encrypted_value",
++            "path",
++            secure,
++            httpOnly,
++            "samesite",
++            "expires_utc",
++            "has_expires",
++            ...(columns.has("source_scheme") ? ["source_scheme"] : []),
++            ...(columns.has("source_port") ? ["source_port"] : []),
++            ...(topFrameSiteKey ? [topFrameSiteKey] : []),
++            ...(hasCrossSiteAncestor ? [hasCrossSiteAncestor] : []),
++        ].filter(Boolean);
++        let version = 0;
++        try {
++            const meta = database.prepare("SELECT value FROM meta WHERE key = 'version'").get();
++            if (meta) {
++                // Real Chromium databases store meta.value as INTEGER, which
++                // readBigInts surfaces as bigint; legacy and synthetic stores
++                // keep the string form.
++                const parsed = typeof meta.value === "bigint" || typeof meta.value === "number"
++                    ? Number(meta.value)
++                    : Number(String(meta.value));
++                if (!Number.isSafeInteger(parsed) || parsed < 0) throw chromiumError("source_extraction_failed", "decode");
++                version = parsed;
++            }
++        } catch (error) {
++            if (error?.cookieReaderCode) throw error;
++            if (!/no such table: meta/i.test(String(error?.message))) throw classifySqliteError(error, "query");
++        }
++        const rows = queryChromiumRows(database, `SELECT ${selection.join(", ")} FROM cookies LIMIT 100001`);
++        if (rows.length > 100000) throw chromiumError("resource_exhausted", "query");
++        const detailedCookies = [];
++        for (const row of rows) {
++            const detailed = chromiumCookieRow(row, key, warnings, version);
++            if (detailed) detailedCookies.push(detailed);
++        }
++        return detailedCookies;
++    } finally {
++        database.close();
++    }
++}
++
++export async function readChromiumCookieSnapshot(options, deps = {}) {
++    if (process.platform !== "darwin") throw chromiumError("no_discovered_source", "discovery");
++    const profile = typeof options.source.profile === "string" ? options.source.profile.trim() : "";
++    if (!profile || !CHROMIUM_PROFILE_NAME_PATTERN.test(profile)) throw chromiumError("no_selected_source", "discovery");
++    const browser = options.source.browser;
++    if (!sourceFor(browser)) throw chromiumError("no_selected_source", "discovery");
++    const home = deps.home ?? homedir();
++    const available = await listChromiumProfiles(browser, home);
++    if (!available.some((entry) => entry.id === profile)) throw chromiumError("no_selected_source", "discovery");
++    let root, profilePath;
++    try {
++        root = await realpath(chromiumProfileRoot(browser, home));
++        profilePath = await realpath(join(root, profile));
++    } catch (error) { throw classifySqliteError(error, "acquisition"); }
++    if (!profilePath.startsWith(root + "/")) throw chromiumError("no_selected_source", "discovery");
++    const databasePath = await chromiumCookieDatabasePath(profilePath);
++    if (!databasePath) throw chromiumError("no_selected_source", "acquisition");
++    if (!(await realpath(databasePath)).startsWith(profilePath + "/")) throw chromiumError("no_selected_source", "acquisition");
++    const workspace = await mkdtemp(join(tmpdir(), "betterwright-chromium-"));
++    try {
++        const copyPath = await snapshotChromiumDatabase(databasePath, workspace);
++        if ((await stat(copyPath)).size > 64 * 1024 * 1024) throw chromiumError("resource_exhausted", "acquisition");
++        const keychainPassword = deps.keychainPassword;
++        if (typeof keychainPassword !== "function") throw chromiumError("reader_unavailable", "decrypt");
++        const password = await keychainPassword(browser, Math.min(options.timeoutMs, CHROMIUM_KEYCHAIN_TIMEOUT_MS));
++        if (!password) throw chromiumError("source_extraction_failed", "decrypt");
++        const key = pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
++        try {
++            const warnings = new Map();
++            const detailedCookies = await queryChromiumCookies(copyPath, key, warnings);
++            return { detailedCookies, warnings: [...warnings.entries()].map(([code, count]) => ({ code, count })) };
++        } finally { key.fill(0); }
++    } finally {
++        await rm(workspace, { recursive: true, force: true }).catch(() => {});
++    }
++
++}
 diff --git a/dist/src/client.js b/dist/src/client.js
-index 55deabe..747cea4 100644
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
-@@ -1024,7 +1024,7 @@ export class BetterWright {
-         let consentTarget;
-         try {
+@@ -335,2 +335,3 @@
+         this.hostTarget = options.hostTarget;
++        this.chromiumKeychainPassword = options.chromiumKeychainPassword;
+         this.hostUploadFiles = options.hostUploadFiles ?? [];
+@@ -1026,3 +1027,3 @@
              normalized = normalizeCookieSyncOptions(options);
 -            consentTarget = cookieSyncConsentTarget(this.provider);
 +            consentTarget = this.hostTarget ? null : cookieSyncConsentTarget(this.provider);
              if (consentTarget && normalized.cloudConsent !== consentTarget) {
-                 return {
-                     ok: false,
-@@ -1049,15 +1049,17 @@ export class BetterWright {
-             };
-         }
+@@ -1051,3 +1052,3 @@
          if (!extracted.cookies.length) {
 -            return {
 +            const empty = {
                  ok: true,
-                 synced: 0,
-                 selected: extracted.selected,
-                 skipped: extracted.skipped,
+@@ -1057,5 +1058,7 @@
                  source: extracted.source,
 -                target: consentTarget || "local",
 +                target: consentTarget || (this.hostTarget ? "host" : "local"),
@@ -29,15 +333,52 @@ index 55deabe..747cea4 100644
 +            if (this.hostTarget) empty.cookieImportDomains = [];
 +            return empty;
          }
-         const config = await this._prepare();
-         const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+@@ -1075,3 +1078,3 @@
+     _extractCookieSync(options) {
+-        return extractCookieSync(options);
++        return extractCookieSync(options, undefined, { keychainPassword: this.chromiumKeychainPassword });
+     }
+diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
+--- a/dist/src/cookie-sync.js
++++ b/dist/src/cookie-sync.js
+@@ -1 +1,2 @@
++import { isChromiumCookieSource, listChromiumCookieSources, listChromiumProfiles, readChromiumCookieSnapshot } from "./chromium-cookie-source.js";
+ import { isIP } from "node:net";
+@@ -431,3 +432,4 @@
+ }
+-export async function extractCookieSync(options, load = loadCookieReader) {
++export async function extractCookieSync(options, load = loadCookieReader, chromiumDeps = undefined) {
++    if (isChromiumCookieSource(options.source.browser)) return normalizeCookieSnapshot(await readChromiumCookieSnapshot(options, chromiumDeps), options);
+     let reader;
+@@ -454,5 +456,6 @@
+ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+-    const reader = await load();
++    const custom = listChromiumCookieSources();
+     let value;
+     try {
++        const reader = await load();
+         value = await reader.supportedBrowsers();
+@@ -460,2 +463,3 @@
+     catch {
++        if (custom.length) return custom;
+         throw new Error("Cookie Sync could not list browsers on this host.");
+@@ -464,3 +468,3 @@
+         throw new Error("Cookie Sync returned an invalid browser list.");
+-    return value.flatMap((entry) => {
++    const native = value.flatMap((entry) => {
+         const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
+@@ -472,2 +476,3 @@
+     });
++    return [...native, ...custom.filter(source => !native.some(entry => entry.id === source.id))];
+ }
+@@ -476,2 +481,3 @@
+     const source = normalized.source;
++    if (isChromiumCookieSource(source.browser)) return listChromiumProfiles(source.browser);
+     const reader = await load();
 diff --git a/dist/src/worker.js b/dist/src/worker.js
-index 654e06e..9e8c08c 100755
 --- a/dist/src/worker.js
 +++ b/dist/src/worker.js
-@@ -6807,9 +6807,12 @@ async function cookieSync(message) {
-     }
-     cookieSyncActive = true;
+@@ -6809,5 +6809,8 @@
      try {
 +        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
          let target;
@@ -47,27 +388,17 @@ index 654e06e..9e8c08c 100755
 +                ? null
 +                : cookieSyncConsentTarget(message.config?.provider);
          }
-         catch {
-             sendResult({
-@@ -6898,7 +6901,7 @@ async function cookieSync(message) {
-                 source.profile = "selected";
-             }
+@@ -6900,3 +6903,3 @@
          }
 -        sendResult({
 +        const result = {
              type: "result",
-             id: message.id,
-             ok: true,
-@@ -6906,13 +6909,17 @@ async function cookieSync(message) {
-             selected,
-             skipped,
+@@ -6908,3 +6911,3 @@
              source,
 -            target: target || "local",
 +            target: target || (hostOwnedTarget ? "host" : "local"),
              warnings: [
-                 ...sanitizedCookieSyncWarnings(message.warnings),
-                 ...(missingCookies ? [{ code: "target_not_stored", count: missingCookies }] : []),
-             ],
+@@ -6914,3 +6917,7 @@
              profileMode,
 -        });
 +        };
@@ -76,15 +407,10 @@ index 654e06e..9e8c08c 100755
 +        }
 +        sendResult(result);
      }
-     finally {
-         cookieSyncActive = false;
 diff --git a/types/public.d.ts b/types/public.d.ts
-index 429dc05..7e53848 100644
 --- a/types/public.d.ts
 +++ b/types/public.d.ts
-@@ -104,6 +104,12 @@ export type CookieSyncResult =
-       skipped: number;
-       source: { browser: string; profile?: string };
+@@ -106,2 +106,8 @@
        target: string;
 +      /**
 +       * Host-owned targets (`hostTarget`) only: deduplicated cookie domains
@@ -93,5 +419,8 @@ index 429dc05..7e53848 100644
 +       */
 +      cookieImportDomains?: string[];
        warnings?: CookieSyncWarning[];
-       profileMode?: "persistent" | "ephemeral";
-     }
+@@ -124,2 +130,4 @@
+ export interface BetterWrightOptions {
++  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
++  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
+   /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */

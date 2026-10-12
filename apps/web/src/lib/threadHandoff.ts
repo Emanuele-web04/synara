@@ -5,6 +5,7 @@
 
 import {
   EventId,
+  type ContextMenuItem,
   MessageId,
   type OrchestrationThreadActivity,
   PROVIDER_DISPLAY_NAMES,
@@ -23,6 +24,7 @@ import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
 import { isCompletedContextCompaction } from "./contextWindow";
 import { findProviderStatus, isProviderUsable } from "./providerAvailability";
 import { randomUUID } from "./utils";
+import { contextMenuGroup } from "./contextMenuGroup";
 
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "account.rate-limits.updated",
@@ -238,6 +240,57 @@ export function canContinueThreadHandoff(input: {
   return input.targetProvider !== input.sourceProvider;
 }
 
+/** Gate only explicit Hand off affordances, not ordinary composer selection. */
+export function resolveContinueThreadHandoffTargets(input: {
+  readonly enabled: boolean;
+  readonly sourceProvider: ProviderKind;
+  readonly targets: ReadonlyArray<ThreadHandoffTarget>;
+}): ReadonlyArray<ThreadHandoffTarget> {
+  return input.enabled
+    ? input.targets.filter((target) =>
+        canContinueThreadHandoff({
+          sourceProvider: input.sourceProvider,
+          targetProvider: target.provider,
+        }),
+      )
+    : [];
+}
+
+/** Native and browser context menus share the same compact destination groups. */
+export function buildThreadHandoffContextMenuItems(input: {
+  readonly enabled: boolean;
+  readonly targets: ReadonlyArray<ThreadHandoffTarget>;
+  readonly continueTargets: ReadonlyArray<ThreadHandoffTarget>;
+  readonly icon: string;
+}): ContextMenuItem[] {
+  const newConversationItems = input.targets.map((target) => ({
+    id: `handoff:${target.instanceId}`,
+    label: target.label,
+    standaloneLabel: input.enabled
+      ? `New conversation with ${target.label}`
+      : `Handoff to ${target.label}`,
+    icon: input.icon,
+  }));
+  const destinations = input.enabled
+    ? [
+        ...contextMenuGroup(
+          { id: "handoff-here", label: "Continue here", icon: input.icon },
+          input.continueTargets.map((target) => ({
+            id: `handoff-here:${target.instanceId}`,
+            label: target.label,
+            standaloneLabel: `Continue here with ${target.label}`,
+            icon: input.icon,
+          })),
+        ),
+        ...contextMenuGroup(
+          { id: "handoff-new", label: "New conversation", icon: input.icon },
+          newConversationItems,
+        ),
+      ]
+    : newConversationItems;
+  return contextMenuGroup({ id: "handoff", label: "Hand off", icon: input.icon }, destinations);
+}
+
 // Mirrors the outcome rows ProviderCommandReactor appends for a same-thread
 // handoff, keyed by the requesting command so the caller can await its result.
 export function providerHandoffOutcomeActivityIds(commandId: string): {
@@ -322,10 +375,13 @@ export function resolveThreadHandoffModelSelection(input: {
   };
 
   const stickySelection = input.stickyModelSelectionByProvider[targetInstanceId];
-  const withTargetInstance = (selection: ModelSelection): ModelSelection => ({
-    ...selection,
-    ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
-  });
+  const withTargetInstance = (selection: ModelSelection): ModelSelection =>
+    selection.provider === "external"
+      ? selection
+      : {
+          ...selection,
+          ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
+        };
 
   if (isCompatibleSelection(stickySelection)) {
     return withTargetInstance(stickySelection);
@@ -333,6 +389,8 @@ export function resolveThreadHandoffModelSelection(input: {
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return withTargetInstance(input.projectDefaultModelSelection);
   }
+  if (input.targetProvider === "external")
+    throw new Error("Select an external agent profile and revision before handing off.");
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {
     throw new Error("Select a Pi model before handing off to Pi.");

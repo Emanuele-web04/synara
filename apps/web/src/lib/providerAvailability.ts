@@ -154,7 +154,7 @@ export function resolveAvailableProviderPreference(input: {
   readonly providerOrder?: readonly ProviderKind[];
   readonly hiddenProviders?: readonly ProviderKind[];
 }): ProviderKind {
-  if (input.statuses.length === 0) {
+  if (input.preferredProvider === "external" || input.statuses.length === 0) {
     return input.preferredProvider;
   }
 
@@ -289,6 +289,15 @@ export function resolveProviderSendAvailability(input: {
   readonly statuses: readonly ServerProviderStatus[];
 }): ProviderSendAvailability {
   const status = findProviderStatus(input.statuses, input.provider, input.instanceId);
+  // External profiles are validated at session start, not by built-in CLI health
+  // probes. Preserve explicit unavailable statuses and reject arbitrary instances.
+  if (
+    input.provider === "external" &&
+    !status &&
+    (!input.instanceId || input.instanceId === "external")
+  ) {
+    return { provider: input.provider, status: null, usable: true, unavailableReason: "" };
+  }
   return {
     provider: input.provider,
     status,

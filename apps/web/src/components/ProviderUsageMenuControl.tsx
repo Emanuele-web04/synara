@@ -10,6 +10,7 @@ import {
 } from "@synara/contracts";
 import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -48,7 +49,10 @@ export interface ProviderUsageMenuModel {
 export function buildProviderUsageMenuModel(input: {
   provider: ProviderKind;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
-  usageSummary: ProviderUsageSummaryData & { readonly isLoading: boolean };
+  usageSummary: ProviderUsageSummaryData & {
+    readonly isLoading: boolean;
+    readonly providerSnapshot?: ServerGetProviderUsageSnapshotResult;
+  };
 }): ProviderUsageMenuModel {
   const rows = deriveProviderUsageDisplayRows(input.usageSummary.rateLimits);
 
@@ -59,7 +63,12 @@ export function buildProviderUsageMenuModel(input: {
     rateLimits: input.usageSummary.rateLimits,
     usageLines: input.usageSummary.usageLines,
     notice: input.usageSummary.usageNotice,
-    emptyMessage: providerUsageEmptyMessage(input.provider, input.providerSnapshot),
+    emptyMessage: providerUsageEmptyMessage(
+      input.provider,
+      input.providerSnapshot !== undefined
+        ? input.providerSnapshot
+        : input.usageSummary.providerSnapshot,
+    ),
     isLoading: input.usageSummary.isLoading,
     resetCredits: input.usageSummary.resetCredits,
   };
@@ -90,6 +99,7 @@ export function useProviderUsageMenuModel(
   input: {
     instanceId?: ProviderInstanceId | undefined;
     providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+    providerSnapshotPending?: boolean | undefined;
   } = {},
 ): ProviderUsageMenuModel {
   const { settings } = useAppSettings();
@@ -100,12 +110,12 @@ export function useProviderUsageMenuModel(
     threads,
     codexHomePath: settings.codexHomePath || null,
     providerSnapshot: input.providerSnapshot,
+    providerSnapshotPending: input.providerSnapshotPending,
     fetchOpenUsageData: false,
   });
 
   return buildProviderUsageMenuModel({
     provider,
-    providerSnapshot: input.providerSnapshot,
     usageSummary,
   });
 }
@@ -117,7 +127,7 @@ export function ProviderUsageMenuPopup({
   showUsageLines = false,
   children,
 }: {
-  provider: ProviderKind;
+  provider: DisplayProvider;
   model: ProviderUsageMenuModel;
   align?: "start" | "end";
   showUsageLines?: boolean;
@@ -146,7 +156,7 @@ export function ProviderUsageMenuPopup({
   );
 }
 
-export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
+export function ProviderUsageMenuControl({ provider }: { provider: DisplayProvider }) {
   const model = useProviderUsageMenuModel(provider);
 
   if (!model.primaryRow) {

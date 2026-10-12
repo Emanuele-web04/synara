@@ -75,6 +75,16 @@ describe("release validation scope", () => {
     expect(windows.cua_matrix.include).toEqual([]);
     expect(windows.package_artifacts).toBe(true);
   });
+  it("builds AppImage, deb and rpm from one Linux runner", () => {
+    const linux = resolveReleaseBuildScope("linux-x64", "artifact").matrix.include[0]!;
+    expect(linux.target).toBe("AppImage,deb,rpm");
+    // Publication still needs every declared platform; a Linux-only scope
+    // must not look complete just because it emits three files.
+    expect(() => resolveReleaseBuildScope("linux-x64", "artifact", true)).toThrow(
+      "Publication requires",
+    );
+  });
+
   it("rejects typos and unsupported Windows source compilation", () => {
     expect(() => resolveReleaseBuildScope("linux")).toThrow("Unknown build platform");
     expect(() => resolveReleaseBuildScope("all", "package")).toThrow("Unknown build stage");

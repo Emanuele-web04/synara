@@ -19,6 +19,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "pi",
   "devin",
   "omp",
+  "cline",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -277,6 +278,8 @@ export const ProviderReadPluginResult = Schema.Struct({
 export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
+  // Server-resolved Claude custom models; caller values are never authoritative.
+  customModels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   provider: ProviderDiscoveryKind,
   // Interactive reads await revalidation; manual refresh still respects server throttling.
   refresh: Schema.optional(Schema.Literals(["if-stale", "now"])),
@@ -314,6 +317,9 @@ export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescri
 // effort/context/fast controls separate from the provider's opaque model UID.
 export const ProviderModelVariantDescriptor = Schema.Struct({
   model: TrimmedNonEmptyString,
+  // Provider-supplied display name for the concrete variant (e.g. a Fusion
+  // pairing like "Claude Fable 5.1 High + SWE-2 Medium").
+  label: Schema.optional(TrimmedNonEmptyString),
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   contextWindow: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
@@ -322,6 +328,7 @@ export const ProviderModelVariantDescriptor = Schema.Struct({
 export type ProviderModelVariantDescriptor = typeof ProviderModelVariantDescriptor.Type;
 
 export const ProviderModelDescriptor = Schema.Struct({
+  isConfiguredCustomModel: Schema.optional(Schema.Boolean),
   slug: TrimmedNonEmptyString,
   resolvedModel: Schema.optional(TrimmedNonEmptyString),
   name: TrimmedNonEmptyString,

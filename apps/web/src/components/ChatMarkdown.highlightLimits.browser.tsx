@@ -58,6 +58,13 @@ describe("ChatMarkdown highlighting size limit", () => {
       expect(document.querySelector("[data-chat-find-match]")?.textContent).toBe("needle");
       await screen.getByRole("button", { name: "Copy code", exact: true }).click();
       expect(seams.copy.mock.calls[0]?.[0] === `${code}\n`).toBe(true);
+      expect(document.querySelector(".chat-markdown-codeblock")?.getAttribute("data-wrap")).toBe(
+        "true",
+      );
+      await screen.getByRole("button", { name: "Disable soft wrap", exact: true }).click();
+      expect(document.querySelector(".chat-markdown-codeblock")?.getAttribute("data-wrap")).toBe(
+        "false",
+      );
       await screen.getByRole("button", { name: "Enable soft wrap", exact: true }).click();
       expect(document.querySelector(".chat-markdown-codeblock")?.getAttribute("data-wrap")).toBe(
         "true",
