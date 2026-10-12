@@ -308,6 +308,7 @@ describe("CheckpointStoreLive", () => {
       git(["init", "--initial-branch=main"]);
       git(["config", "user.email", "test@example.com"]);
       git(["config", "user.name", "Test User"]);
+      git(["config", "core.autocrlf", "false"]);
       git(["config", "diff.noprefix", "true"]);
       mkdirSync(join(cwd, "src"));
       writeFileSync(join(cwd, "src", "file.ts"), "before\n");

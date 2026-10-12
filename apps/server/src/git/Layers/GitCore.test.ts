@@ -272,6 +272,7 @@ it.layer(TestLayer)("git integration", (it) => {
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.autocrlf", "false"]);
         // `diff.noprefix` drops the prefixes git apply strips; `diff.mnemonicPrefix` swaps them;
         // `color.diff=always` writes escape codes that git apply rejects.
         yield* git(tmp, ["config", "diff.noprefix", "true"]);
