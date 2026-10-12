@@ -24,6 +24,8 @@ import {
 let state: BrowserVaultSnapshot;
 let changed: () => void;
 beforeEach(() => {
+  // The password-import UI is macOS-only; keep its primary cases deterministic in Linux CI.
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
   changed = () => {};
   state = {
     protection: { configured: true, locked: false, osProtected: true },
