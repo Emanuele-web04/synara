@@ -15,7 +15,7 @@ export function resolveCodexPathIdentity(inputPath: string): string {
   return runCodexAuthIoSync(resolveCodexPathIdentityIo(inputPath));
 }
 
-function* resolveCodexPathIdentityIo(inputPath: string): CodexAuthIo<string> {
+export function* resolveCodexPathIdentityIo(inputPath: string): CodexAuthIo<string> {
   const resolvedInput = path.resolve(inputPath);
   const missingSegments: string[] = [];
   let candidate = resolvedInput;

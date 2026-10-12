@@ -1097,6 +1097,12 @@ function createSnapshotWithInlineToolOverflow(options: {
   };
 }
 
+function findInlineToolsTurnDisclosure(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    "[data-message-id='msg-assistant-inline-tools'] [data-turn-header='completed'] button[aria-expanded]",
+  );
+}
+
 function createSnapshotWithHistoricalToolHydrationDuringLiveTurn(options: {
   hydrateHistoricalActivities: boolean;
 }): OrchestrationReadModel {
@@ -2610,8 +2616,12 @@ describe("ChatView transcript geometry (full app)", () => {
             const hints = [...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd"]')].filter(
               (hint) => hint.closest("[data-thread-item]"),
             );
-            expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
-            if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
+            expect(hints.length).toBe(activityViewEnabled ? 5 : 7);
+            if (!activityViewEnabled) {
+              expect(sidebar.textContent).toContain("Atlas");
+              // The open subagent reveals its own child as well as its ancestors.
+              expect(sidebar.textContent).toContain("Nova");
+            }
             if (customShortcut) expect(hints[0]!.textContent).toContain("Ctrl+Alt+Shift+Meta");
             for (const hint of hints) {
               const row = hint.closest<HTMLElement>("[data-thread-item]")!;
@@ -2649,6 +2659,8 @@ describe("ChatView transcript geometry (full app)", () => {
                 index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
             )) {
               const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
+              let interaction = "hover";
+              await userEvent.hover(row);
               const actions = activityViewEnabled
                 ? row.querySelector<HTMLElement>(
                     'span[class*="group-hover/activity-row:opacity-100"]',
@@ -2668,11 +2680,43 @@ describe("ChatView transcript geometry (full app)", () => {
               await userEvent.unhover(row);
               await userEvent.hover(row);
               const assertHoverLayout = () => {
-                expect(
-                  Number(getComputedStyle(hoverHint).opacity),
-                  `Shortcut ${hoverHint.textContent} should fade (hover=${hoverGroup.matches(":hover")}, focus=${hoverGroup.contains(document.activeElement)})`,
-                ).toBe(0);
-                expect(Number(getComputedStyle(actions).opacity)).toBe(1);
+                const hintOpacity = Number(getComputedStyle(hoverHint).opacity);
+                const actionsOpacity = Number(getComputedStyle(actions).opacity);
+                const rect = row.getBoundingClientRect();
+                const group = hoverHint.closest<HTMLElement>(
+                  '[class~="group/thread-row"], [class~="group/activity-row"]',
+                );
+                const target = row.matches('[role="button"]')
+                  ? row
+                  : row.querySelector<HTMLElement>('button, [role="button"]');
+                const debug =
+                  hintOpacity === 0 && actionsOpacity === 1
+                    ? undefined
+                    : JSON.stringify({
+                        interaction,
+                        fontSize,
+                        width,
+                        hint: hoverHint.textContent,
+                        rowHover: row.matches(":hover"),
+                        rowFocusWithin: row.matches(":focus-within"),
+                        groupHover: group?.matches(":hover"),
+                        groupFocusWithin: group?.matches(":focus-within"),
+                        connected: row.isConnected && hoverHint.isConnected,
+                        target: target?.outerHTML.slice(0, 250),
+                        activeElement: document.activeElement?.outerHTML.slice(0, 250),
+                        activeFocusVisible: document.activeElement?.matches(":focus-visible"),
+                        documentHasFocus: document.hasFocus(),
+                        rowRect: rect.toJSON(),
+                        rowCenterHit: document
+                          .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+                          ?.outerHTML.slice(0, 250),
+                        hintOpacity,
+                        actionsOpacity,
+                        hintClasses: hoverHint.className,
+                        actionsClasses: actions.className,
+                      });
+                expect(hintOpacity, debug).toBe(0);
+                expect(actionsOpacity, debug).toBe(1);
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
                   (element) =>
@@ -2695,6 +2739,7 @@ describe("ChatView transcript geometry (full app)", () => {
               const focusTarget = row.matches('[role="button"]')
                 ? row
                 : row.querySelector<HTMLElement>('button, [role="button"]')!;
+              interaction = "focus";
               focusTarget.focus();
               await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               focusTarget.blur();
@@ -2709,6 +2754,76 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("keeps the sidebar rows in place while a thread row is pressed", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("subagent-press"),
+      targetText: "Review the sidebar rows",
+    });
+    const parent = { ...base.threads[0]!, title: "Parent thread" };
+    const olderIso = "2026-03-01T12:00:00.000Z";
+    const subagents = ["Atlas", "Nova"].map((nickname, index) => {
+      const id = ThreadId.makeUnsafe(`subagent-press-${index}`);
+      return {
+        ...parent,
+        id,
+        title: `${nickname} task`,
+        messages: [],
+        session: { ...parent.session!, threadId: id },
+        parentThreadId: THREAD_ID,
+        subagentNickname: nickname,
+      };
+    });
+    const other = {
+      ...parent,
+      id: OTHER_THREAD_ID,
+      title: "Other thread",
+      createdAt: olderIso,
+      updatedAt: olderIso,
+      latestTurn: null,
+      messages: [],
+      session: { ...parent.session!, threadId: OTHER_THREAD_ID, updatedAt: olderIso },
+    };
+    localStorage.setItem("synara:sidebar-ui:v1", JSON.stringify({ activityViewEnabled: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...base, threads: [parent, ...subagents, other] },
+    });
+    try {
+      const subagentDots = () =>
+        document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]').length;
+      const otherRowButton = await waitForElement(
+        () =>
+          [...document.querySelectorAll<HTMLElement>("[data-thread-item]")]
+            .find((row) => row.textContent?.includes("Other thread"))
+            ?.querySelector<HTMLElement>('[role="button"]') ?? null,
+        "Unable to find the other thread's sidebar row.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(2));
+      const pressedTop = otherRowButton.getBoundingClientRect().top;
+
+      // The press highlights the row at once, but the open thread's subagent rows
+      // stay until the route changes, so the release lands on the same row.
+      otherRowButton.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }),
+      );
+      await waitForLayout();
+      expect(otherRowButton.getAttribute("data-active")).toBe("true");
+      expect(subagentDots()).toBe(2);
+      expect(otherRowButton.getBoundingClientRect().top).toBe(pressedTop);
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+      await userEvent.click(otherRowButton);
+      await waitForURL(
+        mounted.router,
+        (pathname) => pathname === `/${OTHER_THREAD_ID}`,
+        "The pressed sidebar row did not open its thread.",
+      );
+      await vi.waitFor(() => expect(subagentDots()).toBe(0));
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it.each(["user", "assistant"] as const)(
     "opens the linked PR number from a %s message when the repository path also contains pull",
@@ -6131,7 +6246,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.body.textContent).toContain("Thinking");
           expect(document.body.textContent).not.toContain("Loading");
-          expect(document.body.textContent).not.toContain("Working for");
+          expect(document.querySelector("[data-turn-header='live']")).toBeNull();
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -6143,7 +6258,7 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       expect(document.body.textContent).toContain("Thinking");
       expect(document.body.textContent).not.toContain("Loading");
-      expect(document.body.textContent).not.toContain("Working for");
+      expect(document.querySelector("[data-turn-header='live']")).toBeNull();
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -6167,7 +6282,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Thinking");
-          expect(document.body.textContent).toContain("Working for");
+          const liveHeader = document.querySelector("[data-turn-header='live']");
+          expect(liveHeader).not.toBeNull();
+          expect(liveHeader?.textContent).toMatch(/^Working for \d/);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -6180,7 +6297,7 @@ describe("ChatView transcript geometry (full app)", () => {
   // Regression: the sent message must reach its anchored coordinate in one
   // motion and then stay there for the rest of the turn. The failure this guards
   // is the message visibly jumping up and down through send → Thinking →
-  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // Working → streaming, which is what a fixed-target scroll produces once
   // the coordinate moves under it (reserve sizing, rows above being remeasured).
   it("moves a sent message to its anchor and handles a long streamed response", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -6297,7 +6414,7 @@ describe("ChatView transcript geometry (full app)", () => {
           updatedAt: isoAt(1_301),
         }));
       });
-      // Turn actually starts: the "Working for" header replaces Thinking.
+      // Turn actually starts: the Working header appears beside Thinking.
       at(420, () => {
         syncActiveThread((thread) => ({
           ...thread,
@@ -7009,11 +7126,9 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
     try {
-      const findDisclosure = () =>
-        Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find(
-          (button) => button.textContent?.includes("Worked for"),
-        );
-      await vi.waitFor(() => expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false"));
+      await vi.waitFor(() =>
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
+      );
       useComposerDraftStore.getState().setPrompt(THREAD_ID, "Thanks");
       (await waitForSendButton()).click();
       await vi.waitFor(() => expect(hasDispatchedCommandType("thread.turn.start")).toBe(true));
@@ -7021,7 +7136,7 @@ describe("ChatView transcript geometry (full app)", () => {
       // changes transcript height even if the final settled state looks right.
       for (let frame = 0; frame < 20; frame += 1) {
         await nextFrame();
-        expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
         expect(document.body.textContent).not.toContain("Used 6 tools");
       }
@@ -14630,7 +14745,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("aligns the inline plan card with the composer input", async () => {
+  it("shows the skinny inline plan card for active turn plans", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithActiveInlinePlan(),
@@ -14660,11 +14775,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the composer column width while the input keeps its
-      // rounded top corners. The stacked frame must stay aligned at every viewport size.
+      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
+      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
@@ -14741,7 +14856,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("collapses a settled leading tool run mid-turn, then folds into Worked for after the grace delay", async () => {
+  it("collapses a settled leading tool run mid-turn, then folds into the turn header after the grace delay", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
@@ -14768,20 +14883,23 @@ describe("ChatView transcript geometry (full app)", () => {
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
       });
 
-      // The first settled paint keeps the live layout: no "Worked for" fold yet.
+      // The first settled paint keeps the live layout: no turn disclosure yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
       expect(document.body.textContent).toContain("Used 6 tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
       });
 
-      // Once the grace delay lapses the settled turn folds into "Worked for…",
+      // Once the grace delay lapses the settled turn folds into its Worked header,
       // but the old details stay mounted briefly inside the shared disclosure
       // close transition so the transcript height eases down instead of snapping.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -14798,19 +14916,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       // After the close motion finishes, details are only available by opening
-      // the "Worked for…" disclosure.
+      // the Worked header's disclosure.
       await vi.waitFor(
         () => {
           expect(
             document.querySelector("[data-settled-turn-collapse-transition='true']"),
           ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
-          const settledTrigger = Array.from(
-            document.querySelectorAll<HTMLButtonElement>("button"),
-          ).find((element) => element.textContent?.includes("Worked for"));
-          if (settledTrigger) {
-            expect(settledTrigger.getAttribute("aria-expanded")).toBe("false");
-          }
+          expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14833,7 +14946,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14882,7 +14997,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       // Baseline: with no turn record the tail turn reads as live, so its work
-      // sits inline instead of folded into the turn's "Worked for…" disclosure.
+      // sits inline instead of folded into the turn header's disclosure.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
@@ -14890,7 +15005,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      expect(document.body.textContent).not.toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
 
       useStore.getState().syncServerReadModel({
         ...settledSnapshot,
@@ -14921,7 +15036,8 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       // The turn must land folded, in one step, with no animated close replay.
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked for \d+(?:\.\d+)?s$/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -14964,7 +15080,11 @@ describe("ChatView transcript geometry (full app)", () => {
         }
       }
 
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked for \d+m \d+s$/);
+      expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
+        /^Working for \d/,
+      );
       expect(transitionFrames).toBe(0);
     } finally {
       await mounted.cleanup();

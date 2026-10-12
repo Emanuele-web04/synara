@@ -152,15 +152,33 @@ export interface WorkLogEntry {
   requestKind?: WorkLogRequestKind;
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  // Set on the one entry a turn's subagents fold into: the transcript renders
+  // it as the subagent card (see SubagentRunCard.logic.ts).
+  subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
-  // A task the agent moved to the background finished. Its completion wakes the
-  // agent into a new turn, so the row also marks where that new response starts.
+  // Completion notices and Monitor updates both anchor the response they woke.
+  monitorNotification?: {
+    taskId: string;
+    name: string;
+    output: string;
+    outcome: "updated" | "completed" | "failed" | "stopped";
+    // Arrived while its turn was already working: an update inside that
+    // response, not a wake-up that starts a new one.
+    midTurn?: true;
+  };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
+  // One background task for its whole life: the row sits where the agent
+  // launched it and its status updates in place (running, finished, failed,
+  // stopped) instead of adding a row per lifecycle event.
+  backgroundTask?: WorkLogBackgroundTask;
+  // A subagent's own progress, reported to the thread that launched it. It is
+  // that subagent's current step, never the launcher's reasoning.
+  subagentProgress?: WorkLogSubagentProgress;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
   computerControlDenied?: WorkLogComputerControlDenied;
@@ -253,6 +271,32 @@ export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
   taskType: string | null;
   description: string | null;
+  // How the task ended; absent on completions derived before outcomes existed.
+  outcome?: WorkLogBackgroundTaskOutcome;
+}
+
+export type WorkLogBackgroundTaskOutcome = "finished" | "failed" | "stopped";
+
+export interface WorkLogBackgroundTask {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
+  // The command that runs in the background, from the launching tool call.
+  command: string | null;
+  status: "running" | WorkLogBackgroundTaskOutcome;
+  startedAt: string;
+  completedAt: string | null;
+  exitCode: number | null;
+}
+
+export interface WorkLogSubagentProgress {
+  /** The spawning tool call id: the subagent's provider thread id. */
+  toolUseId: string;
+  /** First progress activity in this invocation, stable across parent turns. */
+  invocationId?: string;
+  title: string | null;
+  /** The subagent's final state, once it ended. */
+  outcome?: "completed" | "failed" | "stopped";
 }
 
 export interface WorkLogSynaraWorkerNotice {
@@ -280,6 +324,30 @@ export interface WorkLogSubagent {
   title?: string | undefined;
   statusLabel?: string | undefined;
   isActive?: boolean | undefined;
+}
+
+/** What the parent's own log says about one subagent of a folded run. */
+export interface WorkLogSubagentRunMember {
+  /** The subagent's key in `subagents` (its provider thread id). */
+  key: string;
+  /** When the launching call first named this subagent. */
+  launchedAt: string;
+  /** The latest step the subagent reported to its launcher. */
+  latestStep: string | null;
+  /** Final state from the subagent's task completion, once it ended. */
+  outcome: "completed" | "failed" | "stopped" | null;
+  /** The launching call's own error, when the launch itself failed. */
+  failure: string | null;
+  /** When a later collab call first reported it finished (Codex "settled"). */
+  settledAt: string | null;
+  /** A later launch of the same child bounds evidence for this invocation. */
+  nextLaunchedAt?: string;
+}
+
+export interface WorkLogSubagentRun {
+  // Adjacent transcript calls retain their identities for jump and visibility tracking.
+  entryIds?: ReadonlyArray<string>;
+  members: ReadonlyArray<WorkLogSubagentRunMember>;
 }
 
 export interface WorkLogSubagentAction {
@@ -380,15 +448,41 @@ export function orderedActivities(
   return ordered;
 }
 
-// Routed subagent work (Claude's agent fan-out) belongs to the composer subagent
-// strip and to the child threads themselves — the transcript never renders a
-// subagent roster. The check runs on derived entries rather than raw activities
+// Routed subagent work (Claude's agent fan-out) belongs to the transcript's
+// subagent card and to the child threads themselves, never to plain tool rows.
+// The check runs on derived entries rather than raw activities
 // because providers stream the tool call first and attach receiver metadata on a
 // later lifecycle update that merges into the same entry. Generic OpenCode task
 // calls carry no receiver metadata and keep their ordinary chat row.
-export function isRoutedSubagentWorkEntry(entry: Pick<WorkLogEntry, "itemType" | "subagents">) {
-  return entry.itemType === "collab_agent_tool_call" && (entry.subagents?.length ?? 0) > 0;
+export function isRoutedSubagentWorkEntry(
+  entry: Pick<WorkLogEntry, "itemType" | "subagents" | "subagentAction">,
+) {
+  if (entry.itemType !== "collab_agent_tool_call") {
+    return false;
+  }
+  if ((entry.subagents?.length ?? 0) > 0) {
+    return true;
+  }
+  // Waiting on, closing, or hearing back from subagents only changes their
+  // state, which the card and the child threads already show. Codex sends
+  // these without receiver ids, so without this they read as bare "Wait" rows.
+  return isSubagentStateOnlyWorkEntry(entry);
 }
+
+// A collab call that only reports on subagents already launched (wait, close,
+// settled). It may update their state but never launches one.
+export function isSubagentStateOnlyWorkEntry(entry: Pick<WorkLogEntry, "subagentAction">): boolean {
+  const tool = normalizeCollabIdentifier(entry.subagentAction?.tool ?? null);
+  return tool !== null && SUBAGENT_STATE_ONLY_COLLAB_TOOLS.has(tool);
+}
+
+const SUBAGENT_STATE_ONLY_COLLAB_TOOLS: ReadonlySet<string> = new Set([
+  "wait",
+  "waitagent",
+  "close",
+  "closeagent",
+  "subagentsettled",
+]);
 
 // Returns the same array when nothing is routed so memoized consumers keep their
 // reference identity on the common (no subagents) path.
@@ -469,8 +563,381 @@ export function deriveWorkLogEntries(
       derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
     }
   }
-  const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
-  return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+  const midTurnNotificationIds = deriveMidTurnNotificationIds(ordered);
+  if (midTurnNotificationIds.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      if (!entry.monitorNotification || !midTurnNotificationIds.has(entry.id)) continue;
+      // Copy rather than mutate: the entry is shared with the per-activity cache.
+      derived[index] = {
+        ...entry,
+        monitorNotification: { ...entry.monitorNotification, midTurn: true },
+      };
+    }
+  }
+  const completions = deriveBackgroundTaskCompletionEntries(
+    ordered,
+    latestTurnId,
+    visibleTurnIds,
+    midTurnNotificationIds,
+  );
+  return [
+    ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered),
+    ...completions,
+    ...deriveTurnFailureEntries(ordered),
+  ];
+}
+
+interface BackgroundTaskState extends WorkLogBackgroundTask {
+  toolUseId: string | null;
+  // The "Moved to background" notice that first announced the task.
+  noticeActivityId: string | null;
+}
+
+function backgroundTaskOutcome(status: unknown): WorkLogBackgroundTaskOutcome | null {
+  switch (typeof status === "string" ? status.trim().toLowerCase() : null) {
+    case "completed":
+      return "finished";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "killed":
+    case "cancelled":
+    case "interrupted":
+      return "stopped";
+    default:
+      return null;
+  }
+}
+
+function parseBackgroundTaskExitCode(detail: string | null): number | null {
+  const match = detail ? /exit code (\d+)/i.exec(detail) : null;
+  return match ? Number.parseInt(match[1]!, 10) : null;
+}
+
+// Folds a thread's task lifecycle into one state per background task: the
+// "Moved to background" notice (or a user's move to background) makes a task
+// a background task, task.started links it to the call that launched it, and
+// task.updated/task.completed settle it. Subagents (`local_agent`) keep their
+// own rows, so they are left out.
+function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadActivity>): {
+  tasks: Map<string, BackgroundTaskState>;
+  // Notices that first announced a subagent: those keep their own row.
+  noticesAnnouncingSubagents: Set<string>;
+} {
+  const tasks = new Map<string, BackgroundTaskState>();
+  const noticesAnnouncingSubagents = new Set<string>();
+  const seenTaskIds = new Set<string>();
+  const started = new Map<
+    string,
+    { toolUseId: string | null; taskType: string | null; startedAt: string }
+  >();
+  const admit = (
+    taskId: string,
+    activity: OrchestrationThreadActivity,
+    info: { taskType: string | null; description: string | null; noticeActivityId: string | null },
+  ) => {
+    const launch = started.get(taskId);
+    const taskType = info.taskType ?? launch?.taskType ?? null;
+    if (taskType === "monitor") return;
+    if (taskType === "local_agent") {
+      // An untyped update can precede both the start and the first notice.
+      // Once identified, the subagent keeps its own row and first notice.
+      const provisional = tasks.get(taskId);
+      if (provisional) {
+        tasks.delete(taskId);
+        seenTaskIds.delete(taskId);
+      }
+      const noticeActivityId = provisional?.noticeActivityId ?? info.noticeActivityId;
+      if (noticeActivityId && !seenTaskIds.has(taskId)) {
+        noticesAnnouncingSubagents.add(noticeActivityId);
+        seenTaskIds.add(taskId);
+      }
+      return;
+    }
+    if (seenTaskIds.has(taskId)) return;
+    seenTaskIds.add(taskId);
+    tasks.set(taskId, {
+      taskId,
+      taskType,
+      description: info.description,
+      command: null,
+      status: "running",
+      startedAt: launch?.startedAt ?? activity.createdAt,
+      completedAt: null,
+      exitCode: null,
+      toolUseId: launch?.toolUseId ?? null,
+      noticeActivityId: info.noticeActivityId,
+    });
+  };
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      const announced = asRecord(payload.data)?.tasks;
+      if (!Array.isArray(announced)) continue;
+      for (const task of announced) {
+        const record = asRecord(task);
+        const taskId = asTrimmedString(record?.task_id);
+        if (!taskId) continue;
+        admit(taskId, activity, {
+          taskType: asTrimmedString(record?.task_type),
+          description: asTrimmedString(record?.description),
+          noticeActivityId: activity.id,
+        });
+      }
+      continue;
+    }
+    const taskId = asTrimmedString(payload?.taskId);
+    if (!taskId) continue;
+    if (activity.kind === "task.started") {
+      const launch = {
+        toolUseId: asTrimmedString(payload?.toolUseId),
+        taskType: asTrimmedString(payload?.taskType),
+        startedAt: activity.createdAt,
+      };
+      started.set(taskId, launch);
+      const task = tasks.get(taskId);
+      if (task) {
+        if (launch.taskType === "local_agent") {
+          admit(taskId, activity, {
+            taskType: launch.taskType,
+            description: null,
+            noticeActivityId: null,
+          });
+          continue;
+        }
+        task.toolUseId ??= launch.toolUseId;
+        task.description ??= asTrimmedString(payload?.detail);
+      }
+      continue;
+    }
+    if (activity.kind === "task.updated" && payload?.isBackgrounded === true) {
+      admit(taskId, activity, {
+        taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
+        noticeActivityId: null,
+      });
+    }
+    const task = tasks.get(taskId);
+    if (!task || task.status !== "running") continue;
+    if (activity.kind === "task.updated" || activity.kind === "task.completed") {
+      const outcome = backgroundTaskOutcome(payload?.status);
+      if (!outcome) continue;
+      const detail = asTrimmedString(payload?.detail);
+      task.status = outcome;
+      task.completedAt = activity.createdAt;
+      task.exitCode = parseBackgroundTaskExitCode(detail);
+    }
+  }
+  return { tasks, noticesAnnouncingSubagents };
+}
+
+// One row per background task, in place of the call that launched it (or of
+// its "Moved to background" notice when that call is not visible). The row's
+// status follows the task, so the transcript never stacks a launch notice,
+// a launching command and a completion line for the same work.
+function withBackgroundTaskRows<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<WorkLogEntry> {
+  if (
+    !ordered.some(
+      (activity) =>
+        (activity.kind === "runtime.warning" &&
+          asRecord(activity.payload)?.nativeEventType === "background_tasks_changed") ||
+        (activity.kind === "task.updated" && asRecord(activity.payload)?.isBackgrounded === true),
+    )
+  ) {
+    return entries;
+  }
+  const { tasks, noticesAnnouncingSubagents } = deriveBackgroundTaskStates(ordered);
+  if (tasks.size === 0) {
+    return entries;
+  }
+  const launchEntryByToolUseId = new Map<string, Entry>();
+  for (const entry of entries) {
+    if (entry.toolCallId) launchEntryByToolUseId.set(entry.toolCallId, entry);
+  }
+  const taskByToolUseId = new Map<string, BackgroundTaskState>();
+  const tasksByNoticeId = new Map<string, BackgroundTaskState[]>();
+  for (const task of tasks.values()) {
+    const launchEntry = task.toolUseId ? launchEntryByToolUseId.get(task.toolUseId) : undefined;
+    if (launchEntry && task.toolUseId) {
+      task.command = launchEntry.rawCommand ?? launchEntry.command ?? null;
+      taskByToolUseId.set(task.toolUseId, task);
+    } else if (task.noticeActivityId) {
+      const noticeTasks = tasksByNoticeId.get(task.noticeActivityId) ?? [];
+      noticeTasks.push(task);
+      tasksByNoticeId.set(task.noticeActivityId, noticeTasks);
+    }
+  }
+  const rowFor = (task: BackgroundTaskState, anchor: WorkLogEntry, id: string): WorkLogEntry => {
+    const { toolUseId: _toolUseId, noticeActivityId: _noticeActivityId, ...backgroundTask } = task;
+    return {
+      id,
+      createdAt: anchor.createdAt,
+      ...(anchor.sequence !== undefined ? { sequence: anchor.sequence } : {}),
+      ...(anchor.turnId ? { turnId: anchor.turnId } : {}),
+      label: "Background task",
+      tone: "tool",
+      ...(anchor.activityKind ? { activityKind: anchor.activityKind } : {}),
+      backgroundTask,
+    };
+  };
+  const rows: WorkLogEntry[] = [];
+  for (const entry of entries) {
+    const launchedTask = entry.toolCallId ? taskByToolUseId.get(entry.toolCallId) : undefined;
+    if (launchedTask) {
+      rows.push(rowFor(launchedTask, entry, entry.id));
+      continue;
+    }
+    if (entry.nativeEventType === "background_tasks_changed") {
+      for (const task of tasksByNoticeId.get(entry.id) ?? []) {
+        rows.push(rowFor(task, entry, `${entry.id}:${task.taskId}`));
+      }
+      // The notice only stays for work this model does not cover (subagents).
+      if (noticesAnnouncingSubagents.has(entry.id)) {
+        rows.push(entry);
+      }
+      continue;
+    }
+    rows.push(entry);
+  }
+  return rows;
+}
+
+function subagentOutcomeFromStatus(
+  status: string | null | undefined,
+): "completed" | "failed" | "stopped" | undefined {
+  switch (status?.trim().toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "interrupted":
+    case "cancelled":
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
+  }
+}
+
+export interface SubagentTaskEnd {
+  outcome: "completed" | "failed" | "stopped";
+  endedAt: string;
+  /** The same provider task's previous, already settled invocation. */
+  previous?: SubagentTaskEnd;
+}
+
+/**
+ * When and how each subagent task ended, keyed by its launching tool call id,
+ * from the parent's task completions. A background subagent's own thread ends
+ * its first turn at launch, so this is the only reliable end it has.
+ */
+export function deriveSubagentTaskEnds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, SubagentTaskEnd> {
+  const ends = new Map<string, SubagentTaskEnd>();
+  const resumed = new Set<string>();
+  for (const activity of activities) {
+    const payload = asRecord(activity.payload);
+    const toolUseId = asTrimmedString(payload?.toolUseId);
+    if (activity.kind === "task.started" && toolUseId && ends.has(toolUseId)) {
+      resumed.add(toolUseId);
+    }
+    if (activity.kind !== "task.completed") continue;
+    const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+    if (toolUseId && outcome) {
+      const previous = resumed.has(toolUseId) ? ends.get(toolUseId) : ends.get(toolUseId)?.previous;
+      ends.set(toolUseId, {
+        outcome,
+        endedAt: activity.createdAt,
+        ...(previous ? { previous } : {}),
+      });
+      resumed.delete(toolUseId);
+    }
+  }
+  return ends;
+}
+
+// Keep terminal outcomes within one invocation. A resumed task reuses its tool
+// id, but a task.started after settlement opens a new scope. Background progress
+// can span parent turns without starting a new invocation.
+function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<Entry> {
+  if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
+    return entries;
+  }
+  type Invocation = { id?: string; outcome?: WorkLogSubagentProgress["outcome"] };
+  const invocationByToolUseId = new Map<string, Invocation>();
+  const invocationByProgressId = new Map<string, Invocation>();
+  const currentInvocation = (toolUseId: string): Invocation => {
+    let invocation = invocationByToolUseId.get(toolUseId);
+    if (!invocation) {
+      invocation = {};
+      invocationByToolUseId.set(toolUseId, invocation);
+    }
+    return invocation;
+  };
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (activity.kind === "task.started") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId && invocationByToolUseId.get(toolUseId)?.outcome !== undefined) {
+        // Older progress retains its settled invocation object. A repeated
+        // start while still live leaves the existing invocation intact.
+        invocationByToolUseId.set(toolUseId, {});
+      }
+      continue;
+    }
+    if (activity.kind === "task.progress") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId) {
+        const invocation = currentInvocation(toolUseId);
+        invocation.id ??= activity.id;
+        invocationByProgressId.set(activity.id, invocation);
+      }
+      continue;
+    }
+    if (activity.kind === "task.completed") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
+      if (toolUseId && outcome) currentInvocation(toolUseId).outcome = outcome;
+      continue;
+    }
+    if (
+      (activity.kind === "tool.updated" || activity.kind === "tool.completed") &&
+      extractWorkLogItemType(payload) === "collab_agent_tool_call"
+    ) {
+      for (const [threadId, state] of Object.entries(
+        decodeSubagentAgentStates(collabPayloadItem(payload)),
+      )) {
+        const outcome = subagentOutcomeFromStatus(state.status);
+        if (outcome) currentInvocation(threadId).outcome = outcome;
+      }
+    }
+  }
+  return entries.map((entry) => {
+    const invocation = entry.subagentProgress ? invocationByProgressId.get(entry.id) : undefined;
+    return invocation && entry.subagentProgress
+      ? {
+          ...entry,
+          subagentProgress: {
+            ...entry.subagentProgress,
+            invocationId: invocation.id ?? entry.id,
+            ...(invocation.outcome ? { outcome: invocation.outcome } : {}),
+          },
+        }
+      : entry;
+  });
 }
 
 // A handoff row summarizes two sessions. Each side reads the fast-mode state its own
@@ -573,14 +1040,50 @@ function deriveTurnFailureEntries(
   return [...failures.values()];
 }
 
+// A background task completion or Monitor event wakes an idle agent into a new
+// response. One that arrives while its turn is already working (the agent
+// stopped its own server, or a build finished between tool calls) is only a
+// status update inside that response. A turn is working once it has run a tool
+// or launched a task, until it completes; a response woken by the notification
+// itself has done neither yet.
+function deriveMidTurnNotificationIds(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): Set<string> {
+  const workingTurnIds = new Set<string>();
+  const ids = new Set<string>();
+  for (const activity of ordered) {
+    const turnId = activity.turnId;
+    if (!turnId) continue;
+    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
+      workingTurnIds.delete(turnId);
+    } else if (
+      activity.kind.startsWith("tool.") ||
+      activity.kind.startsWith("approval.") ||
+      activity.kind === "task.started"
+    ) {
+      workingTurnIds.add(turnId);
+    } else if (
+      workingTurnIds.has(turnId) &&
+      (activity.kind === "task.completed" ||
+        (activity.kind === "runtime.warning" &&
+          asRecord(activity.payload)?.nativeEventType === "monitor_event"))
+    ) {
+      ids.add(activity.id);
+    }
+  }
+  return ids;
+}
+
 // Completions of tasks a visible "Moved to background" notice announced. They
 // bypass the turn filter once the notice that launched them is visible, and
 // belong to the turn that launched the task: a completion can arrive after the
 // user already started another turn (a stopped turn's subagents report late).
+// A mid-turn completion adds nothing: the task's own row already shows it.
 function deriveBackgroundTaskCompletionEntries(
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+  midTurnNotificationIds: ReadonlySet<string>,
 ): WorkLogEntry[] {
   const backgroundTasks = new Map<
     string,
@@ -611,6 +1114,7 @@ function deriveBackgroundTaskCompletionEntries(
     const launched = backgroundTasks.get(payload.taskId);
     if (!launched) continue;
     backgroundTasks.delete(payload.taskId);
+    if (midTurnNotificationIds.has(activity.id)) continue;
     const { turnId: launchTurnId, ...task } = launched;
     const turnId = launchTurnId ?? activity.turnId;
     const noun = task.taskType === "local_agent" ? "Subagent" : "Background task";
@@ -629,7 +1133,7 @@ function deriveBackgroundTaskCompletionEntries(
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
-      backgroundTaskCompletion: { taskId: payload.taskId, ...task },
+      backgroundTaskCompletion: { taskId: payload.taskId, ...task, outcome },
     });
   }
   return completions;
@@ -668,6 +1172,12 @@ function shouldKeepActivityForWorkLog(
   // Created-automation milestones are thread-scoped and carry no provider turn id;
   // keep them so the transcript card survives once the thread has turn-stamped messages.
   if (activity.kind === "automation.created") {
+    return true;
+  }
+
+  // The native subagent cap notice can be budgeted outside any visible turn;
+  // it is the only sign that more subagents ran than the thread shows.
+  if (activity.kind === "subagent.materialization.capped") {
     return true;
   }
 
@@ -712,6 +1222,10 @@ function shouldKeepActivityForWorkLog(
 }
 
 function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): boolean {
+  // Turn starts only record the model for the turn header.
+  if (activity.kind === "turn.started" || activity.kind === "turn.stop-requested") {
+    return true;
+  }
   if (activity.kind !== "turn.completed" && activity.kind !== "turn.aborted") {
     return false;
   }
@@ -1253,8 +1767,36 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.label = "Provider retrying";
     }
   }
+  // A Claude Monitor event wakes the agent like a finished background task, so
+  // it gets the same standalone row that marks where the new response starts.
+  if (activity.kind === "runtime.warning" && nativeEventType === "monitor_event") {
+    const taskId = asTrimmedString(asRecord(payload?.data)?.task_id);
+    const data = asRecord(payload?.data);
+    const outcome =
+      data?.outcome === "completed" || data?.outcome === "failed" || data?.outcome === "stopped"
+        ? data.outcome
+        : "updated";
+    const name = asTrimmedString(data?.name) ?? "";
+    entry.monitorNotification = {
+      taskId: taskId ?? activity.id,
+      name,
+      output: asTrimmedString(data?.output) ?? runtimeWarningMessage ?? "",
+      outcome,
+    };
+    entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    if (outcome === "failed") entry.tone = "error";
+  }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
+  }
+  if (activity.kind === "task.progress") {
+    const subagentToolUseId = asTrimmedString(payload?.toolUseId);
+    if (subagentToolUseId) {
+      entry.subagentProgress = {
+        toolUseId: subagentToolUseId,
+        title: asTrimmedString(payload?.subagentTitle),
+      };
+    }
   }
   if (activity.kind === "turn.tasks.updated") {
     const tasks = parseTaskListTasks(payload);
@@ -3308,6 +3850,41 @@ function isSequenced(row: TimelineEntry): boolean {
   return row.kind === "work" && row.sequence !== undefined;
 }
 
+// The SDK and transcript can report one Monitor termination twice. Coalesce
+// adjacent matching native task/outcome notices only; any reply or different
+// outcome remains a distinct boundary. Keep the exact output and earlier anchor.
+function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry[] {
+  let result: TimelineEntry[] | undefined;
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = result?.at(-1) ?? entries[index - 1]!;
+    const current = entries[index]!;
+    if (previous.kind === "work" && current.kind === "work") {
+      const monitorRow = previous.entry.monitorNotification ? previous : current;
+      const completionRow = previous.entry.backgroundTaskCompletion ? previous : current;
+      const monitor = monitorRow.entry.monitorNotification;
+      const completion = completionRow.entry.backgroundTaskCompletion;
+      if (
+        monitorRow !== completionRow &&
+        monitor &&
+        completion &&
+        monitor.outcome !== "updated" &&
+        monitor.taskId === completion.taskId &&
+        monitor.outcome ===
+          (completion.outcome === "finished" ? "completed" : completion.outcome) &&
+        (!previous.entry.turnId ||
+          !current.entry.turnId ||
+          previous.entry.turnId === current.entry.turnId)
+      ) {
+        result ??= entries.slice(0, index);
+        result[result.length - 1] = { ...monitorRow, createdAt: previous.createdAt };
+        continue;
+      }
+    }
+    result?.push(current);
+  }
+  return result ?? entries;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -3466,22 +4043,24 @@ export function deriveTimelineEntries(
   const sequencedWorkRows = workRows.filter(isSequenced);
   const timedWorkRows =
     sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
-  return coalesceAdjacentMessageSegments(
-    mergeTimelineEntries(
+  return coalesceMonitorTerminalNotices(
+    coalesceAdjacentMessageSegments(
       mergeTimelineEntries(
         mergeTimelineEntries(
-          sortedTimelineEntries(messageRows, compare),
-          sortedTimelineEntries(proposedPlanRows, compare),
+          mergeTimelineEntries(
+            sortedTimelineEntries(messageRows, compare),
+            sortedTimelineEntries(proposedPlanRows, compare),
+            compare,
+          ),
+          sortedTimelineEntries(timedWorkRows, compare),
           compare,
         ),
-        sortedTimelineEntries(timedWorkRows, compare),
+        sortedTimelineEntries(
+          sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
+          compare,
+        ),
         compare,
       ),
-      sortedTimelineEntries(
-        sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
-        compare,
-      ),
-      compare,
     ),
   );
 }

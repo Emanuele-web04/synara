@@ -1,0 +1,24 @@
+---
+title: Multi-folder projects
+description: Work across related folders with Codex or Claude, with explicit limits for Git and recovery.
+---
+
+Available in Synara 1.0.1-beta.2. Create one project for a frontend, API and shared package that change together.
+
+## Choose source folders
+
+When creating a project, add folders under **Source folders**. Use **Make primary** to choose the working directory. The primary folder retains ordinary single-folder project behavior. The agent receives the other folders as additional accessible directories and a list of their absolute paths.
+
+Every folder must already exist. Duplicate and nested folders are refused, including aliases resolved to the same folder. The folder set is fixed when the project is created; create another project to use a different set.
+
+## Provider and environment limits
+
+Only **Codex and Claude** support additional folders. Other providers refuse the chat rather than silently dropping directory access. Use **Local mode**: Worktree mode is refused because it would isolate only the primary folder while editing the other folders live. Provider permission and sandbox policies still apply.
+
+## Review and recover changes
+
+Git actions, checkpoint diffs, and File Undo cover **only the primary folder**. Review, commit and recover edits in additional folders separately, using each folder's own tools and Git history. Multi-folder access does not provide multi-repository checkpoints or atomic Undo.
+
+See [Organize & navigate](/docs/features/organize), [Worktrees](/docs/workflows/worktrees), and [Provider accounts](/docs/features/provider-accounts).
+
+Source evidence: Synara `48603e869`, the audited release head for `1.0.1-beta.2`. `packages/shared/src/projectFolders.ts`, `apps/server/src/orchestration/decider.ts`, `apps/web/src/components/CreateProjectDialog.tsx`, provider command delivery, and the Codex/Claude adapters.

@@ -36,6 +36,7 @@ export interface SubagentStripSource {
   stripSourceActivities: ReadonlyArray<OrchestrationThreadActivity>;
   stripLiveTurnId: TurnId | null;
   stripWorkLogEntries: WorkLogEntry[];
+  stripRelevantWorkLogThreads: ReadonlyArray<Thread>;
   hasStripWorkLogSubagents: boolean;
   backgroundedSubagentToolUseIds: ReadonlySet<string>;
   subagentParentRow: SubagentParentRow | null;
@@ -234,6 +235,7 @@ export function useSubagentStripSource(input: {
     stripSourceActivities,
     stripLiveTurnId,
     stripWorkLogEntries,
+    stripRelevantWorkLogThreads,
     hasStripWorkLogSubagents,
     backgroundedSubagentToolUseIds,
     subagentParentRow,

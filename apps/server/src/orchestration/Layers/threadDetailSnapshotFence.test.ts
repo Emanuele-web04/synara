@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -16,6 +17,7 @@ import { expect, it } from "vitest";
 import { ServerConfig } from "../../config.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
+import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -30,7 +32,7 @@ const threadId = ThreadId.makeUnsafe("fence-thread");
 const messageId = MessageId.makeUnsafe("fence-message");
 const projectId = ProjectId.makeUnsafe("fence-project");
 
-it("never includes a streamed delta newer than the detail snapshot sequence", async () => {
+it("fences streamed deltas and rollback revisions with the projected detail", async () => {
   const runtime = ManagedRuntime.make(
     OrchestrationEngineLive.pipe(
       Layer.provideMerge(OrchestrationProjectionPipelineLive),
@@ -39,7 +41,7 @@ it("never includes a streamed delta newer than the detail snapshot sequence", as
           Layer.provide(ServerSettingsService.layerTest()),
         ),
       ),
-      Layer.provide(OrchestrationEventStoreLive),
+      Layer.provideMerge(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -123,6 +125,49 @@ it("never includes a streamed delta newer than the detail snapshot sequence", as
         .join("");
       expect(text).toBe(expected);
     }
+
+    const beforeRollback = Option.getOrThrow(
+      await runtime.runPromise(snapshots.getThreadDetailSnapshotById(threadId)),
+    );
+    expect(beforeRollback.historyRevisionSequence).toBe(0);
+    const rollback = await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.conversation.rollback.complete",
+        commandId: CommandId.makeUnsafe("fence-rollback"),
+        threadId,
+        messageId,
+        numTurns: 1,
+        createdAt: at,
+      }),
+    );
+    const afterRollback = Option.getOrThrow(
+      await runtime.runPromise(snapshots.getThreadDetailSnapshotById(threadId)),
+    );
+    expect(afterRollback.thread.messages).toEqual([]);
+    expect(afterRollback.historyRevisionSequence).toBe(rollback.sequence);
+
+    // A durable event can lead its projections. Its revision must not make old
+    // detail look authoritative for a rollback that has not been applied yet.
+    const eventStore = await runtime.runPromise(Effect.service(OrchestrationEventStore));
+    const pendingRollback = await runtime.runPromise(
+      eventStore.append({
+        eventId: EventId.makeUnsafe("fence-unprojected-rollback"),
+        type: "thread.reverted",
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: at,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: { threadId, turnCount: 0 },
+      }),
+    );
+    const pending = Option.getOrThrow(
+      await runtime.runPromise(snapshots.getThreadDetailSnapshotById(threadId)),
+    );
+    expect(pending.snapshotSequence).toBeLessThan(pendingRollback.sequence);
+    expect(pending.historyRevisionSequence).toBe(rollback.sequence);
   } finally {
     await runtime.dispose();
   }

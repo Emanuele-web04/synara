@@ -8,6 +8,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   clearRemovedAsyncUserInputResponses,
@@ -1427,9 +1428,21 @@ function applyOrchestrationEvent(
       );
 
     case "thread.turn-interrupt-requested": {
-      // Interrupt requests are best-effort and can fail or time out. Keep the
-      // latest-turn clock/state live until the provider confirms a terminal event.
-      return state;
+      // Record intent for attribution, keeping the turn live until confirmed.
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+          if (!activity) return thread;
+          const activities = normalizeActivities(
+            [...thread.activities, activity],
+            thread.activities,
+          );
+          return activities === thread.activities ? thread : { ...thread, activities };
+        },
+        options,
+      );
     }
 
     case "thread.session-stop-requested":
@@ -1959,6 +1972,22 @@ export function applyOrchestrationEventsHotPath(
       continue;
     }
     nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
+    if (
+      (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") &&
+      nextState.threadDetailRevisionSequenceById?.[event.payload.threadId] !== undefined
+    ) {
+      const threadId = event.payload.threadId;
+      nextState = {
+        ...nextState,
+        threadDetailRevisionSequenceById: {
+          ...nextState.threadDetailRevisionSequenceById,
+          [threadId]: Math.max(
+            nextState.threadDetailRevisionSequenceById[threadId]!,
+            event.sequence,
+          ),
+        },
+      };
+    }
   }
   return nextState;
 }

@@ -1267,6 +1267,24 @@ describe("resolveRequestedModeId", () => {
       ),
     ).resolves.toBe("bypass");
   });
+
+  it("applies Ask Everytime when Code is absent from the Devin catalog", async () => {
+    const harness = makeFakeAcpRuntime({
+      currentModeId: "full-access",
+      availableModes: [
+        { id: "full-access", name: "Full Access" },
+        { id: "ask-everytime", name: "Ask Everytime" },
+      ],
+    });
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime: harness.runtime,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      }),
+    );
+    expect(harness.calls).toEqual([{ method: "setMode", args: ["ask-everytime"] }]);
+  });
 });
 
 describe("resolveDevinStartModel", () => {
