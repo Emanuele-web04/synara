@@ -11,6 +11,7 @@ import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
+import { useProjectAgentSummariesStore } from "../components/chat/project/useProjectAgentSummaries";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -36,6 +37,7 @@ function ChatIndexRouteView() {
   const landingSpaceKey = Route.useSearch({ select: (search) => search.space });
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
+  const summariesByProjectId = useProjectAgentSummariesStore((state) => state.summariesByProjectId);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -83,6 +85,7 @@ function ChatIndexRouteView() {
       threadIds,
       sidebarThreadSummaryById,
       groupProjectIds,
+      summariesByProjectId,
       draftProjectIdByThreadId,
       rememberedSplitViewThreadIds: rememberedSplitView
         ? resolveSplitViewThreadIds(rememberedSplitView)

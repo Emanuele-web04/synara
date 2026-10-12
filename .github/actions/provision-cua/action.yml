@@ -10,6 +10,9 @@ inputs:
   prepared-artifact:
     description: Verified native preparation from this workflow run; never falls back to another source
     default: ""
+  arch:
+    description: Target architecture (arm64 or x64); defaults to the runner. macOS may cross-compile.
+    default: ""
 outputs:
   cache-hit:
     value: ${{ steps.cache.outputs.cache-hit }}
@@ -20,8 +23,17 @@ runs:
   steps:
     - name: Select pinned native toolchains
       shell: bash
+      env:
+        TARGET_ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
+        host_arch=$(node -p process.arch)
+        target_arch="${TARGET_ARCH:-$host_arch}"
+        if [[ "$target_arch" != "$host_arch" && "$RUNNER_OS" != "macOS" ]]; then
+          echo "Only macOS can cross-compile Cua ($host_arch host, $target_arch target)." >&2
+          exit 1
+        fi
+        echo "SYNARA_CUA_TARGET_ARCH=$target_arch" >> "$GITHUB_ENV"
         if [[ "$RUNNER_OS" == "macOS" ]]; then
           test -d /Applications/Xcode_16.4.app/Contents/Developer
           echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
@@ -29,6 +41,11 @@ runs:
         fi
         rust_version=$(node -p 'require("./packages/shared/src/cuaDriverRelease.json").rustVersion')
         rustup toolchain install "$rust_version" --profile minimal
+        if [[ "$target_arch" != "$host_arch" ]]; then
+          rust_target=aarch64-apple-darwin
+          if [[ "$target_arch" == "x64" ]]; then rust_target=x86_64-apple-darwin; fi
+          rustup target add --toolchain "$rust_version" "$rust_target"
+        fi
         echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
 
     - name: Install Linux native build dependencies
@@ -95,7 +112,7 @@ runs:
       run: |
         set -euo pipefail
         unset SYNARA_CUA_ARTIFACT_DIR SYNARA_CUA_SIGN_IDENTITY
-        node apps/desktop/scripts/provision-cua-driver.mjs --destination "$RUNNER_TEMP/cua-artifact"
+        node apps/desktop/scripts/provision-cua-driver.mjs --arch "$SYNARA_CUA_TARGET_ARCH" --destination "$RUNNER_TEMP/cua-artifact"
         printf '%s\n' "$CACHE_KEY" > "$RUNNER_TEMP/cua-artifact/build-key.txt"
 
     - name: Validate and stage cached Cua
@@ -110,7 +127,7 @@ runs:
         set -euo pipefail
         test "$(cat "$RUNNER_TEMP/cua-artifact/build-key.txt")" = "$CACHE_KEY"
         unset SYNARA_CUA_SIGN_IDENTITY
-        node apps/desktop/scripts/provision-cua-driver.mjs --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
+        node apps/desktop/scripts/provision-cua-driver.mjs --arch "$SYNARA_CUA_TARGET_ARCH" --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
         echo "SYNARA_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
         echo "Cua exact cache hit: $CACHE_HIT; persistent run: $PERSISTENT_RUN; prepared artifact: $PREPARED_ARTIFACT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
 

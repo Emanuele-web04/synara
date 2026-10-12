@@ -155,6 +155,16 @@ function candidateStatPath(filePath: string, context: ExecutableLookupContext): 
   return pathModule.resolve(context.cwd ?? process.cwd(), filePath);
 }
 
+function lookupPathEntries(context: ExecutableLookupContext): string[] {
+  const directories = pathEntries(context.env, context.platform);
+  if (context.platform !== "win32") return directories;
+  const cwd = win32.resolve(context.cwd ?? process.cwd()).toLowerCase();
+  // Bare Windows commands must not select repository-controlled files from
+  // the launch cwd, even when PATH explicitly includes it. A qualified path
+  // still expresses the caller's intent to launch a local executable.
+  return directories.filter((directory) => win32.resolve(cwd, directory).toLowerCase() !== cwd);
+}
+
 function* candidatesIn(
   command: string,
   context: ExecutableLookupContext,
@@ -174,7 +184,7 @@ function* candidatesIn(
     return;
   }
 
-  for (const directory of pathEntries(context.env, context.platform)) {
+  for (const directory of lookupPathEntries(context)) {
     for (const name of names) {
       yield { directory, path: join(directory, name) };
     }
@@ -292,7 +302,7 @@ export function createBatchExecutableResolver(
     );
     // Same order as candidatesIn. The listing is a case-folded superset
     // pre-filter; the stat in isExecutableFileIn stays authoritative.
-    for (const directory of pathEntries(context.env, context.platform)) {
+    for (const directory of lookupPathEntries(context)) {
       const listing = listingFor(directory);
       for (const name of names) {
         if (listing !== null && isListingFilterable(name) && !listing.has(name.toLowerCase())) {

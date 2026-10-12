@@ -9,6 +9,7 @@ import { resolveSelectableModel } from "@synara/shared/model";
 import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
 import {
   formatProviderModelOptionName,
+  getOmpModelSelectionIssue,
   groupProviderModelOptions,
   type ProviderModelOption,
 } from "../../providerModelOptions";
@@ -136,8 +137,6 @@ export type ComposerModelPickerRow = {
   groupLabel: string | null;
   /** Present on starred rows: the preset to restore and to un-star. */
   preset: StarredModel | null;
-  /** Present on OMP role rows: the model + options the role resolves to. */
-  role?: ProviderModelOption["role"];
 };
 
 export function buildProviderTabRows(input: {
@@ -167,13 +166,15 @@ export function buildProviderTabRows(input: {
         ? { instanceId: input.instanceId }
         : {}),
       model: option.slug,
-      selectableModel: option.slug,
+      selectableModel:
+        provider === "omp" && getOmpModelSelectionIssue(option.slug, input.options)
+          ? null
+          : option.slug,
       name: option.name,
       detail: null,
       selected: option.slug === input.selectedModel,
       groupLabel: group.label,
       preset: null,
-      role: option.role,
     })),
   );
 }
@@ -201,7 +202,10 @@ export function buildStarredTabRows(input: {
     const instanceId = starredModelInstanceId(entry);
     const options = input.modelOptionsFor(entry.provider, instanceId);
     const accountLabel = input.accountLabelFor?.(instanceId);
-    const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
+    const selectableModel =
+      entry.provider === "omp" && getOmpModelSelectionIssue(entry.model, options)
+        ? null
+        : resolveSelectableModel(entry.provider, entry.model, options);
     const name =
       options.find((option) => option.slug === selectableModel)?.name ??
       formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });

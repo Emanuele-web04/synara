@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import {
@@ -34,6 +36,7 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { makeCodexAdapterLive } from "./CodexAdapter.ts";
+import { makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -714,6 +717,71 @@ turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
     }),
   );
 });
+
+it.effect(
+  "keeps automatic approval review starts in native logs and preserves completion warnings",
+  () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-auto-approval-review-"));
+      try {
+        const logger = yield* makeEventNdjsonLogger(path.join(tempDir, "native.ndjson"), {
+          stream: "native",
+        });
+        assert.ok(logger);
+        const manager = new FakeCodexManager();
+        yield* Effect.gen(function* () {
+          const adapter = yield* CodexAdapter;
+          const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const emit = (method: string, status: string) =>
+            manager.emit("event", {
+              id: asEventId(`review-${method}-${status}`),
+              kind: "notification",
+              provider: "codex",
+              createdAt: new Date().toISOString(),
+              method,
+              threadId: asThreadId("review-thread"),
+              turnId: asTurnId("review-turn"),
+              payload: { review: { status, rationale: `Review ${status}` } },
+            } satisfies ProviderEvent);
+
+          emit("item/autoApprovalReview/started", "inProgress");
+          emit("item/autoApprovalReview/completed", "approved");
+          emit("item/autoApprovalReview/completed", "denied");
+          emit("item/autoApprovalReview/completed", "aborted");
+          emit("session/started", "ready");
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          assert.deepEqual(
+            events.map((event) => event.type),
+            ["runtime.warning", "runtime.warning", "session.started"],
+          );
+          assert.deepEqual(
+            events
+              .filter((event) => event.type === "runtime.warning")
+              .map((event) => event.payload.message),
+            ["Review denied", "Review aborted"],
+          );
+        }).pipe(
+          Effect.provide(
+            makeCodexAdapterLive({ manager, nativeEventLogger: logger }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+              Layer.provideMerge(providerSessionDirectoryTestLayer),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        );
+        yield* logger.close();
+        const nativeLog = fs.readFileSync(path.join(tempDir, "review-thread.log"), "utf8");
+        assert.ok(nativeLog.includes('"method":"item/autoApprovalReview/started"'));
+        assert.ok(nativeLog.includes('"status":"inProgress"'));
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+);
 
 const lifecycleManager = new FakeCodexManager();
 const lifecycleLayer = it.layer(

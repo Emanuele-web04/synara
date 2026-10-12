@@ -85,9 +85,10 @@ function RuntimeModeMenuItem({
   return (
     <MenuRadioItem
       value={mode}
+      preserveChildLayout
+      closeOnClick
       className={cn(
-        "runtime-mode-menu-item",
-        mode === "auto" && "runtime-mode-menu-item--auto",
+        "runtime-mode-menu-item data-checked:bg-[var(--color-background-button-secondary-hover)]",
         accent &&
           "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
       )}
