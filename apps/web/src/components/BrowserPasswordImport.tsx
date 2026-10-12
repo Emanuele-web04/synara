@@ -1,5 +1,6 @@
 import type { BrowserPasswordImportResult, BrowserVaultMethods } from "@synara/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BrowserVaultMaster } from "./BrowserVaultMaster";
 import { Button } from "./ui/button";
 
 type Inventory = Awaited<ReturnType<BrowserVaultMethods["inventoryChromiumProfiles"]>>;
@@ -23,7 +24,7 @@ function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false
     case "too_many_logins":
       return "This profile has more saved passwords than Synara can safely import in one operation.";
     case "vault_locked":
-      return "Unlock or set up Saved Logins in this window, then retry the import.";
+      return "Unlock or set up Saved Logins below, then retry the import.";
     case "vault_failed":
       return "Synara could not save these passwords. Check available disk space and try again.";
     case "unsupported_platform":
@@ -33,35 +34,74 @@ function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false
   }
 }
 
-export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
+export function BrowserPasswordImport({
+  api,
+  onBusyChange,
+}: {
+  api: BrowserVaultMethods;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const [inventory, setInventory] = useState<Inventory>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [inventoryStatus, setInventoryStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [vaultAction, setVaultAction] = useState<"setup" | "unlock" | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [masterAction, setMasterAction] = useState<"setup" | "unlock" | null>(null);
+  const inventoryRequest = useRef(0);
+  const vaultRequest = useRef(0);
+
+  const refreshVaultAccess = useCallback(async () => {
+    const request = ++vaultRequest.current;
+    setVaultStatus("loading");
+    try {
+      const snapshot = await api.snapshot();
+      if (request !== vaultRequest.current) return;
+      setVaultAction(
+        snapshot.protection.locked ? (snapshot.protection.configured ? "unlock" : "setup") : null,
+      );
+      setVaultStatus("ready");
+    } catch {
+      if (request === vaultRequest.current) {
+        setStatus("Saved Logins could not be inspected. Try again before importing passwords.");
+        setVaultStatus("error");
+      }
+    }
+  }, [api]);
+
+  const loadInventory = useCallback(async () => {
+    const request = ++inventoryRequest.current;
+    setInventoryStatus("loading");
+    setInventory([]);
+    try {
+      const next = await api.inventoryChromiumProfiles();
+      if (request !== inventoryRequest.current) return;
+      setInventory(next);
+      setSelected(
+        Object.fromEntries(
+          next.flatMap((browser) =>
+            browser.profiles.map((profile) => [`${browser.id}:${profile.id}`, true]),
+          ),
+        ),
+      );
+      setInventoryStatus("ready");
+    } catch {
+      if (request === inventoryRequest.current) setInventoryStatus("error");
+    }
+  }, [api]);
 
   useEffect(() => {
-    let active = true;
-    void api
-      .inventoryChromiumProfiles()
-      .then((next) => {
-        if (!active) return;
-        setInventory(next);
-        setSelected(
-          Object.fromEntries(
-            next.flatMap((browser) =>
-              browser.profiles.map((profile) => [`${browser.id}:${profile.id}`, true]),
-            ),
-          ),
-        );
-      })
-      .catch(() => {
-        if (active) setStatus("Installed browsers could not be inspected.");
-      });
+    void loadInventory();
+    void refreshVaultAccess();
+    const unsubscribe = api.onChanged(() => void refreshVaultAccess());
     return () => {
-      active = false;
+      inventoryRequest.current++;
+      vaultRequest.current++;
+      unsubscribe();
     };
-  }, [api]);
+  }, [api, loadInventory, refreshVaultAccess]);
 
   const selectedProfiles = useMemo(
     () =>
@@ -76,6 +116,7 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
   const run = async () => {
     if (busy || !confirmed || selectedProfiles.length === 0) return;
     setBusy(true);
+    onBusyChange?.(true);
     setStatus(null);
     const outcomes: string[] = [];
     try {
@@ -91,6 +132,9 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
               ? `${browser.name} — ${profile.name}: ${result.imported} imported, ${result.skipped} skipped${result.warnings.length ? "; provenance could not be saved" : ""}.`
               : `${browser.name} — ${profile.name}: ${failureMessage(result)}`,
           );
+          if (!result.ok && result.code === "vault_locked") {
+            void refreshVaultAccess();
+          }
         } catch {
           outcomes.push(`${browser.name} — ${profile.name}: Synara could not finish this import.`);
         }
@@ -99,6 +143,7 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
       setStatus(outcomes.join(" "));
       setBusy(false);
       setConfirmed(false);
+      onBusyChange?.(false);
     }
   };
 
@@ -108,8 +153,21 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
       aria-label="Import saved passwords"
     >
       <h3 className="font-medium text-muted-foreground">Import saved passwords</h3>
-      {inventory.length === 0 ? (
-        <p className="text-muted-foreground">
+      {inventoryStatus === "loading" ? (
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          Looking for installed Chromium browsers…
+        </p>
+      ) : inventoryStatus === "error" ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-ui-sm text-destructive">
+            Installed browser profiles could not be inspected.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void loadInventory()}>
+            Retry browser detection
+          </Button>
+        </div>
+      ) : inventory.length === 0 ? (
+        <p className="text-ui-sm text-muted-foreground">
           No supported installed Chromium browsers were found.
         </p>
       ) : (
@@ -160,6 +218,38 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
           ))}
         </ul>
       )}
+      {vaultAction ? (
+        <div className="space-y-2 rounded-md border p-3">
+          <p className="text-ui-sm text-muted-foreground">
+            {vaultAction === "setup"
+              ? "Set up Saved Logins before importing passwords."
+              : "Unlock Saved Logins before importing passwords."}
+          </p>
+          {masterAction ? (
+            <BrowserVaultMaster
+              api={api}
+              action={{ kind: masterAction }}
+              onDone={() => {
+                setMasterAction(null);
+                void refreshVaultAccess();
+              }}
+            />
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => setMasterAction(vaultAction)}>
+              {vaultAction === "setup" ? "Set up Saved Logins" : "Unlock Saved Logins"}
+            </Button>
+          )}
+        </div>
+      ) : null}
+      {vaultStatus === "loading" ? (
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          Checking Saved Logins protection…
+        </p>
+      ) : vaultStatus === "error" ? (
+        <Button size="sm" variant="outline" onClick={() => void refreshVaultAccess()}>
+          Retry Saved Logins check
+        </Button>
+      ) : null}
       {inventory.length > 0 ? (
         <>
           <label className="flex items-start gap-2">
@@ -182,7 +272,13 @@ export function BrowserPasswordImport({ api }: { api: BrowserVaultMethods }) {
           <div className="flex justify-end">
             <Button
               size="sm"
-              disabled={busy || !confirmed || selectedProfiles.length === 0}
+              disabled={
+                busy ||
+                !confirmed ||
+                selectedProfiles.length === 0 ||
+                vaultStatus !== "ready" ||
+                vaultAction !== null
+              }
               onClick={() => void run()}
             >
               {busy ? "Importing…" : "Import selected passwords"}

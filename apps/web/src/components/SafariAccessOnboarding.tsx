@@ -74,7 +74,7 @@ export function SafariAccessOnboarding({
   const [busy, setBusy] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
-  const wantsOpen = info?.supported === true && (decision === "unseen" || revisit);
+  const wantsOpen = info?.supported === true && (revisit || (startup && decision === "unseen"));
   const { open: startupOpen } = useAnnouncementSheetSlot(startup && wantsOpen && !revisit);
   // Local setup and deliberate Settings revisits must not depend on the root's
   // first-run gate or wait behind an automatic announcement.

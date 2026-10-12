@@ -51,6 +51,23 @@ function Harness() {
 }
 
 describe("Safari access onboarding", () => {
+  it("keeps Safari access guidance in Settings instead of opening a separate startup sheet", async () => {
+    const screen = await render(
+      <>
+        <SafariAccessOnboarding />
+        <SafariAccessSetupButton />
+      </>,
+    );
+    try {
+      await vi.waitFor(() => expect(api.getInfo).toHaveBeenCalled());
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("opens manual setup despite a pending startup gate and an occupied slot", async () => {
     localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("later"));
     useOnboardingDialogStore.setState({ startupGateSettled: false });

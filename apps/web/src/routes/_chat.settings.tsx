@@ -13,7 +13,8 @@ import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
-import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { BrowserImportPanel } from "../components/BrowserImportPanel";
+import { createFileRoute, useBlocker, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import {
@@ -364,6 +365,19 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
+  const [browserImportBusy, setBrowserImportBusy] = useState(false);
+  useBlocker({
+    shouldBlockFn: () => {
+      if (!browserImportBusy) return false;
+      toastManager.add({
+        type: "error",
+        title: "Browser import in progress",
+        description: "Wait for the selected profiles to finish importing before leaving Settings.",
+      });
+      return true;
+    },
+    enableBeforeUnload: () => browserImportBusy,
+  });
   const platform = getNavigatorPlatform();
   const desktopFlavor = useMemo(
     () =>
@@ -659,8 +673,9 @@ function SettingsRouteView() {
   };
 
   const renderGeneralPanel = () => (
-    <div className="space-y-6">
+    <div hidden={activeSection !== "general"} className="space-y-6">
       <SafariAccessSetupButton />
+      <BrowserImportPanel onBusyChange={setBrowserImportBusy} />
       <BetaChannelSettingsPanel active={true} />
       <SettingsSection title="Core defaults">
         <SettingsRow
@@ -1664,7 +1679,7 @@ function SettingsRouteView() {
   const renderRouteOwnedPanel = () => {
     switch (activeSection) {
       case "general":
-        return renderGeneralPanel();
+        return null;
       case "appearance":
         return renderAppearancePanel();
       case "behavior":
@@ -1756,6 +1771,7 @@ function SettingsRouteView() {
                 </div>
               ) : null}
 
+              {renderGeneralPanel()}
               {renderRouteOwnedPanel()}
               {/* These workflow owners stay mounted so drafts, request guards, and pending
                   mutations retain route lifetime while inactive panels render no DOM. */}

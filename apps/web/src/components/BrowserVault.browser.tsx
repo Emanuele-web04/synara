@@ -10,7 +10,12 @@ vi.mock("~/nativeApi", () => ({ readNativeApi: () => ({ browser: { vault: harnes
 import { BrowserVaultButton, BrowserVaultDialog } from "./BrowserVault";
 import { BrowserCookieImport } from "./BrowserCookieImport";
 import { BrowserPasswordImport } from "./BrowserPasswordImport";
-import { SafariAccessOnboarding, SAFARI_ACCESS_STORAGE_KEY } from "./SafariAccessOnboarding";
+import { BrowserImportPanel } from "./BrowserImportPanel";
+import {
+  SafariAccessOnboarding,
+  SafariAccessSetupButton,
+  SAFARI_ACCESS_STORAGE_KEY,
+} from "./SafariAccessOnboarding";
 
 let state: BrowserVaultSnapshot;
 let changed: () => void;
@@ -68,6 +73,94 @@ beforeEach(() => {
 });
 
 describe("browser saved logins", () => {
+  it("clears consent on refresh without reselecting profiles the user unchecked", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([
+      { id: "Default", name: "Personal" },
+      { id: "Profile 1", name: "Work" },
+    ]);
+    await render(<BrowserImportPanel api={api} />);
+
+    const personal = page.getByRole("checkbox", { name: "Select Google Chrome Personal" });
+    const work = page.getByRole("checkbox", { name: "Select Google Chrome Work" });
+    const consent = page.getByRole("checkbox", { name: /I authorize Synara and its agents/ });
+    const importButton = page.getByRole("button", { name: "Import selected sessions" });
+    await work.click();
+    await consent.click();
+    await page.getByRole("button", { name: "Refresh browser list" }).click();
+
+    await expect.element(personal).toBeChecked();
+    await expect.element(work).not.toBeChecked();
+    await expect.element(consent).not.toBeChecked();
+    await expect.element(importButton).toBeDisabled();
+  });
+
+  it("preselects installed session profiles and imports only after whole-profile consent", async () => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([
+      { id: "Default", name: "Personal" },
+      { id: "Profile 1", name: "Work" },
+    ]);
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profileStatus: "available",
+        profiles: [
+          {
+            id: "Default",
+            name: "Personal",
+            isDefault: true,
+            cookieCount: 3,
+            passwordCount: 0,
+            cookieStatus: "available",
+            passwordStatus: "available",
+          },
+        ],
+      },
+    ]);
+    vi.mocked(api.importCookies).mockResolvedValue({
+      ok: true,
+      imported: 2,
+      skipped: 1,
+      warnings: [],
+    });
+
+    await render(<BrowserImportPanel api={api} />);
+
+    const personal = page.getByRole("checkbox", { name: "Select Google Chrome Personal" });
+    const work = page.getByRole("checkbox", { name: "Select Google Chrome Work" });
+    await expect.element(personal).toBeChecked();
+    await expect.element(work).toBeChecked();
+    await expect.element(page.getByText("Cookies: 3")).toBeVisible();
+    const consent = page.getByRole("checkbox", { name: /I authorize Synara and its agents/ });
+    const importButton = page.getByRole("button", { name: "Import selected sessions" });
+    await expect.element(importButton).toBeDisabled();
+    await consent.click();
+    await importButton.click();
+    await expect
+      .element(page.getByText("Google Chrome — Personal: 2 imported, 1 skipped."))
+      .toBeVisible();
+    await expect
+      .element(page.getByText("Google Chrome — Work: 2 imported, 1 skipped."))
+      .toBeVisible();
+    expect(api.importCookies).toHaveBeenCalledTimes(2);
+    expect(api.importCookies).toHaveBeenNthCalledWith(1, {
+      browser: "chrome",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    expect(api.importCookies).toHaveBeenNthCalledWith(2, {
+      browser: "chrome",
+      profile: "Profile 1",
+      scope: "profile",
+      confirmed: true,
+    });
+  });
+
   it("preselects an installed profile and requires explicit password import consent", async () => {
     const api = harness.api!;
     vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
@@ -114,6 +207,87 @@ describe("browser saved logins", () => {
     });
   });
 
+  it("sets up a locked Saved Logins vault before allowing password import", async () => {
+    const api = harness.api!;
+    state = {
+      ...state,
+      protection: { configured: false, locked: true, osProtected: false },
+    };
+    vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profileStatus: "available",
+        profiles: [
+          {
+            id: "Default",
+            name: "Personal",
+            isDefault: true,
+            cookieCount: 0,
+            passwordCount: 1,
+            cookieStatus: "available",
+            passwordStatus: "available",
+          },
+        ],
+      },
+    ]);
+    vi.mocked(api.setupMaster).mockImplementation(async () => {
+      state = {
+        ...state,
+        protection: { configured: true, locked: false, osProtected: false },
+      };
+    });
+    vi.mocked(api.importPasswords).mockResolvedValue({
+      ok: true,
+      imported: 1,
+      skipped: 0,
+      warnings: [],
+    });
+
+    await render(<BrowserPasswordImport api={api} />);
+    const setup = page.getByRole("button", { name: "Set up Saved Logins" });
+    await expect.element(setup).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Import selected passwords" }))
+      .toBeDisabled();
+    await setup.click();
+    await page.getByLabelText("New master password").fill("throwaway-master-password");
+    await page.getByLabelText("Confirm master password").fill("throwaway-master-password");
+    await page.getByRole("button", { name: "Set master password" }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Set up Saved Logins" }))
+      .not.toBeInTheDocument();
+    await page.getByRole("checkbox", { name: /I authorize Synara/ }).click();
+    await page.getByRole("button", { name: "Import selected passwords" }).click();
+    await expect.element(page.getByRole("status")).toHaveTextContent("1 imported, 0 skipped");
+    expect(api.setupMaster).toHaveBeenCalledWith("throwaway-master-password");
+    expect(api.importPasswords).toHaveBeenCalledWith({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+  });
+
+  it("refreshes vault access when another control unlocks Saved Logins", async () => {
+    const api = harness.api!;
+    state = {
+      ...state,
+      protection: { configured: true, locked: true, osProtected: false },
+    };
+    await render(<BrowserPasswordImport api={api} />);
+    await expect.element(page.getByRole("button", { name: "Unlock Saved Logins" })).toBeVisible();
+
+    state = {
+      ...state,
+      protection: { configured: true, locked: false, osProtected: false },
+    };
+    changed();
+
+    await expect
+      .element(page.getByRole("button", { name: "Unlock Saved Logins" }))
+      .not.toBeInTheDocument();
+  });
+
   it("still reports actual permission denial after continuing past Safari setup", async () => {
     const previous = window.desktopBridge;
     const previousDecision = localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY);
@@ -140,17 +314,21 @@ describe("browser saved logins", () => {
         platform: "macos",
       });
       await render(
-        <SafariAccessOnboarding>
-          <BrowserCookieImport
-            api={api}
-            destination={{
-              threadId: ThreadId.makeUnsafe("cookie-test"),
-              tabId: "tab",
-              origin: "https://example.test",
-            }}
-          />
-        </SafariAccessOnboarding>,
+        <>
+          <SafariAccessOnboarding>
+            <BrowserCookieImport
+              api={api}
+              destination={{
+                threadId: ThreadId.makeUnsafe("cookie-test"),
+                tabId: "tab",
+                origin: "https://example.test",
+              }}
+            />
+          </SafariAccessOnboarding>
+          <SafariAccessSetupButton />
+        </>,
       );
+      await page.getByRole("button", { name: "Safari import setup" }).click();
       await page.getByRole("button", { name: "Open System Settings" }).click();
       await expect
         .element(page.getByRole("status"))

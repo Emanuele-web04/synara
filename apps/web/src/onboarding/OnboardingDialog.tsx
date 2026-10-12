@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { SynaraLogo } from "~/components/SynaraLogo";
+import { BrowserImportPanel } from "~/components/BrowserImportPanel";
 import { useAnnouncementSheetSlot } from "~/components/announcementSheetSlot";
 import {
   Dialog,
@@ -50,6 +51,7 @@ import { useProviderDetection } from "./useProviderDetection";
 const STEP_TITLES: Record<OnboardingStep, string> = {
   welcome: `Welcome to ${APP_BASE_NAME}`,
   tour: `What ${APP_BASE_NAME} can do`,
+  "browser-import": "Bring your browsers",
   providers: "Choose your agents",
   theme: "Pick an appearance",
   project: "Add your first project",
@@ -59,6 +61,7 @@ const STEP_TITLES: Record<OnboardingStep, string> = {
 const STEP_DESCRIPTIONS: Record<Exclude<OnboardingStep, "done">, string> = {
   welcome: "A local-first workspace for coding agents. Setup takes about a minute.",
   tour: "",
+  "browser-import": "Import signed-in sessions and saved passwords from browsers on this device.",
   providers: `Detected on this machine. Uncheck any you don't want ${APP_BASE_NAME} to use.`,
   theme: "Applies live behind this window. Change it anytime in Settings → Appearance.",
   project: `A project is a folder ${APP_BASE_NAME} works in. Git repositories unlock branches, worktrees, diffs and pull requests.`,
@@ -77,9 +80,11 @@ function OnboardingFlow(props: {
   onComplete: () => void;
   projectBusy: boolean;
   onProjectBusyChange: (busy: boolean) => void;
+  onBrowserImportBusyChange: (busy: boolean) => void;
 }) {
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
+  const [browserImportBusy, setBrowserImportBusy] = useState(false);
   const { settings } = useAppSettings();
   const statuses = useProviderStatusesForLocalConfig();
   const providerDetection = useProviderDetection();
@@ -126,6 +131,7 @@ function OnboardingFlow(props: {
         return { label: "Get started", onPrimary: goNext };
       case "tour":
         return { label: "Set up", onPrimary: goNext };
+      case "browser-import":
       case "providers":
       case "theme":
         return { label: "Continue", onPrimary: goNext };
@@ -177,6 +183,14 @@ function OnboardingFlow(props: {
       >
         {step === "welcome" ? <WelcomeStep /> : null}
         {step === "tour" ? <FeatureTourStep /> : null}
+        {step === "browser-import" ? (
+          <BrowserImportPanel
+            onBusyChange={(busy) => {
+              setBrowserImportBusy(busy);
+              props.onBrowserImportBusyChange(busy);
+            }}
+          />
+        ) : null}
         {step === "providers" ? <ProvidersStep detection={providerDetection} /> : null}
         {step === "theme" ? <ThemeStep /> : null}
         {step === "project" ? (
@@ -200,8 +214,8 @@ function OnboardingFlow(props: {
         onSkip={props.onComplete}
         primaryLabel={primaryAction.label}
         onPrimary={primaryAction.onPrimary}
-        primaryBusy={step === "project" && props.projectBusy}
-        navigationLocked={props.projectBusy}
+        primaryBusy={(step === "project" && props.projectBusy) || browserImportBusy}
+        navigationLocked={props.projectBusy || browserImportBusy}
       />
     </div>
   );
@@ -218,8 +232,9 @@ export function OnboardingDialog(props: {
   // Project creation cannot be aborted: closing the tour mid-create would report a skip
   // while a project still appears afterwards, so dismissal waits for it to settle.
   const [projectBusy, setProjectBusy] = useState(false);
+  const [browserImportBusy, setBrowserImportBusy] = useState(false);
   const handleOpenChange = (open: boolean) => {
-    if (!open && projectBusy) return;
+    if (!open && (projectBusy || browserImportBusy)) return;
     props.onOpenChange(open);
   };
   return (
@@ -231,6 +246,7 @@ export function OnboardingDialog(props: {
             onComplete={props.onComplete}
             projectBusy={projectBusy}
             onProjectBusyChange={setProjectBusy}
+            onBrowserImportBusyChange={setBrowserImportBusy}
           />
         ) : null}
       </DialogPopup>

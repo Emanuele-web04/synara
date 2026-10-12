@@ -367,11 +367,10 @@ function RootRouteView() {
           <QueuedComposerDrainCoordinator />
           {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
           <BetaWelcomeDialog />
-          <SafariAccessOnboarding startup>
-            <AppSnapWelcomeDialog>
-              <FeatureTourDialog />
-            </AppSnapWelcomeDialog>
-          </SafariAccessOnboarding>
+          <SafariAccessOnboarding />
+          <AppSnapWelcomeDialog>
+            <FeatureTourDialog />
+          </AppSnapWelcomeDialog>
           <GlobalOnboardingDialog />
           <ProjectImportAnnouncementDialog />
           <GlobalProjectImportDialog />

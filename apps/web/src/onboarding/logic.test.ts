@@ -37,6 +37,8 @@ const RECONCILE_BASE = {
 describe("onboarding steps", () => {
   it("clamps navigation at both ends", () => {
     expect(nextOnboardingStep("welcome")).toBe("tour");
+    expect(nextOnboardingStep("tour")).toBe("browser-import");
+    expect(previousOnboardingStep("providers")).toBe("browser-import");
     expect(nextOnboardingStep("done")).toBe("done");
     expect(previousOnboardingStep("tour")).toBe("welcome");
     expect(previousOnboardingStep("welcome")).toBe("welcome");
@@ -45,6 +47,7 @@ describe("onboarding steps", () => {
   it("treats everything after the tour as a setup step", () => {
     expect(isOnboardingSetupStep("welcome")).toBe(false);
     expect(isOnboardingSetupStep("tour")).toBe(false);
+    expect(isOnboardingSetupStep("browser-import")).toBe(true);
     expect(isOnboardingSetupStep("providers")).toBe(true);
     expect(isOnboardingSetupStep("done")).toBe(true);
   });
