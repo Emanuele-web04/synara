@@ -1560,22 +1560,30 @@ export function partitionSidebarThreadsByProjectIds<
 
 /**
  * Whether a thread is, or may still turn out to be, a Hub member. Workers carry their
- * linked repo's projectId, so only a hub's member list tells them from ordinary chats, and
- * those lists arrive with the summaries list, not with the stream rows that precede it.
- * Until then every chat in a workspace with Hubs is a candidate.
+ * linked repo's projectId, so only a hub's member list or a coordinator's provenance tells
+ * them from ordinary chats, and those lists arrive with the summaries list, not with the
+ * stream rows that precede it. Until then every chat in a workspace with Hubs is a candidate.
  */
 export function mayBelongToGroup(input: {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
+  readonly creationSource: SidebarThreadSummary["creationSource"];
+  readonly sourceThreadId: SidebarThreadSummary["sourceThreadId"];
   readonly groupProjectIds: ReadonlySet<ProjectId>;
   readonly summariesByProjectId: ReadonlyMap<
     ProjectId,
     Pick<ProjectAgentSummary, "memberThreadIds">
   >;
+  readonly coordinatorThreadIds: ReadonlySet<string>;
   readonly membersLoaded: boolean;
 }): boolean {
   return (
     (input.groupProjectIds.size > 0 && !input.membersLoaded) ||
+    // A coordinator's worker shows up before its index row, and a closed Hub never sends
+    // that row here. Its provenance already names the Hub, the rule the server uses too.
+    (input.creationSource === "synara_mcp" &&
+      !!input.sourceThreadId &&
+      input.coordinatorThreadIds.has(input.sourceThreadId)) ||
     isGroupThreadRoute({
       threadId: input.threadId,
       projectId: input.projectId,
@@ -1593,7 +1601,13 @@ export function mayBelongToGroup(input: {
 export function canSnoozeSidebarThread(input: {
   readonly thread: Pick<
     SidebarThreadSummary,
-    "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+    | "id"
+    | "projectId"
+    | "creationSource"
+    | "sourceThreadId"
+    | "parentThreadId"
+    | "sidechatSourceThreadId"
+    | "sidechatContext"
   >;
   readonly groupProjectIds: ReadonlySet<ProjectId>;
   readonly summariesByProjectId: ReadonlyMap<
@@ -1609,8 +1623,11 @@ export function canSnoozeSidebarThread(input: {
     !mayBelongToGroup({
       threadId: thread.id,
       projectId: thread.projectId,
+      creationSource: thread.creationSource,
+      sourceThreadId: thread.sourceThreadId,
       groupProjectIds: input.groupProjectIds,
       summariesByProjectId: input.summariesByProjectId,
+      coordinatorThreadIds: input.coordinatorThreadIds,
       membersLoaded: input.membersLoaded,
     }) &&
     !input.coordinatorThreadIds.has(thread.id) &&

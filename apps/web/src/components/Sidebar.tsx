@@ -1815,7 +1815,13 @@ export default function Sidebar() {
     (
       thread: Pick<
         SidebarThreadSummary,
-        "id" | "projectId" | "parentThreadId" | "sidechatSourceThreadId" | "sidechatContext"
+        | "id"
+        | "projectId"
+        | "creationSource"
+        | "sourceThreadId"
+        | "parentThreadId"
+        | "sidechatSourceThreadId"
+        | "sidechatContext"
       >,
     ) =>
       canSnoozeSidebarThread({
@@ -3373,8 +3379,11 @@ export default function Sidebar() {
         !mayBelongToGroup({
           threadId,
           projectId: thread.projectId,
+          creationSource: thread.creationSource,
+          sourceThreadId: thread.sourceThreadId,
           groupProjectIds: groupProjectIdSet,
           summariesByProjectId,
+          coordinatorThreadIds,
           membersLoaded,
         }) &&
         !thread.parentThreadId;
