@@ -310,26 +310,42 @@ new file mode 100644
 diff --git a/dist/src/client.js b/dist/src/client.js
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
-@@ -335,2 +335,3 @@
+@@ -333,6 +333,7 @@
+      */
+     constructor(options = {}) {
          this.hostTarget = options.hostTarget;
 +        this.chromiumKeychainPassword = options.chromiumKeychainPassword;
          this.hostUploadFiles = options.hostUploadFiles ?? [];
-@@ -1026,3 +1027,3 @@
+         if (this.hostTarget && (!isCallable(this.hostTarget.connect) || options.provider != null)) {
+             throw new TypeError("hostTarget requires connect() and cannot be combined with provider.");
+@@ -1024,7 +1025,7 @@
+         let consentTarget;
+         try {
              normalized = normalizeCookieSyncOptions(options);
 -            consentTarget = cookieSyncConsentTarget(this.provider);
 +            consentTarget = this.hostTarget ? null : cookieSyncConsentTarget(this.provider);
              if (consentTarget && normalized.cloudConsent !== consentTarget) {
-@@ -1048,1 +1049,3 @@
+                 return {
+                     ok: false,
+@@ -1043,21 +1044,25 @@
+             return {
+                 ok: false,
+                 error: "Cookie Sync could not read the selected local browser profile.",
 -                cookieReaderCode: error?.cookieReaderCode || "reader_unavailable",
 +                cookieReaderCode: /Cookie Sync selected more than \d+ cookies|Cookie Sync selected more data than the secure transfer limit/i.test(String(error?.message || ""))
 +                    ? "source_too_large"
 +                    : error?.cookieReaderCode || "reader_unavailable",
-@@ -1051,3 +1054,3 @@
+                 cookiePermissionDenied: error?.cookiePermissionDenied === true,
+                 cookieReaderStage: error?.cookieReaderStage,
+             };
+         }
          if (!extracted.cookies.length) {
 -            return {
 +            const empty = {
                  ok: true,
-@@ -1057,5 +1060,7 @@
+                 synced: 0,
+                 selected: extracted.selected,
+                 skipped: extracted.skipped,
                  source: extracted.source,
 -                target: consentTarget || "local",
 +                target: consentTarget || (this.hostTarget ? "host" : "local"),
@@ -338,11 +354,17 @@ diff --git a/dist/src/client.js b/dist/src/client.js
 +            if (this.hostTarget) empty.cookieImportDomains = [];
 +            return empty;
          }
-@@ -1075,3 +1080,3 @@
+         const config = await this._prepare();
+         const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+@@ -1073,7 +1078,7 @@
+         }, timeoutSeconds);
+     }
      _extractCookieSync(options) {
 -        return extractCookieSync(options);
 +        return extractCookieSync(options, undefined, { keychainPassword: this.chromiumKeychainPassword });
      }
+     /**
+      * Fill a stored credential into the current page from trusted host code.
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
 --- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
@@ -428,7 +450,9 @@ diff --git a/dist/src/worker.js b/dist/src/worker.js
 diff --git a/types/public.d.ts b/types/public.d.ts
 --- a/types/public.d.ts
 +++ b/types/public.d.ts
-@@ -106,2 +106,8 @@
+@@ -104,10 +104,23 @@
+       skipped: number;
+       source: { browser: string; profile?: string };
        target: string;
 +      /**
 +       * Host-owned targets (`hostTarget`) only: deduplicated cookie domains
@@ -437,7 +461,8 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +       */
 +      cookieImportDomains?: string[];
        warnings?: CookieSyncWarning[];
-@@ -116,1 +122,8 @@
+       profileMode?: "persistent" | "ephemeral";
+     }
 -  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
 +  | {
 +      ok: false;
@@ -447,12 +472,18 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +      cookieReaderStage?: string;
 +      cookieSyncFailureCode?: "redaction_capacity" | "target_capacity" | "target_eviction" | "target_failed";
 +    };
-@@ -124,2 +137,4 @@
+ 
+ export interface CookieSourceBrowser {
+   id: string;
+@@ -122,6 +135,8 @@
+ }
+ 
  export interface BetterWrightOptions {
 +  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
 +  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
    /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
-
+   hostTarget?: import("./host.js").HostTarget;
+   /** Exact staged files a trusted host authorizes for upload. Requires hostTarget. */
 diff --git a/dist/src/vault.js b/dist/src/vault.js
 --- a/dist/src/vault.js
 +++ b/dist/src/vault.js
@@ -570,6 +601,6 @@ diff --git a/types/vault.d.ts b/types/vault.d.ts
 +  ownerImportMany(
 +    entries: Array<{ origin: string; username: string; password: string }>,
 +  ): Promise<{ imported: number; skipped: number; ids: string[] }>;
-
+ 
    handleRequest(
      action:
