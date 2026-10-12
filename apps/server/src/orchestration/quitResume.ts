@@ -40,6 +40,7 @@ import type {
   OrchestrationPrepareQuitResumeInput,
   OrchestrationPrepareQuitResumeResult,
   OrchestrationProject,
+  OrchestrationReadModel,
   OrchestrationThread,
 } from "@synara/contracts";
 import {
@@ -52,7 +53,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "@synara/contracts";
-import { Duration, Effect, FileSystem, Schema } from "effect";
+import { Duration, Effect, FileSystem, Option, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 
 import { writeFileStringAtomically } from "../atomicWrite";
@@ -63,6 +64,8 @@ import {
   type ThreadResumePreconditionViolation,
 } from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
 /**
  * A quit normally stops this process within seconds (desktop shutdown timeout is
@@ -183,6 +186,90 @@ export function buildQuitResumeRecord(input: {
   };
 }
 
+/** Capture before restart reconciliation clears the previous runtime's live state.
+ * Pending human decisions and independently scheduled work must not be resumed
+ * as an ordinary conversation. A failed callback read disables this fallback.
+ */
+export const captureCrashResumeRecord = Effect.gen(function* () {
+  const engine = yield* OrchestrationEngineService;
+  const interactions = yield* ProjectionPendingInteractionRepository;
+  const snapshots = yield* ProjectionSnapshotQuery;
+  const now = new Date().toISOString();
+  const pending = yield* interactions.listUnsettled({});
+  const blocked = new Set(pending.map((entry) => entry.threadId));
+  const readModel = yield* engine.getReadModel();
+  // The engine's command model intentionally omits messages. Read the active
+  // candidates' durable details before deciding whether an automation owns them.
+  const details = yield* Effect.forEach(
+    readModel.threads.filter(
+      (thread) => thread.latestTurn?.state === "running" && thread.session?.status === "running",
+    ),
+    (thread) => snapshots.getThreadDetailById(thread.id),
+    { concurrency: 4 },
+  );
+  const threads = details.flatMap((detail) => (Option.isSome(detail) ? [detail.value] : []));
+  const record = buildCrashResumeRecord({ readModel: { ...readModel, threads }, blocked, now });
+  return record.threads.length > 0
+    ? ({ kind: "record", record } as const)
+    : ({ kind: "absent" } as const);
+}).pipe(
+  Effect.catchCause((cause) =>
+    Effect.logWarning("could not capture interrupted chats for crash recovery", { cause }).pipe(
+      Effect.as({ kind: "absent" } as const),
+    ),
+  ),
+);
+
+function buildCrashResumeRecord(input: {
+  readModel: OrchestrationReadModel;
+  blocked: ReadonlySet<ThreadId>;
+  now: string;
+}): QuitResumeRecord {
+  const managedProjects = new Set(
+    input.readModel.projects
+      .filter((project) => project.kind === "group")
+      .map((project) => project.id),
+  );
+  const threads = input.readModel.threads.filter((thread) => {
+    const message = thread.messages.findLast(
+      (message) => message.role === "user" && message.turnId === thread.latestTurn?.turnId,
+    );
+    // Resume turns also use automation origin to preserve human recency. They
+    // remain ordinary chat work when another unexpected shutdown interrupts them.
+    const isScheduledTurn =
+      message?.dispatchOrigin === "automation" && !message.id.startsWith("quit-resume:");
+    return (
+      message !== undefined &&
+      thread.archivedAt == null &&
+      thread.parentThreadId == null &&
+      !thread.goal &&
+      !managedProjects.has(thread.projectId) &&
+      thread.creationSource !== "automation_run" &&
+      thread.creationSource !== "provider_native" &&
+      thread.creationSource !== "synara_mcp" &&
+      thread.creationSource !== "external_mcp" &&
+      !isScheduledTurn &&
+      message.dispatchOrigin !== "agent" &&
+      !thread.hasPendingApprovals &&
+      !thread.hasPendingUserInput &&
+      !input.blocked.has(thread.id) &&
+      thread.latestTurn?.state === "running" &&
+      thread.latestTurn.startedAt !== null &&
+      thread.session?.status === "running"
+    );
+  });
+  return buildQuitResumeRecord({
+    request: {
+      threadIds: threads.slice(0, QUIT_RESUME_MAX_THREADS).map((thread) => thread.id),
+      continuationPrompt:
+        "Synara stopped unexpectedly while this task was running. Check the conversation and current workspace state, verify whether pending operations already completed before repeating them, and continue the remaining work. Preserve pending approval and user decisions; ask again when needed.",
+    },
+    threads,
+    recordId: `crash:${randomUUID()}`,
+    now: input.now,
+  });
+}
+
 export function buildQuitInterruptCommand(input: {
   readonly threadId: ThreadId;
   readonly turnId: TurnId | null;
@@ -291,6 +378,20 @@ export type QuitResumeRecordRead =
   | { readonly kind: "absent" }
   | { readonly kind: "invalid" }
   | { readonly kind: "record"; readonly record: QuitResumeRecord };
+
+/** Persist before reconciliation; return any intent that must stay in memory. */
+export const persistCrashResumeRecord = (input: {
+  readonly path: string;
+  readonly record: QuitResumeRecord;
+}): Effect.Effect<QuitResumeRecordRead, never, FileSystem.FileSystem> =>
+  persistQuitResumeRecord(input).pipe(
+    Effect.as({ kind: "absent" } as const),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("could not persist crash recovery; retaining startup intent in memory", {
+        cause,
+      }).pipe(Effect.as({ kind: "record", record: input.record } as const)),
+    ),
+  );
 
 /**
  * `absent` when there is no file, `invalid` when a file is there but cannot be
@@ -517,7 +618,7 @@ export const resumeQuitInterruptedChats = (
       return;
     }
 
-    yield* Effect.logInfo("resuming chats interrupted by the previous quit", {
+    yield* Effect.logInfo("resuming chats interrupted by the previous shutdown", {
       recordId: record.recordId,
       recordedAt: record.recordedAt,
       threadIds: plan.commands.map((command) => command.threadId),

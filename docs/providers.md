@@ -650,6 +650,12 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 
 ## Passive results from delegated tasks
 
+When an orchestrator needs delegated results to finish the user's request, it must keep calling
+`synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
+synthesize the results. A timeout reports progress; it is not completion. Native provider
+subagents use their provider's own completion mechanism. Neither launching work nor opting
+into passive receipts is a substitute for collecting required results before ending the turn.
+
 An authenticated agent can pass `notifyCreatorOnComplete: true` to
 `synara_create_thread`, or on individual entries in `synara_create_threads`.
 The default is off. The destination is always the authenticated creating task;

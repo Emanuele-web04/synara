@@ -6485,6 +6485,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const context = sessions.get(input.threadId);
           if (!context) return undefined;
           const preflight = yield* resolveClaudeStartPreflight(input).pipe(
+            // Only preflight is reversible. Never abandon process retirement
+            // under a deadline while its persisted binding still claims ownership.
+            Effect.timeoutOrElse({
+              duration: Duration.seconds(60),
+              onTimeout: () =>
+                Effect.fail(
+                  new ProviderAdapterValidationError({
+                    provider: PROVIDER,
+                    operation: "session/reconfigure",
+                    issue:
+                      "Claude session preparation timed out. Check the provider runtime and try again.",
+                  }),
+                ),
+            }),
             Effect.mapError(
               (error) =>
                 new ProviderAdapterValidationError({
