@@ -7,10 +7,8 @@ import {
   type MessageId,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
-  type ProviderKind,
   type TurnId,
 } from "@synara/contracts";
-import { isProviderKind } from "../../providerOrdering";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
@@ -319,12 +317,6 @@ export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>
   return null;
 }
 
-/** The model a turn ran on, as the provider reported it. */
-export interface TurnModel {
-  readonly provider: ProviderKind;
-  readonly model: string;
-}
-
 /** Provider-reported lifecycle of one turn, used for its settled header. */
 export interface TurnTiming {
   readonly startedAt: string | null;
@@ -337,7 +329,6 @@ export interface TurnTiming {
   readonly failed?: boolean;
   /** Short reason for a provider-side interruption, when known. */
   readonly failureReason?: string | null;
-  readonly model?: TurnModel | null;
 }
 
 function activityPayloadRecord(
@@ -377,35 +368,9 @@ export function summarizeTurnFailureReason(input: {
     : firstLine;
 }
 
-// The model a `turn.started` activity names; Claude's context-window reports
-// stand in for turns recorded before turns carried their model.
-function activityTurnModel(activity: OrchestrationThreadActivity): {
-  model: TurnModel;
-  authoritative: boolean;
-} | null {
-  const payload = activityPayloadRecord(activity);
-  if (activity.kind === "turn.started") {
-    const model = nonEmptyString(payload?.model);
-    const provider = nonEmptyString(payload?.provider);
-    return model && provider && isProviderKind(provider)
-      ? { model: { provider, model }, authoritative: true }
-      : null;
-  }
-  if (activity.kind === "context-window.updated") {
-    const claudeCache = payload?.claudeCache;
-    const model =
-      typeof claudeCache === "object" && claudeCache !== null
-        ? nonEmptyString((claudeCache as Record<string, unknown>).model)
-        : null;
-    return model ? { model: { provider: "claudeAgent", model }, authoritative: false } : null;
-  }
-  return null;
-}
-
 // Collects what the thread knows about each turn's real start, end and outcome.
 // Checkpoints carry earlier turns, the latest turn carries the live one, and the
-// turn lifecycle activities say which turns were stopped or failed and which
-// model ran them.
+// turn lifecycle activities say which turns were stopped or failed.
 export function deriveTurnTimingByTurnId(input: {
   turnDiffSummaries: ReadonlyArray<Pick<TurnDiffSummary, "turnId" | "startedAt" | "completedAt">>;
   latestTurn: Pick<
@@ -422,7 +387,6 @@ export function deriveTurnTimingByTurnId(input: {
       completedAt: timing?.completedAt ?? null,
       interrupted: timing?.interrupted ?? false,
       ...(timing?.failed ? { failed: true, failureReason: timing.failureReason ?? null } : {}),
-      ...(timing?.model ? { model: timing.model } : {}),
       ...patch,
     });
   };
@@ -434,7 +398,6 @@ export function deriveTurnTimingByTurnId(input: {
     });
   }
   const settledStateByTurnId = new Map<TurnId, unknown>();
-  const authoritativeModelTurnIds = new Set<TurnId>();
   const stopRequestedAtByTurnId = new Map<TurnId, string>();
   for (const activity of input.activities) {
     if (activity.turnId === null) continue;
@@ -453,12 +416,6 @@ export function deriveTurnTimingByTurnId(input: {
       update(activity.turnId, {
         completedAt: timings.get(activity.turnId)?.completedAt ?? activity.createdAt,
       });
-    }
-    const turnModel = activityTurnModel(activity);
-    if (turnModel && !authoritativeModelTurnIds.has(activity.turnId)) {
-      if (turnModel.authoritative) authoritativeModelTurnIds.add(activity.turnId);
-      update(activity.turnId, { model: turnModel.model });
-      continue;
     }
     if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
       settledStateByTurnId.set(
@@ -543,8 +500,8 @@ export function formatTurnResumedBy(resumedBy: ReadonlyArray<TurnResumedBy>): st
     : `${resumedBy.length} background tasks ended`;
 }
 
-// The text of a settled turn header, without the clock time, model or icon:
-// "Worked 20s", "Stopped by you after 16s", "Interrupted after 16s · usage
+// The text of a settled turn header, without the clock time or icon:
+// "Worked for 20s", "Stopped by you after 16s", "Interrupted after 16s · usage
 // limit reached", "Resumed: “Run delayed echo” finished · 3s".
 export function formatTurnHeaderLabel(
   header: Pick<TurnHeader, "elapsed" | "outcome" | "reason" | "resumedBy">,
@@ -561,7 +518,7 @@ export function formatTurnHeaderLabel(
         const resumed = `Resumed: ${formatTurnResumedBy(header.resumedBy)}`;
         return header.elapsed ? `${resumed} · ${header.elapsed}` : resumed;
       }
-      return header.elapsed ? `Worked ${header.elapsed}` : "Worked";
+      return header.elapsed ? `Worked for ${header.elapsed}` : "Details";
   }
 }
 
@@ -586,9 +543,8 @@ export interface TurnResumedBy {
 }
 
 /**
- * The line that opens every settled turn: "Worked 20s · 22:33 ✓", with the
- * final state, the model only when it changed since the previous turn, and
- * the background task that woke the turn when one did.
+ * A settled turn's work label, with its final state and the background task
+ * that woke the turn when one did.
  */
 export interface TurnHeader {
   readonly elapsed: string | null;
@@ -597,7 +553,6 @@ export interface TurnHeader {
   readonly outcome: "completed" | "stopped" | "interrupted";
   /** Why the provider interrupted the turn, when known. */
   readonly reason: string | null;
-  readonly modelChange: TurnModel | null;
   readonly resumedBy: ReadonlyArray<TurnResumedBy> | null;
 }
 
@@ -672,7 +627,6 @@ export type MessagesTimelineRow =
       kind: "working-header";
       id: string;
       createdAt: string;
-      modelChange?: TurnModel | null;
       resumedBy?: ReadonlyArray<TurnResumedBy> | null;
     }
   | {
@@ -1307,10 +1261,6 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.conversationOnly !== true && input.turnTimingByTurnId) {
-    assignTurnHeaderModelChanges(nextRows, input.turnTimingByTurnId, input.activeTurnId ?? null);
-  }
-
   // A finished background task already shows on its own row and in the header
   // of the turn it woke ("Resumed: … finished"), so its completion line goes.
   return input.conversationOnly === true
@@ -1376,7 +1326,6 @@ function markInterruptedTurnsWithoutHeader(
       endedAt: timing.completedAt,
       outcome: timing.stoppedByUser && !timing.failed ? "stopped" : "interrupted",
       reason: timing.failureReason ?? null,
-      modelChange: null,
       resumedBy: null,
     };
   }
@@ -1679,7 +1628,6 @@ function collapseSettledTurns(
             ? "interrupted"
             : "completed",
       reason: responseTiming?.failureReason ?? null,
-      modelChange: null,
       resumedBy,
     };
 
@@ -1732,40 +1680,6 @@ function collectResumedBy(
     }
   }
   return resumedBy.length > 0 ? resumedBy : null;
-}
-
-function turnModelsEqual(left: TurnModel, right: TurnModel): boolean {
-  return left.provider === right.provider && left.model === right.model;
-}
-
-// Headers name the model only where it changed: each turn compares against
-// the previous turn that reported one. The live header compares against the
-// last settled one.
-function assignTurnHeaderModelChanges(
-  rows: MessagesTimelineRow[],
-  turnTimingByTurnId: ReadonlyMap<TurnId, TurnTiming>,
-  activeTurnId: TurnId | null,
-): void {
-  let previousModel: TurnModel | null = null;
-  for (const row of rows) {
-    const turnId =
-      row.kind === "message" && row.turnHeader
-        ? (row.message.turnId ?? null)
-        : row.kind === "working-header"
-          ? activeTurnId
-          : null;
-    if (turnId === null) continue;
-    const model = turnTimingByTurnId.get(turnId)?.model ?? null;
-    if (!model) continue;
-    const modelChange =
-      previousModel !== null && !turnModelsEqual(previousModel, model) ? model : null;
-    if (row.kind === "message" && row.turnHeader) {
-      row.turnHeader = { ...row.turnHeader, modelChange };
-    } else if (row.kind === "working-header") {
-      row.modelChange = modelChange;
-    }
-    previousModel = model;
-  }
 }
 
 // Reuses stable row references so streaming updates only invalidate rows whose
@@ -2027,12 +1941,6 @@ function collapsedTurnItemsEqual(
   });
 }
 
-function turnModelsMatch(left: TurnModel | null, right: TurnModel | null): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return turnModelsEqual(left, right);
-}
-
 function resumedByEqual(
   left: ReadonlyArray<TurnResumedBy> | null,
   right: ReadonlyArray<TurnResumedBy> | null,
@@ -2053,7 +1961,6 @@ function turnHeadersEqual(left: TurnHeader | undefined, right: TurnHeader | unde
     left.endedAt === right.endedAt &&
     left.outcome === right.outcome &&
     left.reason === right.reason &&
-    turnModelsMatch(left.modelChange, right.modelChange) &&
     resumedByEqual(left.resumedBy, right.resumedBy)
   );
 }
@@ -2101,9 +2008,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "working-header": {
       const bh = b as typeof a;
       return (
-        a.createdAt === bh.createdAt &&
-        turnModelsMatch(a.modelChange ?? null, bh.modelChange ?? null) &&
-        resumedByEqual(a.resumedBy ?? null, bh.resumedBy ?? null)
+        a.createdAt === bh.createdAt && resumedByEqual(a.resumedBy ?? null, bh.resumedBy ?? null)
       );
     }
 

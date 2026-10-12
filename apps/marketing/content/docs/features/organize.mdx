@@ -4,8 +4,8 @@ description: Pins, notes, recaps, split views, exports, and the fastest paths be
 ---
 
 <Callout type="info" title="Stable and Beta availability">
-  Tasks is available in **Synara 1.0.1 Stable**. Hubs remain Beta-only. New 1.0.2-beta.1 behavior is
-  marked below.
+  Tasks is available in **Synara 1.0.1 Stable**. Hubs are available in **Synara 1.0.2 Stable** and
+  Beta. These 1.0.2 features are available in Stable and Beta.
 </Callout>
 
 Long-running agent work produces a lot of conversation. These features keep it navigable.
@@ -44,7 +44,7 @@ The Explorer now edits files with syntax highlighting and a numbered plain-text 
 
 Open text, image, PDF, and diff views revalidate when workspace files change. Unsaved text edits are protected from background replacement. Check the task's checkout before treating an updated preview as evidence from a particular branch.
 
-Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. In 1.0.2-beta.1, choices are independent per chat. Settings → Behavior → Diff layout supplies the default for chats without a saved choice; changing that default does not overwrite existing chat choices.
+Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. In 1.0.2 Stable and Beta, choices are independent per chat. Settings → Behavior → Diff layout supplies the default for chats without a saved choice; changing that default does not overwrite existing chat choices.
 
 ## Read larger documents
 
@@ -107,3 +107,9 @@ Thread hover cards preview unsent draft text. Marking a chat **Done** offers an 
 Source evidence: Synara `48603e869`, the audited release head for `1.0.1-beta.2`. `apps/server/src/threadSearch.ts`, `apps/web/src/components/SidebarSearchPalette.tsx`, `apps/web/src/components/Sidebar.tsx`, and `apps/web/src/hooks/useSidebarThreadActions.ts`.
 
 For long conversations, see [paged history and reload recovery](/docs/features/conversation-history). Provider-native child agents appear in [Subagents](/docs/features/subagents).
+
+## Choose your chat header
+
+In Stable 1.0.2 and Beta, **Settings → General → Thread tabs** controls whether the desktop single-pane chat header shows all open chats or only the current title. It is on by default. When shown, tabs keep readable widths and offer an overflow menu; split panes, mobile and the editor rail keep their existing header behavior.
+
+Source evidence: `apps/web/src/appSettings.ts`, `apps/web/src/routes/_chat.settings.tsx` and `apps/web/src/components/ChatView.tsx` in the 1.0.2 release source.
