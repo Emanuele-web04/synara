@@ -207,5 +207,15 @@ test("v0.9.0 guides keep platform, source preservation and interruption boundari
     read("content/docs/features/project-import.mdx").includes("Source history is preserved"),
   );
   assert.ok(read("content/docs/providers/codex.mdx").includes("10% or less remaining"));
-  assert.ok(read("content/docs/providers/claude-code.mdx").includes("Compact, then send"));
+  assert.ok(
+    read("content/docs/providers/claude-code.mdx").includes("Resume from summary (recommended)"),
+  );
+});
+
+test("Hubs guide documents Stable availability, human approvals and separate app state", () => {
+  const hubs = read("content/docs/features/hubs.mdx");
+  assert.ok(hubs.includes("Synara 1.0.2 Stable"));
+  assert.ok(hubs.includes("It never approves a worker's pending request for you"));
+  assert.ok(hubs.includes("Stable and Beta keep separate Hubs and chats"));
+  assert.ok(hubs.includes("Beta data is not copied back to Stable"));
 });

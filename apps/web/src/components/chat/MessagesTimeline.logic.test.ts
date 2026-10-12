@@ -1614,7 +1614,6 @@ describe("deriveMessagesTimelineRows", () => {
           endedAt: "2026-01-01T00:00:02Z",
           outcome,
           reason: null,
-          modelChange: null,
           resumedBy: null,
         });
         expect(messageRow(rows, "queued")?.turnHeader).toBeUndefined();
@@ -1700,80 +1699,10 @@ describe("deriveMessagesTimelineRows", () => {
         endedAt: "2026-01-01T00:00:06Z",
         outcome: "completed",
         reason: null,
-        modelChange: null,
         resumedBy: null,
       });
-      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked 5.5s");
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked for 5.5s");
       expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["work:w2"]);
-    });
-
-    it("names the model only when it differs from the previous turn", () => {
-      const rows = deriveMessagesTimelineRows({
-        ...baseInput,
-        timelineEntries: threeTurns,
-        turnTimingByTurnId: timings([
-          turnActivity(
-            "m1",
-            "t1",
-            "turn.started",
-            { model: "claude-haiku-5-5", provider: "claudeAgent" },
-            "2026-01-01T00:00:00.500Z",
-          ),
-          turnActivity(
-            "m2",
-            "t2",
-            "turn.started",
-            { model: "claude-haiku-5-5", provider: "claudeAgent" },
-            "2026-01-01T00:01:00.500Z",
-          ),
-          turnActivity(
-            "m3",
-            "turn-third",
-            "turn.started",
-            { model: "gpt-6-luna", provider: "codex" },
-            "2026-01-01T00:02:00.500Z",
-          ),
-        ]),
-      });
-
-      expect(messageRow(rows, "a1")?.turnHeader?.modelChange).toBeNull();
-      expect(messageRow(rows, "a2")?.turnHeader?.modelChange).toBeNull();
-      expect(messageRow(rows, "a3")?.turnHeader?.modelChange).toEqual({
-        provider: "codex",
-        model: "gpt-6-luna",
-      });
-    });
-
-    it("falls back to Claude's reported model for turns recorded before turn.started", () => {
-      const timing = timings([
-        turnActivity(
-          "cw1",
-          "t1",
-          "context-window.updated",
-          { claudeCache: { model: "claude-haiku-5-5" } },
-          "2026-01-01T00:00:01Z",
-        ),
-        turnActivity(
-          "m2",
-          "t2",
-          "turn.started",
-          { model: "claude-opus-5-5", provider: "claudeAgent" },
-          "2026-01-01T00:01:00.500Z",
-        ),
-        // A later context report never overrides the authoritative model.
-        turnActivity(
-          "cw2",
-          "t2",
-          "context-window.updated",
-          { claudeCache: { model: "claude-haiku-5-5" } },
-          "2026-01-01T00:01:02Z",
-        ),
-      ]);
-      expect(timing.get(TurnId.makeUnsafe("t1"))?.model).toEqual({
-        provider: "claudeAgent",
-        model: "claude-haiku-5-5",
-      });
-      expect(timing.get(TurnId.makeUnsafe("t2"))?.model?.model).toBe("claude-opus-5-5");
     });
 
     it("says who ended a turn early: the user or the provider, with its reason", () => {

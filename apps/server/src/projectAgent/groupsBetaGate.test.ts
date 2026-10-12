@@ -19,7 +19,7 @@ function gatedService() {
 }
 
 describe("gateProjectAgentServiceForStable", () => {
-  it("refuses hub APIs with the Beta message", async () => {
+  it("refuses hub APIs when the feature is disabled", async () => {
     const { gated } = gatedService();
     const error = await Effect.runPromise(
       Effect.flip(gated.getOverview({ projectId: PROJECT_ID }, { kind: "user" })),
