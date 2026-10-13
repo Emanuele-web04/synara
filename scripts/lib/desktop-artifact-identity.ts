@@ -1,7 +1,10 @@
-import {
-  synaraDesktopIdentity,
-  type SynaraPackagedDesktopFlavor,
-} from "@synara/shared/desktopIdentity";
+import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
+
+// Native checkpoint qualification runs without an installed workspace graph.
+// Keep the canonical identity implementation while resolving its source directly.
+const { synaraDesktopIdentity }: typeof import("@synara/shared/desktopIdentity") = await import(
+  new URL("../../packages/shared/src/desktopIdentity.ts", import.meta.url).href
+);
 
 export function createDesktopArtifactIdentity(input: {
   readonly platform: "mac" | "linux" | "win";

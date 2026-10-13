@@ -395,7 +395,7 @@ jobs:
       runner: ${{ matrix.runner }}
       platform: ${{ matrix.platform }}
       arch: ${{ matrix.arch }}
-      target: ${{ matrix.target }}
+      target: ${{ matrix.platform == 'linux' && 'AppImage,deb' || matrix.target }}
       version: ${{ needs.preflight.outputs.version }}
       desktop_flavor: ${{ needs.preflight.outputs.desktop_flavor }}
       publish_release: ${{ needs.preflight.outputs.publish_release == 'true' }}
@@ -623,6 +623,7 @@ jobs:
             release-assets/*.dmg
             release-assets/*.zip
             release-assets/*.AppImage
+            release-assets/*.deb
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml

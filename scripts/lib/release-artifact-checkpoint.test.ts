@@ -280,3 +280,167 @@ describe("same-run release artifact checkpoint", () => {
     );
   });
 });
+
+function linuxPackageCheckpoint(target: string, flavor: "production" | "beta" = "production") {
+  const fixture = checkpoint("linux", flavor);
+  const name = flavor === "beta" ? "Synara-Beta" : "Synara";
+  const formats = target.split(",");
+  const files = formats.map(
+    (format) =>
+      `${name}-${fixture.input.version}-${format === "deb" ? "amd64" : "x86_64"}.${format}`,
+  );
+  if (formats.includes("AppImage")) files.push("latest-linux.yml");
+  fixture.changeManifest((manifest) => {
+    for (const artifact of manifest.artifacts)
+      rmSync(join(fixture.input.assetsDirectory, artifact.fileName));
+    manifest.target = target;
+    manifest.artifacts = files.map((fileName) => {
+      const bytes =
+        fileName === "latest-linux.yml"
+          ? `version: ${fixture.input.version}\n`
+          : `original ${fileName} bytes`;
+      writeFileSync(join(fixture.input.assetsDirectory, fileName), bytes);
+      return {
+        fileName,
+        size: Buffer.byteLength(bytes),
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      };
+    });
+  });
+  return { ...fixture, input: { ...fixture.input, target } };
+}
+
+describe("declared Linux checkpoint formats", () => {
+  it.each([
+    ["AppImage,deb", "production"],
+    ["AppImage,deb", "beta"],
+    ["deb", "production"],
+    ["deb", "beta"],
+  ] as const)(
+    "accepts every requested %s payload for %s with native architecture aliases",
+    async (target, flavor) => {
+      const { input } = linuxPackageCheckpoint(target, flavor);
+      await expect(verifyReleaseArtifactCheckpoint(input)).resolves.toMatchObject({ target });
+    },
+  );
+
+  it("requires a declared Debian payload even when AppImage and provenance remain valid", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("AppImage,deb");
+    changeManifest((manifest) => {
+      const deb = manifest.artifacts.find((entry: { fileName: string }) =>
+        entry.fileName.endsWith(".deb"),
+      );
+      rmSync(join(input.assetsDirectory, deb.fileName));
+      manifest.artifacts = manifest.artifacts.filter(
+        (entry: { fileName: string }) => entry !== deb,
+      );
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow("missing required asset");
+  });
+
+  it("rejects an empty declared Debian payload with a matching empty digest", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("AppImage,deb");
+    changeManifest((manifest) => {
+      const deb = manifest.artifacts.find((entry: { fileName: string }) =>
+        entry.fileName.endsWith(".deb"),
+      );
+      writeFileSync(join(input.assetsDirectory, deb.fileName), "");
+      deb.size = 0;
+      deb.sha256 = createHash("sha256").update("").digest("hex");
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow("digest");
+  });
+
+  it("rejects Debian files using x64 instead of the native amd64 name", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("AppImage,deb");
+    changeManifest((manifest) => {
+      const deb = manifest.artifacts.find((entry: { fileName: string }) =>
+        entry.fileName.endsWith(".deb"),
+      );
+      const wrong = deb.fileName.replace("-amd64.deb", "-x64.deb");
+      renameSync(join(input.assetsDirectory, deb.fileName), join(input.assetsDirectory, wrong));
+      deb.fileName = wrong;
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("rejects changed Debian bytes with the same size", async () => {
+    const { input } = linuxPackageCheckpoint("AppImage,deb");
+    const manifest = JSON.parse(
+      readFileSync(join(input.assetsDirectory, "artifact-linux-x64.provenance.json"), "utf8"),
+    );
+    const deb = manifest.artifacts.find((entry: { fileName: string }) =>
+      entry.fileName.endsWith(".deb"),
+    );
+    writeFileSync(join(input.assetsDirectory, deb.fileName), Buffer.alloc(deb.size, 0x58));
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow("checksum");
+  });
+
+  it("rejects an undeclared rpm even when its digest matches", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("AppImage,deb");
+    const fileName = "Synara-1.2.3-x86_64.rpm";
+    writeFileSync(join(input.assetsDirectory, fileName), "extra");
+    changeManifest((manifest) => {
+      manifest.artifacts.push({
+        fileName,
+        size: 5,
+        sha256: createHash("sha256").update("extra").digest("hex"),
+      });
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("requires the same target declaration in the retained provenance", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("AppImage,deb");
+    changeManifest((manifest) => {
+      manifest.target = "AppImage";
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow("target");
+  });
+
+  it.each(["", "AppImage,", "deb,deb", "AppImage,rpm"])(
+    "rejects unsupported target %s before filesystem reuse",
+    async (target) => {
+      const { input } = checkpoint();
+      await expect(verifyReleaseArtifactCheckpoint({ ...input, target })).rejects.toThrow();
+    },
+  );
+
+  it("rejects an updater manifest on a package-manager-only checkpoint", async () => {
+    const { input, changeManifest } = linuxPackageCheckpoint("deb");
+    writeFileSync(join(input.assetsDirectory, "latest-linux.yml"), "extra");
+    changeManifest((manifest) => {
+      manifest.artifacts.push({
+        fileName: "latest-linux.yml",
+        size: 5,
+        sha256: createHash("sha256").update("extra").digest("hex"),
+      });
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+});
+
+it("retains native Linux inspection tools when a checkpoint skips workspace installation", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/release-platform.yml", import.meta.url),
+    "utf8",
+  );
+  const start = workflow.indexOf("      - name: Install Linux checkpoint inspection tools");
+  const end = workflow.indexOf(
+    "      - name: Verify Windows installer with Microsoft Defender",
+    start,
+  );
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const prerequisites = workflow.slice(start, end);
+  expect(prerequisites).toContain(
+    "if: inputs.platform == 'linux' && steps.restore_checkpoint.outcome == 'success'\n",
+  );
+  expect(prerequisites).toContain("dpkg-dev xz-utils xvfb xauth");
+});
