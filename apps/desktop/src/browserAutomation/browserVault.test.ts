@@ -385,3 +385,29 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     vault.dispose();
   });
 });
+
+it(
+  "preserves committed import counts and provenance when the audit file is unwritable",
+  async () => {
+    const { home, vault } = await fixture();
+    try {
+      const audit = join(home, "vault", "audit.jsonl");
+      await rm(audit, { force: true });
+      await mkdir(audit);
+      const result = await vault.importPasswords([
+        { origin, username: "audit-test", password: "synthetic-secret" },
+      ]);
+      expect(result).toEqual({ imported: 1, skipped: 0, provenanceSaved: true, auditSaved: false });
+      const saved = (await vault.snapshot()).logins;
+      expect(saved).toMatchObject([{ username: "audit-test", source: "user" }]);
+      expect(
+        await vault.importPasswords([
+          { origin, username: "audit-test", password: "synthetic-secret" },
+        ]),
+      ).toMatchObject({ imported: 0, skipped: 1 });
+    } finally {
+      vault.dispose();
+    }
+  },
+  VAULT_TEST_TIMEOUT_MS,
+);

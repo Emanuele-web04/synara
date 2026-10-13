@@ -211,7 +211,7 @@ export class BrowserVault {
   /** Stores an explicitly imported set of credentials without upserting existing logins. */
   async importPasswords(
     entries: Array<{ origin: string; username: string; password: string }>,
-  ): Promise<{ imported: number; skipped: number; provenanceSaved: boolean }> {
+  ): Promise<{ imported: number; skipped: number; provenanceSaved: boolean; auditSaved?: false }> {
     await this.ready;
     if ((await this.keys.status()).locked) throw new Error("Unlock the browser vault first.");
     const result = await this.vault.ownerImportMany(entries);
@@ -226,7 +226,12 @@ export class BrowserVault {
       }
       this.changed();
     }
-    return { imported: result.imported, skipped: result.skipped, provenanceSaved };
+    return {
+      imported: result.imported,
+      skipped: result.skipped,
+      provenanceSaved,
+      ...(result.auditWarning ? { auditSaved: false as const } : {}),
+    };
   }
 
   private async request(action: Action, payload: Payload, origin: string, source: Source) {

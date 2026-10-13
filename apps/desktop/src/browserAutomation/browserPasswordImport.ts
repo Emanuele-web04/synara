@@ -113,7 +113,23 @@ export class BrowserPasswordImport {
     if (currentPlatform !== "macos")
       return { ok: false, code: "unsupported_platform", platform: currentPlatform };
 
-    const profile = await this.getProfile(this.home, input.browser, input.profile);
+    let profile: Awaited<ReturnType<typeof inventoryChromiumPasswordProfile>>;
+    try {
+      profile = await this.getProfile(this.home, input.browser, input.profile);
+    } catch (error) {
+      if (signal.aborted) return cancelled();
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      return {
+        ok: false,
+        code:
+          code === "EACCES" || code === "EPERM"
+            ? "permission_denied"
+            : code === "ENOENT"
+              ? "source_missing"
+              : "reader_failed",
+        platform: currentPlatform,
+      };
+    }
     if (signal.aborted) return cancelled();
     if (!profile) return { ok: false, code: "source_missing", platform: currentPlatform };
     if (profile.count === 0) return { ok: true, imported: 0, skipped: 0, warnings: [] };
@@ -176,7 +192,10 @@ export class BrowserPasswordImport {
         ok: true,
         imported: result.imported,
         skipped: result.skipped + read.skipped,
-        warnings: result.provenanceSaved ? [] : ["provenance_not_saved"],
+        warnings: [
+          ...(result.provenanceSaved ? [] : ["provenance_not_saved"]),
+          ...(result.auditSaved === false ? ["audit_not_saved"] : []),
+        ],
       };
     } catch {
       read.logins.length = 0;

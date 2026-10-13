@@ -553,7 +553,7 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
          return record;
      }
      #updatedRecord(record, payload, now, { requirePassword = false } = {}) {
-@@ -2086,6 +2087,87 @@
+@@ -2086,6 +2087,88 @@
              }
          });
      }
@@ -622,16 +622,17 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
 +                    ids.push(record.id);
 +                    imported += 1;
 +                }
++                let auditWarning = null;
 +                if (imported > 0) {
 +                    await persistSnapshot(this.paths, key, snapshot);
-+                    await appendMutationAudit(this.paths, {
++                    auditWarning = await appendMutationAudit(this.paths, {
 +                        at: new Date().toISOString(),
 +                        action: "owner-import",
 +                        category: "login",
 +                        count: imported,
 +                    });
 +                }
-+                return { imported, skipped, ids };
++                return withAuditWarning({ imported, skipped, ids }, auditWarning);
 +            }
 +            finally {
 +                key.fill(0);
@@ -651,7 +652,7 @@ diff --git a/types/vault.d.ts b/types/vault.d.ts
 +  /** Trusted explicit import only; imports without replacing existing logins. */
 +  ownerImportMany(
 +    entries: Array<{ origin: string; username: string; password: string }>,
-+  ): Promise<{ imported: number; skipped: number; ids: string[] }>;
++  ): Promise<{ imported: number; skipped: number; ids: string[]; auditWarning?: VaultAuditWarning }>;
 -
 +
    handleRequest(

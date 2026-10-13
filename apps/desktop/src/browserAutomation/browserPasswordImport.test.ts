@@ -192,3 +192,28 @@ it("cancels only the matching password operation before vault writes", async () 
   importer.cancel("first");
   expect(await next).toMatchObject({ ok: true, imported: 1 });
 });
+
+it.each(["EACCES", "EPERM", "ENOENT", "EIO"])(
+  "returns structured preflight errors for %s",
+  async (code) => {
+    const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
+    const keychain = vi.fn();
+    const importer = new BrowserPasswordImport(vault, keychain, home, async () => {
+      throw Object.assign(new Error("private path"), { code });
+    });
+    expect(
+      await importer.import({ browser: "chrome", profile: "Default", confirmed: true }),
+    ).toEqual({
+      ok: false,
+      code:
+        code === "EACCES" || code === "EPERM"
+          ? "permission_denied"
+          : code === "ENOENT"
+            ? "source_missing"
+            : "reader_failed",
+      platform: "macos",
+    });
+    expect(keychain).not.toHaveBeenCalled();
+    expect(vault.importPasswords).not.toHaveBeenCalled();
+  },
+);

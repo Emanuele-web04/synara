@@ -1080,3 +1080,31 @@ it("cancels the active password operation and skips later profiles", async () =>
     vi.mocked(api.importPasswords).mock.calls[0]?.[0].operationId,
   );
 });
+
+it("does not select unavailable password stores", async () => {
+  const api = harness.api!;
+  vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+    {
+      id: "chrome",
+      name: "Google Chrome",
+      profileStatus: "available",
+      profiles: [
+        {
+          id: "Default",
+          name: "Cookies only",
+          isDefault: true,
+          cookieCount: null,
+          passwordCount: null,
+          cookieStatus: "available",
+          passwordStatus: "unavailable",
+        },
+      ],
+    },
+  ]);
+  await render(<BrowserPasswordImport api={api} />);
+  await expect.element(page.getByRole("checkbox", { name: /Cookies only/ })).not.toBeChecked();
+  await expect.element(page.getByRole("checkbox", { name: /Cookies only/ })).toBeDisabled();
+  await expect
+    .element(page.getByRole("button", { name: "Import selected passwords" }))
+    .toBeDisabled();
+});

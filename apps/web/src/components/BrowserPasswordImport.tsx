@@ -24,7 +24,7 @@ function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false
     case "cancelled":
       return "Password import cancelled.";
     case "permission_denied":
-      return "macOS denied access to this browser's saved-password key. Approve the Keychain prompt and retry.";
+      return "macOS denied access to this browser's saved-password data. Check profile access and approve any Keychain prompt, then retry.";
     case "keychain_unavailable":
       return "The browser's saved-password key is unavailable in Keychain.";
     case "timed_out":
@@ -101,7 +101,10 @@ export function BrowserPasswordImport({
       setSelected(
         Object.fromEntries(
           next.flatMap((browser) =>
-            browser.profiles.map((profile) => [`${browser.id}:${profile.id}`, true]),
+            browser.profiles.map((profile) => [
+              `${browser.id}:${profile.id}`,
+              profile.passwordStatus === "available",
+            ]),
           ),
         ),
       );
@@ -127,7 +130,11 @@ export function BrowserPasswordImport({
     () =>
       inventory.flatMap((browser) =>
         browser.profiles
-          .filter((profile) => selected[`${browser.id}:${profile.id}`] === true)
+          .filter(
+            (profile) =>
+              profile.passwordStatus === "available" &&
+              selected[`${browser.id}:${profile.id}`] === true,
+          )
           .map((profile) => ({ browser, profile })),
       ),
     [inventory, selected],
@@ -154,7 +161,7 @@ export function BrowserPasswordImport({
           });
           outcomes.push(
             result.ok
-              ? `${browser.name} — ${profile.name}: ${result.imported} imported, ${result.skipped} skipped${result.warnings.length ? "; provenance could not be saved" : ""}.`
+              ? `${browser.name} — ${profile.name}: ${result.imported} imported, ${result.skipped} skipped${result.warnings.includes("provenance_not_saved") ? "; provenance could not be saved" : ""}${result.warnings.includes("audit_not_saved") ? "; import audit could not be saved" : ""}.`
               : `${browser.name} — ${profile.name}: ${failureMessage(result)}`,
           );
           if (!result.ok && result.code === "cancelled") break;
@@ -226,7 +233,12 @@ export function BrowserPasswordImport({
                         <label className="flex items-start gap-2">
                           <Checkbox
                             checked={selected[id] === true}
-                            disabled={busy || masterBusy || disabled}
+                            disabled={
+                              busy ||
+                              masterBusy ||
+                              disabled ||
+                              profile.passwordStatus !== "available"
+                            }
                             onCheckedChange={(checked) =>
                               setSelected((current) => ({ ...current, [id]: checked === true }))
                             }
