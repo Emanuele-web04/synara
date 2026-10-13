@@ -7054,6 +7054,24 @@ describe("ChatView transcript geometry (full app)", () => {
         grow();
         await waitForLayout();
       }
+      // Eight delivered chunks exceed the reveal hook's one-second throughput.
+      // Check the actual final text and settled layout, not a transient line
+      // growth while smooth reveal is still draining the delivered buffer.
+      const expectedText = snapshot.threads
+        .find((thread) => thread.id === THREAD_ID)!
+        .messages.find((message) => message.id === messageId)!.text;
+      await vi.waitFor(
+        () => {
+          const paragraphs = container
+            .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
+            ?.querySelectorAll("p");
+          expect(
+            Array.from(paragraphs ?? [], (paragraph) => paragraph.textContent?.trim()),
+          ).toEqual(expectedText.split("\n\n").map((paragraph) => paragraph.trim()));
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      await waitForTranscriptLayoutToSettle(container);
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
