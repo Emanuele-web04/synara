@@ -776,7 +776,16 @@ export class IosSimulatorBackend implements DeviceBackend {
     await this.assertCapability("framebuffer");
     await this.assertCapability("encoder");
     const helper = await this.attachedHelper(udid);
-    await helper.startStream(udid, onFrame);
+    try {
+      await helper.startStream(udid, onFrame);
+    } catch (error) {
+      // After a reboot outside Synara the cached attachment still looks valid,
+      // and starting the stream on it fails with "no framebuffer surface" on
+      // every retry. A fresh attach against the current boot fixes it at once.
+      if (!isStaleDescriptorError(error)) throw error;
+      await this.attachedHelper(udid, { force: true });
+      await helper.startStream(udid, onFrame);
+    }
   }
 
   async detachStream(udid: string): Promise<void> {
