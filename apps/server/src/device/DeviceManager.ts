@@ -28,6 +28,7 @@ import {
 } from "./bootOwnership.ts";
 import {
   DEVICE_SYNARA_BOOT_LIMIT,
+  DEVICE_THREAD_STATE_MAX_DEVICES,
   ThreadId,
   type DeviceAttachPhase,
   type DeviceAvailability,
@@ -49,6 +50,7 @@ import {
 
 import {
   DeviceBackendError,
+  fitDeviceMessage,
   type DeviceBackend,
   type DeviceKeyEvent,
   type DeviceSwipeGesture,
@@ -1027,10 +1029,10 @@ export class DeviceManager {
       threadId: threadId as ThreadDeviceState["threadId"],
       version: attachment.version,
       attachedDeviceUdid: attachment.attachedDeviceUdid as ThreadDeviceState["attachedDeviceUdid"],
-      devices,
+      devices: fitDeviceList(devices, attachment.attachedDeviceUdid),
       agentActive: attachment.agentActiveCount > 0,
       availability,
-      lastError: attachment.lastError,
+      lastError: attachment.lastError === null ? null : fitDeviceMessage(attachment.lastError),
       attachPhase: attachment.attachPhase,
     };
   }
@@ -1060,6 +1062,21 @@ export class DeviceManager {
       }
     }
   }
+}
+
+/**
+ * Keep a thread's device list within the contract's cap. A machine with every
+ * runtime installed can have more simulators than that, and an over-long list
+ * fails the RPC encode. The attached device and booted devices are kept first.
+ */
+function fitDeviceList(
+  devices: readonly DeviceDescriptor[],
+  attachedUdid: string | null,
+): readonly DeviceDescriptor[] {
+  if (devices.length <= DEVICE_THREAD_STATE_MAX_DEVICES) return devices;
+  const rank = (device: DeviceDescriptor) =>
+    device.udid === attachedUdid ? 0 : device.state === "shutdown" ? 2 : 1;
+  return devices.toSorted((a, b) => rank(a) - rank(b)).slice(0, DEVICE_THREAD_STATE_MAX_DEVICES);
 }
 
 export function errorMessage(error: unknown): string {

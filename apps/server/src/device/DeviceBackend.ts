@@ -26,6 +26,7 @@ import type {
   DeviceStartRecordingResult,
   DeviceStopRecordingResult,
 } from "@synara/contracts";
+import { DEVICE_MESSAGE_MAX_LENGTH } from "@synara/contracts";
 
 /**
  * One encoded video frame as the backend produces it. `sequence` is owned by
@@ -42,6 +43,22 @@ export interface DeviceStreamFrame {
 }
 
 export type DeviceFrameListener = (frame: DeviceStreamFrame) => void;
+
+/**
+ * Shorten a message to what the device contract accepts.
+ *
+ * Errors can carry a whole compiler or simctl stderr, which easily runs past
+ * the contract's limit, and a value past the limit fails the RPC encode, so the
+ * pane would get a generic RPC failure instead of the error. Keeps the start
+ * (what failed) and the end (the last diagnostics and the suggested fix).
+ */
+export function fitDeviceMessage(message: string): string {
+  if (message.length <= DEVICE_MESSAGE_MAX_LENGTH) return message;
+  const separator = "\n…\n";
+  const keep = DEVICE_MESSAGE_MAX_LENGTH - separator.length;
+  const head = Math.ceil(keep / 2);
+  return `${message.slice(0, head)}${separator}${message.slice(message.length - (keep - head))}`;
+}
 
 /**
  * Failure surfaced to the pane as `ThreadDeviceState.lastError`. `retryable`

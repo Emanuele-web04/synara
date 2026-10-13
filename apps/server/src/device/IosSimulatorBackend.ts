@@ -51,6 +51,7 @@ import {
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
 import {
   DeviceBackendError,
+  fitDeviceMessage,
   type DeviceBackend,
   type DeviceFrameListener,
   type DeviceKeyEvent,
@@ -1298,7 +1299,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   private recordHelperFailure(message: string): DeviceBackendError {
     // Remembered so `availability()` reports `helper-unavailable` instead of
     // the pane retrying a build that will keep failing the same way.
-    this.helperBuildFailure = message;
+    this.helperBuildFailure = fitDeviceMessage(message);
     return new DeviceBackendError(message);
   }
 

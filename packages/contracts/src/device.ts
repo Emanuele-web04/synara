@@ -39,7 +39,7 @@ const DEVICE_UDID_MAX_LENGTH = 128;
 const DEVICE_TEXT_MAX_LENGTH = 4_096;
 const DEVICE_PATH_MAX_LENGTH = 1_024;
 const DEVICE_URL_MAX_LENGTH = 8_192;
-const DEVICE_MESSAGE_MAX_LENGTH = 2_048;
+export const DEVICE_MESSAGE_MAX_LENGTH = 2_048;
 
 /**
  * Simulator UDIDs are UUIDs today; the charset is widened so an Android
@@ -256,6 +256,9 @@ export const DeviceAttachPhase = Schema.Literals([
 ]);
 export type DeviceAttachPhase = typeof DeviceAttachPhase.Type;
 
+/** Most devices one thread state can list; a machine can have more simulators than this. */
+export const DEVICE_THREAD_STATE_MAX_DEVICES = 64;
+
 export const ThreadDeviceState = Schema.Struct({
   threadId: ThreadId,
   /** Monotonic per thread; lets the pane drop out-of-order pushes. */
@@ -269,7 +272,9 @@ export const ThreadDeviceState = Schema.Struct({
    */
   attachPhase: Schema.optional(Schema.NullOr(DeviceAttachPhase)),
   /** Devices the pane may show: booted devices plus anything Synara is booting. */
-  devices: Schema.Array(DeviceDescriptor).check(Schema.isMaxLength(64)),
+  devices: Schema.Array(DeviceDescriptor).check(
+    Schema.isMaxLength(DEVICE_THREAD_STATE_MAX_DEVICES),
+  ),
   /** True while an agent tool is driving input, so the pane can show the badge. */
   agentActive: Schema.Boolean,
   availability: DeviceAvailability,
