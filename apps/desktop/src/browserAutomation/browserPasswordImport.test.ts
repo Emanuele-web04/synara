@@ -1,5 +1,5 @@
 import { createCipheriv, pbkdf2Sync } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -217,3 +217,33 @@ it.each(["EACCES", "EPERM", "ENOENT", "EIO"])(
     expect(vault.importPasswords).not.toHaveBeenCalled();
   },
 );
+
+it("reads Login Data without touching an inaccessible Network cookie directory", async () => {
+  await makeProfile();
+  const network = join(
+    home,
+    "Library",
+    "Application Support",
+    "Google",
+    "Chrome",
+    "Default",
+    "Network",
+  );
+  await mkdir(network);
+  await chmod(network, 0);
+  try {
+    const vault = {
+      snapshot: async () => ({ protection: { locked: false } }),
+      importPasswords: vi.fn(async () => ({ imported: 1, skipped: 0, provenanceSaved: true })),
+    } as unknown as BrowserVault;
+    const result = await new BrowserPasswordImport(
+      vault,
+      async () => "test-safe-storage",
+      home,
+    ).import({ browser: "chrome", profile: "Default", confirmed: true });
+    expect(result).toMatchObject({ ok: true, imported: 1 });
+    expect(vault.importPasswords).toHaveBeenCalledOnce();
+  } finally {
+    await chmod(network, 0o700);
+  }
+});

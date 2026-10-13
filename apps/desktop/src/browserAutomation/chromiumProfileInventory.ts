@@ -113,7 +113,7 @@ export async function resolveChromiumProfileFolder(
   )
     return null;
   const folder = singleProfile ? root : join(root, profileId);
-  return (await isRealDirectory(folder)) && (await hasProfileStore(folder)) ? folder : null;
+  return (await isRealDirectory(folder)) ? folder : null;
 }
 
 async function isRealFile(path: string): Promise<boolean> {

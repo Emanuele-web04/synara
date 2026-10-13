@@ -183,6 +183,29 @@ describe("macOS Chromium-family cookie sources", () => {
     );
     expect(keychainPassword).not.toHaveBeenCalled();
   });
+  it.each(["oversized", "symlinked"])(
+    "keeps healthy profiles selectable beside a %s cookie store",
+    async (kind) => {
+      const file = await profile(browsers[0]);
+      await profile(browsers[0], false, "Profile 1");
+      if (kind === "oversized") await truncate(file, 64 * 1024 * 1024 + 1);
+      else {
+        await rm(file);
+        const outside = join(home, "outside-cookies");
+        await writeFile(outside, "private");
+        await symlink(outside, file);
+      }
+      expect(
+        (await reader.listChromiumProfiles("helium", home)).map((profile) => profile.id),
+      ).toEqual(["Profile 1"]);
+      await expect(
+        reader.readChromiumCookieSnapshot(options("helium"), { home, keychainPassword }),
+      ).rejects.toMatchObject({
+        cookieReaderCode: kind === "oversized" ? "resource_exhausted" : "source_extraction_failed",
+      });
+    },
+  );
+
   it("lists only profiles with cookie stores, without reading cookies or acquiring keys", async () => {
     for (const browser of browsers) await profile(browser);
     await mkdir(join(home, "Library", "Application Support", "Aside", "Empty"));

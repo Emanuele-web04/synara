@@ -2,7 +2,7 @@ diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-sourc
 new file mode 100644
 --- /dev/null
 +++ b/dist/src/chromium-cookie-source.js
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,342 @@
 +// macOS Chromium-family sources for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -105,7 +105,9 @@ new file mode 100644
 +        for await (const entry of directory) {
 +            if (++entriesRead > 256) throw chromiumError("resource_exhausted", "discovery");
 +            if (!entry.isDirectory() || !CHROMIUM_PROFILE_NAME_PATTERN.test(entry.name)) continue;
-+            if (await chromiumCookieDatabasePath(join(chromiumProfileRoot(browser, home), entry.name)) === null) continue;
++            try {
++                if (await chromiumCookieDatabasePath(join(chromiumProfileRoot(browser, home), entry.name)) === null) continue;
++            } catch { continue; }
 +            profiles.push({ id: entry.name, name: entry.name, isDefault: entry.name === "Default" });
 +        }
 +    } catch (error) {
@@ -310,13 +312,16 @@ new file mode 100644
 +    const browser = options.source.browser;
 +    if (!sourceFor(browser)) throw chromiumError("no_selected_source", "discovery");
 +    const home = deps.home ?? homedir();
-+    const available = await listChromiumProfiles(browser, home);
-+    if (!available.some((entry) => entry.id === profile)) throw chromiumError("no_selected_source", "discovery");
 +    let root, profilePath;
 +    try {
 +        root = await realpath(chromiumProfileRoot(browser, home));
-+        profilePath = await realpath(join(root, profile));
-+    } catch (error) { throw classifySqliteError(error, "acquisition"); }
++        const selected = join(root, profile);
++        if (!(await lstat(selected)).isDirectory()) throw chromiumError("no_selected_source", "discovery");
++        profilePath = await realpath(selected);
++    } catch (error) {
++        if (isMissingError(error)) throw chromiumError("no_selected_source", "discovery");
++        throw classifySqliteError(error, "acquisition");
++    }
 +    if (!profilePath.startsWith(root + "/")) throw chromiumError("no_selected_source", "discovery");
 +    const databasePath = await chromiumCookieDatabasePath(profilePath);
 +    if (!databasePath) throw chromiumError("no_selected_source", "acquisition");
