@@ -1264,7 +1264,10 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   private async compileHelper(): Promise<string> {
     const buildScript = path.join(this.helperSourceDir, "build.sh");
-    const outputDirectory = path.join(this.helperCacheRoot, await this.xcodeBuildKey());
+    const key = await this.xcodeBuildKey().catch((error: unknown) => {
+      throw this.recordHelperFailure(error instanceof Error ? error.message : String(error));
+    });
+    const outputDirectory = path.join(this.helperCacheRoot, key);
     const result = await this.run("/bin/sh", [buildScript, outputDirectory], {
       timeoutMs: 300_000,
       allowNonZeroExit: true,
@@ -1378,8 +1381,12 @@ export class IosSimulatorBackend implements DeviceBackend {
       result?.code === 0
         ? deviceHelperCacheKey(result.stdout, await this.helperSourceRevision())
         : null;
+    // Not recorded as a helper failure here: this also runs on every cache
+    // lookup, and one slow or failed call (Xcode updating, a license prompt)
+    // would otherwise leave the pane on "helper unavailable" until restart.
+    // compileHelper records it when the failure actually blocks a build.
     if (key === null) {
-      throw this.recordHelperFailure(
+      throw new DeviceBackendError(
         "Could not determine the Xcode version. Install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
       );
     }

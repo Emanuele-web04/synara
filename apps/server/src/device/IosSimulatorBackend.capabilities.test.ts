@@ -109,7 +109,13 @@ async function capabilityCacheKey(): Promise<string> {
  * A backend wired to a cache directory containing a fake helper binary, so
  * `cachedHelperPath()` resolves and the probe runs.
  */
-async function makeBackend(capabilities: Record<string, unknown>) {
+async function makeBackend(
+  capabilities: Record<string, unknown>,
+  options: {
+    /** Overrides the nth `xcodebuild -version` answer (1-based); undefined keeps the default. */
+    readonly xcodeVersion?: (call: number) => ProcessRunResult | undefined;
+  } = {},
+) {
   const cacheRoot = await mkdtemp(path.join(tmpdir(), "synara-capability-"));
   // The directory name must match the key the backend derives, or the cache
   // lookup misses and no probe runs. That key is the stubbed `xcodebuild
@@ -121,6 +127,7 @@ async function makeBackend(capabilities: Record<string, unknown>) {
   await writeFile(binaryPath, "#!/bin/sh\n");
 
   const probeCalls: (readonly string[])[] = [];
+  let xcodeVersionCalls = 0;
 
   const backend = new IosSimulatorBackend({
     platform: "darwin",
@@ -137,7 +144,9 @@ async function makeBackend(capabilities: Record<string, unknown>) {
       }
       if (command === "xcode-select") return ok("/Applications/Xcode.app/Contents/Developer");
       if (command === "xcodebuild") {
-        return args.includes("-license") ? ok("") : ok("Xcode 26.3\nBuild version 17D1");
+        if (args.includes("-license")) return ok("");
+        xcodeVersionCalls += 1;
+        return options.xcodeVersion?.(xcodeVersionCalls) ?? ok("Xcode 26.3\nBuild version 17D1");
       }
       if (command === "xcrun") return ok(DEVICE_LIST_JSON);
       return ok("");
@@ -245,5 +254,43 @@ describe("a broken input path", () => {
     await expect(backend.attachStream(DEVICE, () => {})).rejects.toThrow(
       /Screen capture is unavailable/u,
     );
+  });
+});
+
+describe("a transient xcodebuild -version failure", () => {
+  /** What `runProcess` reports when `xcodebuild -version` overruns its 20s timeout. */
+  const timedOut: ProcessRunResult = {
+    stdout: "",
+    stderr: "",
+    code: null,
+    signal: "SIGTERM",
+    timedOut: true,
+  };
+
+  it("recovers once xcodebuild answers again and the cached helper is still there", async () => {
+    // The first `xcodebuild -version` is the one inside the agent's first tap
+    // (the capability probe resolving the helper cache key); it times out once.
+    const { backend } = await makeBackend(ALL_OK, {
+      xcodeVersion: (call) => (call === 1 ? timedOut : undefined),
+    });
+
+    // The very same tap then finds the cached helper and works.
+    await expect(backend.tap(DEVICE, 10, 10)).resolves.toBeUndefined();
+
+    // Every later xcodebuild call succeeds and the binary is in the cache, so
+    // nothing is left to report as broken.
+    expect(await backend.availability()).toMatchObject({ kind: "available" });
+  });
+
+  it("recovers when the transient failure hit the cache-key probe inside availability", async () => {
+    // Call 1 is the license check (fine); call 2 resolves the helper cache key
+    // inside the same availability() and fails once.
+    const { backend } = await makeBackend(ALL_OK, {
+      xcodeVersion: (call) => (call === 2 ? timedOut : undefined),
+    });
+    await backend.availability();
+
+    expect(await backend.availability()).toMatchObject({ kind: "available" });
+    expect(await backend.availability()).toMatchObject({ kind: "available" });
   });
 });
