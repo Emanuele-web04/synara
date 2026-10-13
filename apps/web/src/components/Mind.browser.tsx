@@ -8,13 +8,33 @@ import { render } from "vitest-browser-react";
 import { Route } from "../routes/_chat.mind.index";
 
 const state = vi.hoisted(() => ({
-  role: "owner" as "owner" | "client",
+  authSession: {
+    authenticated: true,
+    role: "owner" as "owner" | "client" | undefined,
+    auth: {
+      policy: "desktop-managed-local",
+      authEnabled: false,
+      bootstrapMethods: ["desktop-bootstrap"],
+      sessionMethods: ["browser-session-cookie"],
+      sessionCookieName: "synara-session",
+    },
+  } as {
+    authenticated: boolean;
+    role?: "owner" | "client";
+    auth: {
+      policy: string;
+      authEnabled: boolean;
+      bootstrapMethods: string[];
+      sessionMethods: string[];
+      sessionCookieName: string;
+    };
+  },
   api: { list: vi.fn(), search: vi.fn(), history: vi.fn(), affirm: vi.fn() },
 }));
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     mind: state.api,
-    server: { getAuthSession: async () => ({ role: state.role }) },
+    server: { getAuthSession: async () => state.authSession },
   }),
 }));
 vi.mock("~/store", () => ({
@@ -45,7 +65,17 @@ const memory: MindMemory = {
 const result = (value = memory) => ({ memories: [value], count: 1, cap: 500 });
 beforeEach(() => {
   vi.resetAllMocks();
-  state.role = "owner";
+  state.authSession = {
+    authenticated: true,
+    role: "owner",
+    auth: {
+      policy: "desktop-managed-local",
+      authEnabled: false,
+      bootstrapMethods: ["desktop-bootstrap"],
+      sessionMethods: ["browser-session-cookie"],
+      sessionCookieName: "synara-session",
+    },
+  };
   state.api.list.mockResolvedValue(result());
   state.api.search.mockResolvedValue(result());
   state.api.history.mockResolvedValue({ entries: [] });
@@ -120,7 +150,7 @@ it("keeps every affirm row disabled while a confirmation is pending", async () =
   await expect.element(buttons.nth(1)).toBeDisabled();
 });
 it("does not query owner-only Mind from a paired browser", async () => {
-  state.role = "client";
+  state.authSession = { ...state.authSession, authenticated: true, role: "client" };
   const View = Route.options.component!;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await render(
@@ -133,4 +163,19 @@ it("does not query owner-only Mind from a paired browser", async () => {
     .toBeVisible();
   expect(state.api.list).not.toHaveBeenCalled();
   expect(state.api.search).not.toHaveBeenCalled();
+});
+
+it("loads Mind for a local auth-disabled owner without a browser session", async () => {
+  state.authSession = {
+    authenticated: false,
+    auth: {
+      policy: "desktop-managed-local",
+      authEnabled: false,
+      bootstrapMethods: ["desktop-bootstrap"],
+      sessionMethods: ["browser-session-cookie"],
+      sessionCookieName: "synara-session",
+    },
+  };
+  await mount();
+  expect(state.api.list).toHaveBeenCalledOnce();
 });

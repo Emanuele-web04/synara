@@ -40,18 +40,20 @@ describe("ServerAuthPolicyLive", () => {
     );
 
     expect(descriptor.policy).toBe("desktop-managed-local");
+    expect(descriptor.authEnabled).toBe(false);
     expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap"]);
     expect(descriptor.sessionCookieName).toBe("synara_session_3773");
   });
 
   it("uses remote-reachable policy for wildcard desktop mode", async () => {
     const descriptor = await getDescriptor.pipe(
-      Effect.provide(makeLayer({ mode: "desktop", host: "0.0.0.0" })),
+      Effect.provide(makeLayer({ mode: "desktop", host: "0.0.0.0", authToken: "test-token" })),
       Effect.scoped,
       Effect.runPromise,
     );
 
     expect(descriptor.policy).toBe("remote-reachable");
+    expect(descriptor.authEnabled).toBe(true);
     expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap", "one-time-token"]);
   });
 

@@ -206,6 +206,7 @@ import {
   serverAuthSessionQueryOptions,
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
+import { canAccessMind } from "../lib/mindAccess";
 import {
   onNativeApiServerCapabilitiesChange,
   readNativeApi,
@@ -1439,7 +1440,7 @@ export default function Sidebar() {
   // Mind count shares the global ["mind","list","all"] cache with the Mind
   // view, so the sidebar badge never adds a request the page would not make.
   const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
-  const mindAvailable = authSessionQuery.data?.role === "owner";
+  const mindAvailable = canAccessMind(authSessionQuery.data);
   const mindListQuery = useQuery({
     queryKey: mindListQueryKey(null),
     queryFn: () => ensureNativeApi().mind.list({}),

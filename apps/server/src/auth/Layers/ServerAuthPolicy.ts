@@ -28,6 +28,7 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
 
   const descriptor: ServerAuthDescriptor = {
     policy,
+    authEnabled: Boolean(config.authToken),
     bootstrapMethods,
     sessionMethods: ["browser-session-cookie", "bearer-session-token"],
     sessionCookieName: resolveSessionCookieName({

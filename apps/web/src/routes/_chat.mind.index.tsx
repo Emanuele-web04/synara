@@ -52,6 +52,7 @@ import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { serverAuthSessionQueryOptions } from "~/lib/serverReactQuery";
+import { canAccessMind } from "~/lib/mindAccess";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 
@@ -432,7 +433,7 @@ function MindRouteView() {
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
   const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
-  const mindAvailable = authSessionQuery.data?.role === "owner";
+  const mindAvailable = canAccessMind(authSessionQuery.data);
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const trimmedSearch = search.trim().slice(0, MIND_RECALL_QUERY_MAX_CHARS);

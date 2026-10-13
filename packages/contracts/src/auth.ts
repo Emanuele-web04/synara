@@ -24,6 +24,7 @@ export type AuthSessionRole = typeof AuthSessionRole.Type;
 
 export const ServerAuthDescriptor = Schema.Struct({
   policy: ServerAuthPolicy,
+  authEnabled: Schema.optionalKey(Schema.Boolean),
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
