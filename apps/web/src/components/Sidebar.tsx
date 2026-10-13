@@ -1439,8 +1439,11 @@ export default function Sidebar() {
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
   // Mind count shares the global ["mind","list","all"] cache with the Mind
   // view, so the sidebar badge never adds a request the page would not make.
-  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
-  const mindAvailable = canAccessMind(authSessionQuery.data);
+  const mindAccessQuery = useQuery({
+    ...serverAuthSessionQueryOptions(),
+    select: canAccessMind,
+  });
+  const mindAvailable = mindAccessQuery.data ?? false;
   const mindListQuery = useQuery({
     queryKey: mindListQueryKey(null),
     queryFn: () => ensureNativeApi().mind.list({}),

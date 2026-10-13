@@ -432,8 +432,11 @@ function MindRouteView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
-  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
-  const mindAvailable = canAccessMind(authSessionQuery.data);
+  const mindAccessQuery = useQuery({
+    ...serverAuthSessionQueryOptions(),
+    select: canAccessMind,
+  });
+  const mindAvailable = mindAccessQuery.data ?? false;
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const trimmedSearch = search.trim().slice(0, MIND_RECALL_QUERY_MAX_CHARS);
@@ -749,7 +752,7 @@ function MindRouteView() {
   if (!mindAvailable) {
     return (
       <div className="p-4 text-ui">
-        {authSessionQuery.isPending ? "Loading…" : "Mind is available only to the workspace owner."}
+        {mindAccessQuery.isPending ? "Loading…" : "Mind is available only to the workspace owner."}
       </div>
     );
   }
