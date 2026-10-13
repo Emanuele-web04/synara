@@ -862,7 +862,7 @@ function MindRouteView() {
                 ) : null}
               </div>
             ) : null}
-            {mindQuery.isError ? (
+            {mindQuery.isError && !searchActive ? (
               <Alert variant="error" size="sm" className="text-destructive">
                 <AlertDescription>
                   <span>
@@ -875,7 +875,7 @@ function MindRouteView() {
                   </Button>
                 </AlertDescription>
               </Alert>
-            ) : mindQuery.isLoading ? (
+            ) : mindQuery.isLoading && !searchActive ? (
               <div className="py-16 text-center text-ui-sm text-muted-foreground">
                 Loading memories...
               </div>

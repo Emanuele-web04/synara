@@ -103,6 +103,35 @@ it("refreshes visible search results", async () => {
     .toBeVisible();
   expect(state.api.list).toHaveBeenCalledTimes(listCalls);
 });
+it("keeps search usable when the initial list request fails", async () => {
+  state.api.list.mockRejectedValue(new Error("List request failed"));
+  state.api.search.mockResolvedValue(result({ ...memory, text: "Search works independently" }));
+  const View = Route.options.component!;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await render(
+    <QueryClientProvider client={client}>
+      <View />
+    </QueryClientProvider>,
+  );
+  await expect.element(page.getByText("List request failed")).toBeVisible();
+  await page.getByRole("textbox", { name: "Search memories" }).fill("independently");
+  await expect.element(page.getByText("Search works independently", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("List request failed")).not.toBeInTheDocument();
+});
+it("keeps search usable while the initial list request is pending", async () => {
+  state.api.list.mockImplementation(() => new Promise(() => {}));
+  state.api.search.mockResolvedValue(result({ ...memory, text: "Search works while loading" }));
+  const View = Route.options.component!;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await render(
+    <QueryClientProvider client={client}>
+      <View />
+    </QueryClientProvider>,
+  );
+  await expect.element(page.getByText("Loading memories...")).toBeVisible();
+  await page.getByRole("textbox", { name: "Search memories" }).fill("while loading");
+  await expect.element(page.getByText("Search works while loading", { exact: true })).toBeVisible();
+});
 it("prevents a second pending affirm and refreshes open history after it settles", async () => {
   let finish: (() => void) | undefined;
   state.api.affirm.mockImplementation(
