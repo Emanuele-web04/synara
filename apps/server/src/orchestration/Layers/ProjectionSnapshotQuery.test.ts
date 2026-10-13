@@ -140,6 +140,45 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("keeps only the newest value of each task patch field across many updates", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("task-progress-volume");
+      const now = "2026-10-11T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('task-progress-project', 'Tasks', '/tmp/task-progress-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${threadId}, 'task-progress-project', 'Tasks', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+      // Long-lived threads accumulate thousands of progress patches. Older
+      // ones fall outside the detail window and must be superseded per field.
+      yield* sql`WITH RECURSIVE progress(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM progress WHERE n < 4000
+      ) INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        SELECT 'progress-' || n, ${threadId}, 'info', 'task.progress', 'Progress',
+          json_object('taskId', 'task-' || (n % 4), 'lastToolName', 'tool-' || n),
+          n, ${now}
+        FROM progress`;
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES
+          ('early-description', ${threadId}, 'info', 'task.progress', 'Progress', '{"taskId":"task-1","description":"Kept"}', 0, ${now}),
+          ('task-2-completed', ${threadId}, 'info', 'task.completed', 'Done', '{"taskId":"task-2","lastToolName":"final"}', 4001, ${now})`;
+
+      const detail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+      const outsideWindow = detail.thread.activities
+        .filter((activity) => (activity.sequence ?? 0) <= 2001)
+        .map((activity) => activity.id);
+      // Each of task-0, task-1 and task-3 keeps only its newest lastToolName;
+      // task-2 was superseded by its completion. The untouched field survives.
+      assert.deepEqual(outsideWindow, ["early-description"]);
+      assert.isTrue(detail.thread.activities.some((activity) => activity.id === "progress-4000"));
+    }),
+  );
+
   it.effect("recovers the stored fork cutoff from persisted rows on every continuation read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
