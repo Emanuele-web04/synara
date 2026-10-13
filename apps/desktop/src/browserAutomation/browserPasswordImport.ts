@@ -10,7 +10,7 @@ import {
 } from "./chromiumPasswordReadProcess";
 
 const MAX_PROFILE_LOGINS = 50_000;
-const MAX_PASSWORD_IMPORT_MS = 120_000;
+const MAX_PASSWORD_PREWRITE_MS = 120_000;
 type PasswordProfilePreflight =
   | Awaited<ReturnType<typeof inventoryChromiumPasswordProfileProcess>>
   | undefined;
@@ -85,6 +85,28 @@ function platform(): "macos" | "windows" | "linux" {
   return "linux";
 }
 
+function awaitReadUntilAbort<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error("Browser password read aborted."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    read.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
 export class BrowserPasswordImport {
   private active: { operationId: string | undefined; controller: AbortController } | undefined;
 
@@ -121,7 +143,7 @@ export class BrowserPasswordImport {
     const active = { operationId: input.operationId, controller: new AbortController() };
     const timeout = setTimeout(
       () => active.controller.abort(new PasswordImportTimeoutError()),
-      MAX_PASSWORD_IMPORT_MS,
+      MAX_PASSWORD_PREWRITE_MS,
     );
     this.active = active;
     try {
@@ -175,9 +197,12 @@ export class BrowserPasswordImport {
     if (profile.count > MAX_PROFILE_LOGINS)
       return { ok: false, code: "too_many_logins", platform: currentPlatform };
     try {
-      if ((await this.vault.snapshot()).protection.locked)
+      const snapshot = await awaitReadUntilAbort(this.vault.snapshot(), signal);
+      if (signal.aborted) return cancelled();
+      if (snapshot.protection.locked)
         return { ok: false, code: "vault_locked", platform: currentPlatform };
     } catch {
+      if (signal.aborted) return cancelled();
       return { ok: false, code: "vault_failed", platform: currentPlatform };
     }
     if (signal.aborted) return cancelled();
@@ -224,6 +249,7 @@ export class BrowserPasswordImport {
         read.logins.length = 0;
         return cancelled();
       }
+      // Once the durable write starts, await its result instead of reporting a false cancellation.
       const result = await this.vault.importPasswords(read.logins);
       read.logins.length = 0;
       return {
