@@ -203,6 +203,7 @@ import { modelQueryOptionsForProviderInstance } from "../hooks/useProviderModelC
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
+  serverAuthSessionQueryOptions,
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import {
@@ -1437,9 +1438,12 @@ export default function Sidebar() {
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
   // Mind count shares the global ["mind","list","all"] cache with the Mind
   // view, so the sidebar badge never adds a request the page would not make.
+  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
+  const mindAvailable = authSessionQuery.data?.role === "owner";
   const mindListQuery = useQuery({
     queryKey: mindListQueryKey(null),
     queryFn: () => ensureNativeApi().mind.list({}),
+    enabled: mindAvailable,
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -6911,7 +6915,9 @@ export default function Sidebar() {
     activeItem: railSlotActiveItem,
     ...railAvailability,
   });
-  const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
+  const railItems: AppRailItem[] = railVisibleItemIds
+    .filter((id) => id !== "mind" || mindAvailable)
+    .map(railItemFor);
   const searchPaletteNavigationActions: SidebarSearchAction[] = (
     ["inbox", "kanban", "studio", "automations"] as const
   )
@@ -7003,7 +7009,7 @@ export default function Sidebar() {
   // Customize rows: the rail popover lists the rail's own items (Groups only while its
   // section is enabled, Inbox only where it ships), then its Space/project shortcuts.
   const railCustomizeItems: SidebarCustomizeItem[] = railItemOrder
-    .filter((id) => isRailItemAvailable(id, railAvailability))
+    .filter((id) => isRailItemAvailable(id, railAvailability) && (id !== "mind" || mindAvailable))
     .map((id) => ({
       id,
       icon: railItemGlyphs(id).idle,

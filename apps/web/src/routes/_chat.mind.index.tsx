@@ -1,4 +1,4 @@
-import { PROVIDER_DISPLAY_NAMES, ProjectId } from "@synara/contracts";
+import { MIND_RECALL_QUERY_MAX_CHARS, PROVIDER_DISPLAY_NAMES, ProjectId } from "@synara/contracts";
 import {
   type MindListResult,
   type MindMemory,
@@ -51,6 +51,7 @@ import { formatRelativeTime } from "~/lib/relativeTime";
 import { pinActionLabel, PinStatusIcon } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { serverAuthSessionQueryOptions } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 
@@ -194,7 +195,7 @@ function MindListRow({
               {formatMindWeightLabel(memory.weight)}
               {provenance ? ` · ${provenance}` : ""}
               {memory.accessCount > 0
-                ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "recall", "recalls")}`
+                ? ` · ${memory.accessCount} ${pluralize(memory.accessCount, "confirmation", "confirmations")}`
                 : ""}
               {memory.pinned ? " · pinned" : ""}
             </span>
@@ -430,9 +431,11 @@ function MindRouteView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
+  const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
+  const mindAvailable = authSessionQuery.data?.role === "owner";
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const trimmedSearch = search.trim();
+  const trimmedSearch = search.trim().slice(0, MIND_RECALL_QUERY_MAX_CHARS);
   const [debouncedSearch] = useDebouncedValue(trimmedSearch, { wait: MIND_SEARCH_DEBOUNCE_MS });
   const searchActive = debouncedSearch.length > 0;
 
@@ -441,6 +444,7 @@ function MindRouteView() {
   // capped across projects, so filtering it could hide the project's rows).
   const mindQuery = useQuery({
     queryKey: mindListQueryKey(projectFilter),
+    enabled: mindAvailable,
     queryFn: () =>
       ensureNativeApi().mind.list(
         projectFilter === null ? {} : { projectId: ProjectId.makeUnsafe(projectFilter) },
@@ -466,7 +470,7 @@ function MindRouteView() {
             query: debouncedSearch,
             projectId: ProjectId.makeUnsafe(projectFilter),
           }),
-    enabled: searchActive,
+    enabled: mindAvailable && searchActive,
     staleTime: 15_000,
     // Hold prior results across keystrokes but never across project scopes —
     // placeholder rows from project A must not render under project B's chip.
@@ -723,10 +727,7 @@ function MindRouteView() {
                   key={memory.memoryId}
                   memory={memory}
                   projectName={projectNamesById.get(memory.projectId) ?? "Unknown project"}
-                  affirmPending={
-                    affirmMutation.isPending &&
-                    affirmMutation.variables?.memoryId === memory.memoryId
-                  }
+                  affirmPending={affirmMutation.isPending}
                   onAffirm={() => affirmMutation.mutate(memory)}
                   onTogglePinned={() =>
                     setPinnedMutation.mutate({ memory, pinned: !memory.pinned })
@@ -743,6 +744,14 @@ function MindRouteView() {
       )}
     </section>
   );
+
+  if (!mindAvailable) {
+    return (
+      <div className="p-4 text-ui">
+        {authSessionQuery.isPending ? "Loading…" : "Mind is available only to the workspace owner."}
+      </div>
+    );
+  }
 
   return (
     <RouteInsetSurface>
@@ -766,6 +775,7 @@ function MindRouteView() {
             <div className="min-w-0 flex-1" />
             <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
               <SearchInput
+                maxLength={MIND_RECALL_QUERY_MAX_CHARS}
                 aria-label="Search memories"
                 placeholder="Search memories"
                 value={search}
