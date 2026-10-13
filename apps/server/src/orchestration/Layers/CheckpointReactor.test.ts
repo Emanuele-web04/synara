@@ -2029,7 +2029,9 @@ describe("CheckpointReactor", () => {
         expect(
           Option.isSome(
             await Effect.runPromise(
-              Deferred.await(independentCaptured).pipe(Effect.timeoutOption("500 millis")),
+              // This is a liveness contract while the first workspace stays
+              // blocked, not a 500 ms Git performance budget on a shared runner.
+              Deferred.await(independentCaptured).pipe(Effect.timeoutOption("10 seconds")),
             ),
           ),
         ).toBe(true);

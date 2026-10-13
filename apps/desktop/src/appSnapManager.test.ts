@@ -1452,6 +1452,16 @@ describe("AppSnap window picker requests", () => {
         return originalRename(oldPath, newPath);
       });
 
+    const originalUnlink = FS.promises.unlink;
+    let markCleanupFinished!: () => void;
+    const cleanupFinished = new Promise<void>((resolve) => {
+      markCleanupFinished = resolve;
+    });
+    const unlinkSpy = vi.spyOn(FS.promises, "unlink").mockImplementation(async (path) => {
+      await originalUnlink(path);
+      if (String(path).endsWith(".json")) markCleanupFinished();
+    });
+
     try {
       const capturing = manager.captureWindow(77);
       await flushPromises();
@@ -1474,16 +1484,20 @@ describe("AppSnap window picker requests", () => {
       await vi.advanceTimersByTimeAsync(20_000);
       await assertion;
       releaseRename();
-      for (let index = 0; index < 6; index += 1) await flushPromises();
+      // Wait for durable cleanup, not a fixed number of event-loop turns:
+      // filesystem completion can lag behind setImmediate under CI load.
+      await cleanupFinished;
 
       expect(onCaptured).not.toHaveBeenCalled();
       expect(await manager.listPendingCaptures()).toHaveLength(0);
       expect(FS.existsSync(capturePath)).toBe(false);
+      expect(FS.readdirSync(captureDirectory)).toEqual([]);
     } finally {
       releaseRename();
       renameSpy.mockRestore();
-      dispose();
+      unlinkSpy.mockRestore();
       vi.useRealTimers();
+      dispose();
     }
   });
 
