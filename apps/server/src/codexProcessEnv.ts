@@ -21,6 +21,7 @@ import {
   resolveBaseCodexHomePath,
   resolveCodexHomeOverlayAccountSegment,
   resolveSynaraCodexHomeOverlayPath,
+  SYNARA_CODEX_HOME_OVERLAY_DIR,
 } from "./codexHomePaths.ts";
 import {
   codexAuthFs,
@@ -33,6 +34,7 @@ import {
   codexPathsReferenceSameLocation,
   codexPathsReferenceSameLocationIo,
   resolveCodexPathIdentity,
+  resolveCodexPathIdentityIo,
 } from "./codexPathIdentity.ts";
 import {
   buildProviderChildEnvironment,
@@ -151,6 +153,11 @@ export interface CodexProcessEnvInput {
   readonly expectedSharedContinuationGeneration?: string;
   readonly allowLegacySharedContinuationMigration?: boolean;
 }
+
+type CodexSourceHomeInput = Pick<
+  CodexProcessEnvInput,
+  "env" | "homePath" | "shadowHomePath" | "accountId" | "explicitProviderEnvironment"
+>;
 
 export function hydrateCodexProviderCredentialEnvironment(input: {
   readonly env: NodeJS.ProcessEnv;
@@ -769,18 +776,141 @@ function* readCodexPreparedAuthTrackingFingerprintIo(
   });
 }
 
+export function resolveCodexProcessSourceEnvironment(
+  input: CodexSourceHomeInput = {},
+): NodeJS.ProcessEnv {
+  return runCodexAuthIoSync(resolveCodexProcessSourceEnvironmentIo(input));
+}
+
+function* optionalCodexEntryStatIo(entryPath: string): CodexAuthIo<BigIntStats | undefined> {
+  try {
+    return yield* codexAuthFs.lstat(entryPath);
+  } catch (cause) {
+    if (filesystemErrorCode(cause) === "ENOENT") return undefined;
+    throw cause;
+  }
+}
+
+/**
+ * A nested default instance inherits the parent's generated CODEX_HOME and the
+ * real CODEX_SQLITE_HOME. Recognize only a fully prepared shared overlay; never
+ * reinterpret explicitly selected homes or a parent's independent private auth.
+ * All readers use this same algorithm, including asynchronous auth revalidation.
+ */
+function* resolveCodexProcessSourceEnvironmentIo(
+  input: CodexSourceHomeInput,
+): CodexAuthIo<NodeJS.ProcessEnv> {
+  const env = { ...(input.env ?? process.env) };
+  const accountId = input.accountId?.trim();
+  const sourceHint = env[CODEX_SQLITE_HOME_ENV_NAME]?.trim();
+  if (
+    input.homePath?.trim() ||
+    input.shadowHomePath?.trim() ||
+    (accountId && accountId !== "default") ||
+    Object.hasOwn(input.explicitProviderEnvironment ?? {}, "CODEX_HOME") ||
+    Object.hasOwn(input.explicitProviderEnvironment ?? {}, CODEX_SQLITE_HOME_ENV_NAME) ||
+    !env.CODEX_HOME?.trim() ||
+    !sourceHint
+  ) {
+    return env;
+  }
+  const overlayHomePath = resolveBaseCodexHomePath(env);
+  if (path.basename(overlayHomePath) !== SYNARA_CODEX_HOME_OVERLAY_DIR) return env;
+  const sourceHomePath = resolveBaseCodexHomePath(env, sourceHint);
+  try {
+    if (yield* codexPathsReferenceSameLocationIo(overlayHomePath, sourceHomePath)) return env;
+    const overlay = yield* bindCodexPreparedHomeSourceIo(overlayHomePath, {
+      label: "Inherited Codex overlay",
+      requireRealDirectory: true,
+    });
+    const source = yield* bindCodexPreparedHomeSourceIo(sourceHomePath, {
+      label: "Inherited Codex source",
+      requireRealDirectory: true,
+    });
+    if (overlay.kind !== "bound" || source.kind !== "bound") return env;
+    if ((yield* readCodexPreparedHomeFileSnapshotIo(overlay, "config.toml")) === undefined) {
+      return env;
+    }
+    const markerBytes = yield* readCodexPreparedHomeFileSnapshotIo(
+      source,
+      SYNARA_SHARED_CONTINUATION_MARKER_FILE,
+    );
+    if (markerBytes === undefined) return env;
+    const marker = JSON.parse(markerBytes.toString("utf8")) as {
+      version?: unknown;
+      sourceHomeIdentity?: unknown;
+      generation?: unknown;
+      migratedFromVersion?: unknown;
+    } | null;
+    if (
+      marker?.version !== SYNARA_SHARED_CONTINUATION_MARKER_VERSION ||
+      marker.sourceHomeIdentity !== (yield* resolveCodexPathIdentityIo(sourceHomePath)) ||
+      typeof marker.generation !== "string" ||
+      !SHARED_CONTINUATION_GENERATION_PATTERN.test(marker.generation) ||
+      (marker.migratedFromVersion !== undefined && marker.migratedFromVersion !== 1)
+    ) {
+      return env;
+    }
+    for (const entryName of sharedContinuationIdentityEntryNames()) {
+      const sourcePath = path.join(source.canonicalHomePath, entryName);
+      const overlayPath = path.join(overlay.canonicalHomePath, entryName);
+      const sourceStat = yield* codexAuthFs.lstat(sourcePath);
+      const overlayStat = yield* codexAuthFs.lstat(overlayPath);
+      const sourceHasExpectedType =
+        sharedContinuationEntryKind(entryName) === "dir"
+          ? sourceStat.isDirectory()
+          : sourceStat.isFile();
+      if (
+        !sourceHasExpectedType ||
+        !overlayStat.isSymbolicLink() ||
+        !(yield* codexPathsReferenceSameLocationIo(sourcePath, overlayPath))
+      ) {
+        return env;
+      }
+    }
+    const sourceAuthPath = path.join(source.canonicalHomePath, "auth.json");
+    const overlayAuthPath = path.join(overlay.canonicalHomePath, "auth.json");
+    const sourceAuth = yield* optionalCodexEntryStatIo(sourceAuthPath);
+    const overlayAuth = yield* optionalCodexEntryStatIo(overlayAuthPath);
+    if (sourceAuth || overlayAuth) {
+      if (
+        !sourceAuth?.isFile() ||
+        !overlayAuth?.isSymbolicLink() ||
+        !(yield* codexPathsReferenceSameLocationIo(sourceAuthPath, overlayAuthPath))
+      ) {
+        return env;
+      }
+    }
+    yield* assertLogicalHomeMatchesPreparedSourceIo({
+      logicalHomePath: overlayHomePath,
+      source: overlay,
+      label: "Inherited Codex overlay",
+    });
+    yield* assertLogicalHomeMatchesPreparedSourceIo({
+      logicalHomePath: sourceHomePath,
+      source,
+      label: "Inherited Codex source",
+    });
+    return { ...env, CODEX_HOME: source.canonicalHomePath };
+  } catch {
+    // Unknown or damaged layouts retain their original source selection. The
+    // existing auth/archive/continuation guards remain responsible for refusal.
+    return env;
+  }
+}
+
 export function prepareCodexAuthTracking(
-  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  input: CodexSourceHomeInput = {},
   hooks: CodexAuthTrackingPreparationHooks = {},
 ): PreparedCodexAuthTracking {
   return runCodexAuthIoSync(prepareCodexAuthTrackingIo(input, hooks));
 }
 
 function* prepareCodexAuthTrackingIo(
-  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  input: CodexSourceHomeInput = {},
   hooks: CodexAuthTrackingPreparationHooks = {},
 ): CodexAuthIo<PreparedCodexAuthTracking> {
-  const env = { ...(input.env ?? process.env) };
+  const env = yield* resolveCodexProcessSourceEnvironmentIo(input);
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
   const ambientHomePath = resolveBaseCodexHomePath(env);
   const hasDedicatedAccountHome =
@@ -876,10 +1006,11 @@ export async function readSynaraConfigSuppressions(markerPath: string): Promise<
 }
 
 function findConflictingLocalBrowserPluginSections(config: string): readonly string[] {
+  const parsed = splitConfigLines(config);
   return [
     ...new Set(
-      config
-        .split(/\r?\n/)
+      parsed.lines
+        .filter((_, index) => parsed.structural[index])
         .map((line) => line.trim())
         .filter((line) => CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN.test(line)),
     ),
@@ -900,6 +1031,7 @@ export function disableCodexConfigSections(
     }
   }
   const lines = config.split(/\r?\n/);
+  const { structural } = splitConfigLines(config);
   const output: string[] = [];
   let inTargetSection = false;
   const seenTargetSections = new Set<string>();
@@ -911,7 +1043,11 @@ export function disableCodexConfigSections(
     }
   };
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    if (!structural[index]) {
+      output.push(line);
+      continue;
+    }
     const tableName = normalizeTomlTableHeaderName(line);
     if (tableName !== undefined) {
       closeTargetSection();
@@ -922,7 +1058,13 @@ export function disableCodexConfigSections(
       continue;
     }
 
-    if (inTargetSection && /^\s*enabled\s*=/.test(line)) {
+    const enabledValueIndex = inTargetSection
+      ? findTomlKeyAssignmentValueIndex(line, "enabled")
+      : undefined;
+    if (enabledValueIndex !== undefined) {
+      if (!/^(?:true|false)[\t ]*(?:#.*)?$/.test(line.slice(enabledValueIndex))) {
+        throw new Error("Codex plugin enabled must be a boolean before Synara can disable it.");
+      }
       output.push("enabled = false");
       targetSectionHasEnabled = true;
       continue;
@@ -1937,14 +2079,9 @@ function selectedCodexOverlaySharesContinuationState(input: {
 }
 
 export function readCodexSharedContinuationGeneration(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly shadowHomePath?: string;
-    readonly accountId?: string;
-  } = {},
+  input: CodexSourceHomeInput = {},
 ): string | undefined {
-  const env = { ...(input.env ?? process.env) };
+  const env = resolveCodexProcessSourceEnvironment(input);
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
   const shadowHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(env, input.shadowHomePath)
@@ -1979,14 +2116,7 @@ export function readCodexSharedContinuationGeneration(
   }
 }
 
-export function isCodexSharedContinuationStatePrepared(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly shadowHomePath?: string;
-    readonly accountId?: string;
-  } = {},
-): boolean {
+export function isCodexSharedContinuationStatePrepared(input: CodexSourceHomeInput = {}): boolean {
   return readCodexSharedContinuationGeneration(input) !== undefined;
 }
 
@@ -2007,32 +2137,129 @@ async function removeLegacyCodexOverlaySqliteLinks(overlayHomePath: string): Pro
   }
 }
 
-export function appendCodexConfigSection(config: string, section: string): string {
-  const trimmedSection = section.trim();
-  if (!trimmedSection) {
-    return config;
+type TomlMultilineDelimiter = '"""' | "'''";
+
+interface ConfigLines {
+  readonly lines: readonly string[];
+  // True when the line begins outside any TOML multiline string. Only those
+  // lines can carry structure (table headers, keys, comments, our markers);
+  // an identical line inside a multiline string is just string content.
+  readonly structural: readonly boolean[];
+}
+
+function countRun(line: string, index: number, char: string): number {
+  let count = 0;
+  while (line[index + count] === char) {
+    count += 1;
   }
-  if (config.includes(trimmedSection.split("\n")[0] ?? trimmedSection)) {
-    return config;
+  return count;
+}
+
+// Advances the multiline-string state across one line. Only string and
+// comment lexing is needed: anything else on a structural line is irrelevant
+// to marker matching, and malformed input simply keeps the current state.
+function scanTomlLine(
+  line: string,
+  open: TomlMultilineDelimiter | undefined,
+): TomlMultilineDelimiter | undefined {
+  let state = open;
+  let index = 0;
+  while (index < line.length) {
+    const char = line[index];
+    if (state === undefined) {
+      if (char === "#") {
+        return undefined;
+      }
+      if (line.startsWith('"""', index)) {
+        state = '"""';
+        index += 3;
+      } else if (line.startsWith("'''", index)) {
+        state = "'''";
+        index += 3;
+      } else if (char === '"') {
+        index += 1;
+        while (index < line.length && line[index] !== '"') {
+          index += line[index] === "\\" ? 2 : 1;
+        }
+        index += 1;
+      } else if (char === "'") {
+        const close = line.indexOf("'", index + 1);
+        if (close === -1) {
+          return undefined;
+        }
+        index = close + 1;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (state === '"""' && char === "\\") {
+      index += 2;
+      continue;
+    }
+    const quotes = countRun(line, index, state[0] ?? "");
+    if (quotes >= 3) {
+      // TOML allows up to two extra quotes right before the closing delimiter.
+      state = undefined;
+      index += Math.min(quotes, 5);
+      continue;
+    }
+    index += Math.max(quotes, 1);
   }
+  return state;
+}
+
+function splitConfigLines(config: string): ConfigLines {
+  const lines = config.split("\n");
+  const structural: boolean[] = [];
+  let open: TomlMultilineDelimiter | undefined;
+  for (const line of lines) {
+    structural.push(open === undefined);
+    open = scanTomlLine(line, open);
+  }
+  return { lines, structural };
+}
+
+// Only complete, non-nested pairs identify an owned block. If another begin
+// appears first, the preceding begin is unmatched and its user content stays.
+function findManagedConfigBlock(
+  config: ConfigLines,
+  from = 0,
+): { readonly begin: number; readonly end: number } | undefined {
+  let begin: number | undefined;
+  for (let index = from; index < config.lines.length; index += 1) {
+    if (!config.structural[index]) {
+      continue;
+    }
+    const rawLine = config.lines[index] ?? "";
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line === SYNARA_MANAGED_CODEX_CONFIG_BEGIN) {
+      begin = index;
+    } else if (line === SYNARA_MANAGED_CODEX_CONFIG_END && begin !== undefined) {
+      return { begin, end: index };
+    }
+  }
+  return undefined;
+}
+
+function appendConfigBlock(config: string, block: string): string {
   const base = config.trimEnd();
-  return base.length > 0 ? `${base}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
+  return base.length > 0 ? `${base}\n\n${block}\n` : `${block}\n`;
 }
 
 export const SYNARA_MANAGED_CODEX_CONFIG_BEGIN = "# >>> synara managed config >>>";
 export const SYNARA_MANAGED_CODEX_CONFIG_END = "# <<< synara managed config <<<";
 
 export function extractManagedCodexConfigSection(config: string): string | undefined {
-  const begin = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_BEGIN);
-  if (begin === -1) {
+  const parsed = splitConfigLines(config);
+  const block = findManagedConfigBlock(parsed);
+  if (!block) {
     return undefined;
   }
-  const contentStart = begin + SYNARA_MANAGED_CODEX_CONFIG_BEGIN.length;
-  const end = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_END, contentStart);
-  if (end === -1) {
-    return undefined;
-  }
-  const content = config.slice(contentStart, end).trim();
+  const content = parsed.lines
+    .slice(block.begin + 1, block.end)
+    .join("\n")
+    .trim();
   return content.length > 0 ? content : undefined;
 }
 
@@ -2130,9 +2357,10 @@ function findTomlTableHeader(config: string, header: string): TomlTableHeaderLoc
     return undefined;
   }
   let offset = 0;
-  for (const rawLine of config.split("\n")) {
+  const parsed = splitConfigLines(config);
+  for (const [index, rawLine] of parsed.lines.entries()) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (normalizeTomlTableHeaderName(line) === target) {
+    if (parsed.structural[index] && normalizeTomlTableHeaderName(line) === target) {
       return { index: offset, end: offset + line.length };
     }
     offset += rawLine.length + 1;
@@ -2143,9 +2371,10 @@ function findTomlTableHeader(config: string, header: string): TomlTableHeaderLoc
 function findNextTomlTableHeaderIndex(config: string, start: number): number {
   const tail = config.slice(start);
   let offset = 0;
-  for (const rawLine of tail.split("\n")) {
+  const parsed = splitConfigLines(tail);
+  for (const [index, rawLine] of parsed.lines.entries()) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (normalizeTomlTableHeaderName(line) !== undefined) {
+    if (parsed.structural[index] && normalizeTomlTableHeaderName(line) !== undefined) {
       return start + offset;
     }
     offset += rawLine.length + 1;
@@ -2160,8 +2389,9 @@ export function configHasTomlTableHeader(config: string, header: string): boolea
 function splitTomlTables(snippet: string): string[] {
   const tables: string[] = [];
   let current: string[] = [];
-  for (const line of snippet.split("\n")) {
-    if (/^\s*\[/.test(line) && current.length > 0) {
+  const parsed = splitConfigLines(snippet);
+  for (const [index, line] of parsed.lines.entries()) {
+    if (parsed.structural[index] && /^\s*\[/.test(line) && current.length > 0) {
       tables.push(current.join("\n").trim());
       current = [];
     }
@@ -2183,10 +2413,11 @@ function findTomlTableHeaderInNamespace(
   }
   const descendantPrefix = `${namespace.slice(0, -1)},`;
   let offset = 0;
-  for (const rawLine of config.split("\n")) {
+  const parsed = splitConfigLines(config);
+  for (const [index, rawLine] of parsed.lines.entries()) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     const table = normalizeTomlTableHeaderName(line);
-    if (table === namespace || table?.startsWith(descendantPrefix)) {
+    if (parsed.structural[index] && (table === namespace || table?.startsWith(descendantPrefix))) {
       return { index: offset, end: offset + line.length };
     }
     offset += rawLine.length + 1;
@@ -2206,80 +2437,12 @@ function removeTomlTableNamespace(config: string, namespaceHeader: string): stri
   }
 }
 
-function maskTomlComments(input: string): string {
-  let result = "";
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-  let inComment = false;
-
-  for (const character of input) {
-    if (inComment) {
-      if (character === "\n" || character === "\r") {
-        inComment = false;
-        result += character;
-      } else {
-        result += " ";
-      }
-      continue;
-    }
-
-    if (quote) {
-      result += character;
-      if (quote === '"' && escaped) {
-        escaped = false;
-      } else if (quote === '"' && character === "\\") {
-        escaped = true;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      quote = character;
-      result += character;
-    } else if (character === "#") {
-      inComment = true;
-      result += " ";
-    } else {
-      result += character;
-    }
+function findTomlKeyAssignmentValueIndex(line: string, key: string): number | undefined {
+  const match = /^[\t ]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*'|[A-Za-z0-9_-]+)[\t ]*=[\t ]*/.exec(line);
+  if (!match || normalizeTomlTableHeaderName(`[${match[1]}]`) !== JSON.stringify([key])) {
+    return undefined;
   }
-
-  return result;
-}
-
-function findTomlArrayEnd(input: string, openBracketIndex: number): number | undefined {
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-  let depth = 0;
-
-  for (let index = openBracketIndex; index < input.length; index += 1) {
-    const character = input[index];
-    if (quote) {
-      if (quote === '"' && escaped) {
-        escaped = false;
-      } else if (quote === '"' && character === "\\") {
-        escaped = true;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === "[") {
-      depth += 1;
-    } else if (character === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-
-  return undefined;
+  return match[0].length;
 }
 
 function mergeTomlStringArrayValues(
@@ -2299,28 +2462,39 @@ function mergeTomlStringArrayValues(
   const tableStart = headerMatch.end;
   const tableEnd = findNextTomlTableHeaderIndex(config, tableStart);
   const tableBody = config.slice(tableStart, tableEnd);
-  const activeTableBody = maskTomlComments(tableBody);
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const arrayPattern = new RegExp(`(^[\\t ]*${escapedKey}[\\t ]*=[\\t ]*\\[)`, "m");
-  const arrayMatch = arrayPattern.exec(activeTableBody);
+  const parsedBody = splitConfigLines(tableBody);
+  let openBracketIndex: number | undefined;
+  let offset = 0;
+  for (const [index, line] of parsedBody.lines.entries()) {
+    const valueIndex = parsedBody.structural[index]
+      ? findTomlKeyAssignmentValueIndex(line, key)
+      : undefined;
+    if (valueIndex !== undefined && line[valueIndex] === "[") {
+      openBracketIndex = offset + valueIndex;
+      break;
+    }
+    offset += line.length + 1;
+  }
 
-  if (arrayMatch) {
-    const openBracketIndex = arrayMatch.index + arrayMatch[0].lastIndexOf("[");
-    const closeBracketIndex = findTomlArrayEnd(activeTableBody, openBracketIndex);
-    if (closeBracketIndex === undefined) {
+  if (openBracketIndex !== undefined) {
+    // Decode values with the existing TOML parser: quoted token text inside a
+    // larger multiline value is not an exact environment-variable exclusion.
+    let existingValues: unknown;
+    try {
+      existingValues = parseToml(tableBody)[key];
+    } catch {
       return config;
     }
-    const activeArray = activeTableBody.slice(openBracketIndex + 1, closeBracketIndex);
-    const missing = additions.filter((value) => {
-      const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return !new RegExp(`(["'])${escapedValue}\\1`).test(activeArray);
-    });
+    if (!Array.isArray(existingValues)) {
+      return config;
+    }
+    const missing = additions.filter((value) => !existingValues.includes(value));
     if (missing.length === 0) {
       return config;
     }
 
     const insertAt = tableStart + openBracketIndex + 1;
-    const separator = activeArray.trim().length > 0 ? ", " : "";
+    const separator = existingValues.length > 0 ? ", " : "";
     return `${config.slice(0, insertAt)}${missing.map((value) => JSON.stringify(value)).join(", ")}${separator}${config.slice(insertAt)}`;
   }
 
@@ -2374,10 +2548,30 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
   if (tables.length === 0) {
     return overlayConfig;
   }
-  return appendCodexConfigSection(
+  // Append directly: every complete managed block was stripped above, and an
+  // unmatched begin marker left in place must not suppress the new block.
+  return appendConfigBlock(
     overlayConfig,
     `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
+}
+
+function removeManagedCodexConfigSections(config: string): string {
+  const parsed = splitConfigLines(config);
+  const kept: string[] = [];
+  let index = 0;
+  while (index < parsed.lines.length) {
+    const block = findManagedConfigBlock(parsed, index);
+    if (!block) {
+      // No further complete block. Keep everything, including any unmatched
+      // begin marker, so user config after a truncated block is never lost.
+      kept.push(...parsed.lines.slice(index));
+      break;
+    }
+    kept.push(...parsed.lines.slice(index, block.begin));
+    index = block.end + 1;
+  }
+  return kept.join("\n");
 }
 
 async function serializeCodexOverlayPreparation<A>(
@@ -2600,7 +2794,15 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
     ]),
   ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   const overlayConfigPath = path.join(overlayHomePath, "config.toml");
-  let overlayConfig = disableCodexConfigSections(sourceConfig, suppressedSections, true);
+  // A development/Canary Synara can be launched from a terminal managed by
+  // another Synara instance. In that case CODEX_HOME points at the parent
+  // instance's overlay, whose managed block contains the parent's MCP port.
+  // Drop that complete block on every rebuild, including probes that append
+  // no section of their own, so the parent's endpoint never reaches this
+  // instance's overlay.
+  let overlayConfig = removeManagedCodexConfigSections(
+    disableCodexConfigSections(sourceConfig, suppressedSections, true),
+  );
   const managedSection =
     input.appendConfigToml ??
     (await fs
@@ -2679,13 +2881,14 @@ type CodexHomeOverlayPreparationInput = Pick<
   | "overlayEntryLinker"
   | "expectedSharedContinuationGeneration"
   | "allowLegacySharedContinuationMigration"
+  | "explicitProviderEnvironment"
 >;
 
 async function prepareCodexHomeOverlayWithSourcePolicy(
   input: CodexHomeOverlayPreparationInput,
   continuationSourcePolicy: SharedContinuationSourcePolicy,
 ): Promise<string | undefined> {
-  const env = { ...(input.env ?? process.env) };
+  const env = await runCodexAuthIoAsync(resolveCodexProcessSourceEnvironmentIo(input));
   return prepareSynaraCodexHomeOverlay({
     env,
     ...(input.homePath ? { homePath: input.homePath } : {}),
@@ -2730,10 +2933,13 @@ export async function prepareCodexHomeOverlayFromPreparedContinuationSource(
 export async function buildCodexProcessEnv(
   input: CodexProcessEnvInput = {},
 ): Promise<NodeJS.ProcessEnv> {
-  const baseEnv = { ...(input.env ?? process.env) };
+  const baseEnv = await runCodexAuthIoAsync(resolveCodexProcessSourceEnvironmentIo(input));
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
   const overlayPreparationInput: CodexHomeOverlayPreparationInput = {
     env: baseEnv,
+    ...(input.explicitProviderEnvironment
+      ? { explicitProviderEnvironment: input.explicitProviderEnvironment }
+      : {}),
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
@@ -2821,13 +3027,24 @@ export async function buildCodexProcessEnv(
 export async function buildCodexProcessLaunchContext(
   input: CodexProcessEnvInput = {},
 ): Promise<CodexProcessLaunchContext> {
-  const baseEnv = { ...(input.env ?? process.env) };
-  const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
   const initialAuthTracking = prepareCodexAuthTracking(input);
   const initialAuthFingerprint = readCodexPreparedAuthTrackingFingerprint(initialAuthTracking);
   const env = await buildCodexProcessEnv(input);
   const authTracking = prepareCodexAuthTracking(input);
   const authFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+  const sourceHomePath = path.dirname(authTracking.sourceConfigPath);
+  if (
+    !codexPathsReferenceSameLocation(
+      initialAuthTracking.sourceConfigPath,
+      authTracking.sourceConfigPath,
+    ) ||
+    !env[CODEX_SQLITE_HOME_ENV_NAME] ||
+    !codexPathsReferenceSameLocation(sourceHomePath, env[CODEX_SQLITE_HOME_ENV_NAME])
+  ) {
+    throw new Error(
+      "Codex source home changed during app-server launch preparation; retry the request.",
+    );
+  }
   const effectiveHomePath = resolveBaseCodexHomePath(env);
   const authIsMirroredFromAnotherHome = !codexPathsReferenceSameLocation(
     path.dirname(initialAuthTracking.authoritativeAuthFilePath),
@@ -2852,7 +3069,7 @@ export async function buildCodexProcessLaunchContext(
 }
 
 export function readCodexAuthFingerprintAsync(
-  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  input: CodexSourceHomeInput = {},
   hooks: CodexAuthTrackingPreparationHooks = {},
 ): Promise<string> {
   return runCodexAuthIoAsync(

@@ -288,6 +288,18 @@ export function floatingBrowserResizeCursor(edge: FloatingBrowserResizeEdge): st
   return "nwse-resize";
 }
 
+/**
+ * How far the floating card's host must stop above the pane's bottom edge so the card (kept
+ * one margin inside the host) never covers the composer. Zero when there is no composer.
+ */
+export function floatingBrowserComposerClearancePx(input: {
+  paneBottom: number;
+  composerTop: number | null;
+}): number {
+  if (input.composerTop === null || !Number.isFinite(input.composerTop)) return 0;
+  return Math.max(0, Math.round(input.paneBottom - input.composerTop));
+}
+
 export const FLOATING_BROWSER_DRAG_THRESHOLD_PX = 4;
 
 export function isFloatingBrowserDragGesture(

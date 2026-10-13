@@ -11,6 +11,7 @@ import {
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
+  getSidebarThreadSortKey,
   getVisibleSidebarEntriesForPreview,
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
@@ -1265,6 +1266,49 @@ describe("resolveProjectStatusIndicator", () => {
 });
 
 describe("buildProjectThreadTree", () => {
+  it("shows the open parent's children under the subagent that launched them", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const outer = ThreadId.makeUnsafe("outer");
+    const inner = ThreadId.makeUnsafe("inner");
+    const threads = [
+      makeThread({ id: parent }),
+      makeThread({ id: outer, parentThreadId: parent }),
+      makeThread({ id: inner, parentThreadId: parent, sourceThreadId: outer }),
+    ];
+    for (const active of [parent, inner]) {
+      expect(
+        buildProjectThreadTree({ threads, forceVisibleThreadId: active }).map((row) => [
+          row.thread.id,
+          row.depth,
+        ]),
+      ).toEqual([
+        [parent, 0],
+        [outer, 1],
+        [inner, 2],
+      ]);
+    }
+  });
+
+  it("keeps a child reachable under its root when its launching subagent is missing", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const child = ThreadId.makeUnsafe("child");
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: parent }),
+        makeThread({
+          id: child,
+          parentThreadId: parent,
+          sourceThreadId: ThreadId.makeUnsafe("missing"),
+        }),
+      ],
+      forceVisibleThreadId: parent,
+    });
+    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      [parent, 0],
+      [child, 1],
+    ]);
+  });
+
   it("keeps inactive child threads out of the sidebar", () => {
     const rows = buildProjectThreadTree({
       threads: [
@@ -1540,6 +1584,36 @@ describe("normalizeSidebarView", () => {
 });
 
 describe("partitionSidebarThreadsByProjectIds", () => {
+  it("keeps linked-repository hub workers out of Home restore candidates", () => {
+    const hubId = ProjectId.makeUnsafe("hub");
+    const repoId = ProjectId.makeUnsafe("repo");
+    const worker = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("worker"),
+      projectId: repoId,
+    });
+    const ordinary = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("ordinary"),
+      projectId: repoId,
+    });
+    const result = partitionSidebarThreadsByProjectIds(
+      [worker, ordinary],
+      new Set([hubId]),
+      new Map([[hubId, { memberThreadIds: [worker.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([ordinary]);
+    expect(result.groupThreads).toEqual([worker]);
+  });
+
+  it("ignores member indexes of projects outside the validated Hubs set", () => {
+    const thread = makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("ordinary") });
+    const result = partitionSidebarThreadsByProjectIds(
+      [thread],
+      new Set(),
+      new Map([[thread.projectId, { memberThreadIds: [thread.id] }]]),
+    );
+    expect(result.nonGroupThreads).toEqual([thread]);
+  });
+
   it("splits group threads (including legacy Studio rows) from the Threads surface", () => {
     const projectThread = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-project"),
@@ -2096,6 +2170,75 @@ describe("sortThreadsForSidebar", () => {
       ThreadId.makeUnsafe("thread-running"),
       ThreadId.makeUnsafe("thread-newer"),
     ]);
+  });
+});
+
+describe("sortThreadsForSidebar attention and held order", () => {
+  const plain = makeThread({
+    id: ThreadId.makeUnsafe("thread-newest-plain"),
+    createdAt: "2026-03-09T11:00:00.000Z",
+    updatedAt: "2026-03-09T11:00:00.000Z",
+  });
+  const working = {
+    ...makeThread({
+      id: ThreadId.makeUnsafe("thread-working"),
+      createdAt: "2026-03-09T09:00:00.000Z",
+      updatedAt: "2026-03-09T09:00:00.000Z",
+    }),
+    hasLiveTailWork: true,
+  };
+  const unread = makeThread({
+    id: ThreadId.makeUnsafe("thread-unread"),
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:05:00.000Z" }),
+  });
+
+  it("keeps plain activity order when working and unread chats are not floated", () => {
+    const sorted = sortThreadsForSidebar([working, unread, plain], "updated_at", {
+      attentionFirst: false,
+    });
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-newest-plain"),
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-working"),
+    ]);
+  });
+
+  it("holds an opened unread chat in place and slots new chats in by their live key", () => {
+    const heldKeys = new Map(
+      [unread, plain].map((thread) => [
+        thread.id,
+        getSidebarThreadSortKey(thread, "updated_at", true),
+      ]),
+    );
+    const opened = { ...unread, lastVisitedAt: "2026-03-09T12:00:00.000Z" };
+    const created = makeThread({
+      id: ThreadId.makeUnsafe("thread-created"),
+      createdAt: "2026-03-09T11:30:00.000Z",
+      updatedAt: "2026-03-09T11:30:00.000Z",
+    });
+
+    expect(sortThreadsForSidebar([plain, opened], "updated_at").map((thread) => thread.id)).toEqual(
+      [ThreadId.makeUnsafe("thread-newest-plain"), ThreadId.makeUnsafe("thread-unread")],
+    );
+    expect(
+      sortThreadsForSidebar([plain, opened, created], "updated_at", { heldKeys }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([
+      ThreadId.makeUnsafe("thread-unread"),
+      ThreadId.makeUnsafe("thread-created"),
+      ThreadId.makeUnsafe("thread-newest-plain"),
+    ]);
+  });
+
+  it("ignores the toggle for created-at order", () => {
+    expect(getSidebarThreadSortKey(working, "created_at", true).attentionRank).toBe(0);
+    expect(getSidebarThreadSortKey(working, "updated_at", true).attentionRank).toBe(2);
+    expect(getSidebarThreadSortKey(unread, "updated_at", true).attentionRank).toBe(1);
+    expect(getSidebarThreadSortKey(unread, "updated_at", false).attentionRank).toBe(0);
   });
 });
 

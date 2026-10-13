@@ -56,6 +56,8 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 import { AutomationService } from "./automation/Services/AutomationService";
 import { TodoService } from "./todo/Services/TodoService";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
+import { readInlineVisual } from "./inlineVisualStore";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -1238,6 +1240,9 @@ const makeWsRpcHandlersLayer = () =>
         });
       const whenTasksEnabled = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         tasksEnabled ? effect : Effect.fail(tasksUnavailableError());
+      // Beta only, like the gateway tool that publishes them: a Stable server
+      // serves no visual documents even if one is somehow on disk.
+      const inlineVisualsEnabled = isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE);
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1374,7 +1379,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
-              // Groups is Beta-only: Stable refuses to create or re-kind a group.
+              // Refuse creating or re-kinding a Hub if the shared feature policy disables it.
               if (!isServerGroupsEnabled() && isGroupProjectCommand(command)) {
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
@@ -1445,6 +1450,37 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
+        [ORCHESTRATION_WS_METHODS.getInlineVisual]: (input) =>
+          inlineVisualsEnabled
+            ? rpcEffect(
+                Effect.tryPromise(() =>
+                  readInlineVisual({
+                    attachmentsDir: config.attachmentsDir,
+                    threadId: input.threadId,
+                    visualId: input.visualId,
+                  }),
+                ),
+                "Failed to load visual",
+              ).pipe(
+                Effect.flatMap((html) =>
+                  html === null
+                    ? Effect.fail(
+                        new WsRpcError({
+                          message: "This visual is no longer available.",
+                          code: "inline-visual-missing",
+                          retryable: false,
+                        }),
+                      )
+                    : Effect.succeed({ visualId: input.visualId, html }),
+                ),
+              )
+            : Effect.fail(
+                new WsRpcError({
+                  message: "Inline visuals are unavailable on this server.",
+                  code: "inline-visuals-unavailable",
+                  retryable: false,
+                }),
+              ),
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
           const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
             maximum: Number.MAX_SAFE_INTEGER,

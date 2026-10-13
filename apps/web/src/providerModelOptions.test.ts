@@ -11,6 +11,7 @@ import {
   buildModelSelection,
   buildNextProviderOptions,
   formatProviderModelOptionName,
+  getOmpModelSelectionIssue,
   groupProviderModelOptionsWithFavorites,
   mergeDynamicModelOptions,
   providerModelCostMultiplierLabel,
@@ -35,6 +36,41 @@ describe("Antigravity model options", () => {
   });
 });
 describe("OMP model options", () => {
+  it("keeps a concrete role-era selection's thinking options and account identity", () => {
+    expect(
+      buildModelSelection(
+        "omp",
+        "upstream/catalog-model",
+        { thinkingLevel: "high" },
+        {
+          instanceId: "omp_work",
+        },
+      ),
+    ).toEqual({
+      provider: "omp",
+      instanceId: "omp_work",
+      model: "upstream/catalog-model",
+      options: { thinkingLevel: "high" },
+    });
+  });
+
+  it("requires selection for obsolete role keys, not catalog or custom real selectors", () => {
+    expect(getOmpModelSelectionIssue(" role:smol ", [])).toContain("Choose an OMP model");
+    expect(
+      getOmpModelSelectionIssue("role:smol", [{ slug: "role:smol", isCustom: true }]),
+    ).toContain("Choose an OMP model");
+    expect(getOmpModelSelectionIssue("role:real-model", [{ slug: "role:real-model" }])).toBeNull();
+    for (const selector of [
+      "opaque-custom-selector",
+      "provider/router:max",
+      "provider/role:literal",
+      "@smol",
+      "pi/slow",
+    ]) {
+      expect(getOmpModelSelectionIssue(selector, [])).toBeNull();
+    }
+  });
+
   it("builds an OMP model selection carrying a max thinking level", () => {
     expect(
       buildModelSelection("omp", "anthropic/claude-sonnet-4", { thinkingLevel: "max" }),

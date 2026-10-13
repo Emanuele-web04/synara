@@ -18,7 +18,7 @@ import {
  */
 export type BetaOnlyFeature = string;
 
-/** Groups: the coordinator, its threads, the Group panel and the Library. */
+/** Hubs (Stable and Beta): the coordinator, its threads, the Hub panel and Library. */
 export const GROUPS_BETA_FEATURE = "groups";
 
 /** Inbox (Stable and Beta): the Inbox page and its `stats.getRecap` RPC. */
@@ -33,7 +33,14 @@ export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 /** Auto-fix CI (Stable and Beta): the PR menu checkbox, RPCs, and check watcher. */
 export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GROUPS_BETA_FEATURE];
+/**
+ * Inline visuals (Beta only): the `synara_show_visual` agent tool, its
+ * transcript rows, and the `orchestration.getInlineVisual` read. Agent HTML runs
+ * in the app renderer (sandboxed), so it stays out of Stable until proven there.
+ */
+export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [INLINE_VISUALS_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

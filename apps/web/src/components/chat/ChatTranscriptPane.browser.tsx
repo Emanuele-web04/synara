@@ -3,6 +3,7 @@ import "../../index.css";
 import { MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { page } from "vitest/browser";
+import { flushSync } from "react-dom";
 import { Profiler, useRef, useState, type ProfilerOnRenderCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -34,7 +35,7 @@ async function settleLayout(): Promise<void> {
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
-function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
+function TranscriptPerfHarness(props: { onTranscriptRender: (actualDuration: number) => void }) {
   const [composerValue, setComposerValue] = useState("");
   const composerImagesRef = useRef<readonly []>([]);
   const composerFilesRef = useRef<readonly []>([]);
@@ -72,8 +73,8 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
   const handleComposerChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setComposerValue(event.target.value);
   };
-  const handleTranscriptRender: ProfilerOnRenderCallback = () => {
-    props.onTranscriptRender();
+  const handleTranscriptRender: ProfilerOnRenderCallback = (_id, _phase, actualDuration) => {
+    props.onTranscriptRender(actualDuration);
   };
 
   return (
@@ -145,8 +146,9 @@ describe("ChatTranscriptPane", () => {
 
     const screen = await render(
       <TranscriptPerfHarness
-        onTranscriptRender={() => {
-          transcriptCommitCount += 1;
+        onTranscriptRender={(actualDuration) => {
+          // Profiler also reports zero-work parent commits when its subtree bails out.
+          if (actualDuration > 0) transcriptCommitCount += 1;
         }}
       />,
     );
@@ -155,13 +157,17 @@ describe("ChatTranscriptPane", () => {
         expect(transcriptCommitCount).toBeGreaterThan(0);
       });
 
+      // Initial virtualizer measurement commits belong to mounting, not composer typing.
+      await settleLayout();
+      const input = screen.container.querySelector<HTMLInputElement>("#composer-input")!;
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       const baselineCommitCount = transcriptCommitCount;
-      await page.getByPlaceholder("Type composer text").fill("reply follow up");
-
-      await vi.waitFor(() => {
-        expect(screen.container.querySelector("#composer-input")).toHaveValue("reply follow up");
+      // Commit the real input event in this task; asynchronous list measurements are unrelated.
+      flushSync(() => {
+        setValue.call(input, "reply follow up");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
       });
-
+      expect(input).toHaveValue("reply follow up");
       expect(transcriptCommitCount).toBe(baselineCommitCount);
     } finally {
       await screen.unmount();
@@ -169,6 +175,17 @@ describe("ChatTranscriptPane", () => {
   });
 
   it("expands collapsed user messages from the Show more control", async () => {
+    const scrollHeightGetter = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollHeight",
+    )!.get!;
+    let overflowLayoutReads = 0;
+    const heightSpy = vi
+      .spyOn(Element.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: Element) {
+        if (this.hasAttribute("data-user-message-clamp")) overflowLayoutReads++;
+        return scrollHeightGetter.call(this);
+      });
     const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
     // Well past the visual line clamp so the collapsed message measures as
     // overflowing regardless of viewport width.
@@ -177,12 +194,12 @@ describe("ChatTranscriptPane", () => {
     host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
     document.body.append(host);
 
-    const screen = await render(
+    const transcript = (text: string, chatFontSizePx = 15) => (
       <ChatTranscriptPane
         activeThreadId="thread-user-message-expand"
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        chatFontSizePx={15}
+        chatFontSizePx={chatFontSizePx}
         emptyStateProjectName={undefined}
         hasMessages
         isRevertingCheckpoint={false}
@@ -219,7 +236,7 @@ describe("ChatTranscriptPane", () => {
             message: {
               id: MessageId.makeUnsafe("user-message-expand"),
               role: "user",
-              text: longUserText,
+              text,
               createdAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
             },
@@ -228,10 +245,13 @@ describe("ChatTranscriptPane", () => {
         timestampFormat="locale"
         turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
         workspaceRoot={undefined}
-      />,
-      { container: host },
+      />
     );
+    const screen = await render(transcript(longUserText), { container: host });
     try {
+      await settleLayout();
+      expect(overflowLayoutReads).toBe(0);
+      heightSpy.mockRestore();
       // Collapsing is a visual clamp: the tail stays in the DOM but the clamp
       // wrapper is overflowing (cut off) until the message is expanded.
       await vi.waitFor(() => {
@@ -265,7 +285,31 @@ describe("ChatTranscriptPane", () => {
         "Show less",
       );
       await settleLayout();
+      await page.getByText("Show less").click();
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+
+      // Below the first-paint character hint, but enough words to overflow a
+      // narrow pane. Clear a stale fade on widening and remeasure font changes.
+      const wrappingText = "word ".repeat(90);
+      await screen.rerender(transcript(wrappingText));
+      const overflowToggle = () =>
+        screen.container.querySelector(`button[aria-controls="${clamp.id}"]`);
+      await expect.poll(() => overflowToggle() === null).toBe(true);
+      host.style.width = "200px";
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+      host.style.width = "600px";
+      await screen.rerender(transcript(wrappingText, 30));
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+      await screen.rerender(transcript(wrappingText, 15));
+      await expect.poll(() => overflowToggle() === null).toBe(true);
     } finally {
+      heightSpy.mockRestore();
       await screen.unmount();
       host.remove();
       await settleLayout();

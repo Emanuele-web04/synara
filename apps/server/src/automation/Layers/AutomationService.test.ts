@@ -603,6 +603,114 @@ const layer = it.layer(
 );
 
 layer("AutomationService", (it) => {
+  for (const managedByProject of [true, false]) {
+    it.effect(
+      `uses ${managedByProject ? "the coordinator's current" : "the automation's saved"} access mode for check-ins`,
+      () =>
+        Effect.gen(function* () {
+          resetHarness();
+          const service = yield* AutomationService;
+          const targetThreadId = ThreadId.makeUnsafe(`mode-check-in-${managedByProject}`);
+          threadShell = Option.some({
+            ...makeThreadShell({ id: targetThreadId }),
+            runtimeMode: "approval-required",
+          });
+          const input = {
+            ...createInput("local"),
+            mode: "heartbeat" as const,
+            targetThreadId,
+            runtimeMode: "approval-required" as const,
+            schedule: managedByProject
+              ? { type: "project-event" as const, projectId }
+              : { type: "manual" as const },
+          };
+          const definition = yield* managedByProject
+            ? service.createProjectManaged(input)
+            : service.create(input);
+          // Changing the chat's mode must affect coordinator wakes, including a later downgrade.
+          for (const runtimeMode of ["full-access", "approval-required"] as const) {
+            threadShell = Option.some({ ...makeThreadShell({ id: targetThreadId }), runtimeMode });
+            const { run } = yield* service.runNow({ automationId: definition.id });
+            const expected = managedByProject ? runtimeMode : "approval-required";
+            const command = dispatchedCommands.find(
+              (entry) =>
+                entry.type === "thread.turn.start" && entry.commandId === run.turnStartCommandId,
+            );
+            assert.isDefined(command);
+            if (command?.type !== "thread.turn.start") assert.fail("Expected a check-in turn.");
+            assert.equal(command.runtimeMode, expected);
+            assert.equal(run.permissionSnapshot.runtimeMode, expected);
+            assert.equal(
+              run.permissionSnapshot.allowedCapabilities.includes("full-access"),
+              expected === "full-access",
+            );
+            yield* service.cancelRun({ runId: run.id });
+          }
+        }),
+    );
+  }
+
+  for (const { liveModel, instanceId } of [
+    { liveModel: "claude-opus-5-5", instanceId: "claudeAgent" },
+    { liveModel: "claude-sonnet-5", instanceId: "claudeAgent" },
+    { liveModel: "claude-opus-5-5", instanceId: "claude-other" },
+  ] as const) {
+    it.effect(
+      `uses live Auto capability only for the configured coordinator model and account (${liveModel}, ${instanceId})`,
+      () =>
+        Effect.gen(function* () {
+          resetHarness();
+          const service = yield* AutomationService;
+          const targetThreadId = ThreadId.makeUnsafe(`auto-check-in-${liveModel}-${instanceId}`);
+          const modelSelection = { provider: "claudeAgent", model: "claude-opus-5-5" } as const;
+          threadShell = Option.some(makeThreadShell({ id: targetThreadId, modelSelection }));
+          const definition = yield* service.createProjectManaged({
+            ...createInput("local"),
+            mode: "heartbeat",
+            targetThreadId,
+            modelSelection,
+            schedule: { type: "project-event", projectId },
+          });
+          threadShell = Option.some({
+            ...makeThreadShell({
+              id: targetThreadId,
+              modelSelection: {
+                ...modelSelection,
+                model: liveModel,
+                instanceId: instanceId as ProviderInstanceId,
+                supportsAutoMode: true,
+              },
+            }),
+            runtimeMode: "auto",
+          });
+          const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
+          if (liveModel !== modelSelection.model || instanceId !== "claudeAgent") {
+            assert.equal(result._tag, "Failure");
+            if (result._tag === "Failure")
+              assert.match(result.failure.message, /not been verified/);
+            return;
+          }
+          assert.equal(result._tag, "Success");
+          const command = dispatchedCommands.find((entry) => entry.type === "thread.turn.start");
+          if (command?.type !== "thread.turn.start")
+            assert.fail("Expected a coordinator check-in.");
+          assert.equal(command.runtimeMode, "auto");
+          assert.deepEqual(command.modelSelection, {
+            ...modelSelection,
+            instanceId: "claudeAgent",
+            supportsAutoMode: true,
+          });
+          if (result._tag === "Success") {
+            assert.deepEqual(
+              result.success.run.permissionSnapshot.modelSelection,
+              command.modelSelection,
+            );
+            yield* service.cancelRun({ runId: result.success.run.id });
+          }
+        }),
+    );
+  }
+
   it.effect("persists discovered Claude Auto targets through exact-target create and update", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -6238,7 +6346,7 @@ layer("AutomationService", (it) => {
   );
 });
 
-layer("Stable saved Groups automations", (it) => {
+layer("Saved Groups automations with Hubs disabled", (it) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.effect("refuses saved group check-ins without changing their definitions or runs", () =>
@@ -6269,7 +6377,8 @@ layer("Stable saved Groups automations", (it) => {
         const savedDefinition = yield* repository.getDefinitionById({ id: definition.id });
         const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
         assert.equal(result._tag, "Failure");
-        if (result._tag === "Failure") assert.match(result.failure.message, /Synara Beta/);
+        if (result._tag === "Failure")
+          assert.equal(result.failure.message, "Hubs are unavailable on this host.");
         assert.deepEqual(
           yield* repository.getDefinitionById({ id: definition.id }),
           savedDefinition,

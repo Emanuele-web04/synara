@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BETA_ONLY_FEATURES,
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
 } from "./betaFeatures";
 import {
@@ -37,12 +37,24 @@ describe("isBetaFeatureEnabled", () => {
     }
   });
 
-  it("keeps Groups out of Stable only", () => {
-    expect(BETA_ONLY_FEATURES).toContain(GROUPS_BETA_FEATURE);
-    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+  it("offers Hubs in Stable and all other flavors", () => {
+    for (const flavor of [
+      "production",
+      "development",
+      "canary",
+      "cua",
+      "beta",
+      "unknown",
+    ] as const) {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
     }
-    expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, "production")).toBe(false);
+  });
+
+  it("keeps inline visuals out of Stable only", () => {
+    expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(false);
+    for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, flavor)).toBe(true);
+    }
   });
 
   it("enables the rail sidebar layout in both Beta and Stable", () => {

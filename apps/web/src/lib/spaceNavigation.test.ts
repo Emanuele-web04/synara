@@ -324,3 +324,21 @@ describe("isThreadReachableFromSpace", () => {
     expect(isThreadReachableFromSpace({ project: undefined, spaceId: null, paths })).toBe(false);
   });
 });
+
+it("does not restore a linked-repository hub worker from the Home landing", () => {
+  const hubId = ProjectId.makeUnsafe("hub");
+  const workerId = ThreadId.makeUnsafe("hub-worker");
+  expect(
+    resolveChatIndexRestoreRoute({
+      lastThreadRoute: { threadId: workerId },
+      availableSplitViewIds: new Set(),
+      threadIds: [workerId],
+      sidebarThreadSummaryById: { [workerId]: { projectId: ProjectId.makeUnsafe("repo") } },
+      groupProjectIds: new Set([hubId]),
+      summariesByProjectId: new Map([[hubId, { memberThreadIds: [workerId] }]]),
+      draftProjectIdByThreadId: new Map(),
+      rememberedSplitViewThreadIds: undefined,
+      landingSpace: null,
+    }),
+  ).toBeNull();
+});

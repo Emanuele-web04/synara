@@ -7,6 +7,7 @@ import {
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
@@ -26,9 +27,8 @@ export const isBetaFeatureOn = (feature: string): boolean =>
   isBetaFeatureEnabled(feature, DESKTOP_FLAVOR);
 
 /**
- * Groups is Beta-only. Off, group folders read as ordinary projects (so no
- * chat is hidden), and every Groups entry point is gone. The server refuses
- * the group APIs regardless; this only keeps Stable from offering them.
+ * Hubs is available in Stable and Beta. The shared feature policy also controls
+ * server APIs, background work, and whether saved hub folders act as containers.
  */
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
@@ -41,6 +41,12 @@ export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
  */
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
+
+/**
+ * Inline visuals are Beta-only. On Stable the transcript ignores `visual.shown`
+ * activities entirely (no row, no fetch); the server also refuses the tool and read.
+ */
+export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

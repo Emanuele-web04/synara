@@ -48,6 +48,8 @@ export * from "./projectAgent";
 export * from "./hubWork";
 export * from "./projectImport";
 export * from "./studio";
+export * from "./inlineVisual";
+export * from "./inlineVisualSpec";
 export * from "./filesystem";
 export * from "./device";
 export * from "./computer";

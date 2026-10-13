@@ -151,6 +151,9 @@ export function useHandleNewThread() {
         model: defaultModel,
       });
     };
+    // Puts back a composer draft that a draft-mapping change or the route swap removed. A
+    // draft still present is newer than the snapshot (typed, sent, or re-selected while the
+    // navigation settled) and must win, or the composer is rewritten mid-typing.
     const restoreComposerDraft = (
       threadId: ThreadId,
       draftState: ComposerThreadDraftState | null,
@@ -159,7 +162,7 @@ export function useHandleNewThread() {
         return;
       }
       useComposerDraftStore.setState((state) => {
-        if (state.draftsByThreadId[threadId] === draftState) {
+        if (state.draftsByThreadId[threadId] !== undefined) {
           return state;
         }
         return {
@@ -395,7 +398,7 @@ export function useHandleNewThread() {
       })();
     }
 
-    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {
+    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
       const threadId = newThreadId();
       if (wantsTemporaryThread) {
         markTemporaryThread(threadId);
@@ -412,6 +415,7 @@ export function useHandleNewThread() {
         entryPoint,
       });
       const committed = await stageDraftNavigation({
+        signal,
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {

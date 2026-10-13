@@ -21,6 +21,7 @@ import {
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   CommandId,
+  INLINE_VISUAL_ACTIVITY_KIND,
   EventId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
@@ -40,6 +41,7 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
@@ -119,6 +121,10 @@ import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
+import { makeAgentGatewayTodoTools } from "../todoTools.ts";
+import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
+import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
@@ -174,6 +180,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const projectAgentService = yield* ProjectAgentService;
+  const todoService = yield* TodoService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -1573,6 +1580,46 @@ export const makeAgentGateway = Effect.gen(function* () {
     },
   });
 
+  const todoTools = makeAgentGatewayTodoTools({
+    todos: todoService,
+    snapshotQuery,
+    workspacePaths: {
+      homeDir: serverConfig.homeDir,
+      chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
+    },
+    requireThreadShell,
+  });
+
+  const inlineVisualTools = makeAgentGatewayInlineVisualTools({
+    attachmentsDir: serverConfig.attachmentsDir,
+    appendVisualActivity: ({ threadId, turnId, digest, payload }) => {
+      const createdAt = isoNow();
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`agent:${digest}:inline-visual`),
+          threadId: ThreadId.makeUnsafe(threadId),
+          activity: {
+            id: EventId.makeUnsafe(`gateway:${digest}:inline-visual`),
+            tone: "info",
+            kind: INLINE_VISUAL_ACTIVITY_KIND,
+            summary: `Visual: ${payload.title}`,
+            // Spelled out: the activity payload is JSON, which has no optional fields.
+            payload: { ...payload, format: payload.format ?? "html" },
+            turnId: TurnId.makeUnsafe(turnId),
+            createdAt,
+          },
+          createdAt,
+        })
+        .pipe(
+          Effect.asVoid,
+          // An identical retry reuses the command id with a later timestamp. The
+          // first attempt already recorded this visual, so the retry succeeds.
+          Effect.catchTag("OrchestrationCommandIdentityCollisionError", () => Effect.void),
+        );
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1587,6 +1634,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...automationTools,
     ...browserTools,
     ...kanbanTools,
+    // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.
+    ...(isServerBetaFeatureEnabled("tasks") ? todoTools : []),
+    // Beta only: a Stable server neither offers nor accepts inline visuals.
+    ...(isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE) ? inlineVisualTools : []),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({
           manager: deviceService.manager,
@@ -1605,7 +1656,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         })
       : []),
     ...computerBrowserTools,
-    // Group tools are Beta-only: Stable does not offer them to agents at all.
+    // Offer Hub tools only when the authoritative shared feature policy enables them.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
   ];
 

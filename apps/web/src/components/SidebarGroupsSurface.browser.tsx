@@ -8,6 +8,7 @@ import "../index.css";
 import { ProjectId, ThreadId, type ProjectAgentSummary } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { page, userEvent } from "vitest/browser";
 
 const harness = vi.hoisted(() => ({
   dispatchCommand: vi.fn(async (_command: unknown) => ({ sequence: 1 })),
@@ -143,8 +144,12 @@ function Harness(props: { threadsHydrated: boolean; callbacks: Callbacks }) {
         projectSidebarDataById={props.callbacks.dataById}
         threadsHydrated={props.threadsHydrated}
         visualActiveThreadId={null}
-        threadSortOrder="updated_at"
-        onThreadSortOrderChange={() => {}}
+        threadSortMenuProps={{
+          threadSortOrder: "updated_at",
+          onThreadSortOrderChange: () => {},
+          threadAttentionFirst: true,
+          onThreadAttentionFirstChange: () => {},
+        }}
         renderThreadRow={(thread) => (
           <li key={thread.id} data-testid={`thread-row-${thread.id}`}>
             {thread.title}
@@ -236,6 +241,7 @@ describe("SidebarGroupsSurface", () => {
   });
 
   afterEach(async () => {
+    await page.viewport(1280, 800);
     await mountedRoot?.unmount();
     mountedRoot = null;
   });
@@ -362,41 +368,44 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
-  it("keeps a collapsed hub with chats expandable without an active hub thread", async () => {
-    const group = makeGroupProject({
-      id: GROUP_A_ID,
-      kind: "group",
-      name: "Team Alpha",
-      cwd: `${GROUPS_ROOT}/team-alpha`,
-      expanded: false,
-    });
-    const data = projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"));
-    // Collapsed hubs omit their rows when no thread inside them is active.
-    data.visibleEntries = [];
-    await mount({
-      projects: [group],
-      threadsHydrated: true,
-      dataById: new Map([[GROUP_A_ID, data]]),
-    });
+  it.each([390, 1280])(
+    "keeps a collapsed hub expandable by pointer at %i pixels",
+    async (width) => {
+      await page.viewport(width, 800);
+      const group = makeGroupProject({
+        id: GROUP_A_ID,
+        kind: "group",
+        name: "Team Alpha",
+        cwd: `${GROUPS_ROOT}/team-alpha`,
+        expanded: false,
+      });
+      const data = projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"));
+      // Collapsed hubs omit their rows when no thread inside them is active.
+      data.visibleEntries = [];
+      await mount({
+        projects: [group],
+        threadsHydrated: true,
+        dataById: new Map([[GROUP_A_ID, data]]),
+      });
 
-    await waitForText("Team Alpha");
-    const toggle = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show threads in Team Alpha"]',
-    );
-    expect(toggle).not.toBeNull();
-    expect(getComputedStyle(toggle!).visibility).toBe("visible");
-    expect(toggle!.tabIndex).toBe(0);
-    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
-    toggle!.focus();
-    expect(document.activeElement).toBe(toggle);
-    toggle!.click();
-    await vi.waitFor(() => {
-      expect(toggle!.getAttribute("aria-expanded")).toBe("true");
-      expect(
-        useStore.getState().projects.find((project) => project.id === GROUP_A_ID)?.expanded,
-      ).toBe(true);
-    });
-  });
+      await waitForText("Team Alpha");
+      const toggle = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Show threads in Team Alpha"]',
+      );
+      expect(toggle).not.toBeNull();
+      expect(getComputedStyle(toggle!).visibility).toBe("visible");
+      expect(toggle!.tabIndex).toBe(0);
+      expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+      if (width >= 768) await userEvent.hover(toggle!.parentElement!);
+      await page.getByRole("button", { name: "Show threads in Team Alpha", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(toggle!.getAttribute("aria-expanded")).toBe("true");
+        expect(
+          useStore.getState().projects.find((project) => project.id === GROUP_A_ID)?.expanded,
+        ).toBe(true);
+      });
+    },
+  );
 
   it("shows just the coordinator row for a hub with no chats", async () => {
     const group = makeGroupProject({
