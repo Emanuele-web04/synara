@@ -522,6 +522,9 @@ function SettingsRouteView() {
       ? ["Fold finished turns"]
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
+    ...(settings.enableSameThreadHandoffs !== defaults.enableSameThreadHandoffs
+      ? ["Continue handoffs here"]
+      : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["Message trail sound"]
       : []),
@@ -1477,6 +1480,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "enableSameThreadHandoffs",
+          title: "Continue handoffs here",
+          description:
+            'Add "Continue here" to the Hand off menu to start another provider with a bounded recap in this conversation. "New conversation" stays available. This does not change the model picker.',
+          resetLabel: "continue handoffs here",
+          ariaLabel: "Allow handoffs to continue in this conversation",
         })}
 
         {renderBooleanSettingRow({
