@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   inventory: vi.fn(),
   exec: vi.fn(),
+  readCookieSnapshotProcess: vi.fn(),
   constructedOptions: { current: undefined as unknown },
 }));
 vi.mock("betterwright", () => ({
@@ -26,6 +27,12 @@ vi.mock("betterwright", () => ({
     constructor(
       public options: {
         hostTarget: { connect(arg: unknown): Promise<{ close(): Promise<void> }> };
+        chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
+        chromiumCookieSnapshot?: (
+          source: { browser: string; profile?: string },
+          timeoutMs: number,
+          keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
+        ) => Promise<unknown>;
       },
     ) {
       mocks.constructedOptions.current = options;
@@ -46,6 +53,9 @@ vi.mock("betterwright", () => ({
 vi.mock("./betterwrightConnection", () => ({ openBetterwrightConnection: mocks.connect }));
 vi.mock("./chromiumProfileInventory", () => ({
   listChromiumProfileInventory: mocks.inventory,
+}));
+vi.mock("./chromiumCookieReadProcess", () => ({
+  readChromiumCookieSnapshotProcess: mocks.readCookieSnapshotProcess,
 }));
 vi.mock("@synara/shared/processRuntime", async (original) => ({
   ...(await original<typeof import("@synara/shared/processRuntime")>()),
@@ -82,6 +92,7 @@ beforeEach(() => {
   mocks.closeConnection.mockResolvedValue(undefined);
   mocks.constructedOptions.current = undefined;
   mocks.inventory.mockResolvedValue([]);
+  mocks.readCookieSnapshotProcess.mockResolvedValue({ detailedCookies: [], warnings: [] });
   mocks.connect.mockImplementation(async () => {
     let closing: Promise<void> | undefined;
     return {
@@ -188,6 +199,17 @@ describe("human-only cookie import", () => {
     expect(contents.listenerCount("did-start-navigation")).toBe(0);
   });
 
+  it("returns source_missing when the selected profile disappears before import", async () => {
+    mocks.profiles.mockResolvedValueOnce([]);
+    const { importer } = fixture();
+    await expect(importer.import(input)).resolves.toEqual({
+      ok: false,
+      code: "source_missing",
+      platform,
+    });
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["helium", "Helium", "Helium Storage Key"],
     ["aside", "Aside", "Aside Safe Storage"],
@@ -204,6 +226,11 @@ describe("human-only cookie import", () => {
         mocks.sync.mockImplementation(async () => {
           const options = mocks.constructedOptions.current as {
             chromiumKeychainPassword(browser: string, timeoutMs: number): Promise<string>;
+            chromiumCookieSnapshot(
+              source: { browser: string; profile?: string },
+              timeoutMs: number,
+              keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
+            ): Promise<unknown>;
           };
           expect(await options.chromiumKeychainPassword(browser, 30_000)).toBe("synthetic-key");
           await expect(
@@ -211,6 +238,11 @@ describe("human-only cookie import", () => {
           ).rejects.toThrow("Unsupported cookie source");
           await expect(options.chromiumKeychainPassword("__proto__", 30_000)).rejects.toThrow(
             "Unsupported cookie source",
+          );
+          await options.chromiumCookieSnapshot(
+            { browser, profile: "Default" },
+            30_000,
+            async () => "synthetic-key",
           );
           return { ok: true, synced: 1, skipped: 0, cookieImportDomains: ["example.test"] };
         });
@@ -236,6 +268,13 @@ describe("human-only cookie import", () => {
         );
         expect(mocks.sync).toHaveBeenCalledWith(
           expect.objectContaining({ domains: ["example.test"], windowsAppBound: "disabled" }),
+        );
+        expect(mocks.readCookieSnapshotProcess).toHaveBeenCalledWith(
+          { browser, profile: "Default" },
+          30_000,
+          expect.any(Function),
+          expect.any(AbortSignal),
+          homedir(),
         );
       } finally {
         Object.defineProperty(process, "platform", descriptor);
@@ -277,7 +316,7 @@ describe("human-only cookie import", () => {
     await expect(importer.import({ ...input, origin: "https://unrelated.test" })).rejects.toThrow();
     await expect(
       importer.import({ ...input, profile: "/private/arbitrary-path" }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ ok: false, code: "source_missing" });
     expect(() =>
       Schema.decodeUnknownSync(BrowserCookieImportInput)({ ...input, browser: "unsupported" }),
     ).toThrow();

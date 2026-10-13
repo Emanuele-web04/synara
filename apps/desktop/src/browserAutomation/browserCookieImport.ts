@@ -15,6 +15,7 @@ import { execProcessFile } from "@synara/shared/processRuntime";
 import type { DesktopBrowserManager } from "../browserManager";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 import { listChromiumProfileInventory } from "./chromiumProfileInventory";
+import { readChromiumCookieSnapshotProcess } from "./chromiumCookieReadProcess";
 
 const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
   helium: { account: "Helium", service: "Helium Storage Key" },
@@ -147,7 +148,11 @@ export class BrowserCookieImport {
       const profiles = await waitForAbortable(this.profiles(input.browser), interrupt.signal);
       interrupt.signal.throwIfAborted();
       if (!profiles.some(({ id }) => id === input.profile))
-        throw new Error("Choose an available browser profile.");
+        return {
+          ok: false,
+          code: "source_missing",
+          platform: importPlatform(),
+        };
       const runtime =
         profileRuntime ??
         (await waitForAbortable(
@@ -274,6 +279,14 @@ export class BrowserCookieImport {
                 },
               );
             }),
+          chromiumCookieSnapshot: (source, timeoutMs, keychainPassword) =>
+            readChromiumCookieSnapshotProcess(
+              source,
+              timeoutMs,
+              keychainPassword,
+              interrupt.signal,
+              homedir(),
+            ),
           hostTarget,
           downloadPolicy: "deny",
           credentialCapture: false,

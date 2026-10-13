@@ -2,7 +2,7 @@ diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-sourc
 new file mode 100644
 --- /dev/null
 +++ b/dist/src/chromium-cookie-source.js
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,343 @@
 +// macOS Chromium-family sources for hosts whose native reader does
 +// not register the browser yet. Reads the same Chromium cookie database the
 +// native reader would, decrypts v10 rows with the profile's Keychain secret,
@@ -306,6 +306,7 @@ new file mode 100644
 +}
 +
 +export async function readChromiumCookieSnapshot(options, deps = {}) {
++    if (typeof deps.readSnapshot === "function") return deps.readSnapshot(options.source, options.timeoutMs, deps.keychainPassword);
 +    if (process.platform !== "darwin") throw chromiumError("no_discovered_source", "discovery");
 +    const profile = typeof options.source.profile === "string" ? options.source.profile.trim() : "";
 +    if (!profile || !CHROMIUM_PROFILE_NAME_PATTERN.test(profile)) throw chromiumError("no_selected_source", "discovery");
@@ -348,11 +349,12 @@ new file mode 100644
 diff --git a/dist/src/client.js b/dist/src/client.js
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
-@@ -333,6 +333,7 @@
+@@ -333,6 +333,8 @@
       */
      constructor(options = {}) {
          this.hostTarget = options.hostTarget;
 +        this.chromiumKeychainPassword = options.chromiumKeychainPassword;
++        this.chromiumCookieSnapshot = options.chromiumCookieSnapshot;
          this.hostUploadFiles = options.hostUploadFiles ?? [];
          if (this.hostTarget && (!isCallable(this.hostTarget.connect) || options.provider != null)) {
              throw new TypeError("hostTarget requires connect() and cannot be combined with provider.");
@@ -394,12 +396,15 @@ diff --git a/dist/src/client.js b/dist/src/client.js
          }
          const config = await this._prepare();
          const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
-@@ -1073,7 +1078,7 @@
+@@ -1073,7 +1078,10 @@
          }, timeoutSeconds);
      }
      _extractCookieSync(options) {
 -        return extractCookieSync(options);
-+        return extractCookieSync(options, undefined, { keychainPassword: this.chromiumKeychainPassword });
++        return extractCookieSync(options, undefined, {
++            keychainPassword: this.chromiumKeychainPassword,
++            readSnapshot: this.chromiumCookieSnapshot,
++        });
      }
      /**
       * Fill a stored credential into the current page from trusted host code.
@@ -526,13 +531,19 @@ diff --git a/types/public.d.ts b/types/public.d.ts
 +
  export interface CookieSourceBrowser {
    id: string;
-@@ -122,6 +135,8 @@
+@@ -122,6 +135,14 @@
  }
 -
 +
  export interface BetterWrightOptions {
 +  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
 +  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
++  /** Runs bounded local Chromium SQLite work away from the host event loop. */
++  chromiumCookieSnapshot?: (
++    source: { browser: string; profile?: string },
++    timeoutMs: number,
++    keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
++  ) => Promise<unknown>;
    /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
    hostTarget?: import("./host.js").HostTarget;
    /** Exact staged files a trusted host authorizes for upload. Requires hostTarget. */
