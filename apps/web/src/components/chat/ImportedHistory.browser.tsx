@@ -224,6 +224,8 @@ it.each(["initial", "older-page"])(
         .toBeDisabled();
       expect(page.getByRole("alert").query()).toBeNull();
       releaseCapacity = true;
+      // Recovered history is prepended above the reader, who stays at the bottom.
+      await props.listRef.current!.scrollToOffset({ offset: 0, animated: false });
       await expect
         .element(page.getByText("Recovered earlier message", { exact: true }))
         .toBeInTheDocument();

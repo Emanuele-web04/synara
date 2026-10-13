@@ -222,6 +222,8 @@ export interface ProviderServiceShape {
    */
   readonly stopRuntimeSession?: (input: {
     readonly threadId: ThreadId;
+    /** Idle reapers must revalidate activity and live ownership under the lifecycle lock. */
+    readonly onlyIfIdleSince?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**

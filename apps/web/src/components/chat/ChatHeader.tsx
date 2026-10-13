@@ -172,6 +172,7 @@ function EditorChatHistoryMenu(props: {
   const historyThreads = sortThreadsForSidebar(
     displayThreads.filter((thread) => thread.projectId === props.projectId),
     settings.sidebarThreadSortOrder,
+    { attentionFirst: settings.sidebarThreadAttentionFirst },
   ).slice(0, EDITOR_CHAT_HISTORY_LIMIT);
 
   return (

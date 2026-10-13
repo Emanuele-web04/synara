@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Idle provider cleanup rechecks live turns, pending sends, background tasks and recent activity before stopping a session, so a lagging projection cannot kill active work.
+- Runtime reconciliation uses an additive message-activity index and turn-scoped lookups instead of repeatedly scanning old messages in long chats.
+
 ## 1.0.3 — 2026-10-11
 
 **Easier Hub navigation, simpler conversation recovery and safer provider restarts.**

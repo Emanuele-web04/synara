@@ -277,6 +277,13 @@ and creates independent conversation copies without replacing your existing Syna
 
 Each task owns a provider session.
 
+Codex terminal notifications retain the turn they name. If a legacy completion
+fallback has already allowed the next turn to start, a delayed completion, abort,
+or terminal error for the previous turn updates its history without settling the
+new turn or changing its gateway credential renewal state. A stale terminal also
+removes only its old review membership so a later review-exit notification cannot
+settle an unrelated new turn.
+
 The session may preserve provider-specific behavior such as:
 
 - Plans

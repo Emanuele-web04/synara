@@ -276,6 +276,10 @@ import type {
 import type { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
+  OrchestrationGetInlineVisualInput,
+  OrchestrationGetInlineVisualResult,
+} from "./inlineVisual";
+import type {
   ServerConfig,
   ServerDiagnosticsResult,
   ServerReadThreadDiagnosticsInput,
@@ -1380,6 +1384,9 @@ export interface NativeApi {
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
+    getInlineVisual: (
+      input: OrchestrationGetInlineVisualInput,
+    ) => Promise<OrchestrationGetInlineVisualResult>;
     replayEvents: (
       fromSequenceExclusive: number,
       threadId?: ThreadId,

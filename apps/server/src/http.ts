@@ -36,6 +36,7 @@ import {
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
+import { INLINE_VISUALS_DIRECTORY } from "./inlineVisualStore";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
@@ -1392,7 +1393,11 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     }
     if (
       normalizedRelativePath.startsWith("objects/") ||
-      normalizedRelativePath.startsWith(".staging/")
+      normalizedRelativePath.startsWith(".staging/") ||
+      // Agent-authored visual HTML must never load from the app origin; clients
+      // fetch it over the authenticated socket and run it in a sandboxed frame.
+      // Case-insensitive: the attachments root may sit on a case-insensitive volume.
+      normalizedRelativePath.toLowerCase().startsWith(`${INLINE_VISUALS_DIRECTORY}/`)
     ) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }

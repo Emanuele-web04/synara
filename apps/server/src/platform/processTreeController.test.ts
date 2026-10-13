@@ -467,3 +467,33 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
 );
+
+it.skipIf(process.platform === "win32")(
+  "captures a POSIX tree for teardown without blocking the event loop",
+  async () => {
+    const child = spawn("/bin/sh", ["-c", "sleep 3 & wait"], { stdio: "ignore" });
+    const exited = once(child, "exit");
+    try {
+      await once(child, "spawn");
+      const deadline = Date.now() + 5_000;
+      let captured: CapturedProcess | undefined;
+      let timerFiredDuringScan = false;
+      while (!captured && Date.now() < deadline) {
+        let timerFired = false;
+        setTimeout(() => {
+          timerFired = true;
+        }, 0);
+        const tree = await captureProcessTree(child.pid as number);
+        timerFiredDuringScan = timerFired;
+        expect(tree.captureComplete).toBe(true);
+        captured = tree.descendants.find((row) => row.command === "sleep 3");
+      }
+      expect(captured?.startedAt).toBeDefined();
+      // The process-table scan runs in a child process; RPCs keep being served.
+      expect(timerFiredDuringScan).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  },
+);
