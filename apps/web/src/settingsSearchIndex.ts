@@ -113,6 +113,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Controls how threads are arranged inside each project in the main sidebar. sort updated created",
   },
   {
+    id: "general:thread-attention-first",
+    section: "general",
+    title: "Working and unread on top",
+    keywords:
+      "With Recently active order, move working and unread threads above the rest. sort unread jump reorder pin top hold",
+  },
+  {
     id: "general:chats-section",
     section: "general",
     title: "Chats",

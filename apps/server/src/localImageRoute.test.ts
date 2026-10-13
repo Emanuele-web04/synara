@@ -625,4 +625,21 @@ describe("attachmentsEffectRouteLayer", () => {
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
     });
   });
+
+  it("never serves inline visual HTML from the app origin", async () => {
+    const config = makeServerConfig({ authToken: "desktop-secret" });
+    const visualDirectory = path.join(config.attachmentsDir, "visuals", "thread-1");
+    mkdirSync(visualDirectory, { recursive: true });
+    const visualName = `vis_${"c".repeat(32)}.html`;
+    writeFileSync(path.join(visualDirectory, visualName), "<script>parent.document</script>");
+
+    await withEffectServer(config, attachmentsEffectRouteLayer, async (origin) => {
+      for (const prefix of ["visuals", "Visuals", "./visuals"]) {
+        const response = await fetch(
+          `${origin}/attachments/${prefix}/thread-1/${visualName}?token=desktop-secret`,
+        );
+        expect(response.status, prefix).toBe(404);
+      }
+    });
+  });
 });

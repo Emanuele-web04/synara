@@ -1,4 +1,4 @@
-import threadTitleRefreshSchema from "./135_ThreadTitleRefresh.ts";
+import threadTitleRefreshSchema from "./136_ThreadTitleRefresh.ts";
 import {
   CommandId,
   CorrelationId,

@@ -160,7 +160,7 @@ function makeFakeAdapter(provider: ProviderKind) {
     streamEvents: Stream.never,
   };
 
-  return { adapter, startSession, stopSession };
+  return { adapter, startSession, stopSession, sessions };
 }
 
 describe("ProviderSessionReaperLive", () => {
@@ -262,11 +262,22 @@ describe("ProviderSessionReaperLive", () => {
   it("keeps the Codex resume cursor after an idle reaper sweep of a pre-warmed running session", async () => {
     await assertIdleReaperPreservesResumeCursor("codex", "thread-reaper-idle-codex");
   });
+
+  it.each([
+    "live-turn",
+    "running",
+    "connecting",
+    "recent-activity",
+    "live-recent-activity",
+  ] as const)("preserves %s when the idle sweep sees a lagging projection", async (scenario) => {
+    await assertIdleReaperPreservesResumeCursor("codex", `thread-reaper-${scenario}`, scenario);
+  });
 });
 
 async function assertIdleReaperPreservesResumeCursor(
   provider: ProviderKind,
   threadIdValue: string,
+  scenario?: "live-turn" | "running" | "connecting" | "recent-activity" | "live-recent-activity",
 ): Promise<void> {
   const threadId = ThreadId.makeUnsafe(threadIdValue);
   const fake = makeFakeAdapter(provider);
@@ -371,10 +382,63 @@ async function assertIdleReaperPreservesResumeCursor(
 
     yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
     const adapterStopsBeforeSweep = fake.stopSession.mock.calls.length;
-    yield* reaper.start();
-    yield* Effect.promise(() =>
-      waitFor(() => fake.stopSession.mock.calls.length === adapterStopsBeforeSweep + 1),
+    const activeTurnId = TurnId.makeUnsafe("live-turn-missing-from-projection");
+    if (scenario === "live-recent-activity") {
+      const hasSession = fake.adapter.hasSession;
+      vi.spyOn(fake.adapter, "hasSession").mockImplementationOnce((id) =>
+        Effect.sync(() => {
+          // The adapter settles first, after the reaper captured its cutoff;
+          // the durable terminal event has not reached SQLite yet.
+          fake.sessions.set(threadId, {
+            ...prewarmed,
+            status: "ready",
+            updatedAt: new Date().toISOString(),
+          });
+        }).pipe(Effect.andThen(hasSession(id))),
+      );
+    } else if (scenario && scenario !== "recent-activity") {
+      // The adapter has accepted work but persistence/projection has not caught up.
+      fake.sessions.set(threadId, {
+        ...prewarmed,
+        status: scenario === "connecting" ? "connecting" : "running",
+        ...(scenario === "live-turn" ? { activeTurnId } : {}),
+      });
+    } else if (scenario === "recent-activity") {
+      const hasSession = fake.adapter.hasSession;
+      vi.spyOn(fake.adapter, "hasSession").mockImplementationOnce((id) =>
+        Effect.gen(function* () {
+          // Activity arrives after the reaper captured its old idle cutoff.
+          yield* directory.upsert({ threadId, provider }).pipe(Effect.orDie);
+          return yield* hasSession(id);
+        }),
+      );
+    }
+    let sweepStopSettled = false;
+    const originalStop = providerService.stopRuntimeSession;
+    vi.spyOn(providerService, "stopRuntimeSession").mockImplementation((input) =>
+      originalStop(input).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            sweepStopSettled = true;
+          }),
+        ),
+      ),
     );
+    yield* reaper.start();
+    yield* Effect.promise(() => waitFor(() => sweepStopSettled));
+
+    if (scenario) {
+      expect(fake.stopSession.mock.calls.length).toBe(adapterStopsBeforeSweep);
+      expect(fake.sessions.has(threadId)).toBe(true);
+      if (scenario === "live-turn")
+        expect(fake.sessions.get(threadId)?.activeTurnId).toBe(activeTurnId);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      expect(binding?.status).toBe(prewarmedBinding?.status);
+      expect(binding?.lifecycleGeneration).toBe(prewarmedBinding?.lifecycleGeneration);
+      expect(binding?.resumeCursor).toEqual(prewarmedBinding?.resumeCursor);
+      return;
+    }
+    expect(fake.stopSession.mock.calls.length).toBe(adapterStopsBeforeSweep + 1);
 
     const afterSweep = Option.getOrUndefined(yield* directory.getBinding(threadId));
     expect(afterSweep).toBeDefined();
