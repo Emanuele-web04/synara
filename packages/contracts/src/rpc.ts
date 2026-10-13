@@ -361,6 +361,23 @@ import {
   StatsGetRecapInput,
   StatsGetRecapResult,
 } from "./stats";
+import {
+  MindAffirmInput,
+  MindForgetInput,
+  MindHistoryInput,
+  MindHistoryResult,
+  MindListInput,
+  MindListResult,
+  MindMemory,
+  MindProfile,
+  MindProfileGetInput,
+  MindProfileGetResult,
+  MindProfileSetInput,
+  MindSearchInput,
+  MindSearchResult,
+  MindSetPinnedInput,
+  MindUpdateInput,
+} from "./mind";
 import { WS_METHODS } from "./ws";
 import {
   WS_BOOTSTRAP_METHOD,
@@ -1702,6 +1719,24 @@ export const WsTodoDeleteRpc = Rpc.make(WS_METHODS.todoDelete, {
   error: WsRpcError,
 });
 
+export const WsMindListRpc = Rpc.make(WS_METHODS.mindList, {
+  payload: MindListInput,
+  success: MindListResult,
+  error: WsRpcError,
+});
+
+export const WsMindSearchRpc = Rpc.make(WS_METHODS.mindSearch, {
+  payload: MindSearchInput,
+  success: MindSearchResult,
+  error: WsRpcError,
+});
+
+export const WsMindForgetRpc = Rpc.make(WS_METHODS.mindForget, {
+  payload: MindForgetInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsSubscribeTodoEventsRpc = Rpc.make(WS_METHODS.subscribeTodoEvents, {
   payload: Schema.Struct({}),
   success: TodoStreamEvent,
@@ -1907,6 +1942,42 @@ export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribePro
   stream: true,
 });
 
+export const WsMindSetPinnedRpc = Rpc.make(WS_METHODS.mindSetPinned, {
+  payload: MindSetPinnedInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
+export const WsMindAffirmRpc = Rpc.make(WS_METHODS.mindAffirm, {
+  payload: MindAffirmInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
+export const WsMindUpdateRpc = Rpc.make(WS_METHODS.mindUpdate, {
+  payload: MindUpdateInput,
+  success: MindMemory,
+  error: WsRpcError,
+});
+
+export const WsMindHistoryRpc = Rpc.make(WS_METHODS.mindHistory, {
+  payload: MindHistoryInput,
+  success: MindHistoryResult,
+  error: WsRpcError,
+});
+
+export const WsMindProfileGetRpc = Rpc.make(WS_METHODS.mindProfileGet, {
+  payload: MindProfileGetInput,
+  success: MindProfileGetResult,
+  error: WsRpcError,
+});
+
+export const WsMindProfileSetRpc = Rpc.make(WS_METHODS.mindProfileSet, {
+  payload: MindProfileSetInput,
+  success: MindProfile,
+  error: WsRpcError,
+});
+
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
@@ -2057,6 +2128,19 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsTodoUpdateRpc,
   WsTodoDeleteRpc,
   WsSubscribeTodoEventsRpc,
+);
+
+// Keep Mind declarations bounded using the existing satellite-group pattern.
+export const WsMindRpcGroup = RpcGroup.make(
+  WsMindListRpc,
+  WsMindSearchRpc,
+  WsMindForgetRpc,
+  WsMindSetPinnedRpc,
+  WsMindAffirmRpc,
+  WsMindUpdateRpc,
+  WsMindHistoryRpc,
+  WsMindProfileGetRpc,
+  WsMindProfileSetRpc,
 );
 
 // Project-agent RPCs live in a satellite group: folding them into

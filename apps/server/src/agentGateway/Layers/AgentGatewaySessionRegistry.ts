@@ -17,6 +17,7 @@ const PROVIDER_SESSION_CAPABILITIES = [
   "diagnostics:read",
   "browser:control",
   "device:control",
+  "memory:use",
 ] as const;
 
 export function makeAgentGatewaySessionRegistry(options?: {

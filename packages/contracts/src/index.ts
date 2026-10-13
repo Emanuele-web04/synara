@@ -20,6 +20,7 @@ export * from "./providerDiscovery";
 export * from "./providerInstance";
 export * from "./providerRuntime";
 export * from "./model";
+export * from "./mind";
 export * from "./agentMentions";
 export * from "./agentGateway";
 export * from "./externalMcp";
