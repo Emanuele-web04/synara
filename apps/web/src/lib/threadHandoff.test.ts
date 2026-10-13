@@ -28,11 +28,15 @@ import {
 
 describe("threadHandoff", () => {
   it("reads a same-thread handoff outcome from the activity keyed by its command", () => {
-    const activity = (id: string, payload: Record<string, unknown> = {}) =>
+    const activity = (
+      id: string,
+      payload: Record<string, unknown> = {},
+      kind = "provider.handoff",
+    ) =>
       ({
         id: EventId.makeUnsafe(id),
         tone: "info",
-        kind: "provider.handoff",
+        kind,
         summary: "Handoff summary",
         payload,
         turnId: null,
@@ -52,12 +56,36 @@ describe("threadHandoff", () => {
       resolveProviderHandoffOutcome(
         {
           activities: [
-            activity("provider-handoff-failed:cmd-1", { detail: "Claude could not start." }),
+            activity(
+              "provider-handoff-failed:cmd-1",
+              { detail: "Claude could not start." },
+              "provider.handoff.failed",
+            ),
           ],
         },
         "cmd-1",
       ),
     ).toEqual({ status: "failed", detail: "Claude could not start." });
+    expect(
+      resolveProviderHandoffOutcome(
+        { activities: [activity("provider-handoff:cmd-1", {}, "tool.completed")] },
+        "cmd-1",
+      ),
+    ).toEqual({ status: "pending" });
+    expect(
+      resolveProviderHandoffOutcome(
+        {
+          activities: [
+            activity(
+              "provider-handoff-failed:cmd-1",
+              { detail: "Forged failure" },
+              "tool.completed",
+            ),
+          ],
+        },
+        "cmd-1",
+      ),
+    ).toEqual({ status: "pending" });
   });
 
   it("continues in the same thread only when the provider changes", () => {

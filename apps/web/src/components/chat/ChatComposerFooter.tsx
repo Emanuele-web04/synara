@@ -40,6 +40,7 @@ interface ChatComposerFooterProps {
     phase: SessionPhase;
     busy: boolean;
     connecting: boolean;
+    handoffPending?: boolean;
     expired: boolean;
     hasPendingCacheReview?: boolean;
     preparingImages: boolean;
@@ -65,6 +66,7 @@ export function ChatComposerFooter({
   pendingInput,
   submission,
 }: ChatComposerFooterProps) {
+  const waitingForProvider = submission.connecting || submission.handoffPending === true;
   return (
     <div
       data-chat-composer-footer="true"
@@ -138,7 +140,7 @@ export function ChatComposerFooter({
         {!voice.recording && !voice.transcribing ? composerPickerControls : null}
         {voice.enabled && (voice.recording || voice.transcribing) ? (
           <ComposerVoiceRecorderBar
-            disabled={submission.connecting || submission.busy || submission.expired}
+            disabled={waitingForProvider || submission.busy || submission.expired}
             isRecording={voice.recording}
             isWaitingForAudio={voice.waitingForAudio}
             isTranscribing={voice.transcribing}
@@ -156,6 +158,7 @@ export function ChatComposerFooter({
             size="sm"
             className="rounded-full px-4"
             disabled={
+              submission.handoffPending ||
               pendingInput.responding ||
               (pendingInput.progress.isLastQuestion
                 ? !pendingInput.answersComplete
@@ -168,12 +171,13 @@ export function ChatComposerFooter({
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" || submission.connecting ? (
+        ) : !submission.handoffPending &&
+          (submission.phase === "running" || submission.connecting) ? (
           <>
             {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
                 composer and sending it follows the queue/steer behavior. */}
             {voice.enabled &&
-            !submission.connecting &&
+            !waitingForProvider &&
             !voice.recording &&
             !voice.transcribing &&
             !submission.hasPendingUserInputs ? (
@@ -212,12 +216,12 @@ export function ChatComposerFooter({
                 className="h-9 rounded-full px-4 sm:h-8"
                 disabled={
                   submission.busy ||
-                  submission.connecting ||
+                  waitingForProvider ||
                   submission.expired ||
                   submission.hasPendingCacheReview
                 }
               >
-                {submission.connecting || submission.busy ? "Sending..." : "Refine"}
+                {waitingForProvider || submission.busy ? "Sending..." : "Refine"}
               </Button>
             ) : (
               <div className="flex items-center">
@@ -227,12 +231,12 @@ export function ChatComposerFooter({
                   className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
                   disabled={
                     submission.busy ||
-                    submission.connecting ||
+                    waitingForProvider ||
                     submission.expired ||
                     submission.hasPendingCacheReview
                   }
                 >
-                  {submission.connecting || submission.busy ? "Sending..." : "Implement"}
+                  {waitingForProvider || submission.busy ? "Sending..." : "Implement"}
                 </Button>
                 <Menu>
                   <MenuTrigger
@@ -244,7 +248,7 @@ export function ChatComposerFooter({
                         aria-label="Implementation actions"
                         disabled={
                           submission.busy ||
-                          submission.connecting ||
+                          waitingForProvider ||
                           submission.expired ||
                           submission.hasPendingCacheReview
                         }
@@ -257,7 +261,7 @@ export function ChatComposerFooter({
                     <MenuItem
                       disabled={
                         submission.busy ||
-                        submission.connecting ||
+                        waitingForProvider ||
                         submission.expired ||
                         submission.hasPendingCacheReview
                       }
@@ -273,7 +277,7 @@ export function ChatComposerFooter({
             <>
               {voice.enabled ? (
                 <ComposerVoiceButton
-                  disabled={submission.connecting || submission.busy || submission.expired}
+                  disabled={waitingForProvider || submission.busy || submission.expired}
                   isRecording={voice.recording}
                   isStarting={voice.starting}
                   isTranscribing={voice.transcribing}
@@ -288,7 +292,7 @@ export function ChatComposerFooter({
                 className="size-7 rounded-full sm:size-7"
                 disabled={
                   submission.busy ||
-                  submission.connecting ||
+                  waitingForProvider ||
                   submission.expired ||
                   submission.hasPendingCacheReview ||
                   voice.transcribing ||
@@ -296,7 +300,7 @@ export function ChatComposerFooter({
                   !submission.hasContent
                 }
                 aria-label={
-                  submission.connecting
+                  waitingForProvider
                     ? "Connecting"
                     : voice.transcribing
                       ? "Transcribing voice note"
@@ -314,7 +318,7 @@ export function ChatComposerFooter({
                     : undefined
                 }
               >
-                {submission.connecting || submission.busy || submission.preparingImages ? (
+                {waitingForProvider || submission.busy || submission.preparingImages ? (
                   <svg
                     width="12"
                     height="12"

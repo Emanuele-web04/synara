@@ -15,6 +15,7 @@ import {
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
+import { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
 import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
@@ -204,7 +205,7 @@ export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">)
 }
 
 export function canCreateThreadHandoff(input: {
-  readonly thread: Pick<Thread, "handoff" | "messages" | "session">;
+  readonly thread: Pick<Thread, "activities" | "handoff" | "messages" | "session">;
   readonly isBusy?: boolean;
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
@@ -212,6 +213,7 @@ export function canCreateThreadHandoff(input: {
   if (input.isBusy || input.hasPendingApprovals || input.hasPendingUserInput) {
     return false;
   }
+  if (resolvePendingProviderHandoff(input.thread.activities) !== null) return false;
   const sessionStatus = input.thread.session?.orchestrationStatus;
   if (sessionStatus === "starting" || sessionStatus === "running") {
     return false;
@@ -266,10 +268,10 @@ export function resolveProviderHandoffOutcome(
 ): ProviderHandoffOutcome {
   const ids = providerHandoffOutcomeActivityIds(commandId);
   for (const activity of thread?.activities ?? []) {
-    if (activity.id === ids.completed) {
+    if (activity.id === ids.completed && activity.kind === "provider.handoff") {
       return { status: "completed" };
     }
-    if (activity.id === ids.failed) {
+    if (activity.id === ids.failed && activity.kind === "provider.handoff.failed") {
       const payload =
         activity.payload && typeof activity.payload === "object"
           ? (activity.payload as { detail?: unknown })
@@ -313,6 +315,7 @@ export function resolveThreadHandoffModelSelection(input: {
   readonly targetProviderInstanceId?: ProviderInstanceId | null | undefined;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
   readonly stickyModelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
+  readonly discoveredFallbackModel?: string | null;
 }): ModelSelection {
   const targetInstanceId = input.targetProviderInstanceId ?? input.targetProvider;
   const isCompatibleSelection = (
@@ -333,9 +336,9 @@ export function resolveThreadHandoffModelSelection(input: {
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return withTargetInstance(input.projectDefaultModelSelection);
   }
-  const defaultModel = getDefaultModel(input.targetProvider);
+  const defaultModel = getDefaultModel(input.targetProvider) ?? input.discoveredFallbackModel;
   if (!defaultModel) {
-    throw new Error("Select a Pi model before handing off to Pi.");
+    throw new Error("No Pi model is available. Configure Pi and retry the handoff.");
   }
   return withTargetInstance({
     provider: input.targetProvider,

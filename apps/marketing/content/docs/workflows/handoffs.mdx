@@ -26,6 +26,16 @@ You can also pick another provider in the composer's model picker. Choosing it c
 
 Switching between two accounts of the same provider always creates a new thread.
 
+### Waiting for a provider switch
+
+The composer shows **Switching to…** while the receiving provider starts. Editing and sending pause until the server records the outcome; your draft and earlier messages stay in the same thread. Other clients also have to wait before submitting a turn, changing execution settings, moving the task to a different workspace or branch, or starting another switch. Renaming, pinning, and updating notes remain available.
+
+Stopping or interrupting the session, archiving the task, or expiring a side chat cancels a pending switch. **Cancelling switch to…** remains visible while the server settles that request. Unarchiving the task does not revive the cancelled switch. A failed switch restores the task's original provider selection and records why it could not finish.
+
+Synara retains provider transitions when older tool activity leaves the visible activity window. The pending request and outcome survive reloads and server restarts. After a successful switch, its recap remains available through failed or aborted target turns and is retired only when the matching target turn finishes successfully.
+
+Pi uses the selected configuration's discovered models when no explicit, remembered, or project model is available. If discovery fails or returns no models, the handoff stops before creating a task or changing its provider; check that Pi configuration before retrying.
+
 ## Good reasons to hand off
 
 - A different provider has a capability better suited to the next phase

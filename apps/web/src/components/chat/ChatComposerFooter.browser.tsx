@@ -5,15 +5,19 @@ import { render } from "vitest-browser-react";
 import type { SessionPhase } from "../../types";
 import { ChatComposerFooter } from "./ChatComposerFooter";
 
-function mountFooter(input: {
+interface FooterInput {
   phase: SessionPhase;
   connecting: boolean;
+  handoffPending?: boolean;
+  hasContent?: boolean;
   onInterrupt?: () => void;
   voiceEnabled?: boolean;
   voiceRecording?: boolean;
   onVoiceToggle?: () => void;
-}) {
-  return render(
+}
+
+function footer(input: FooterInput) {
+  return (
     <ChatComposerFooter
       isComposerFooterCompact={false}
       leadingControls={null}
@@ -39,18 +43,23 @@ function mountFooter(input: {
         phase: input.phase,
         busy: false,
         connecting: input.connecting,
+        handoffPending: input.handoffPending ?? false,
         expired: false,
         preparingImages: false,
         preparingWorktree: false,
-        hasContent: false,
+        hasContent: input.hasContent ?? false,
         hasPendingUserInputs: false,
         showPlanFollowUp: false,
         hasPrompt: false,
         onInterrupt: input.onInterrupt ?? vi.fn(),
         onImplementInNewThread: vi.fn(),
       }}
-    />,
+    />
   );
+}
+
+function mountFooter(input: FooterInput) {
+  return render(footer(input));
 }
 
 describe("ChatComposerFooter stop control", () => {
@@ -107,4 +116,52 @@ describe("ChatComposerFooter stop control", () => {
       await screen.unmount();
     }
   });
+
+  it.each(["ready", "connecting", "running"] as const)(
+    "holds handoff admission separately from %s cancellation and restores Send when settled",
+    async (phase) => {
+      const onInterrupt = vi.fn();
+      const onVoiceToggle = vi.fn();
+      const input: FooterInput = {
+        phase,
+        connecting: phase === "connecting",
+        handoffPending: true,
+        hasContent: true,
+        voiceEnabled: true,
+        onInterrupt,
+        onVoiceToggle,
+      };
+      const screen = await mountFooter(input);
+      try {
+        const submit = page.getByRole("button", { name: "Connecting", exact: true });
+        await expect.element(submit).toBeVisible();
+        await expect.element(submit).toBeDisabled();
+        expect(document.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+        expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+        await expect
+          .element(page.getByRole("button", { name: "Record voice note" }))
+          .toBeDisabled();
+        expect(onInterrupt).not.toHaveBeenCalled();
+        expect(onVoiceToggle).not.toHaveBeenCalled();
+
+        await screen.rerender(
+          footer({
+            ...input,
+            phase: "ready",
+            connecting: false,
+            handoffPending: false,
+          }),
+        );
+        await expect
+          .element(page.getByRole("button", { name: "Send message", exact: true }))
+          .toBeEnabled();
+        expect(document.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+        expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+        await expect.element(page.getByRole("button", { name: "Record voice note" })).toBeEnabled();
+        expect(onInterrupt).not.toHaveBeenCalled();
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 });

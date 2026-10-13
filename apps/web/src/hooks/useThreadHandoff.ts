@@ -4,6 +4,7 @@
 // Exports: useThreadHandoff
 
 import { useNavigate } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
@@ -11,6 +12,7 @@ import {
   type ProviderKind,
 } from "@synara/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useAppSettings } from "../appSettings";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
@@ -24,6 +26,9 @@ import {
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
+import { providerModelsPrefetchQueryOptions } from "../lib/providerModelPrefetch";
+import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -65,6 +70,9 @@ function waitForProviderHandoffOutcome(
 
 export function useThreadHandoff() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -76,6 +84,7 @@ export function useThreadHandoff() {
     thread: Thread,
     targetProvider: ProviderKind,
     targetProviderInstanceId?: ProviderInstanceId,
+    explicitModelSelection?: ModelSelection,
   ) => {
     const api = readNativeApi();
     if (!api) {
@@ -115,14 +124,48 @@ export function useThreadHandoff() {
       );
     }
 
-    const modelSelection = resolveThreadHandoffModelSelection({
-      sourceThread: thread,
-      targetProvider,
-      targetProviderInstanceId,
-      projectDefaultModelSelection: project.defaultModelSelection,
-      stickyModelSelectionByProvider:
-        useComposerDraftStore.getState().stickyModelSelectionByProvider,
-    });
+    if (
+      explicitModelSelection &&
+      (explicitModelSelection.provider !== targetProvider ||
+        (explicitModelSelection.instanceId ?? explicitModelSelection.provider) !== targetInstanceId)
+    ) {
+      throw new Error("The selected model does not belong to this handoff target.");
+    }
+    const stickyModelSelectionByProvider =
+      useComposerDraftStore.getState().stickyModelSelectionByProvider;
+    let discoveredFallbackModel: string | null = null;
+    if (
+      !explicitModelSelection &&
+      targetProvider === "pi" &&
+      stickyModelSelectionByProvider[targetInstanceId]?.provider !== "pi" &&
+      project.defaultModelSelection?.provider !== "pi"
+    ) {
+      const discovered = await queryClient.fetchQuery(
+        providerModelsPrefetchQueryOptions({
+          provider: "pi",
+          instanceId: targetInstanceId,
+          settings,
+          cwd: resolveProviderDiscoveryCwd({
+            activeThreadWorktreePath: thread.worktreePath ?? null,
+            activeProjectCwd: project.cwd ?? null,
+            serverCwd: serverConfigQuery.data?.cwd ?? null,
+          }),
+          priority: "prefetch",
+        }),
+      );
+      if (discovered.error) throw new Error(`Pi model discovery failed: ${discovered.error}`);
+      discoveredFallbackModel = discovered.models[0]?.slug ?? null;
+    }
+    const modelSelection =
+      explicitModelSelection ??
+      resolveThreadHandoffModelSelection({
+        sourceThread: thread,
+        targetProvider,
+        targetProviderInstanceId,
+        projectDefaultModelSelection: project.defaultModelSelection,
+        stickyModelSelectionByProvider,
+        discoveredFallbackModel,
+      });
     return { api, modelSelection };
   };
 
@@ -144,8 +187,13 @@ export function useThreadHandoff() {
     ) {
       throw new Error("Hand off to a new thread to switch between accounts of the same provider.");
     }
-    const prepared = await prepareThreadHandoff(thread, targetProvider, targetProviderInstanceId);
-    const modelSelection = explicitModelSelection ?? prepared.modelSelection;
+    const prepared = await prepareThreadHandoff(
+      thread,
+      targetProvider,
+      targetProviderInstanceId,
+      explicitModelSelection,
+    );
+    const modelSelection = prepared.modelSelection;
     const commandId = newCommandId();
     // The composer shows the provider the next message goes to.
     useComposerDraftStore.getState().setModelSelectionAndSticky(thread.id, modelSelection);

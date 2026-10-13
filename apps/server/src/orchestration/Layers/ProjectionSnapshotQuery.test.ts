@@ -8,6 +8,7 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type ModelSelection,
   type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
@@ -20,6 +21,8 @@ import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
+import { decideOrchestrationCommand } from "../decider.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -36,6 +39,153 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("rehydrates provider handoff admission and history beyond both activity windows", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("durable-provider-handoff");
+      const now = "2026-10-11T10:00:00.000Z";
+      const source = { provider: "codex", model: "gpt-5.4" } satisfies ModelSelection;
+      const target = {
+        provider: "pi",
+        instanceId: "pi-work",
+        model: "vendor/model",
+      } satisfies ModelSelection;
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('handoff-project', 'Handoff', '/tmp/handoff-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${threadId}, 'handoff-project', 'Handoff', ${JSON.stringify(target)}, ${now}, ${now})`;
+      const rows = [
+        [
+          "prior-request",
+          "provider.handoff.requested",
+          { handoffCommandId: "prior", sourceModelSelection: source, targetModelSelection: target },
+        ],
+        [
+          "prior-completed",
+          "provider.handoff",
+          { handoffCommandId: "prior", sourceModelSelection: source, targetModelSelection: target },
+        ],
+        [
+          "pending-request",
+          "provider.handoff.requested",
+          {
+            handoffCommandId: "pending",
+            sourceModelSelection: source,
+            targetModelSelection: target,
+          },
+        ],
+        ["checkpoint-completed", "checkpoint.revert.succeeded", {}],
+      ] as const;
+      for (const [index, [id, kind, payload]] of rows.entries()) {
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${id}, ${threadId}, 'info', ${kind}, 'State', ${JSON.stringify(payload)}, ${index + 1}, ${now})`;
+      }
+      yield* sql`WITH RECURSIVE filler(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM filler WHERE n < 2010
+      ) INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        SELECT 'handoff-noise-' || n, ${threadId}, 'tool', 'tool.completed', 'Work', '{}', n + 10, ${now} FROM filler`;
+      const detailed = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId)).thread;
+      const snapshot = (yield* query.getSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      for (const [thread, cap] of [
+        [detailed, 2000],
+        [snapshot, 500],
+      ] as const) {
+        assert.deepEqual(
+          thread.activities
+            .filter((activity) => activity.kind.startsWith("provider.handoff"))
+            .map((activity) => activity.id),
+          rows.slice(0, 3).map(([id]) => asEventId(id)),
+        );
+        assert.equal(
+          thread.activities.filter((activity) => activity.kind === "tool.completed").length,
+          cap,
+        );
+        assert.equal(resolvePendingProviderHandoff(thread.activities)?.handoffCommandId, "pending");
+      }
+      const recovered = yield* query.getCommandReadModel();
+      const commandThread = recovered.threads.find((thread) => thread.id === threadId)!;
+      assert.deepEqual(
+        new Set(commandThread.activities.map((activity) => activity.kind)),
+        new Set(["provider.handoff.requested", "checkpoint.revert.succeeded"]),
+      );
+      const blocked = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel: recovered,
+          command: {
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.makeUnsafe("blocked-mode"),
+            threadId,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          },
+        }),
+      );
+      assert.include(blocked.detail, "still switching");
+      // A persisted cancellation still holds admission, and remains visible
+      // when restart recovery loads only the latest row in this lifecycle.
+      yield* sql`UPDATE projection_thread_activities
+        SET payload_json = ${JSON.stringify({
+          handoffCommandId: "pending",
+          sourceModelSelection: source,
+          targetModelSelection: target,
+          cancellationRequestedAt: now,
+        })}, sequence = 2020 WHERE activity_id = 'pending-request' AND thread_id = ${threadId}`;
+      const cancelled = yield* query.getCommandReadModel();
+      assert.equal(
+        resolvePendingProviderHandoff(cancelled.threads[0]!.activities)?.cancellationRequestedAt,
+        now,
+      );
+      const refusedCompletion = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel: cancelled,
+          command: {
+            type: "thread.provider.handoff.settle",
+            commandId: CommandId.makeUnsafe("cancelled-completion"),
+            threadId,
+            handoffCommandId: CommandId.makeUnsafe("pending"),
+            sourceModelSelection: source,
+            targetModelSelection: target,
+            outcome: "completed",
+            contextText: null,
+            createdAt: now,
+          },
+        }),
+      );
+      assert.include(refusedCompletion.detail, "cancelled");
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES ('pending-failed', ${threadId}, 'error', 'provider.handoff.failed', 'Failed', '{"handoffCommandId":"pending"}', 2021, ${now})`;
+      const settled = yield* query.getCommandReadModel();
+      const settledThread = settled.threads.find((thread) => thread.id === threadId)!;
+      assert.isNull(resolvePendingProviderHandoff(settledThread.activities));
+      assert.deepEqual(
+        new Set(settledThread.activities.map((activity) => activity.kind)),
+        new Set(["provider.handoff.failed", "checkpoint.revert.succeeded"]),
+      );
+      const admitted = yield* decideOrchestrationCommand({
+        readModel: settled,
+        command: {
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.makeUnsafe("unblocked-mode"),
+          threadId,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        },
+      });
+      assert.deepEqual(
+        (Array.isArray(admitted) ? admitted : [admitted]).map((event) => event.type),
+        ["thread.runtime-mode-set"],
+      );
+    }),
+  );
+
   it.effect("retains durable task state beyond the detail activity window", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;

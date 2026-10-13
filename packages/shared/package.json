@@ -380,6 +380,10 @@
       "types": "./src/browserAutomationMcpError.ts",
       "import": "./src/browserAutomationMcpError.ts"
     },
+    "./providerHandoff": {
+      "types": "./src/providerHandoff.ts",
+      "import": "./src/providerHandoff.ts"
+    },
     "./providerDeliveryBlock": {
       "types": "./src/providerDeliveryBlock.ts",
       "import": "./src/providerDeliveryBlock.ts"

@@ -24,8 +24,58 @@ import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtur
 import type { Thread } from "./types";
 import { deriveActiveTaskListState, deriveOutstandingBackgroundTaskIds } from "./session-logic";
 import { derivePendingUserInputs } from "./pendingInteractionDerivation";
+import { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
 
 type ThreadActivity = Thread["activities"][number];
+
+describe("provider handoff activity retention", () => {
+  it("preserves the complete transition path and pending state during incremental work", () => {
+    const path = [
+      makeActivity({
+        id: "old-request",
+        kind: "provider.handoff.requested",
+        payload: {
+          handoffCommandId: "old",
+          sourceModelSelection: { provider: "codex", model: "gpt-5.4" },
+          targetModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+        },
+      }),
+      makeActivity({
+        id: "old-completed",
+        kind: "provider.handoff",
+        payload: { handoffCommandId: "old" },
+      }),
+      makeActivity({
+        id: "pending-request",
+        kind: "provider.handoff.requested",
+        payload: {
+          handoffCommandId: "pending",
+          sourceModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+          targetModelSelection: { provider: "pi", model: "vendor/model" },
+        },
+      }),
+    ];
+    let activities = path;
+    for (let index = 0; index < 2010; index += 1) {
+      activities = [
+        ...capThreadActivities([...activities, makeActivity({ id: `handoff-noise-${index}` })]),
+      ];
+    }
+    expect(activities.filter((row) => row.kind.startsWith("provider.handoff"))).toEqual(path);
+    expect(activities.filter((row) => row.kind === "tool.started")).toHaveLength(2000);
+    expect(resolvePendingProviderHandoff(activities)?.handoffCommandId).toBe("pending");
+    const settled = capThreadActivities([
+      ...activities,
+      makeActivity({
+        id: "pending-failed",
+        kind: "provider.handoff.failed",
+        payload: { handoffCommandId: "pending" },
+      }),
+    ]);
+    expect(resolvePendingProviderHandoff(settled)).toBeNull();
+    expect(settled.filter((row) => row.kind.startsWith("provider.handoff"))).toHaveLength(4);
+  });
+});
 
 describe("pending interaction activity retention", () => {
   const request = makeActivity({

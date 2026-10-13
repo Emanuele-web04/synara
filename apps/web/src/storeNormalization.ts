@@ -1,3 +1,4 @@
+import { isProviderHandoffActivity } from "@synara/shared/providerHandoff";
 // FILE: storeNormalization.ts
 // Purpose: Normalizes orchestration projects, threads, messages, and activities with stable identity.
 // Exports: Pure normalization and equality helpers consumed by projection and event reduction.
@@ -1470,6 +1471,9 @@ export function capThreadActivities<TActivity extends Thread["activities"][numbe
   const tail = activities.slice(dropCount);
   const retainedIds = new Set(tail.map((activity) => activity.id));
   retainTaskActivityIds(activities, retainedIds);
+  for (const activity of activities) {
+    if (isProviderHandoffActivity(activity)) retainedIds.add(activity.id);
+  }
   const retainedRequests = new Map(
     pendingInteractionsFromActivities(activities).map((request) => [request.key, request]),
   );

@@ -4885,6 +4885,138 @@ describe("ChatView transcript geometry (full app)", () => {
         useStore.getState().syncServerReadModel(fixture.snapshot);
       };
 
+    it.each(["completed", "failed"] as const)(
+      "holds the composer for a durable provider request until its matching %s outcome",
+      async (outcome) => {
+        const base = createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("msg-durable-handoff"),
+          targetText: "Keep the reconnect investigation in this thread",
+        });
+        const sourceModelSelection = { provider: "codex" as const, model: "gpt-5.5" };
+        const targetModelSelection = {
+          provider: "claudeAgent" as const,
+          model: "claude-sonnet-4-6",
+        };
+        const snapshot = {
+          ...base,
+          threads: [{ ...base.threads[0]!, modelSelection: sourceModelSelection }],
+        };
+        const before = snapshot.threads[0]!;
+        const mounted = await mountWithCapturedCommands(snapshot);
+        try {
+          const draft = "Keep this draft while the provider changes.";
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, draft);
+          const editor = await waitForComposerEditor();
+          await vi.waitFor(() => expect(editor.textContent).toContain(draft));
+          const handoffCommandId = "durable-handoff-browser";
+          fixture.snapshot = {
+            ...fixture.snapshot,
+            snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+            threads: fixture.snapshot.threads.map((thread) => ({
+              ...thread,
+              modelSelection: targetModelSelection,
+              activities: [
+                ...thread.activities,
+                {
+                  id: EventId.makeUnsafe("provider-handoff-requested:" + handoffCommandId),
+                  createdAt: new Date().toISOString(),
+                  kind: "provider.handoff.requested",
+                  summary: "Switching from Codex to Claude",
+                  tone: "info" as const,
+                  turnId: null,
+                  sequence: 949,
+                  payload: { handoffCommandId, sourceModelSelection, targetModelSelection },
+                },
+              ],
+            })),
+          };
+          useStore.getState().syncServerReadModel(fixture.snapshot);
+          const status = page.getByRole("status").filter({ hasText: "Switching to Claude" });
+          // Durable request has hydrated; observe admission before asserting its UI state.
+          await expect.element(status).toBeVisible();
+          await vi.waitFor(() => expect(editor.contentEditable).toBe("false"));
+          await expect
+            .element(page.getByRole("button", { name: "Connecting", exact: true }))
+            .toBeDisabled();
+          expect(mounted.commands).toHaveLength(0);
+          // Durable handoff pending: the production composer is visible but unavailable.
+          await mounted.setViewport({ name: "narrow", width: 480, height: 640 });
+          await expect.element(status).toBeVisible();
+          expect(editor.getBoundingClientRect().width).toBeGreaterThan(0);
+          expect(editor.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
+          expect(editor.textContent).toContain(draft);
+
+          const settledSelection =
+            outcome === "completed" ? targetModelSelection : sourceModelSelection;
+          fixture.snapshot = {
+            ...fixture.snapshot,
+            snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+            threads: fixture.snapshot.threads.map((thread) => ({
+              ...thread,
+              modelSelection: settledSelection,
+              session: {
+                ...before.session!,
+                status: "ready" as const,
+                providerName: settledSelection.provider,
+                providerInstanceId: settledSelection.provider,
+                activeTurnId: null,
+                updatedAt: new Date().toISOString(),
+              },
+              activities: [
+                ...thread.activities,
+                {
+                  id: EventId.makeUnsafe(
+                    outcome === "completed"
+                      ? "provider-handoff:" + handoffCommandId
+                      : "provider-handoff-failed:" + handoffCommandId,
+                  ),
+                  createdAt: new Date().toISOString(),
+                  kind: outcome === "completed" ? "provider.handoff" : "provider.handoff.failed",
+                  summary:
+                    outcome === "completed"
+                      ? "Handed off from Codex to Claude"
+                      : "Claude could not start",
+                  tone: outcome === "completed" ? ("info" as const) : ("error" as const),
+                  turnId: null,
+                  sequence: 950,
+                  payload: {
+                    handoffCommandId,
+                    sourceModelSelection,
+                    targetModelSelection,
+                    sourceProvider: sourceModelSelection.provider,
+                    sourceModel: sourceModelSelection.model,
+                    targetProvider: targetModelSelection.provider,
+                    targetModel: targetModelSelection.model,
+                    ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
+                  },
+                },
+              ],
+            })),
+          };
+          useStore.getState().syncServerReadModel(fixture.snapshot);
+          await expect.element(status).not.toBeInTheDocument();
+          await vi.waitFor(() => expect(editor.contentEditable).toBe("true"));
+          await expect
+            .element(page.getByRole("button", { name: "Send message", exact: true }))
+            .toBeEnabled();
+          expect(editor.textContent).toContain(draft);
+          expect(mounted.commands).toHaveLength(0);
+          const after = fixture.snapshot.threads[0]!;
+          expect(after).toMatchObject({
+            id: before.id,
+            projectId: before.projectId,
+            branch: before.branch,
+            worktreePath: before.worktreePath,
+            modelSelection: settledSelection,
+          });
+          expect(after.messages).toEqual(before.messages);
+          // Matching durable outcome: editing resumes without submitting or discarding the draft.
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
+
     async function pickClaudeAndSend(text: string) {
       useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
         provider: "claudeAgent",

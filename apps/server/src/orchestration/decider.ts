@@ -15,6 +15,7 @@ import {
   MAX_PINNED_PROJECTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PINNED_MESSAGES_MAX_COUNT,
+  PROVIDER_DISPLAY_NAMES,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
   THREAD_GOAL_ACHIEVEMENTS_MAX_COUNT,
@@ -31,6 +32,12 @@ import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
+import {
+  PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND,
+  resolvePendingProviderHandoff,
+  providerHandoffModelSelectionsEqual,
+  toProviderHandoffActivityModelSelection,
+} from "@synara/shared/providerHandoff";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -151,6 +158,21 @@ function validateAutoRuntimeMode(
  * it shares Hand off's preconditions: no running turn, pending approval, or
  * pending question the new session could not settle.
  */
+function validateNoPendingProviderHandoff(
+  command: Pick<OrchestrationCommand, "type">,
+  thread: Pick<OrchestrationThread, "id" | "activities">,
+) {
+  const pending = resolvePendingProviderHandoff(thread.activities);
+  return pending === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' is still switching to '${pending.targetModelSelection.provider}'. Wait for the provider handoff to finish.`,
+        }),
+      );
+}
+
 function validateProviderHandoff(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   thread: OrchestrationThread,
@@ -163,11 +185,13 @@ function validateProviderHandoff(
       ? "A provider handoff needs a target model selection."
       : target.provider === thread.modelSelection.provider
         ? `Thread '${command.threadId}' already runs on '${target.provider}'; hand off to a new thread instead.`
-        : thread.session?.status === "starting" || thread.session?.status === "running"
+        : threadHasInFlightTurn(thread)
           ? `Thread '${command.threadId}' still has a running turn.`
           : thread.hasPendingApprovals || thread.hasPendingUserInput
             ? `Thread '${command.threadId}' is waiting for an approval or an answer.`
-            : null;
+            : threadHasCheckpointRevertInProgress(thread)
+              ? checkpointRevertInProgressDetail(thread.id)
+              : null;
   return detail === null
     ? Effect.void
     : Effect.fail(new OrchestrationCommandInvariantError({ commandType: command.type, detail }));
@@ -183,6 +207,51 @@ const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload">
   correlationId: null,
   metadata: {},
 };
+
+function providerHandoffCancellationEvent(
+  thread: OrchestrationThread | undefined,
+  command: OrchestrationCommand,
+  occurredAt: string,
+): Omit<OrchestrationEvent, "sequence"> | null {
+  const pending = thread ? resolvePendingProviderHandoff(thread.activities) : null;
+  if (!thread || !pending || pending.cancellationRequestedAt !== undefined) return null;
+  const requestId = EventId.makeUnsafe("provider-handoff-requested:" + pending.handoffCommandId);
+  const requested = thread.activities.find((activity) => activity.id === requestId);
+  // Update the server-owned request in the same transaction as cancellation.
+  // It remains pending until native cleanup/failure settlement finishes, but
+  // completion cannot win a race with a stop or archive followed by unarchive.
+  // The journal retains the original request and this update separately.
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: thread.id,
+      occurredAt,
+      commandId: command.commandId,
+    }),
+    type: "thread.activity-appended",
+    payload: {
+      threadId: thread.id,
+      activity: {
+        id: requestId,
+        tone: "info",
+        kind: PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND,
+        summary: "Cancelling provider switch",
+        payload: {
+          handoffCommandId: pending.handoffCommandId,
+          sourceModelSelection: toProviderHandoffActivityModelSelection(
+            pending.sourceModelSelection,
+          ),
+          targetModelSelection: toProviderHandoffActivityModelSelection(
+            pending.targetModelSelection,
+          ),
+          cancellationRequestedAt: occurredAt,
+        },
+        turnId: null,
+        createdAt: requested?.createdAt ?? occurredAt,
+      },
+    },
+  };
+}
 
 function withEventBase(
   input: Pick<OrchestrationCommand, "commandId"> & {
@@ -1470,7 +1539,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Side chat '${command.threadId}' still has a pending interaction.`,
         });
       }
-      return {
+      const expiredEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1484,6 +1553,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           expiredAt: command.expiredAt,
         },
       };
+      const cancellation = providerHandoffCancellationEvent(thread, command, command.expiredAt);
+      return cancellation ? [cancellation, expiredEvent] : expiredEvent;
     }
 
     case "thread.delete": {
@@ -1544,10 +1615,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         .map((thread) => thread.id);
       return [...subagentThreadIds, command.threadId].flatMap(
         (threadId): Array<Omit<OrchestrationEvent, "sequence">> => {
-          const review = readModel.threads.find(
-            (entry) => entry.id === threadId,
-          )?.claudeCacheReview;
+          const thread = readModel.threads.find((entry) => entry.id === threadId);
+          const review = thread?.claudeCacheReview;
           const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+          const cancellation = providerHandoffCancellationEvent(thread, command, occurredAt);
+          if (cancellation) events.push(cancellation);
           if (review) {
             events.push({
               ...withEventBase({
@@ -1615,6 +1687,36 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
+      const workspacePatch = resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread);
+      const workspaceChanged = (
+        [
+          "envMode",
+          "branch",
+          "worktreePath",
+          "workingDirectory",
+          "associatedWorktreePath",
+          "associatedWorktreeBranch",
+          "associatedWorktreeRef",
+        ] as const
+      ).some(
+        (key) =>
+          workspacePatch[key] !== undefined &&
+          workspacePatch[key] !== (thread[key] ?? (key === "envMode" ? "local" : null)),
+      );
+      // Async target startup has already captured this workspace. Matching
+      // metadata writes are safe; moving it must wait for the same handoff gate.
+      if (
+        command.modelSelection !== undefined ||
+        command.providerHandoff === true ||
+        workspaceChanged
+      ) {
+        yield* validateNoPendingProviderHandoff(command, thread);
+      }
+      if (command.providerHandoff === true) {
+        yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+        yield* validateSidechatExecutionAvailable(command, thread);
+      }
       const expectedSnoozedUntil = command.expectedSnoozedUntil;
       const expiresSnooze = expectedSnoozedUntil !== undefined;
       if (command.snoozedUntil != null || expiresSnooze) {
@@ -1639,7 +1741,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
-      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
       if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
@@ -1649,7 +1750,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         yield* validateProviderHandoff(command, thread);
       }
       const occurredAt = nowIso();
-      return {
+      const metaUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1663,7 +1764,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
-          ...resolveThreadWorkspaceMetadataPatch(project?.kind, command, thread),
+          ...workspacePatch,
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           ...(command.isSettled !== undefined
             ? { settledAt: command.isSettled ? occurredAt : null }
@@ -1698,6 +1799,144 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      if (command.providerHandoff !== true || command.modelSelection === undefined) {
+        return metaUpdatedEvent;
+      }
+      const requestedActivityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.makeUnsafe(`provider-handoff-requested:${command.commandId}`),
+            tone: "info",
+            kind: PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND,
+            summary: `Switching to ${PROVIDER_DISPLAY_NAMES[command.modelSelection.provider]}`,
+            payload: {
+              handoffCommandId: command.commandId,
+              sourceModelSelection: toProviderHandoffActivityModelSelection(thread.modelSelection),
+              targetModelSelection: toProviderHandoffActivityModelSelection(command.modelSelection),
+            },
+            turnId: null,
+            createdAt: occurredAt,
+          },
+        },
+      };
+      // Both records commit in the same transaction. The pending activity is
+      // projected before the provider intent is delivered to its consumer.
+      return [requestedActivityEvent, metaUpdatedEvent];
+    }
+
+    case "thread.provider.handoff.settle": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const pending = resolvePendingProviderHandoff(thread.activities);
+      if (
+        pending?.handoffCommandId !== command.handoffCommandId ||
+        !providerHandoffModelSelectionsEqual(
+          pending.sourceModelSelection,
+          command.sourceModelSelection,
+        ) ||
+        !providerHandoffModelSelectionsEqual(
+          pending.targetModelSelection,
+          command.targetModelSelection,
+        ) ||
+        !providerHandoffModelSelectionsEqual(thread.modelSelection, command.targetModelSelection)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' no longer owns provider handoff '${command.handoffCommandId}'.`,
+        });
+      }
+      if (command.outcome === "completed") {
+        if (pending.cancellationRequestedAt !== undefined) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This provider handoff was cancelled before completion.",
+          });
+        }
+        yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+        yield* validateSidechatExecutionAvailable(command, thread);
+      }
+      // Rename/pin commands remain available while a provider starts. Never
+      // move their newer thread timestamp backward to the request's time.
+      const occurredAt = new Date(
+        Math.max(Date.now(), Date.parse(command.createdAt), Date.parse(thread.updatedAt)),
+      ).toISOString();
+      const completed = command.outcome === "completed";
+      const source = command.sourceModelSelection;
+      const target = command.targetModelSelection;
+      const describe = (selection: typeof source) =>
+        `${PROVIDER_DISPLAY_NAMES[selection.provider]} (${selection.model})`;
+      const metaUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: thread.id,
+          ...(completed
+            ? {
+                handoff: {
+                  sourceThreadId: thread.id,
+                  sourceProvider: source.provider,
+                  importedAt: occurredAt,
+                  bootstrapStatus: "completed" as const,
+                },
+              }
+            : { modelSelection: source }),
+          updatedAt: occurredAt,
+        },
+      };
+      const activityEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: thread.id,
+          activity: {
+            id: EventId.makeUnsafe(
+              `${completed ? "provider-handoff" : "provider-handoff-failed"}:${command.handoffCommandId}`,
+            ),
+            tone: completed ? "info" : "error",
+            kind: completed ? "provider.handoff" : "provider.handoff.failed",
+            summary: completed
+              ? `Handed off from ${describe(source)} to ${describe(target)}`
+              : `Handoff to ${describe(target)} failed; the thread stays on ${describe(source)}.`,
+            payload: {
+              handoffCommandId: command.handoffCommandId,
+              sourceProvider: source.provider,
+              sourceModel: source.model,
+              targetProvider: target.provider,
+              targetModel: target.model,
+              sourceModelSelection: toProviderHandoffActivityModelSelection(source),
+              targetModelSelection: toProviderHandoffActivityModelSelection(target),
+              ...(completed
+                ? {
+                    contextText: command.contextText,
+                    contextCharacters: command.contextText?.length ?? 0,
+                  }
+                : { detail: command.detail ?? "The provider handoff could not finish." }),
+            },
+            turnId: null,
+            createdAt: occurredAt,
+          },
+        },
+      };
+      // Restore/complete the selection and clear admission atomically. No
+      // client command can leave an outcome without its corresponding state.
+      return [metaUpdatedEvent, activityEvent];
     }
 
     case "thread.pinned-message.add": {
@@ -1812,6 +2051,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       yield* validateAutoRuntimeMode(command, thread.modelSelection, command.runtimeMode);
       const occurredAt = nowIso();
       return {
@@ -1836,6 +2076,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       const occurredAt = nowIso();
       return {
         ...withEventBase({
@@ -1860,6 +2101,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, targetThread);
       yield* validateSidechatExecutionAvailable(command, targetThread);
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
@@ -2212,6 +2454,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.claude-cache.respond": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      yield* validateNoPendingProviderHandoff(command, thread);
       const review = thread.claudeCacheReview;
       if (
         !review ||
@@ -2255,6 +2498,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       yield* validateSidechatExecutionAvailable(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
@@ -2320,8 +2564,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      const cancellation = providerHandoffCancellationEvent(thread, command, command.createdAt);
       if ((thread.goal ?? "").trim().length === 0 || thread.goalPausedAt != null) {
-        return interruptEvent;
+        return cancellation ? [cancellation, interruptEvent] : interruptEvent;
       }
 
       const pausedAt = nowIso();
@@ -2340,6 +2585,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [
+        ...(cancellation ? [cancellation] : []),
         pauseEvent,
         {
           ...interruptEvent,
@@ -2468,6 +2714,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasInFlightTurn(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2528,6 +2775,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2570,6 +2818,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       yield* validateSidechatExecutionAvailable(command, thread);
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
@@ -2673,7 +2922,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       const review = thread.claudeCacheReview;
-      return review
+      const cancellation = providerHandoffCancellationEvent(thread, command, command.createdAt);
+      const events = review
         ? [
             {
               ...withEventBase({
@@ -2687,7 +2937,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             },
             stopEvent,
           ]
-        : stopEvent;
+        : [stopEvent];
+      return cancellation ? [cancellation, ...events] : review ? events : stopEvent;
     }
 
     case "thread.goal.continue": {
@@ -2696,6 +2947,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* validateNoPendingProviderHandoff(command, thread);
       yield* validateSidechatExecutionAvailable(command, thread);
       return {
         ...withEventBase({
@@ -3061,12 +3313,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      yield* (command.requireUnarchived ? requireThreadNotArchived : requireThread)({
+      const thread = yield* (command.requireUnarchived ? requireThreadNotArchived : requireThread)({
         readModel,
         command,
         threadId: command.threadId,
       });
       const activity = command.activity;
+      if (activity.kind === PROVIDER_HANDOFF_REQUESTED_ACTIVITY_KIND) {
+        // Only the server can append this kind. Legacy unclaimed handoff
+        // intents reserve admission here before any provider I/O; a newer
+        // request or model selection must never be overwritten by recovery.
+        yield* validateNoPendingProviderHandoff(command, thread);
+        const pending = resolvePendingProviderHandoff([activity]);
+        if (
+          !pending ||
+          !providerHandoffModelSelectionsEqual(thread.modelSelection, pending.targetModelSelection)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${thread.id}' no longer owns the requested provider handoff target.`,
+          });
+        }
+      }
       const requestId =
         typeof activity.payload === "object" &&
         activity.payload !== null &&

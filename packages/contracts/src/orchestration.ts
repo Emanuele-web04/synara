@@ -1883,6 +1883,32 @@ const ThreadActivityAppendCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Handoff activities carry the server's durable admission/settlement state.
+// Reserve IDs too: an ordinary kind with a protected ID could otherwise replace
+// the pending row through the projection's activity upsert.
+const ClientThreadActivityAppendCommand = ThreadActivityAppendCommand.check(
+  Schema.makeFilter(
+    ({ activity }) =>
+      activity.kind !== "provider.handoff" &&
+      !activity.kind.startsWith("provider.handoff.") &&
+      !/^provider-handoff(?:-requested|-failed)?:/.test(activity.id),
+    { message: "Provider handoff activities can only be recorded by the server." },
+  ),
+);
+
+const ThreadProviderHandoffSettleCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider.handoff.settle"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  handoffCommandId: CommandId,
+  sourceModelSelection: ModelSelection,
+  targetModelSelection: ModelSelection,
+  outcome: Schema.Literals(["completed", "failed"]),
+  contextText: Schema.NullOr(Schema.String),
+  detail: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   SpaceCreateCommand,
   SpaceMetaUpdateCommand,
@@ -1914,7 +1940,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadMessageEditAndResendCommand,
-  ThreadActivityAppendCommand,
+  ClientThreadActivityAppendCommand,
   ThreadSessionStopCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
@@ -1951,7 +1977,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadMessageEditAndResendCommand,
-  ThreadActivityAppendCommand,
+  ClientThreadActivityAppendCommand,
   ThreadSessionStopCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
@@ -2086,6 +2112,7 @@ const ThreadSidechatExpireCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadProviderHandoffSettleCommand,
   ThreadClaudeCacheCompactedCommand,
   ThreadClaudeCacheSetCommand,
   ThreadSessionSetCommand,

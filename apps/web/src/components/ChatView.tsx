@@ -27,6 +27,7 @@ import {
 } from "@synara/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { getModelCapabilities, resolveApiModelId } from "@synara/shared/model";
+import { resolvePendingProviderHandoff } from "@synara/shared/providerHandoff";
 import {
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
   resolveThreadBranchSourceCwd,
@@ -1055,6 +1056,10 @@ export default function ChatView({
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const pendingProviderHandoff = useMemo(
+    () => resolvePendingProviderHandoff(threadActivities),
+    [threadActivities],
+  );
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
     messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -1829,7 +1834,8 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting || isComposerApprovalState || isSidechatExpired || pendingProviderHandoff !== null;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -6189,15 +6195,24 @@ export default function ChatView({
             ) : null}
             {emptyLandingControls}
           </div>
+          {pendingProviderHandoff !== null ? (
+            <p role="status" className="px-4 pb-2 text-ui-xs text-muted-foreground">
+              {pendingProviderHandoff.cancellationRequestedAt !== undefined
+                ? "Cancelling switch to "
+                : "Switching to "}
+              {PROVIDER_DISPLAY_NAMES[pendingProviderHandoff.targetModelSelection.provider]}…
+            </p>
+          ) : null}
           <div
             className={cn(
               COMPOSER_INPUT_SHELL_CLASS_NAME,
               composerProviderState.composerFrameClassName,
               composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
-              isSidechatExpired && "pointer-events-none opacity-60",
+              (isSidechatExpired || pendingProviderHandoff !== null) &&
+                "pointer-events-none opacity-60",
               isThreadDragOverComposer && "ring-1 ring-info/65",
             )}
-            aria-disabled={isSidechatExpired}
+            aria-disabled={isSidechatExpired || pendingProviderHandoff !== null}
             {...threadMentionDropzoneProps}
           >
             <div
@@ -6463,6 +6478,7 @@ export default function ChatView({
                     phase,
                     busy: isSendBusy,
                     connecting: isConnecting,
+                    handoffPending: pendingProviderHandoff !== null,
                     expired: isSidechatExpired,
                     hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                     preparingImages: isPreparingComposerImages,
