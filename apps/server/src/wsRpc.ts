@@ -479,8 +479,9 @@ export function resolveNormalizedWorkItemCwd(
   paths: Pick<typeof NodePath, "parse" | "resolve" | "isAbsolute" | "normalize"> = NodePath,
 ): string | null {
   const root = paths.parse(rawCwd).root;
-  const stripped = rawCwd.replace(/[\\/]+$/, "");
-  const candidate = root && stripped === root.replace(/[\\/]+$/, "") ? root : stripped || rawCwd;
+  const separators = paths.normalize("/") === "\\" ? /[\\/]+$/ : /\/+$/;
+  const stripped = rawCwd.replace(separators, "");
+  const candidate = root && stripped === root.replace(separators, "") ? root : stripped || rawCwd;
   const resolved = paths.resolve(candidate);
   return paths.isAbsolute(candidate) && resolved === paths.normalize(candidate) ? resolved : null;
 }

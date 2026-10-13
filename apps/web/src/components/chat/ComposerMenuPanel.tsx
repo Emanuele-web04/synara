@@ -42,7 +42,6 @@ export type ComposerMenuPanelRow = {
   /** Right-aligned metadata (path, scope, shortcut, chevron, check). */
   trailing?: ReactNode;
   disabled?: boolean;
-  hint?: string | undefined;
 };
 
 export type ComposerMenuPanelGroup = {
@@ -142,7 +141,6 @@ const ComposerMenuPanelItem = memo(function ComposerMenuPanelItem({
       ref={rowRef}
       value={row.id}
       disabled={row.disabled ?? false}
-      title={row.hint}
       className={cn(
         COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
         isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,

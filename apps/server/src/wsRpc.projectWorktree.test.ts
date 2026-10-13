@@ -106,3 +106,8 @@ it.each(["C:\\", "C:/", "C:\\\\", "\\\\server\\share\\"])(
 it("rejects drive-relative work item cwd paths", () => {
   expect(resolveNormalizedWorkItemCwd("C:", path.win32)).toBeNull();
 });
+
+it("preserves literal trailing backslashes in POSIX workspaces", () => {
+  expect(resolveNormalizedWorkItemCwd("/repos/foo\\", path.posix)).toBe("/repos/foo\\");
+  expect(resolveNormalizedWorkItemCwd("/repos/foo\\/", path.posix)).toBe("/repos/foo\\");
+});

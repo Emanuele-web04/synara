@@ -499,6 +499,6 @@ it("shows the unavailable GitHub action disabled with its server-provided hint",
   const row = page.getByRole("option", { name: "Issue or pull request" });
   await expect.element(row).toHaveAttribute("aria-disabled", "true");
   await expect
-    .element(row)
-    .toHaveAttribute("title", "Run gh auth login to attach GitHub work items.");
+    .element(page.getByText("Run gh auth login to attach GitHub work items.", { exact: true }))
+    .toBeVisible();
 });

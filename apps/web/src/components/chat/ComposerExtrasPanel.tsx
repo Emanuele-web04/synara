@@ -136,7 +136,6 @@ export function ComposerExtrasPanel(props: {
                       icon: <ListTodoIcon className={GLYPH} />,
                       title: "Issue or pull request",
                       disabled: !props.onAttachWorkItems,
-                      hint: props.workItemsDisabledHint,
                     },
                   ]
                 : []),
@@ -366,6 +365,13 @@ export function ComposerExtrasPanel(props: {
       />
       <ComposerMenuPanel
         groups={groups}
+        status={
+          !props.onAttachWorkItems && props.workItemsDisabledHint ? (
+            <p className="px-3 pb-2 text-ui-sm text-muted-foreground">
+              {props.workItemsDisabledHint}
+            </p>
+          ) : null
+        }
         activeRowId={highlightedRowId}
         onHighlightRow={setActiveRowId}
         onSelectRow={selectRow}
