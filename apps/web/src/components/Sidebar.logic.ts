@@ -186,7 +186,7 @@ type SidebarProject = {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
-type SidebarThreadSortInput = {
+export type SidebarThreadSortInput = {
   createdAt: string;
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
@@ -1350,22 +1350,57 @@ function threadSortAttentionRank(thread: SidebarThreadSortInput): number {
   return 0;
 }
 
+// Everything that decides a thread's sidebar position, captured as plain
+// numbers so the order can be held while the pointer is over the sidebar.
+export type SidebarThreadSortKey = {
+  readonly attentionRank: number;
+  readonly timestamp: number;
+};
+
+export type SidebarThreadSortOptions = {
+  // Float working and unread chats above the timestamp order. Defaults to on;
+  // "created_at" ignores it and stays a plain creation-time list.
+  readonly attentionFirst?: boolean | undefined;
+  // Keys captured earlier (see useHeldSidebarThreadSortKeys). A thread listed
+  // here keeps its captured position; others sort by their live key.
+  readonly heldKeys?: ReadonlyMap<string, SidebarThreadSortKey> | undefined;
+};
+
+export function getSidebarThreadSortKey(
+  thread: SidebarThreadSortInput,
+  sortOrder: SidebarThreadSortOrder,
+  attentionFirst: boolean,
+): SidebarThreadSortKey {
+  return {
+    attentionRank:
+      attentionFirst && sortOrder !== "created_at" ? threadSortAttentionRank(thread) : 0,
+    timestamp: getThreadSortTimestamp(thread, sortOrder),
+  };
+}
+
 export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarThreadSortInput>(
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,
+  options?: SidebarThreadSortOptions,
 ): T[] {
-  return threads.toSorted((left, right) => {
-    if (sortOrder !== "created_at") {
-      const byAttentionRank = threadSortAttentionRank(right) - threadSortAttentionRank(left);
+  const attentionFirst = options?.attentionFirst ?? true;
+  const heldKeys = options?.heldKeys;
+  return threads
+    .map((thread) => ({
+      thread,
+      key: heldKeys?.get(thread.id) ?? getSidebarThreadSortKey(thread, sortOrder, attentionFirst),
+    }))
+    .toSorted((left, right) => {
+      const byAttentionRank = right.key.attentionRank - left.key.attentionRank;
       if (byAttentionRank !== 0) return byAttentionRank;
-    }
-    const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
-    const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
-    const byTimestamp =
-      rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
-    if (byTimestamp !== 0) return byTimestamp;
-    return right.id.localeCompare(left.id);
-  });
+      const rightTimestamp = right.key.timestamp;
+      const leftTimestamp = left.key.timestamp;
+      const byTimestamp =
+        rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+      if (byTimestamp !== 0) return byTimestamp;
+      return right.thread.id.localeCompare(left.thread.id);
+    })
+    .map((entry) => entry.thread);
 }
 
 export function getFallbackThreadIdAfterDelete<
@@ -1374,9 +1409,10 @@ export function getFallbackThreadIdAfterDelete<
   threads: readonly T[];
   deletedThreadId: T["id"];
   sortOrder: SidebarThreadSortOrder;
+  attentionFirst?: boolean;
   deletedThreadIds?: ReadonlySet<T["id"]>;
 }): T["id"] | null {
-  const { deletedThreadId, deletedThreadIds, sortOrder, threads } = input;
+  const { attentionFirst, deletedThreadId, deletedThreadIds, sortOrder, threads } = input;
   const deletedThread = threads.find((thread) => thread.id === deletedThreadId);
   if (!deletedThread) {
     return null;
@@ -1391,6 +1427,7 @@ export function getFallbackThreadIdAfterDelete<
           !deletedThreadIds?.has(thread.id),
       ),
       sortOrder,
+      { attentionFirst },
     )[0]?.id ?? null
   );
 }
