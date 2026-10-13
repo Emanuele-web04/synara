@@ -39,6 +39,8 @@ Release inputs passed frozen dependency installation with Node 24.13.1 and Bun 1
 
 The exact tag workflow remains the final publication gate for the full quality suite, all three server shards, four native packages, provenance, macOS signing/notarization and Intel startup, Windows Defender/startup, and public release assets. Windows uses the version-scoped unsigned policy; unsigned does not bypass qualification.
 
+Prepublication macOS attempts on `775b3359e18bb9429fb59a3dd3e5ef6744e39a57` exposed repeated Apple ticket-delivery connection losses after accepted notarization. The packaging correction retries only `stapler` exit 68 with `NSURLErrorDomain Code=-1005`, at most four attempts with bounded backoff, including provenance validation. Other failures still stop publication. Three regression cases failed on the previous command runner; all 45 focused notarization, DMG, provenance and checkpoint tests passed after the repair. The corrected candidate requires fresh native qualification; earlier installers are not relabeled or reused across source commits.
+
 Existing Chrome performance measurements predate the final row-height cache repair and are not presented as v1.0.4 speedup percentages. The bounded-estimator microbenchmark measures the helper only. Manual installed-app upgrades, credentialed live-provider sessions and application-specific Computer Use outcomes are not established by source tests or packaged startup checks.
 
 ## 1.0.3 — 2026-10-11
