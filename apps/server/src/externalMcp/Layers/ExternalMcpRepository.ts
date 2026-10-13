@@ -15,6 +15,8 @@ import {
   type ExternalMcpRepositoryShape,
   type ExternalMcpTaskRecord,
   type ReserveExternalMcpOperationResult,
+  type ExternalMcpFollowupRecord,
+  type ExternalMcpFollowupRun,
 } from "../Services/ExternalMcpRepository.ts";
 
 interface IntegrationRow {
@@ -703,7 +705,166 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
       Effect.mapError(repositoryError("getTask")),
     );
 
+  const selectFollowup = (where: ReturnType<typeof sql.literal>) =>
+    sql<ExternalMcpFollowupRecord>`
+      SELECT run_id AS "runId", integration_id AS "integrationId", request_id AS "requestId",
+        fingerprint, task_operation_id AS "taskOperationId", thread_id AS "threadId",
+        message_id AS "messageId", command_id AS "commandId", mode, status,
+        error_code AS "errorCode", created_at AS "createdAt"
+      FROM external_mcp_task_followups WHERE ${where}
+    `;
+
+  const getFollowupByRequest: ExternalMcpRepositoryShape["getFollowupByRequest"] = (input) =>
+    selectFollowup(
+      sql`integration_id = ${input.integrationId} AND request_id = ${input.requestId}`,
+    ).pipe(
+      Effect.map((rows) => rows[0] ?? null),
+      Effect.mapError(repositoryError("getFollowupByRequest")),
+    );
+
+  const reserveFollowup: ExternalMcpRepositoryShape["reserveFollowup"] = (input) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const active = yield* sql<{ readonly limit: number | null }>`
+        SELECT concurrency_limit AS "limit" FROM external_mcp_integrations
+        WHERE integration_id = ${input.integrationId} AND audience = 'synara.external-mcp'
+          AND credential_hash IS NOT NULL AND revoked_at IS NULL AND expires_at > ${input.createdAt}
+          AND EXISTS (SELECT 1 FROM json_each(capabilities_json) WHERE value = 'tasks:create')
+      `;
+          if (!active[0]) return { kind: "inactive" } as const;
+          const existing = (yield* selectFollowup(
+            sql`integration_id = ${input.integrationId} AND request_id = ${input.requestId}`,
+          ))[0];
+          if (existing)
+            return {
+              kind: existing.fingerprint === input.fingerprint ? "replay" : "idempotency_conflict",
+              followup: existing,
+            } as const;
+          const owned = yield* sql`
+        SELECT 1 FROM external_mcp_tasks AS tasks
+        JOIN external_mcp_operations AS operations ON operations.operation_id = tasks.operation_id
+        WHERE tasks.integration_id = ${input.integrationId} AND tasks.thread_id = ${input.threadId}
+          AND tasks.operation_id = ${input.taskOperationId} AND tasks.status = 'created'
+          AND operations.status = 'completed'
+      `;
+          if (owned.length === 0) return { kind: "task_denied" } as const;
+          const capacity = (yield* sql<{
+            readonly activeCount: number;
+            readonly alreadyClaimed: number;
+          }>`
+        SELECT COUNT(*) AS "activeCount",
+          COALESCE(MAX(operation_id = ${input.taskOperationId}), 0) AS "alreadyClaimed"
+        FROM external_mcp_active_capacity_claims WHERE integration_id = ${input.integrationId}
+      `)[0]!;
+          if (
+            active[0].limit !== null &&
+            !capacity.alreadyClaimed &&
+            capacity.activeCount >= active[0].limit
+          ) {
+            return {
+              kind: "concurrency_limited",
+              activeCount: capacity.activeCount,
+              limit: active[0].limit,
+            } as const;
+          }
+          yield* sql`
+        INSERT INTO external_mcp_task_followups (
+          run_id, integration_id, request_id, fingerprint, task_operation_id, thread_id,
+          message_id, command_id, mode, status, error_code, created_at
+        ) VALUES (
+          ${input.runId}, ${input.integrationId}, ${input.requestId}, ${input.fingerprint},
+          ${input.taskOperationId}, ${input.threadId}, ${input.messageId}, ${input.commandId},
+          ${input.mode}, 'reserved', NULL, ${input.createdAt}
+        )
+      `;
+          return {
+            kind: "reserved",
+            followup: { ...input, status: "reserved", errorCode: null },
+          } as const;
+        }),
+      )
+      .pipe(Effect.mapError(repositoryError("reserveFollowup")));
+
+  const getFollowupRun: ExternalMcpRepositoryShape["getFollowupRun"] = (input) =>
+    sql<Omit<ExternalMcpFollowupRun, "blocked"> & { readonly blocked: number | null }>`
+      SELECT states.run_id AS "runId", states.thread_id AS "threadId", states.turn_id AS "turnId",
+        states.state, states.blocked, states.error_code AS "errorCode"
+      FROM external_mcp_task_followup_states AS states
+      JOIN external_mcp_task_followups AS followups ON followups.run_id = states.run_id
+      WHERE followups.integration_id = ${input.integrationId}
+        AND followups.thread_id = ${input.threadId} AND followups.run_id = ${input.runId}
+    `.pipe(
+      Effect.map((rows) => (rows[0] ? { ...rows[0], blocked: rows[0].blocked === 1 } : null)),
+      Effect.mapError(repositoryError("getFollowupRun")),
+    );
+
+  const markFollowupDispatching: ExternalMcpRepositoryShape["markFollowupDispatching"] = (runId) =>
+    sql`
+      UPDATE external_mcp_task_followups SET status = 'dispatching'
+      WHERE run_id = ${runId} AND status = 'reserved'
+        AND EXISTS (
+          SELECT 1 FROM external_mcp_integrations AS integrations
+          WHERE integrations.integration_id = external_mcp_task_followups.integration_id
+            AND integrations.revoked_at IS NULL AND integrations.credential_hash IS NOT NULL
+            AND integrations.expires_at > ${new Date().toISOString()}
+        )
+      RETURNING run_id
+    `.pipe(
+      Effect.map((rows) => rows.length === 1),
+      Effect.mapError(repositoryError("markFollowupDispatching")),
+    );
+
+  const settleFollowupDispatch: ExternalMcpRepositoryShape["settleFollowupDispatch"] = (input) =>
+    sql`
+      UPDATE external_mcp_task_followups
+      SET status = CASE
+            WHEN ${input.accepted ? 1 : 0} OR (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'accepted' THEN 'accepted'
+            WHEN ${input.notAttempted ? 1 : 0} OR (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'rejected' THEN 'failed'
+            ELSE 'dispatching' END,
+          error_code = CASE
+            WHEN ${input.accepted ? 1 : 0} OR (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'accepted' THEN NULL
+            WHEN ${input.notAttempted ? 1 : 0} THEN 'dispatch_not_attempted'
+            WHEN (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'rejected' THEN 'dispatch_rejected'
+            ELSE 'dispatch_uncertain' END
+      WHERE run_id = ${input.runId} AND status = 'dispatching'
+    `.pipe(Effect.asVoid, Effect.mapError(repositoryError("settleFollowupDispatch")));
+
+  const failReservedFollowup: ExternalMcpRepositoryShape["failReservedFollowup"] = (runId) =>
+    sql`
+      UPDATE external_mcp_task_followups SET status = 'failed', error_code = 'dispatch_not_attempted'
+      WHERE run_id = ${runId} AND status = 'reserved'
+    `.pipe(Effect.asVoid, Effect.mapError(repositoryError("failReservedFollowup")));
+
+  const recoverFollowups: ExternalMcpRepositoryShape["recoverFollowups"] = () =>
+    sql`
+      UPDATE external_mcp_task_followups
+      SET status = CASE
+            WHEN (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'accepted' THEN 'accepted'
+            ELSE 'failed' END,
+          error_code = CASE
+            WHEN (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'accepted' THEN NULL
+            WHEN status = 'reserved' THEN 'dispatch_not_attempted'
+            WHEN (SELECT status FROM orchestration_command_receipts
+              WHERE command_id = external_mcp_task_followups.command_id) = 'rejected' THEN 'dispatch_rejected'
+            ELSE 'dispatch_not_committed' END
+      WHERE status IN ('reserved', 'dispatching')
+    `.pipe(Effect.asVoid, Effect.mapError(repositoryError("recoverFollowups")));
+
   return {
+    reserveFollowup,
+    getFollowupByRequest,
+    getFollowupRun,
+    markFollowupDispatching,
+    settleFollowupDispatch,
+    failReservedFollowup,
+    recoverFollowups,
     listActiveProjects,
     createIntegration,
     updateConcurrencyLimit,
