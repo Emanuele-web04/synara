@@ -1054,6 +1054,16 @@ export default function ChatView({
   // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
+  const isNativeSubagentMessagingUnavailable = Boolean(
+    activeThread &&
+    (activeThread.creationSource === "provider_native" ||
+      activeThread.id.startsWith("subagent:")) &&
+    ((activeThread.session?.provider ?? activeThread.modelSelection.provider) === "codex" ||
+      activeThread.session?.status !== "running" ||
+      activeThread.session.activeTurnId === null ||
+      activeLatestTurnState !== "running" ||
+      activeLatestTurnId !== activeThread.session.activeTurnId),
+  );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
     latestTurn: activeLatestTurn,
@@ -1829,7 +1839,11 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting ||
+    isComposerApprovalState ||
+    isSidechatExpired ||
+    isNativeSubagentMessagingUnavailable;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -4683,6 +4697,10 @@ export default function ChatView({
   }, [claudeSwitchKey]);
   const onSend = useCallback(
     async (...args: Parameters<typeof submitComposerTurn>) => {
+      if (isNativeSubagentMessagingUnavailable) {
+        args[0]?.preventDefault();
+        return false;
+      }
       // Keep the choice captured for this send: later picker changes belong to the
       // next message. Automatic queue drains must not acknowledge a new draft choice.
       const switchKeyForSend = claudeSwitchKey;
@@ -4692,7 +4710,7 @@ export default function ChatView({
       }
       return accepted;
     },
-    [claudeSwitchKey, submitComposerTurn],
+    [claudeSwitchKey, isNativeSubagentMessagingUnavailable, submitComposerTurn],
   );
   const showClaudeModelSwitchNote =
     claudeSwitchKey !== null &&
@@ -6360,21 +6378,23 @@ export default function ChatView({
                     ? { onCollapsePastedText: handleCollapsePastedText }
                     : {})}
                   placeholder={
-                    isComposerApprovalState
-                      ? "Resolve this approval request to continue"
-                      : activePendingProgress
-                        ? activePendingProgress.activeQuestion?.options.length === 0
-                          ? "Type your answer to continue"
-                          : "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : activeThread?.parentThreadId
-                            ? "Message this subagent"
-                            : hasLiveTurn
-                              ? "Ask for follow-up changes"
-                              : standaloneSidechatContext
-                                ? `Ask about this ${standaloneSidechatItemNoun}`
-                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                    isNativeSubagentMessagingUnavailable
+                      ? "This subagent is read-only"
+                      : isComposerApprovalState
+                        ? "Resolve this approval request to continue"
+                        : activePendingProgress
+                          ? activePendingProgress.activeQuestion?.options.length === 0
+                            ? "Type your answer to continue"
+                            : "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : activeThread?.parentThreadId
+                              ? "Message this subagent"
+                              : hasLiveTurn
+                                ? "Ask for follow-up changes"
+                                : standaloneSidechatContext
+                                  ? `Ask about this ${standaloneSidechatItemNoun}`
+                                  : "Ask anything, @tag files/folders, or use / to show available commands"
                   }
                   disabled={isComposerEditorDisabled}
                 />
@@ -6463,7 +6483,7 @@ export default function ChatView({
                     phase,
                     busy: isSendBusy,
                     connecting: isConnecting,
-                    expired: isSidechatExpired,
+                    expired: isSidechatExpired || isNativeSubagentMessagingUnavailable,
                     hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                     preparingImages: isPreparingComposerImages,
                     preparingWorktree: isPreparingWorktree,

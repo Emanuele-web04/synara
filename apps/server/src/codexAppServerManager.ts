@@ -5433,10 +5433,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       method === "thread/closed" ||
       method === "thread/compacted" ||
       method === "thread/name/updated" ||
-      method === "thread/tokenUsage/updated" ||
-      method === "turn/started" ||
-      method === "turn/completed" ||
-      method === "turn/aborted"
+      method === "thread/tokenUsage/updated"
     );
   }
 

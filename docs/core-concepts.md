@@ -251,6 +251,7 @@ not offer a generic Retry because an error message alone cannot prove that resen
 Messages queued above the composer while a turn runs are sent one by one after it completes.
 If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
 stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+if the provider session stopped, it starts the session again once the server connection is open.
 **Edit** moves the next queued message back into the composer. Sending a new message
 yourself goes first, and the queue resumes once that turn completes. The pause is per
 thread and survives a reload. A message already shown in the conversation was accepted by

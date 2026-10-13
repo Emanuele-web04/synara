@@ -784,6 +784,72 @@ it.effect(
 );
 
 const lifecycleManager = new FakeCodexManager();
+it.effect("keeps the parent idle watchdog armed when a native child starts", () =>
+  Effect.gen(function* () {
+    const manager = new FakeCodexManager();
+    const parentThread = asThreadId("watchdog-parent");
+    const parentTurn = asTurnId("watchdog-parent-turn");
+    let now = 1_000;
+    let tick: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      callback: () => void,
+      delay: number,
+    ) => {
+      if (delay === 15_000) tick = callback;
+      return originalSetInterval(callback, delay);
+    }) as typeof setInterval);
+    const clockSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const activeSpy = vi
+      .spyOn(manager, "isTurnActive")
+      .mockImplementation((threadId, turnId) => threadId === parentThread && turnId === parentTurn);
+    vi.spyOn(manager, "isAwaitingHumanResponse").mockReturnValue(false);
+    const abandon = vi.spyOn(manager, "abandonTurn").mockResolvedValue(undefined);
+    try {
+      yield* Effect.gen(function* () {
+        yield* CodexAdapter;
+        manager.emit("event", {
+          id: asEventId("watchdog-parent-start"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "turn/started",
+          threadId: parentThread,
+          turnId: parentTurn,
+          payload: { turn: { id: parentTurn } },
+        } satisfies ProviderEvent);
+        manager.emit("event", {
+          id: asEventId("watchdog-child-start"),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method: "turn/started",
+          threadId: parentThread,
+          turnId: asTurnId("watchdog-child-turn"),
+          providerThreadId: "native-child",
+          providerParentThreadId: "native-parent",
+          payload: { turn: { id: "watchdog-child-turn" } },
+        } satisfies ProviderEvent);
+        now += 900_001;
+        assert.ok(tick);
+        tick();
+        assert.deepStrictEqual(activeSpy.mock.calls.at(-1), [parentThread, parentTurn]);
+        assert.equal(abandon.mock.calls[0]?.[1], parentTurn);
+      }).pipe(
+        Effect.provide(
+          makeCodexAdapterLive({ manager }).pipe(
+            Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+            Layer.provideMerge(providerSessionDirectoryTestLayer),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+    } finally {
+      intervalSpy.mockRestore();
+      clockSpy.mockRestore();
+    }
+  }),
+);
 const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),

@@ -2349,6 +2349,8 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    useRightDockStore.setState({ dockStateByThreadId: {} });
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
@@ -2513,6 +2515,101 @@ describe("ChatView transcript geometry (full app)", () => {
       await reopened.cleanup();
     }
   });
+
+  it.each([
+    {
+      name: "finished native Codex child",
+      creationSource: "provider_native" as const,
+      provider: "codex" as const,
+      running: false,
+      disabled: true,
+    },
+    {
+      name: "running native Codex child",
+      creationSource: "provider_native" as const,
+      provider: "codex" as const,
+      running: true,
+      disabled: true,
+    },
+    {
+      name: "running native Claude child",
+      creationSource: "provider_native" as const,
+      provider: "claudeAgent" as const,
+      running: true,
+      disabled: false,
+    },
+    {
+      name: "finished app-owned child",
+      creationSource: null,
+      provider: "codex" as const,
+      running: false,
+      disabled: false,
+    },
+  ])(
+    "keeps the $name composer in its lifecycle state",
+    async ({ creationSource, provider, running, disabled }) => {
+      const base = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("child-composer-user"),
+        targetText: "Child task",
+        sessionStatus: running ? "running" : "ready",
+      });
+      const childTurnId = TurnId.makeUnsafe("child-composer-turn");
+      const snapshot: OrchestrationReadModel = {
+        ...base,
+        threads: [
+          {
+            ...base.threads[0]!,
+            creationSource,
+            modelSelection:
+              provider === "claudeAgent"
+                ? { provider, model: "claude-haiku-4-5" }
+                : { provider, model: "gpt-5" },
+            parentThreadId: OTHER_THREAD_ID,
+            latestTurn: {
+              turnId: childTurnId,
+              state: running ? "running" : "completed",
+              requestedAt: NOW_ISO,
+              startedAt: NOW_ISO,
+              completedAt: running ? null : NOW_ISO,
+              assistantMessageId: null,
+            },
+            session: {
+              ...base.threads[0]!.session!,
+              status: running ? "running" : "ready",
+              providerName: provider,
+              activeTurnId: running ? childTurnId : null,
+            },
+          },
+        ],
+      };
+      const draftText = "keep this child draft";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, draftText);
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]');
+        expect(editor).not.toBeNull();
+        await vi.waitFor(() => expect(editor?.textContent ?? "").toContain(draftText));
+        expect(editor?.getAttribute("contenteditable")).toBe(disabled ? "false" : "true");
+        if (running) {
+          expect(
+            document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]')
+              ?.disabled,
+          ).toBe(false);
+        } else {
+          const sendButton = await waitForSendButton();
+          expect(sendButton.disabled).toBe(disabled);
+        }
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          draftText,
+        );
+        expect(wsRequests.some((request) => turnStartText(request)?.includes(draftText))).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it.each([
     { activityViewEnabled: false, customShortcut: false },
@@ -5293,7 +5390,7 @@ describe("ChatView transcript geometry (full app)", () => {
         )!;
         const clamp = row.querySelector<HTMLElement>('[data-user-message-clamp="true"]')!;
         expect(clamp).toBeTruthy();
-        const text = clamp.firstElementChild!;
+        const text = clamp.querySelector<HTMLElement>(".chat-markdown--user")!;
         const lineHeightPx = Number.parseFloat(getComputedStyle(text).lineHeight);
         expect(lineHeightPx).toBeGreaterThan(0);
         expect(clamp.scrollHeight).toBeGreaterThan(clamp.clientHeight);
@@ -9448,14 +9545,17 @@ describe("ChatView transcript geometry (full app)", () => {
     const sentQueuedPrompt = () =>
       wsRequests.some((request) => turnStartText(request)?.includes(queuedPrompt) === true);
 
-    async function mountPausedQueue(kind: "chat" | "plan-follow-up" = "chat") {
+    async function mountPausedQueue(
+      kind: "chat" | "plan-follow-up" = "chat",
+      sessionStatus: OrchestrationSessionStatus = "ready",
+    ) {
       const baseSnapshot =
         kind === "plan-follow-up"
           ? createSnapshotWithSettledPlanAwaitingFollowUp()
           : createSnapshotForTargetUser({
               targetMessageId: "msg-user-paused-queue-target" as MessageId,
               targetText: "paused queue target",
-              sessionStatus: "ready",
+              sessionStatus,
             });
       const snapshot: OrchestrationReadModel = {
         ...baseSnapshot,
@@ -9463,10 +9563,10 @@ describe("ChatView transcript geometry (full app)", () => {
           thread.id === THREAD_ID
             ? {
                 ...thread,
-                // Claude settles a stopped turn as "completed"; the recorded Stop still holds.
+                // A stopped provider process leaves its turn failed and session closed.
                 latestTurn: {
                   turnId: stoppedTurnId,
-                  state: "completed",
+                  state: sessionStatus === "stopped" ? "error" : "completed",
                   requestedAt: NOW_ISO,
                   startedAt: NOW_ISO,
                   completedAt: NOW_ISO,
@@ -9512,8 +9612,10 @@ describe("ChatView transcript geometry (full app)", () => {
       if (kind === "plan-follow-up") {
         useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
       }
-      // Same tick as the enqueue: the Stop action recorded this turn before it settled.
-      useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, stoppedTurnId);
+      if (sessionStatus !== "stopped") {
+        // Same tick as the enqueue: the Stop action recorded this turn before it settled.
+        useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, stoppedTurnId);
+      }
 
       await vi.waitFor(
         () => {
@@ -9548,6 +9650,32 @@ describe("ChatView transcript geometry (full app)", () => {
           useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ?? null,
         ).toBe(null);
       } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it("restarts a queued turn after the provider session closed and only after Resume", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountPausedQueue("chat", "stopped");
+      try {
+        emitWsTransportState("closed");
+        await page.getByRole("button", { name: "Resume", exact: true }).click();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(wsRequests.some((request) => turnStartText(request)?.includes(queuedPrompt))).toBe(
+          false,
+        );
+        expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+
+        emitWsTransportState("open");
+        await vi.waitFor(() => {
+          expect(
+            wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+          ).toHaveLength(1);
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
+        });
+      } finally {
+        emitWsTransportState("open");
         await mounted.cleanup();
         restoreNativeApi();
       }
@@ -11088,6 +11216,7 @@ describe("ChatView transcript geometry (full app)", () => {
       // must keep focus in the one now on screen.
       const settledComposerEditor = await waitForComposerEditor();
       settledComposerEditor.focus();
+      await waitForLayout();
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
       let frameRequestCount = 0;
@@ -15385,6 +15514,9 @@ describe("ChatView transcript geometry (full app)", () => {
           await expect
             .element(page.getByRole("button", { name: /Visual follow up/ }))
             .toBeVisible();
+          await userEvent.unhover(
+            document.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!,
+          );
           const before = wsRequests.filter((request) =>
             turnStartText(request)?.includes("Follow up from visual"),
           ).length;

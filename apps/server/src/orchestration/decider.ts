@@ -1976,6 +1976,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.providerName ?? targetThread.modelSelection.provider;
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      if (
+        (targetThread.creationSource === "provider_native" ||
+          targetThread.id.startsWith("subagent:")) &&
+        (activeProvider === "codex" ||
+          !isThreadRunning ||
+          targetThread.latestTurn?.state !== "running" ||
+          targetThread.latestTurn.turnId !== targetThread.session?.activeTurnId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            activeProvider === "codex"
+              ? `Direct messages to Codex subagent '${targetThread.id}' are unavailable.`
+              : `Subagent '${targetThread.id}' is no longer running.`,
+        });
+      }
       // Subagent threads never queue: their messages steer the running child task
       // through the parent session, so deferring until the turn settles would
       // deliver the message only after the subagent already finished.

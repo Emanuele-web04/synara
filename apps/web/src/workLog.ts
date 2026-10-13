@@ -1178,6 +1178,15 @@ function shouldKeepActivityForWorkLog(
   // visible even when the transcript has turn-scoped assistant messages.
   if (activity.kind === "auth.status") return true;
 
+  // A rejected child steer has no new provider turn. Its accepted user message
+  // still needs delivery feedback after the child's previous turn completes.
+  if (
+    activity.kind === "provider.turn.start.failed" &&
+    asTrimmedString(asRecord(activity.payload)?.messageId)
+  ) {
+    return true;
+  }
+
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
     return true;

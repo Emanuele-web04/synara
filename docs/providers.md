@@ -317,6 +317,12 @@ Codex multi-agent v2 encrypts spawn briefs, so its children are named after thei
 open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
 parent thread when more ran.
 
+You can message a running Claude native child from its own composer. Codex native children are
+read-only: Codex multi-agent v2 requires its parent agent to deliver child messages and rejects
+direct app-server input. Finished native children are also read-only. These sends are rejected
+before adding a user message, preserving the completed outcome. Ordinary delegated task
+conversations keep their independent messaging behavior.
+
 The parent transcript groups adjacent child launches from the same turn in a compact card at
 their launch position; assistant narration separates groups. Cards start collapsed and preserve
 each invocation's status, elapsed time, current step and short result. Their compact headers stay

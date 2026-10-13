@@ -5518,7 +5518,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         .pipe(Effect.result);
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.instanceOf(result.failure, ProviderAdapterRequestError);
+        assert.instanceOf(result.failure, ProviderAdapterValidationError);
+        if (result.failure instanceof ProviderAdapterValidationError) {
+          assert.equal(result.failure.operation, "turn/steerSubagent");
+          assert.match(result.failure.issue, /already finished/);
+        }
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

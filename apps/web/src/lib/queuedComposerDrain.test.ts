@@ -145,6 +145,25 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, isSendBusy: true })).toBe(false);
   });
 
+  it("drains a resumed closed provider session only while the transport is available", () => {
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        phase: "disconnected",
+        canResumeClosedSession: true,
+        isTransportAvailable: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({
+        ...OPEN_GATES,
+        phase: "disconnected",
+        canResumeClosedSession: true,
+        isTransportAvailable: false,
+      }),
+    ).toBe(false);
+  });
+
   it("blocks drain while a steer gate, approval, or user input is outstanding", () => {
     expect(
       shouldAutoDispatchQueuedComposerTurn({
@@ -320,6 +339,31 @@ describe("queued composer drain watcher", () => {
     resetQueuedComposerDrainForTests();
     resetComposerDraftStore();
     useStore.setState(initialState);
+  });
+
+  it("sends a closed provider's failed queue head after explicit Resume", async () => {
+    resetQueuedComposerDrainForTests();
+    const closedThread = makeThread({
+      id: THREAD_ID,
+      session: makeSession("closed"),
+      latestTurn: makeLatestTurn("error"),
+    });
+    seedThread(closedThread);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-failed"));
+    // Model a restored draft and stopped session before the background watcher starts.
+    startQueuedComposerDrainWatcher({ dispatch });
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    useComposerDraftStore.getState().resumeQueuedTurns(THREAD_ID, LIVE_TURN_ID);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("queued-failed");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+    ).toHaveLength(0);
   });
 
   it("holds every cache review status without consuming retries and resumes after clearance", async () => {
