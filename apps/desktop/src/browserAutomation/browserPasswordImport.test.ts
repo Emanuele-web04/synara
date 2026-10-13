@@ -270,6 +270,39 @@ it("cancels a pending profile preflight without requesting Keychain access", asy
   expect(vault.snapshot).not.toHaveBeenCalled();
 });
 
+it("applies one total deadline to a pending password preflight", async () => {
+  vi.useFakeTimers();
+  try {
+    const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
+    const keychain = vi.fn(async () => "test-safe-storage");
+    const getProfile = vi.fn(
+      (_home: string, _browser: string, _profile: string, signal: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+    const importer = new BrowserPasswordImport(
+      vault,
+      keychain,
+      home,
+      getProfile,
+      readChromiumProfilePasswords,
+    );
+    const pending = importer.import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await expect(pending).resolves.toEqual({ ok: false, code: "timed_out", platform: "macos" });
+    expect(keychain).not.toHaveBeenCalled();
+    expect(vault.snapshot).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("cancels the password reader process before vault writes", async () => {
   const vault = {
     snapshot: vi.fn(async () => ({ protection: { locked: false } })),

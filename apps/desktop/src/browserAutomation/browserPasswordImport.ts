@@ -10,6 +10,7 @@ import {
 } from "./chromiumPasswordReadProcess";
 
 const MAX_PROFILE_LOGINS = 50_000;
+const MAX_PASSWORD_IMPORT_MS = 120_000;
 type PasswordProfilePreflight =
   | Awaited<ReturnType<typeof inventoryChromiumPasswordProfileProcess>>
   | undefined;
@@ -36,6 +37,12 @@ type KeychainFailure = "permission_denied" | "timed_out" | "keychain_unavailable
 class KeychainError extends Error {
   constructor(readonly keychainFailure: KeychainFailure) {
     super("Browser Keychain access failed.");
+  }
+}
+
+class PasswordImportTimeoutError extends Error {
+  constructor() {
+    super("Browser password import timed out.");
   }
 }
 
@@ -112,10 +119,15 @@ export class BrowserPasswordImport {
   async import(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult> {
     if (this.active) return { ok: false, code: "vault_failed", platform: platform() };
     const active = { operationId: input.operationId, controller: new AbortController() };
+    const timeout = setTimeout(
+      () => active.controller.abort(new PasswordImportTimeoutError()),
+      MAX_PASSWORD_IMPORT_MS,
+    );
     this.active = active;
     try {
       return await this.importProfile(input, active.controller.signal);
     } finally {
+      clearTimeout(timeout);
       if (this.active === active) this.active = undefined;
     }
   }
@@ -127,7 +139,7 @@ export class BrowserPasswordImport {
     const currentPlatform = platform();
     const cancelled = (): BrowserPasswordImportResult => ({
       ok: false,
-      code: "cancelled",
+      code: signal.reason instanceof PasswordImportTimeoutError ? "timed_out" : "cancelled",
       platform: currentPlatform,
     });
     if (input.confirmed !== true)
@@ -141,6 +153,7 @@ export class BrowserPasswordImport {
     } catch (error) {
       if (signal.aborted) return cancelled();
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (code === "timed_out") return { ok: false, code, platform: currentPlatform };
       return {
         ok: false,
         code:
@@ -165,6 +178,7 @@ export class BrowserPasswordImport {
     } catch {
       return { ok: false, code: "vault_failed", platform: currentPlatform };
     }
+    if (signal.aborted) return cancelled();
 
     let passphrase: string;
     try {
@@ -191,7 +205,10 @@ export class BrowserPasswordImport {
       return {
         ok: false,
         code:
-          code === "source_missing" || code === "too_many_logins" || code === "source_too_large"
+          code === "source_missing" ||
+          code === "too_many_logins" ||
+          code === "source_too_large" ||
+          code === "timed_out"
             ? code
             : "reader_failed",
         platform: currentPlatform,
