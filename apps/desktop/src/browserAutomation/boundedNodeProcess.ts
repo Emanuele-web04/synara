@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { spawnProcess } from "@synara/shared/processRuntime";
 
 export type BoundedNodeProcessFailure =
@@ -49,13 +52,17 @@ export async function runBoundedNodeProcess(
     },
     Math.max(1, options.timeoutMs),
   );
+  let tempWorkspace: string | undefined;
   try {
+    tempWorkspace = await mkdtemp(join(tmpdir(), "synara-browser-process-"));
     const child = spawnProcess(process.execPath, ["--input-type=module", "-e", script], {
       env: {
         ELECTRON_RUN_AS_NODE: "1",
         HOME: home,
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+        TMPDIR: tempWorkspace,
+        TEMP: tempWorkspace,
+        TMP: tempWorkspace,
       },
       signal: controller.signal,
       stdio: ["pipe", "pipe", "pipe"],
@@ -115,5 +122,6 @@ export async function runBoundedNodeProcess(
     clearTimeout(timeout);
     signal.removeEventListener("abort", abortFromCaller);
     payload.fill(0);
+    if (tempWorkspace) await rm(tempWorkspace, { recursive: true, force: true });
   }
 }
