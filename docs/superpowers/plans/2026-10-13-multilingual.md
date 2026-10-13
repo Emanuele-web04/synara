@@ -9,7 +9,7 @@
 
 ## Global Constraints
 
-- Stay on upstream/main b4bdc7362 in the existing isolated t3/multilingual-support worktree.
+- Stay on upstream/main b4bdc7362 in the existing isolated worktree.
 - Reuse settings controls/storage and browser fixtures; no global DOM translation or transcript mutation.
 - No provider calls, publishing, unrelated refactors or fixed typography sizes.
 - Changing language must preserve mounted state, settings anchors and technical command identifiers.
