@@ -6,10 +6,13 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { StarIcon, XIcon } from "~/lib/icons";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 const DISMISSED_STORAGE_KEY = "synara:sponsor-landing-banner:dismissed:v1";
 
 export function SponsorLandingBanner(props: { className?: string }) {
+  const { t } = useTranslation();
+
   const [dismissed, setDismissed] = useLocalStorage(DISMISSED_STORAGE_KEY, false, Schema.Boolean);
   if (dismissed) return null;
   return (
@@ -27,15 +30,17 @@ export function SponsorLandingBanner(props: { className?: string }) {
           <StarIcon className="size-5" />
         </span>
         <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-ui font-medium text-foreground">Support Synara</span>
+          <span className="truncate text-ui font-medium text-foreground">
+            {t("Support Synara")}
+          </span>
           <span className="truncate text-ui text-muted-foreground">
-            Explore sponsorships and help fund development
+            {t("Explore sponsorships and help fund development")}
           </span>
         </span>
       </button>
       <button
         type="button"
-        aria-label="Dismiss sponsor banner"
+        aria-label={t("Dismiss sponsor banner")}
         className="absolute -right-1.5 -top-1.5 flex size-[22px] items-center justify-center rounded-full border border-border/70 bg-background text-muted-foreground opacity-0 shadow-xs transition-opacity duration-150 ease-out hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 group-hover/landing-banner:opacity-100 motion-reduce:transition-none"
         onClick={() => setDismissed(true)}
       >

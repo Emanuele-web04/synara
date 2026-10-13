@@ -38,8 +38,11 @@ import {
   formatProfileUsageBasis,
   toDisplayName,
 } from "../profile/profileFormatting";
+import { useTranslation, t } from "~/i18n";
 
 export function ProfileSettingsPanel() {
+  const { t } = useTranslation();
+
   const coreQuery = useQuery(serverProfileStatsQueryOptions());
   const tokenQuery = useQuery(serverProfileTokenStatsQueryOptions());
 
@@ -50,10 +53,10 @@ export function ProfileSettingsPanel() {
     return (
       <div className="flex flex-col items-center gap-3 py-24 text-center">
         <p className="text-ui leading-snug text-muted-foreground">
-          Couldn’t load your local stats.
+          {t("Couldn’t load your local stats.")}
         </p>
         <Button variant="outline" size="sm" onClick={() => void coreQuery.refetch()}>
-          Try again
+          {t("Try again")}
         </Button>
       </div>
     );
@@ -77,6 +80,8 @@ function ProfileContent({
   tokenStats: ProfileTokenStats | null;
   tokensPending: boolean;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -90,8 +95,11 @@ function ProfileContent({
   const heatmap = selectProfileHeatmap(stats, tokenStats);
   const topProvider = selectProfileTopProvider(stats, tokenStats);
   const modelUsage = selectProfileModelUsage(stats, tokenStats);
-  const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
-  const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
+  const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour, formatLocale);
+  const mostWorkedProjectLabel = formatMostWorkedProjectLabel(
+    stats.mostWorkedProject,
+    formatLocale,
+  );
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -99,11 +107,11 @@ function ProfileContent({
       <div className="flex items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
           <CentralIcon name="share-os" />
-          Share
+          {t("Share")}
         </Button>
         <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
           <CentralIcon name="pencil" />
-          Edit
+          {t("Edit")}
         </Button>
       </div>
 
@@ -131,28 +139,44 @@ function ProfileContent({
       {/* Stat tiles */}
       <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
         <StatTile
-          label="Lifetime tokens"
-          value={tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
+          label={t("Lifetime tokens")}
+          value={
+            tokensPending
+              ? null
+              : formatCompact(tokenStats?.lifetimeTotalTokens ?? null, formatLocale)
+          }
         />
         <StatTile
-          label="Peak day"
-          value={tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null)}
+          label={t("Peak day")}
+          value={
+            tokensPending ? null : formatCompact(tokenStats?.peakDayTokens ?? null, formatLocale)
+          }
         />
-        <StatTile label="Total prompts" value={formatNumber(stats.activity.totalPromptsSent)} />
-        <StatTile label="Current streak" value={formatDays(stats.activity.currentStreakDays)} />
-        <StatTile label="Longest streak" value={formatDays(stats.activity.longestStreakDays)} />
+        <StatTile
+          label={t("Total prompts")}
+          value={formatNumber(stats.activity.totalPromptsSent, formatLocale)}
+        />
+        <StatTile
+          label={t("Current streak")}
+          value={formatDays(stats.activity.currentStreakDays, formatLocale)}
+        />
+        <StatTile
+          label={t("Longest streak")}
+          value={formatDays(stats.activity.longestStreakDays, formatLocale)}
+        />
       </div>
 
       {/* Heatmap */}
       {stats.providerModels.some((entry) => entry.provider === "claudeAgent") ||
       tokenStats?.providers.includes("claudeAgent") ? (
         <p className="text-ui leading-snug text-muted-foreground">
-          Claude token totals use verifiable records. Older history and unfinished turns may be
-          incomplete.
+          {t(
+            "Claude token totals use verifiable records. Older history and unfinished turns may be incomplete.",
+          )}
         </p>
       ) : null}
       <section className="flex min-w-0 flex-col gap-3">
-        <h3 className="text-ui-lg font-medium">Activity</h3>
+        <h3 className="text-ui-lg font-medium">{t("Activity")}</h3>
         {tokensPending ? (
           <Skeleton className="h-28 w-full rounded-lg" />
         ) : (
@@ -172,22 +196,27 @@ function ProfileContent({
       {/* Insights + plugins */}
       <div className="grid gap-x-12 gap-y-7 md:grid-cols-2">
         <section className="flex flex-col gap-3">
-          <h3 className="text-ui-lg font-medium">Activity insights</h3>
+          <h3 className="text-ui-lg font-medium">{t("Activity insights")}</h3>
           <dl className="flex flex-col gap-2.5">
             <InsightRow
-              label="Most used provider"
+              label={t("Most used provider")}
               value={
                 topProvider.provider
                   ? `${formatProviderLabel(topProvider.provider)}${
                       topProvider.percent !== null
-                        ? ` · ${topProvider.percent}% of ${formatProfileUsageBasis(topProvider.metric)}`
+                        ? t(" · {{percent}}% of {{metric}}", {
+                            percent: new Intl.NumberFormat(formatLocale, {
+                              maximumFractionDigits: 1,
+                            }).format(topProvider.percent),
+                            metric: formatProfileUsageBasis(topProvider.metric, formatLocale),
+                          })
                         : ""
                     }`
                   : "—"
               }
             />
             <InsightRow
-              label="Most used reasoning"
+              label={t("Most used reasoning")}
               value={
                 stats.insights.topReasoning
                   ? `${capitalize(stats.insights.topReasoning)}${
@@ -198,23 +227,26 @@ function ProfileContent({
                   : "—"
               }
             />
-            <InsightRow label="Most active hour" value={peakHourLabel} />
-            <InsightRow label="Most worked project" value={mostWorkedProjectLabel} />
+            <InsightRow label={t("Most active hour")} value={peakHourLabel} />
+            <InsightRow label={t("Most worked project")} value={mostWorkedProjectLabel} />
             <InsightRow
-              label="Skills explored"
-              value={formatNumber(stats.insights.skillsExplored)}
+              label={t("Skills explored")}
+              value={formatNumber(stats.insights.skillsExplored, formatLocale)}
             />
             <InsightRow
-              label="Total skills used"
-              value={formatNumber(stats.insights.totalSkillsUsed)}
+              label={t("Total skills used")}
+              value={formatNumber(stats.insights.totalSkillsUsed, formatLocale)}
             />
-            <InsightRow label="Total threads" value={formatNumber(stats.activity.totalThreads)} />
+            <InsightRow
+              label={t("Total threads")}
+              value={formatNumber(stats.activity.totalThreads, formatLocale)}
+            />
           </dl>
           <ProfileUsageCoverage unavailableProviders={topProvider.unavailableProviders} />
         </section>
 
         <section className="flex flex-col gap-3">
-          <h3 className="text-ui-lg font-medium">Most used plugins</h3>
+          <h3 className="text-ui-lg font-medium">{t("Most used plugins")}</h3>
           {stats.skills.length > 0 ? (
             <ul className="flex flex-col gap-2.5">
               {stats.skills.slice(0, 6).map((skill) => (
@@ -232,14 +264,14 @@ function ProfileContent({
                     <span className="truncate text-ui leading-snug">{skill.displayName}</span>
                   </span>
                   <span className="shrink-0 text-ui leading-snug tabular-nums text-muted-foreground">
-                    {formatNumber(skill.runCount)} runs
+                    {formatNumber(skill.runCount, formatLocale)} {t("runs")}
                   </span>
                 </li>
               ))}
             </ul>
           ) : (
             <p className="text-ui leading-snug text-muted-foreground">
-              No skills or agents used yet.
+              {t("No skills or agents used yet.")}
             </p>
           )}
         </section>
@@ -247,9 +279,9 @@ function ProfileContent({
 
       {/* Model usage */}
       <section className="flex flex-col gap-3">
-        <h3 className="text-ui-lg font-medium">Model usage</h3>
+        <h3 className="text-ui-lg font-medium">{t("Model usage")}</h3>
         <p className="text-ui leading-snug text-muted-foreground">
-          Share of {formatProfileUsageBasis(modelUsage.metric)}.
+          {t("Share of")} {formatProfileUsageBasis(modelUsage.metric, formatLocale)}.
         </p>
         {modelUsage.entries.length > 0 ? (
           <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
@@ -263,7 +295,9 @@ function ProfileContent({
             ))}
           </ul>
         ) : (
-          <p className="text-ui leading-snug text-muted-foreground">No model activity yet.</p>
+          <p className="text-ui leading-snug text-muted-foreground">
+            {t("No model activity yet.")}
+          </p>
         )}
         <ProfileUsageCoverage unavailableProviders={modelUsage.unavailableProviders} />
       </section>
@@ -331,23 +365,30 @@ function InsightRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatHour(hour: number): string {
+function formatHour(hour: number, formatLocale: string): string {
   const normalized = ((hour % 24) + 24) % 24;
-  if (normalized === 0) return "12 AM";
-  if (normalized === 12) return "12 PM";
-  return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
+  return new Intl.DateTimeFormat(formatLocale, { hour: "numeric", timeZone: "UTC" }).format(
+    new Date(Date.UTC(2026, 0, 1, normalized)),
+  );
 }
 
-function formatPeakHourLabel(startHour: number | null): string {
-  return startHour === null ? "—" : formatHour(startHour);
+function formatPeakHourLabel(startHour: number | null, formatLocale: string): string {
+  return startHour === null ? "—" : formatHour(startHour, formatLocale);
 }
 
-function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]): string {
+function formatMostWorkedProjectLabel(
+  project: ProfileStats["mostWorkedProject"],
+  formatLocale: string,
+): string {
   if (!project) {
     return "—";
   }
-  const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
-  return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
+  const promptLabel = project.promptCount === 1 ? t("prompt") : t("prompts");
+  return t("{{value0}} · {{value1}} {{value2}}", {
+    value0: project.title,
+    value1: formatNumber(project.promptCount, formatLocale),
+    value2: promptLabel,
+  });
 }
 
 function ModelUsageRow({
@@ -359,6 +400,7 @@ function ModelUsageRow({
   model: string;
   percent: number;
 }) {
+  const { formatLocale } = useTranslation();
   return (
     <li className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-3 text-ui leading-snug">
@@ -370,7 +412,9 @@ function ModelUsageRow({
           )}
           <span className="truncate">{model}</span>
         </span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">{percent}%</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">
+          {new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 1 }).format(percent)}%
+        </span>
       </div>
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         <div

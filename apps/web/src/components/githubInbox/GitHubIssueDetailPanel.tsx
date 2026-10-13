@@ -47,6 +47,7 @@ import {
   githubIssueDetailQueryOptions,
 } from "~/lib/githubInboxQueryOptions";
 import { pullRequestQueryErrorState } from "~/lib/pullRequestReactQuery";
+import { useTranslation } from "~/i18n";
 
 type IssueTab = "summary" | "timeline";
 
@@ -71,6 +72,8 @@ export function GitHubIssueDetailPanel({
   /** Pin, side chat threads, and the floating composer, from the code review page. */
   pageHost?: GitHubItemPageHost;
 }) {
+  const { t } = useTranslation();
+
   const pollingEnabled = pollingEnabledProp ?? true;
   // The page remounts the panel per issue, so the tab starts on Summary for each one.
   const [tab, setTab] = useState<IssueTab>("summary");
@@ -95,7 +98,7 @@ export function GitHubIssueDetailPanel({
       action: "send",
       projectId,
       card: (environment) => createGitHubItemContextDraft(source, environment),
-      errorTitle: "Could not send the issue to an agent",
+      errorTitle: t("Could not send the issue to an agent"),
     });
   };
 
@@ -119,7 +122,12 @@ export function GitHubIssueDetailPanel({
     <GitHubItemDetailPage
       onBack={onBack}
       tabs={
-        <GitHubItemTabs label="Issue detail tabs" tabs={ISSUE_TABS} value={tab} onChange={setTab} />
+        <GitHubItemTabs
+          label={t("Issue detail tabs")}
+          tabs={ISSUE_TABS.map((tab) => ({ value: tab.value, label: t(tab.label) }))}
+          value={tab}
+          onChange={setTab}
+        />
       }
       actions={
         detail ? (
@@ -145,13 +153,13 @@ export function GitHubIssueDetailPanel({
         loaded: detail !== undefined,
       }}
       notFound={{
-        title: "Issue not found",
-        description: "The selected issue could not be loaded.",
+        title: t("Issue not found"),
+        description: t("The selected issue could not be loaded."),
       }}
       banners={
         backgroundError ? (
           <PullRequestWarningNote shape="banner" role="status">
-            Could not refresh the issue. Showing saved data.
+            {t("Could not refresh the issue. Showing saved data.")}
           </PullRequestWarningNote>
         ) : null
       }

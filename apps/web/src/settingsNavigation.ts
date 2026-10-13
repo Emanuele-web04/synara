@@ -54,6 +54,7 @@ export type SettingsNavItem = {
   badge?: string;
 };
 
+// Keep English source keys here: callers translate at render time, while section/row ids stay stable.
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   id: SettingsNavGroupId;
   label: string;

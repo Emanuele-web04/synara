@@ -23,6 +23,7 @@ import {
 } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 import { useTaskAgentActions, useTaskAgentThread } from "./useTaskAgent";
+import { useTranslation } from "~/i18n";
 
 const APPROVAL_ASK: Record<PendingApproval["requestKind"], string> = {
   command: "wants to run a command",
@@ -45,6 +46,8 @@ export function TaskAgentPanel({
   projectCwdById: ReadonlyMap<string, string>;
   onUpdate: (input: TodoUpdateInput) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const { todo, status } = row;
   const summary = row.thread;
   const openChat = useOpenChat(threadId);
@@ -78,7 +81,11 @@ export function TaskAgentPanel({
   const headline = (text: string, className?: string) => (
     <div
       className="flex min-w-0 items-center gap-2"
-      title={`${agentName} · ${model}${location ? ` · in ${fullPath ?? location}` : ""}`}
+      title={t("{{value0}} · {{value1}}{{value2}}", {
+        value0: agentName,
+        value1: model,
+        value2: location ? ` · in ${fullPath ?? location}` : "",
+      })}
     >
       <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
       <span className={cn("min-w-0 text-ui-sm text-foreground", className)}>{text}</span>
@@ -86,7 +93,10 @@ export function TaskAgentPanel({
   );
 
   return (
-    <section aria-label={`${agentName} · ${model}`} className="flex flex-col gap-2">
+    <section
+      aria-label={t("{{value0}} · {{value1}}", { value0: agentName, value1: model })}
+      className="flex flex-col gap-2"
+    >
       {status.kind === "running" || status.kind === "starting" ? (
         <>
           <TaskWell>
@@ -108,10 +118,10 @@ export function TaskAgentPanel({
                 interrupts whatever turn is active. */}
             {status.kind === "running" ? (
               <TaskPillButton disabled={isStopping} onClick={() => void stop()}>
-                Stop
+                {t("Stop")}
               </TaskPillButton>
             ) : null}
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            <TaskPillButton onClick={openChat}>{t("Open chat")}</TaskPillButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -140,7 +150,7 @@ export function TaskAgentPanel({
               onClick={openChat}
               className="mr-auto text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
             >
-              More choices
+              {t("More choices")}
             </button>
             <TaskPillButton
               disabled={respondingKey === approval.requestId}
@@ -153,7 +163,7 @@ export function TaskAgentPanel({
                 )
               }
             >
-              Deny
+              {t("Deny")}
             </TaskPillButton>
             <TaskActionButton
               disabled={respondingKey === approval.requestId}
@@ -166,7 +176,7 @@ export function TaskAgentPanel({
                 )
               }
             >
-              Allow
+              {t("Allow")}
             </TaskActionButton>
           </TaskActionRow>
         </>
@@ -176,7 +186,7 @@ export function TaskAgentPanel({
         <>
           <TaskWell>{headline(`${agentName} asked you a question`)}</TaskWell>
           <TaskActionRow>
-            <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
+            <TaskActionButton onClick={openChat}>{t("Answer in the chat")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -185,7 +195,7 @@ export function TaskAgentPanel({
         <>
           <TaskWell>{headline(`${agentName} is waiting for your OK`)}</TaskWell>
           <TaskActionRow>
-            <TaskActionButton onClick={openChat}>Open chat</TaskActionButton>
+            <TaskActionButton onClick={openChat}>{t("Open chat")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -193,7 +203,10 @@ export function TaskAgentPanel({
       {status.kind === "review" ? (
         <>
           <TaskWell>
-            {headline(formatAgentActivity(status, summary) ?? "Finished", "text-muted-foreground")}
+            {headline(
+              formatAgentActivity(status, summary, t, formatLocale) ?? t("Finished"),
+              "text-muted-foreground",
+            )}
             {latestReply ? (
               <div className="max-h-72 overflow-y-auto">
                 <ChatMarkdown
@@ -205,8 +218,8 @@ export function TaskAgentPanel({
             ) : null}
           </TaskWell>
           <TaskActionRow>
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
-            <TaskActionButton onClick={markDone}>Mark as done</TaskActionButton>
+            <TaskPillButton onClick={openChat}>{t("Open chat")}</TaskPillButton>
+            <TaskActionButton onClick={markDone}>{t("Mark as done")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -220,8 +233,8 @@ export function TaskAgentPanel({
             ) : null}
           </TaskWell>
           <TaskActionRow>
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
-            <TaskPillButton onClick={markDone}>Mark as done</TaskPillButton>
+            <TaskPillButton onClick={openChat}>{t("Open chat")}</TaskPillButton>
+            <TaskPillButton onClick={markDone}>{t("Mark as done")}</TaskPillButton>
           </TaskActionRow>
         </>
       ) : null}

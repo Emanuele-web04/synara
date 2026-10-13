@@ -4,11 +4,12 @@
 // Layer: Chat composer UI
 // Exports: ComposerPendingBackgroundWorkRow
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { BotIcon } from "~/lib/icons";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
 import { COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 interface ComposerPendingBackgroundWorkRowProps {
   count: number;
@@ -19,6 +20,8 @@ export function ComposerPendingBackgroundWorkRow({
   count,
   attachedToPrevious: attachedToPreviousProp,
 }: ComposerPendingBackgroundWorkRowProps) {
+  const { t } = useTranslation();
+
   const attachedToPrevious = attachedToPreviousProp ?? false;
   return (
     <ComposerStackedPanel
@@ -30,7 +33,7 @@ export function ComposerPendingBackgroundWorkRow({
         <div className="flex min-w-0 items-center gap-1.5">
           <BotIcon className="size-3 shrink-0" />
           <span className="truncate">
-            Waiting on {count} background {pluralize(count, "agent")}
+            {t("Waiting on")} {count} {t("background")} {pluralize(count, "agent")}
           </span>
         </div>
       </div>

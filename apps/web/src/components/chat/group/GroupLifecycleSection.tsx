@@ -15,12 +15,15 @@ import { toastManager } from "~/components/ui/toast";
 
 import { buildGroupDeletedNotice } from "./groupLifecycle.logic";
 import type { useProjectAgent } from "../project/useProjectAgent";
+import { useTranslation } from "~/i18n";
 
 export function GroupLifecycleSection(props: {
   readonly agent: ReturnType<typeof useProjectAgent>;
   readonly projectName: string;
   readonly onDeleted: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { agent, projectName } = props;
   const [confirmName, setConfirmName] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -39,7 +42,7 @@ export function GroupLifecycleSection(props: {
       toastManager.add({
         type: "error",
         title: errorTitle,
-        description: agent.error ?? "An error occurred.",
+        description: agent.error ?? t("An error occurred."),
       });
     }
   };
@@ -52,8 +55,8 @@ export function GroupLifecycleSection(props: {
     if (result === null) {
       toastManager.add({
         type: "error",
-        title: "Unable to delete hub",
-        description: agent.error ?? "An error occurred.",
+        title: t("Unable to delete hub"),
+        description: agent.error ?? t("An error occurred."),
       });
       return;
     }
@@ -61,7 +64,7 @@ export function GroupLifecycleSection(props: {
     if (notice) {
       toastManager.add({
         type: "info",
-        title: "Hub deleted",
+        title: t("Hub deleted"),
         description: notice.description,
         data: { copyItems: notice.copyItems },
       });
@@ -75,11 +78,11 @@ export function GroupLifecycleSection(props: {
         <SettingsCard>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium">{paused ? "Resume hub" : "Pause hub"}</p>
+              <p className="text-ui font-medium">{paused ? t("Resume hub") : t("Pause hub")}</p>
               <p className="text-ui-sm text-muted-foreground">
                 {paused
-                  ? "Threads and automations are stopped until you resume."
-                  : "Interrupts running threads and stops new coordinator wakes."}
+                  ? t("Threads and automations are stopped until you resume.")
+                  : t("Interrupts running threads and stops new coordinator wakes.")}
               </p>
             </div>
             <Button
@@ -97,14 +100,14 @@ export function GroupLifecycleSection(props: {
                 )
               }
             >
-              {paused ? "Resume" : "Pause"}
+              {paused ? t("Resume") : t("Pause")}
             </Button>
           </div>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium">Restart coordinator</p>
+              <p className="text-ui font-medium">{t("Restart coordinator")}</p>
               <p className="text-ui-sm text-muted-foreground">
-                Stops and restarts the coordinator's session. Transcript is kept.
+                {t("Stops and restarts the coordinator's session. Transcript is kept.")}
               </p>
             </div>
             <Button
@@ -119,14 +122,14 @@ export function GroupLifecycleSection(props: {
                 )
               }
             >
-              Restart
+              {t("Restart")}
             </Button>
           </div>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium">Archive hub</p>
+              <p className="text-ui font-medium">{t("Archive hub")}</p>
               <p className="text-ui-sm text-muted-foreground">
-                Archives every thread and hides the hub in the sidebar until unarchived.
+                {t("Archives every thread and hides the hub in the sidebar until unarchived.")}
               </p>
             </div>
             <Button
@@ -138,7 +141,7 @@ export function GroupLifecycleSection(props: {
                 void run(() => agent.archiveGroup(config.projectId), "Unable to archive hub")
               }
             >
-              Archive
+              {t("Archive")}
             </Button>
           </div>
         </SettingsCard>
@@ -148,12 +151,11 @@ export function GroupLifecycleSection(props: {
         <SettingsCard>
           <div className="space-y-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium text-destructive">Delete hub</p>
+              <p className="text-ui font-medium text-destructive">{t("Delete hub")}</p>
               <p className="text-ui-sm text-muted-foreground">
-                Deletes the hub, its coordinator, context, and automations. The Library is moved to
-                the trash when possible. The hub folder under ~/Documents/Synara/Groups is removed
-                only when it holds nothing but Synara-generated files; if it has your files it is
-                kept and you get its path. Linked repositories and their threads are untouched.
+                {t(
+                  "Deletes the hub, its coordinator, context, and automations. The Library is moved to the trash when possible. The hub folder under ~/Documents/Synara/Groups is removed only when it holds nothing but Synara-generated files; if it has your files it is kept and you get its path. Linked repositories and their threads are untouched.",
+                )}
               </p>
             </div>
             {confirmOpen ? (
@@ -161,8 +163,8 @@ export function GroupLifecycleSection(props: {
                 <Input
                   value={confirmName}
                   onChange={(event) => setConfirmName(event.target.value)}
-                  placeholder={`Type ${projectName} to confirm`}
-                  aria-label="Type the hub name to confirm deletion"
+                  placeholder={t("Type {{value0}} to confirm", { value0: projectName })}
+                  aria-label={t("Type the hub name to confirm deletion")}
                 />
                 <div className="flex items-center gap-2">
                   <Button
@@ -172,7 +174,7 @@ export function GroupLifecycleSection(props: {
                     disabled={!nameMatches || busy}
                     onClick={() => void handleDelete()}
                   >
-                    {deleting ? "Deleting..." : "Delete hub"}
+                    {deleting ? t("Deleting...") : t("Delete hub")}
                   </Button>
                   <Button
                     type="button"
@@ -184,7 +186,7 @@ export function GroupLifecycleSection(props: {
                       setConfirmName("");
                     }}
                   >
-                    Cancel
+                    {t("Cancel")}
                   </Button>
                 </div>
               </div>
@@ -196,7 +198,7 @@ export function GroupLifecycleSection(props: {
                 disabled={busy}
                 onClick={() => setConfirmOpen(true)}
               >
-                Delete hub…
+                {t("Delete hub…")}
               </Button>
             )}
           </div>

@@ -17,6 +17,7 @@ import {
   SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
   SIDEBAR_HOVER_CARD_ROW_CLASS_NAME,
 } from "./sidebarHoverCardStyles";
+import { useTranslation } from "~/i18n";
 
 export type ProjectHoverCardContentProps = {
   name: string;
@@ -56,6 +57,8 @@ export function ProjectHoverCardContent({
   onEditProject,
   onEditProjectAgent,
 }: ProjectHoverCardContentProps) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn("flex w-full flex-col gap-0", SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME)}
@@ -102,7 +105,7 @@ export function ProjectHoverCardContent({
         )}
       >
         <SettingsIcon className={ICON_CLASS_NAME} aria-hidden />
-        <span className="min-w-0 truncate">Edit project</span>
+        <span className="min-w-0 truncate">{t("Edit project")}</span>
       </button>
       {onEditProjectAgent ? (
         <button
@@ -114,7 +117,7 @@ export function ProjectHoverCardContent({
           )}
         >
           <BotIcon className={ICON_CLASS_NAME} aria-hidden />
-          <span className="min-w-0 truncate">Edit coordinator</span>
+          <span className="min-w-0 truncate">{t("Edit coordinator")}</span>
         </button>
       ) : null}
     </div>

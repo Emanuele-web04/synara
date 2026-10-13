@@ -21,11 +21,14 @@ import { TaskQuickAdd } from "./TaskQuickAdd";
 import { TasksViewSwitch } from "./TasksViewSwitch";
 import { buildTaskSections, summarizeTaskList, type TaskRowModel } from "./tasks.logic";
 import { useTaskRows, useTodoList, useTodoMutations } from "./useTodos";
+import { useTranslation } from "~/i18n";
 
 /** Finished to-dos shown before "Show all". */
 const DONE_PREVIEW_COUNT = 2;
 
 export default function TasksView() {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   // The connected server may not offer Tasks (an older server): back to Kanban.
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
@@ -82,23 +85,25 @@ export default function TasksView() {
         <TaskCardSurface selection={selection} now={now} mutations={mutations}>
           <div className="mx-auto flex w-full max-w-[36rem] flex-col gap-7 px-6 pt-10 pb-20">
             <header className="flex flex-col gap-1 px-3">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tasks</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {t("Tasks")}
+              </h1>
               <p className="text-ui text-muted-foreground">
-                {isLoading ? "Loading…" : summarizeTaskList(rows)}
+                {isLoading ? t("Loading…") : summarizeTaskList(rows)}
               </p>
             </header>
 
             {isError && rows.length === 0 ? (
               <div className="flex items-center gap-3 px-3">
-                <p className="text-ui text-foreground">Couldn't load your tasks.</p>
+                <p className="text-ui text-foreground">{t("Couldn't load your tasks.")}</p>
                 <Button size="sm" shape="capsule" variant="subtle" onClick={() => void refetch()}>
-                  Try again
+                  {t("Try again")}
                 </Button>
               </div>
             ) : null}
 
             <div className="flex flex-col gap-0.5">
-              <div role="list" aria-label="To do" className="flex flex-col gap-0.5">
+              <div role="list" aria-label={t("To do")} className="flex flex-col gap-0.5">
                 {openRows.map(renderRow)}
               </div>
               <TaskQuickAdd inputRef={quickAddRef} onCreate={selection.addTask} />
@@ -106,7 +111,7 @@ export default function TasksView() {
 
             {completed.length > 0 ? (
               <div className="flex flex-col gap-0.5 opacity-80">
-                <div role="list" aria-label="Done" className="flex flex-col gap-0.5">
+                <div role="list" aria-label={t("Done")} className="flex flex-col gap-0.5">
                   {shownDone.map(renderRow)}
                 </div>
                 {completed.length > DONE_PREVIEW_COUNT ? (
@@ -116,7 +121,9 @@ export default function TasksView() {
                     onClick={() => setShowsAllDone((current) => !current)}
                     className="self-start px-3 py-1.5 text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
                   >
-                    {showsAllDone ? "Show less" : `Show all ${completed.length} done`}
+                    {showsAllDone
+                      ? t("Show less")
+                      : t("Show all {{value0}} done", { value0: completed.length })}
                   </button>
                 ) : null}
               </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: useSubagentStripSource.ts
 // Purpose: Resolves the work-log source behind every subagent surface (composer strip,
 //          Environment panel summary, right-dock Subagents pane): the thread's own
@@ -78,6 +79,8 @@ export function useSubagentStripSource(input: {
   // top-level thread reuses it so every live activity does not scan the history twice.
   activeRawWorkLogEntries?: WorkLogEntry[] | undefined;
 }): SubagentStripSource {
+  const { t } = useTranslation();
+
   const { activeThread, latestTurnSettled, activeRawWorkLogEntries } = input;
   // Native-CLI parity: while a subagent thread is open, the strip derives from the
   // PARENT thread's activities so all sibling subagents (plus a way back to the
@@ -138,6 +141,7 @@ export function useSubagentStripSource(input: {
             activeTurnStartedAt: stripSourceLatestTurnStartedAt,
             latestTurnState: stripSourceLatestTurnState,
             latestTurnCompletedAt: stripSourceLatestTurnCompletedAt,
+            translate: t,
           }),
       }),
     [
@@ -150,6 +154,7 @@ export function useSubagentStripSource(input: {
       stripSourceLatestTurnStartedAt,
       stripSourceLatestTurnState,
       stripVisibleTurnIds,
+      t,
     ],
   );
   const hasStripWorkLogSubagents = useMemo(

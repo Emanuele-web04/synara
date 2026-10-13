@@ -6,7 +6,7 @@
 // Exports: InboxTaskList, Group
 
 import type { ThreadId } from "@synara/contracts";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { useId, type DragEvent, type ReactNode } from "react";
 
 import { Spinner } from "~/components/ui/spinner";
@@ -28,6 +28,7 @@ import { DiffStat } from "../chat/DiffStatLabel";
 import { ProviderIcon } from "../ProviderIcon";
 import { resolveThreadProjectLabel, type SidebarActionBadge } from "../Sidebar.logic";
 import type { InboxThreadGroups, NeedsYouKind } from "./inbox.logic";
+import { useTranslation } from "~/i18n";
 
 const NEEDS_YOU_REASONS: Partial<Record<NeedsYouKind, string>> = {
   approval: "approve a command",
@@ -151,6 +152,8 @@ function ThreadMeta({
   project: Project | undefined;
   reason?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   const pr = thread.lastKnownPr;
   return (
     <>
@@ -167,7 +170,7 @@ function ThreadMeta({
       ) : null}
       <span className="truncate">
         {resolveThreadProjectLabel(project)}
-        {reason ? `, ${reason}` : ""}
+        {reason ? t(", {{value0}}", { value0: reason }) : ""}
       </span>
     </>
   );
@@ -191,6 +194,8 @@ export function InboxTaskList({
   onOpenPullRequests: () => void;
   onOpenAutomations: () => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const needsYouCount = groups.needsYou.length + (reviewRequests?.count ?? 0) + automationAttention;
   const threadRow = (thread: SidebarThreadSummary, tone: RowTone, reason?: string) => (
     <TaskRow
@@ -201,7 +206,7 @@ export function InboxTaskList({
       meta={
         <ThreadMeta thread={thread} project={projectById.get(thread.projectId)} reason={reason} />
       }
-      time={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+      time={formatRelativeTime(thread.updatedAt ?? thread.createdAt, undefined, formatLocale)}
       onOpen={() => onOpenThread(thread.id)}
     />
   );
@@ -209,7 +214,7 @@ export function InboxTaskList({
   return (
     <div className="flex flex-col gap-3">
       {needsYouCount > 0 ? (
-        <Group label="Needs you" count={needsYouCount}>
+        <Group label={t("Needs you")} count={needsYouCount}>
           {groups.needsYou.map((item) =>
             threadRow(item.thread, "attention", NEEDS_YOU_REASONS[item.kind]),
           )}
@@ -217,10 +222,10 @@ export function InboxTaskList({
             <TaskRow
               tone="link"
               icon={<GitPullRequestIcon className="size-4 shrink-0 text-info" aria-hidden />}
-              title={`${reviewRequests.badge.text} ${pluralize(
-                reviewRequests.count,
-                "pull request",
-              )} to review`}
+              title={t("{{value0}} {{value1}} to review", {
+                value0: reviewRequests.badge.text,
+                value1: pluralize(reviewRequests.count, "pull request"),
+              })}
               meta="GitHub"
               onOpen={onOpenPullRequests}
             />
@@ -229,10 +234,10 @@ export function InboxTaskList({
             <TaskRow
               tone="link"
               icon={<ClockIcon className="size-4 shrink-0 text-info" aria-hidden />}
-              title={`${automationAttention} ${pluralize(
-                automationAttention,
-                "automation run",
-              )} to check`}
+              title={t("{{value0}} {{value1}} to check", {
+                value0: automationAttention,
+                value1: pluralize(automationAttention, "automation run"),
+              })}
               meta="Automations"
               onOpen={onOpenAutomations}
             />
@@ -240,17 +245,17 @@ export function InboxTaskList({
         </Group>
       ) : null}
       {groups.working.length > 0 ? (
-        <Group label="In progress" count={groups.working.length}>
+        <Group label={t("In progress")} count={groups.working.length}>
           {groups.working.map((thread) => threadRow(thread, "working"))}
         </Group>
       ) : null}
       {groups.finished.length > 0 ? (
-        <Group label="Ready for review" count={groups.finished.length}>
+        <Group label={t("Ready for review")} count={groups.finished.length}>
           {groups.finished.map((thread) => threadRow(thread, "done"))}
         </Group>
       ) : null}
       {groups.failed.length > 0 ? (
-        <Group label="Failed" count={groups.failed.length}>
+        <Group label={t("Failed")} count={groups.failed.length}>
           {groups.failed.map((thread) => threadRow(thread, "failed", "turn failed"))}
         </Group>
       ) : null}

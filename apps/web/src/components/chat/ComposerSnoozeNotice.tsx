@@ -15,6 +15,7 @@ import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
 import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 const ACTION_CLASS_NAME = cn(COMPOSER_INLINE_ACTION_PILL_CLASS_NAME, "text-ui-sm");
 
@@ -27,6 +28,8 @@ export function ComposerSnoozeNotice({
   onReturnNow: () => void;
   onReschedule: (duration: SnoozeDuration) => void;
 }) {
+  const { t } = useTranslation();
+
   const [dialogOpen, setDialogOpen] = useState(false);
   return (
     <div
@@ -43,14 +46,14 @@ export function ComposerSnoozeNotice({
         <span className="font-medium text-foreground">
           <SnoozeCountdown snoozedUntil={snoozedUntil} />
         </span>
-        <span className="block">Sending a message cancels the reminder.</span>
+        <span className="block">{t("Sending a message cancels the reminder.")}</span>
       </span>
       <button type="button" className={ACTION_CLASS_NAME} onClick={onReturnNow}>
-        Return now
+        {t("Return now")}
       </button>
       <Menu modal={false}>
         <MenuTrigger render={<button type="button" className={ACTION_CLASS_NAME} />}>
-          Change time
+          {t("Change time")}
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="top" sideOffset={6}>
           {SNOOZE_PRESETS.map((preset) => (
@@ -59,7 +62,7 @@ export function ComposerSnoozeNotice({
             </MenuItem>
           ))}
           <MenuSeparator />
-          <MenuItem onClick={() => setDialogOpen(true)}>Pick date & time…</MenuItem>
+          <MenuItem onClick={() => setDialogOpen(true)}>{t("Pick date & time…")}</MenuItem>
         </ComposerPickerMenuPopup>
       </Menu>
       <SnoozeUntilDialog

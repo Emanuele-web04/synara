@@ -37,6 +37,7 @@ import {
   ComposerMenuPanel,
   type ComposerMenuPanelGroup,
 } from "./ComposerMenuPanel";
+import { t, useTranslation } from "~/i18n";
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -51,31 +52,31 @@ function commandMenuTitle(
 ): string {
   switch (item.command) {
     case "clear":
-      return "Clear";
+      return t("Clear");
     case "compact":
-      return "Compact Context";
+      return t("Compact Context");
     case "model":
-      return "Model";
+      return t("Model");
     case "fast":
-      return "Fast Mode";
+      return t("Fast Mode");
     case "plan":
-      return "Plan Mode";
+      return t("Plan Mode");
     case "debug":
-      return "Debug Mode";
+      return t("Debug Mode");
     case "default":
-      return "Default Mode";
+      return t("Default Mode");
     case "review":
-      return "Code Review";
+      return t("Code Review");
     case "fork":
-      return "Fork";
+      return t("Fork");
     case "side":
-      return "Sidechat";
+      return t("Sidechat");
     case "status":
-      return "Status";
+      return t("Status");
     case "subagents":
-      return "Subagents";
+      return t("Subagents");
     case "feedback":
-      return "Feedback Synara";
+      return t("Feedback Synara");
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -263,16 +264,16 @@ export function groupCommandItems(
 
     const groups: ComposerCommandGroupModel[] = [];
     if (pluginItems.length > 0) {
-      groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
+      groups.push({ id: "plugins", label: t("Plugins"), items: pluginItems });
     }
     if (threadItems.length > 0) {
-      groups.push({ id: "chats", label: "Chats", items: threadItems });
+      groups.push({ id: "chats", label: t("Chats"), items: threadItems });
     }
     if (localItems.length > 0) {
-      groups.push({ id: "local", label: "Local", items: localItems });
+      groups.push({ id: "local", label: t("Local"), items: localItems });
     }
     if (agentItems.length > 0) {
-      groups.push({ id: "subagents", label: "Subagents", items: agentItems });
+      groups.push({ id: "subagents", label: t("Subagents"), items: agentItems });
     }
     if (otherItems.length > 0) {
       groups.push({ id: "other", label: null, items: otherItems });
@@ -296,13 +297,13 @@ export function groupCommandItems(
 
   const groups: ComposerCommandGroupModel[] = [];
   if (builtInItems.length > 0) {
-    groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
+    groups.push({ id: "built-in", label: t("Built-in"), items: builtInItems });
   }
   if (providerItems.length > 0) {
-    groups.push({ id: "provider", label: "Provider", items: providerItems });
+    groups.push({ id: "provider", label: t("Provider"), items: providerItems });
   }
   if (skillItems.length > 0) {
-    groups.push({ id: "skills", label: "Skills", items: skillItems });
+    groups.push({ id: "skills", label: t("Skills"), items: skillItems });
   }
   if (otherItems.length > 0) {
     groups.push({ id: "other", label: null, items: otherItems });
@@ -340,6 +341,8 @@ export function ComposerCommandMenu(props: {
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
+  const { t } = useTranslation();
+
   const groups = groupCommandItems(
     props.items,
     props.triggerKind,
@@ -388,10 +391,10 @@ export function ComposerCommandMenu(props: {
                 "px-2 py-0 font-medium text-muted-foreground text-ui leading-snug",
               )}
             >
-              Files
+              {t("Files")}
             </p>
             <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/55">
-              Type to search for files
+              {t("Type to search for files")}
             </p>
           </div>
         ) : null
@@ -408,16 +411,16 @@ export function ComposerCommandMenu(props: {
           >
             {props.isLoading
               ? props.triggerKind === "mention"
-                ? "Searching mentions..."
+                ? t("Searching mentions...")
                 : props.triggerKind === "skill"
-                  ? "Loading skills..."
-                  : "Loading commands..."
+                  ? t("Loading skills...")
+                  : t("Loading commands...")
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
-                  ? "No matching plugin, chat, or file."
+                  ? t("No matching plugin, chat, or file.")
                   : props.triggerKind === "skill"
-                    ? "No matching skill."
-                    : "No matching command."))}
+                    ? t("No matching skill.")
+                    : t("No matching command.")))}
           </p>
         ) : null
       }

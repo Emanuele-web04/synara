@@ -50,6 +50,7 @@ import {
   resolveRightDockPaneLabel,
 } from "./rightDockPaneMeta";
 import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { useTranslation } from "~/i18n";
 
 // Pane kinds whose content has a natural width, opened at that size rather than
 // at the even split. The device pane frames a portrait phone, so its useful
@@ -102,9 +103,11 @@ function RightDockLauncher(props: {
   items: readonly RightDockLauncherItem[];
   onOpen: (kind: RightDockPaneKind) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <nav
-      aria-label="Open a panel"
+      aria-label={t("Open a panel")}
       className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-6"
     >
       <div className="flex w-full max-w-sm flex-col gap-1.5">
@@ -114,7 +117,7 @@ function RightDockLauncher(props: {
             variant="subtle"
             size="xl"
             className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-ui-lg font-normal"
-            aria-label={`Open ${label}`}
+            aria-label={t("Open {{value0}}", { value0: label })}
             onClick={() => props.onOpen(kind)}
           >
             <Icon className="size-4 shrink-0" />
@@ -165,6 +168,8 @@ function useKeepMountedPaneIds(
 }
 
 export function RightDock(props: RightDockProps) {
+  const { t } = useTranslation();
+
   const activePane = resolveActivePane(props.state);
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
@@ -320,12 +325,12 @@ export function RightDock(props: RightDockProps) {
             )}
           >
             <SurfaceContentTabs
-              ariaLabel="Open panels"
+              ariaLabel={t("Open panels")}
               activeKey={props.state.activePaneId}
               onMove={props.onMovePane}
               tabs={props.state.panes.map((pane) => ({
                 key: pane.id,
-                title: resolveRightDockPaneLabel(pane, props.paneLabelOverrides),
+                title: resolveRightDockPaneLabel(pane, props.paneLabelOverrides, t),
                 icon: props.paneIconOverrides?.[pane.id] ?? resolveRightDockPaneIcon(pane),
                 onSelect: onSelectPane ? () => onSelectPane(pane.id) : undefined,
                 onClose: () => props.onClosePane(pane.id),
@@ -338,8 +343,8 @@ export function RightDock(props: RightDockProps) {
                     <Button
                       variant="chrome"
                       size="icon-xs"
-                      aria-label="Add panel"
-                      title="Add panel"
+                      aria-label={t("Add panel")}
+                      title={t("Add panel")}
                       className={DOCK_HEADER_ICON_BUTTON_CLASS}
                     />
                   }
@@ -348,7 +353,7 @@ export function RightDock(props: RightDockProps) {
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
                   {props.addMenuKinds.map((kind) => {
-                    const { Icon, label } = getRightDockPaneMeta(kind);
+                    const { Icon, label } = getRightDockPaneMeta(kind, t);
                     return (
                       <MenuItem key={kind} onClick={() => props.onAddPane(kind)}>
                         <Icon className="size-3.5 shrink-0" />
@@ -376,8 +381,8 @@ export function RightDock(props: RightDockProps) {
               <IconButton
                 variant="chrome"
                 size="icon-xs"
-                label={maximized ? "Restore panel" : "Maximize panel"}
-                tooltip={maximized ? "Restore panel" : "Maximize panel"}
+                label={maximized ? t("Restore panel") : t("Maximize panel")}
+                tooltip={maximized ? t("Restore panel") : t("Maximize panel")}
                 tooltipSide="bottom"
                 aria-pressed={maximized}
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
@@ -393,8 +398,8 @@ export function RightDock(props: RightDockProps) {
             <IconButton
               variant="chrome"
               size="icon-xs"
-              label="Collapse panel"
-              tooltip="Collapse panel"
+              label={t("Collapse panel")}
+              tooltip={t("Collapse panel")}
               tooltipSide="bottom"
               className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}

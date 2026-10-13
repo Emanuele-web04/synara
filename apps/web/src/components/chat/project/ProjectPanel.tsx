@@ -62,6 +62,7 @@ import {
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
 import { useProjectAgentSummaries } from "./useProjectAgentSummaries";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_SIDEBAR_THREADS: readonly SidebarThreadSummary[] = [];
 const EMPTY_GROUP_THREAD_ROWS: readonly GroupThreadRowData[] = [];
@@ -114,6 +115,8 @@ export function ProjectPanel({
   settingsInitialSection,
   onSettingsDialogOpenChange,
 }: ProjectPanelProps) {
+  const { t } = useTranslation();
+
   const [internalDialogOpen, setInternalDialogOpen] = useState(false);
   const agentDialogOpen = settingsDialogOpen ?? internalDialogOpen;
   const setAgentDialogOpen = (open: boolean) => {
@@ -330,19 +333,23 @@ export function ProjectPanel({
   const content = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 px-3 pb-0.5 pt-1">
-        <EnvironmentPanelTitle>Hubs</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>{t("Hubs")}</EnvironmentPanelTitle>
         <div className="flex items-center gap-0.5">
           {configured ? (
             <>
               {agent.overview?.goal?.status === "active" ? (
-                <IconButton type="button" label="Pause goal" onClick={() => void agent.pauseGoal()}>
+                <IconButton
+                  type="button"
+                  label={t("Pause goal")}
+                  onClick={() => void agent.pauseGoal()}
+                >
                   <PauseIcon className="size-3.5" />
                 </IconButton>
               ) : null}
               {agent.overview?.goal?.status === "paused" ? (
                 <IconButton
                   type="button"
-                  label="Resume goal"
+                  label={t("Resume goal")}
                   onClick={() => void agent.resumeGoal()}
                 >
                   <PlayIcon className="size-3.5" />
@@ -350,15 +357,20 @@ export function ProjectPanel({
               ) : null}
               <IconButton
                 type="button"
-                label="Hub settings"
-                tooltip="Hub settings"
+                label={t("Hub settings")}
+                tooltip={t("Hub settings")}
                 onClick={() => setAgentDialogOpen(true)}
               >
                 <SettingsIcon className="size-3.5" />
               </IconButton>
             </>
           ) : null}
-          <IconButton type="button" label="Close hub panel" tooltip="Close" onClick={onClose}>
+          <IconButton
+            type="button"
+            label={t("Close hub panel")}
+            tooltip={t("Close")}
+            onClick={onClose}
+          >
             <XIcon className="size-3.5" />
           </IconButton>
         </div>
@@ -386,8 +398,8 @@ export function ProjectPanel({
                   <BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />
                 )
               }
-              label="Coordinator"
-              aria-label={`Open ${coordinatorDisplayName}`}
+              label={t("Coordinator")}
+              aria-label={t("Open {{value0}}", { value0: coordinatorDisplayName })}
               title={coordinatorDisplayName}
               onClick={openCoordinatorThread}
               trailing={
@@ -411,7 +423,7 @@ export function ProjectPanel({
                           coordinatorStatusDot.dotClassName,
                           coordinatorStatusDot.pulse && "animate-pulse",
                         )}
-                        title={coordinatorStatusDot.label}
+                        title={t(coordinatorStatusDot.label)}
                       />
                     </span>
                   ) : null}
@@ -424,7 +436,7 @@ export function ProjectPanel({
                 {focusSummary}
               </p>
             ) : focusUpdating ? (
-              <p className="px-2 pb-1.5 text-ui-xs text-muted-foreground">Updating…</p>
+              <p className="px-2 pb-1.5 text-ui-xs text-muted-foreground">{t("Updating…")}</p>
             ) : null}
             {digestFocus.length > 0 ? (
               <ul className="flex flex-col gap-1 px-2 pb-1.5">
@@ -444,7 +456,7 @@ export function ProjectPanel({
           <div className={GROUP_PANEL_TILE_CLASS_NAME}>
             <EnvironmentRow
               icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-              label="Set up coordinator"
+              label={t("Set up coordinator")}
               onClick={() => setAgentDialogOpen(true)}
             />
           </div>
@@ -454,14 +466,15 @@ export function ProjectPanel({
           <>
             {agent.overview?.blockers.map((blocker) => (
               <p key={blocker.taskId} className="px-2 text-ui-sm text-destructive">
-                Blocked: {blocker.title} — {blocker.reason}
+                {t("Blocked:")} {blocker.title} — {blocker.reason}
               </p>
             ))}
 
             {queuedWorkItems.length > 0 ? (
-              <section aria-label="Queued work" className="space-y-2 px-2">
+              <section aria-label={t("Queued work")} className="space-y-2 px-2">
                 <p className="text-ui-sm font-medium text-muted-foreground">
-                  Queued work ({queuedWorkItems.length})
+                  {t("Queued work (")}
+                  {queuedWorkItems.length})
                 </p>
                 <HubWorkItemCards items={queuedWorkItems} onOpenThread={onOpenThread} />
               </section>
@@ -539,8 +552,9 @@ export function ProjectPanel({
           </>
         ) : (
           <p className="px-2 py-1 text-ui text-muted-foreground">
-            Threads, context, and memory for the hub live in this folder after you set up the
-            coordinator. Setup does not launch a model.
+            {t(
+              "Threads, context, and memory for the hub live in this folder after you set up the coordinator. Setup does not launch a model.",
+            )}
           </p>
         )}
       </div>
@@ -624,6 +638,8 @@ function ProjectContextFile({
   projectId: ProjectId | null;
   agent: ReturnType<typeof useProjectAgent>;
 }) {
+  const { t } = useTranslation();
+
   const [body, setBody] = useState("");
   const [revision, setRevision] = useState(0);
   const [conflict, setConflict] = useState<string | null>(null);
@@ -709,7 +725,7 @@ function ProjectContextFile({
           className={CONTEXT_TEXTAREA_CLASS_NAME}
           value={body}
           aria-label={logicalPath}
-          placeholder="Type here"
+          placeholder={t("Type here")}
           onFocus={() => {
             focusedRef.current = true;
           }}
@@ -739,7 +755,7 @@ function ProjectContextFile({
           className={cn(ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME, "pull-request-prose")}
         />
       ) : (
-        <p className="text-ui text-muted-foreground">Nothing here yet.</p>
+        <p className="text-ui text-muted-foreground">{t("Nothing here yet.")}</p>
       )}
     </div>
   );

@@ -9,6 +9,7 @@ import {
 import { useAnnouncementSheetSlot, useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 /** A remembered hint sharing the startup announcement slot with Activity and the tour. */
 export function OneTimeCoachmark({
@@ -114,8 +115,14 @@ export function TasksCoachmark({
   children: ReactElement<ButtonHTMLAttributes<HTMLButtonElement>>;
   tooltip: string;
 }) {
+  const { t } = useTranslation();
   return (
-    <OneTimeCoachmark {...TASKS_COACHMARK} tooltip={tooltip}>
+    <OneTimeCoachmark
+      {...TASKS_COACHMARK}
+      title={t(TASKS_COACHMARK.title)}
+      description={t(TASKS_COACHMARK.description)}
+      tooltip={tooltip}
+    >
       {children}
     </OneTimeCoachmark>
   );

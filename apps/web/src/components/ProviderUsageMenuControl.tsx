@@ -32,6 +32,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { Menu, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { t } from "~/i18n";
 
 export interface ProviderUsageMenuModel {
   menuTitle: string;
@@ -77,9 +78,9 @@ function providerUsageEmptyMessage(
     case "needs-auth":
       return snapshot.detail ?? providerUsageNeedsAuthDetail(provider);
     case "unsupported":
-      return snapshot.detail ?? "Live usage is not available for this provider configuration.";
+      return snapshot.detail ?? t("Live usage is not available for this provider configuration.");
     case "error":
-      return snapshot.detail ?? "Usage is currently unavailable.";
+      return snapshot.detail ?? t("Usage is currently unavailable.");
     default:
       return undefined;
   }

@@ -13,6 +13,8 @@
 // the pane already receives rather than left as an opaque id.
 
 import type { ComputerWindow } from "@synara/contracts";
+import { t } from "~/i18n";
+import { pluralize as sourcePluralize } from "@synara/shared/text";
 
 /** The gateway's Computer tools, and the verb each one performs. */
 export const COMPUTER_TOOL_TITLES = {
@@ -100,12 +102,16 @@ export interface ComputerToolCallDescription {
  * into the app and title a person recognises. Without a match the id is dropped
  * rather than printed: an id tells the user nothing they can check against what
  * is on their screen.
+ * A fixed source translator keeps cached work-log labels independent of the UI locale.
  */
-export function describeComputerToolCall(input: {
-  readonly toolName: string | null | undefined;
-  readonly args: Readonly<Record<string, unknown>> | undefined;
-  readonly windows?: readonly ComputerWindow[] | undefined;
-}): ComputerToolCallDescription | null {
+export function describeComputerToolCall(
+  input: {
+    readonly toolName: string | null | undefined;
+    readonly args: Readonly<Record<string, unknown>> | undefined;
+    readonly windows?: readonly ComputerWindow[] | undefined;
+  },
+  translate: typeof t = t,
+): ComputerToolCallDescription | null {
   const tool = computerToolName(input.toolName);
   if (tool === null) return null;
   const args = input.args ?? {};
@@ -118,11 +124,14 @@ export function describeComputerToolCall(input: {
       selectedTool === "computer_get_cursor_position" ||
       selectedTool === "computer_spaces"
     ) {
-      const description = describeComputerToolCall({
-        toolName: selectedTool,
-        args: readRecord(args.arguments) ?? undefined,
-        windows: input.windows,
-      })!;
+      const description = describeComputerToolCall(
+        {
+          toolName: selectedTool,
+          args: readRecord(args.arguments) ?? undefined,
+          windows: input.windows,
+        },
+        translate,
+      )!;
       return {
         ...description,
         tool,
@@ -141,45 +150,46 @@ export function describeComputerToolCall(input: {
     return {
       tool,
       summary: Object.hasOwn(summaries, readString(args.operation) ?? "list")
-        ? summaries[readString(args.operation) ?? "list"]!
-        : "Check a desktop Space operation",
-      params: describeParams(tool, args, input.windows),
+        ? translate(summaries[readString(args.operation) ?? "list"]!)
+        : translate("Check a desktop Space operation"),
+      params: describeParams(tool, args, input.windows, translate),
     };
   }
   if (tool.startsWith("computer_browser_")) {
     return {
       tool,
-      summary: describeBrowserAction(tool, args),
-      params: describeParams(tool, args, input.windows),
+      summary: describeBrowserAction(tool, args, translate),
+      params: describeParams(tool, args, input.windows, translate),
     };
   }
   // The visibility pair's flag is the verb's direction: an approval that reads
   // "Minimize or restore" makes the user guess which half is being asked for.
   const verb =
     tool === "computer_press_key" && readString(args.key)
-      ? "Press"
+      ? translate("Press")
       : tool === "computer_launch_app"
-        ? "Open"
+        ? translate("Open")
         : tool === "computer_activate_window"
-          ? `Switch to ${
-              readString(args.app_name) ??
-              readString(args.application) ??
-              readString(args.app) ??
-              resolveWindow(args.window_id, input.windows) ??
-              ""
-            }`.trimEnd()
+          ? translate("Switch to {{target}}", {
+              target:
+                readString(args.app_name) ??
+                readString(args.application) ??
+                readString(args.app) ??
+                resolveWindow(args.window_id, input.windows) ??
+                "",
+            }).trimEnd()
           : ((tool === "computer_set_window_minimized"
-              ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
+              ? directionVerb(args.minimized, "Minimize a window", "Restore a window", translate)
               : tool === "computer_set_app_visibility"
-                ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
-                : undefined) ?? COMPUTER_TOOL_TITLES[tool]);
+                ? directionVerb(args.hidden, "Hide an app", "Unhide an app", translate)
+                : undefined) ?? translate(COMPUTER_TOOL_TITLES[tool], { context: "computerTool" }));
   const where =
     tool === "computer_launch_app" || tool === "computer_activate_window"
       ? ""
       : tool === "computer_drag"
-        ? describeDragTarget(args, input.windows)
+        ? describeDragTarget(args, input.windows, translate)
         : tool === "computer_set_app_visibility"
-          ? describePidTarget(args, input.windows)
+          ? describePidTarget(args, input.windows, translate)
           : describeTarget(
               args,
               input.windows,
@@ -189,52 +199,68 @@ export function describeComputerToolCall(input: {
                   ? "in"
                   : "on",
               tool === "computer_zoom",
+              translate,
             );
-  const what = describePayload(tool, args);
+  const what = describePayload(tool, args, translate);
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
-  return { tool, summary, params: describeParams(tool, args, input.windows) };
+  return { tool, summary, params: describeParams(tool, args, input.windows, translate) };
 }
 
 /** true/false pick the verb's direction; anything else keeps the generic title. */
-function directionVerb(flag: unknown, whenTrue: string, whenFalse: string): string | undefined {
-  return flag === true ? whenTrue : flag === false ? whenFalse : undefined;
+function directionVerb(
+  flag: unknown,
+  whenTrue: string,
+  whenFalse: string,
+  translate: typeof t,
+): string | undefined {
+  return flag === true ? translate(whenTrue) : flag === false ? translate(whenFalse) : undefined;
 }
 
 /** "in Safari" — the pid resolved through the window list, or "" when it cannot be. */
 function describePidTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
+  translate: typeof t,
 ): string {
   const pid = readNumber(args.pid);
   if (pid === null || !windows) return "";
   const app = windows.find((window) => window.pid === pid)?.appName?.trim();
-  return app ? `in ${app}` : "";
+  return app ? translate("in {{target}}", { target: app }) : "";
 }
 
 /** "at (812, 344) in Safari — Google", "on “Save” in Notes", or "". */
 function describeTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
-  labelPreposition: "on" | "for" | "in" = "on",
+  labelPreposition: "on" | "for" | "in" | null = "on",
   alwaysShowCoordinates = false,
+  translate: typeof t,
 ): string {
   const parts: string[] = [];
   const label = readString(args.label);
   const x = readNumber(args.x);
   const y = readNumber(args.y);
-  const coordinates = x !== null && y !== null ? `at (${x}, ${y})` : null;
+  const coordinates = x !== null && y !== null ? translate("at ({{x}}, {{y}})", { x, y }) : null;
   const window = resolveWindow(args.window_id, windows);
   const app = readString(args.app_name) ?? readString(args.application) ?? readString(args.app);
   if (label) {
-    parts.push(`${labelPreposition} “${label}”`);
+    const template =
+      labelPreposition === "on"
+        ? "on “{{label}}”"
+        : labelPreposition === "for"
+          ? "for “{{label}}”"
+          : labelPreposition === "in"
+            ? "in “{{label}}”"
+            : "“{{label}}”";
+    parts.push(translate(template, { label }));
   } else if (alwaysShowCoordinates && coordinates) {
     parts.push(coordinates);
   }
   if (window) {
-    parts.push(`in ${window}`);
+    parts.push(translate("in {{target}}", { target: window }));
   } else if (app) {
-    parts.push(`in ${app}`);
+    parts.push(translate("in {{target}}", { target: app }));
   }
   // Coordinates appear only when nothing else names the target: a window or
   // app title is what a person checks against their screen, and the raw pair
@@ -249,17 +275,24 @@ function describeTarget(
 function describeDragTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
+  translate: typeof t,
 ): string {
   const from = readRecord(args.from);
   const to = readRecord(args.to);
   if (!from || !to) return "";
-  const fromTarget = describeTarget(from, windows).replace(/^on /, "");
-  const toTarget = describeTarget(to, windows).replace(/^on /, "");
-  return fromTarget && toTarget ? `from ${fromTarget} to ${toTarget}` : "";
+  const fromTarget = describeTarget(from, windows, null, false, translate);
+  const toTarget = describeTarget(to, windows, null, false, translate);
+  return fromTarget && toTarget
+    ? translate("from {{from}} to {{to}}", { from: fromTarget, to: toTarget })
+    : "";
 }
 
 /** The thing being typed, pressed, or scrolled — the part that is not a target. */
-function describePayload(tool: ComputerToolName, args: Readonly<Record<string, unknown>>): string {
+function describePayload(
+  tool: ComputerToolName,
+  args: Readonly<Record<string, unknown>>,
+  translate: typeof t,
+): string {
   // Values typed into a field or copied to the clipboard can be credentials or
   // other private data. The expanded parameter list may show the exact action
   // being approved, but transcript summaries must never repeat that content.
@@ -279,8 +312,8 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   if (tool === "computer_scroll") {
     const dx = readNumber(args.delta_x) ?? 0;
     const dy = readNumber(args.delta_y) ?? 0;
-    if (dy !== 0) return dy > 0 ? "down" : "up";
-    if (dx !== 0) return dx > 0 ? "right" : "left";
+    if (dy !== 0) return translate(dy > 0 ? "down" : "up");
+    if (dx !== 0) return translate(dx > 0 ? "right" : "left");
     return "";
   }
   if (tool === "computer_launch_app") {
@@ -295,8 +328,11 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
     const durationMs = readNumber(args.duration_ms);
     if (durationMs === null) return "";
     return durationMs >= 1_000 && durationMs % 1_000 === 0
-      ? `for ${durationMs / 1_000} ${durationMs === 1_000 ? "second" : "seconds"}`
-      : `for ${durationMs} ms`;
+      ? translate("for {{duration}} {{unit}}", {
+          duration: durationMs / 1_000,
+          unit: translate(sourcePluralize(durationMs / 1_000, "second")),
+        })
+      : translate("for {{duration}} ms", { duration: durationMs });
   }
   return "";
 }
@@ -304,30 +340,40 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
 function describeBrowserAction(
   tool: ComputerToolName,
   args: Readonly<Record<string, unknown>>,
+  translate: typeof t,
 ): string {
   if (tool === "computer_browser_prepare" && args.allow_launch === true) {
     return args.windowed === true
-      ? "Open an isolated browser window"
-      : "Open an isolated browser in the background";
+      ? translate("Open an isolated browser window")
+      : translate("Open an isolated browser in the background");
   }
   if (tool === "computer_browser_navigate") {
     const site = browserSite(args.url);
-    if (site) return `Open ${site} in the browser`;
+    if (site) return translate("Open {{site}} in the browser", { site });
   }
   if (tool === "computer_browser_type" && args.replace === true) {
-    return args.text === "" ? "Clear a browser field" : "Replace text in a browser field";
+    return translate(
+      args.text === "" ? "Clear a browser field" : "Replace text in a browser field",
+    );
   }
   if (tool === "computer_browser_dialog") {
-    const verbs: Record<string, string> = { inspect: "Read", accept: "Accept", dismiss: "Dismiss" };
+    const verbs: Record<string, string> = {
+      inspect: "Read a browser dialog",
+      accept: "Accept a browser dialog",
+      dismiss: "Dismiss a browser dialog",
+    };
     const verb =
       typeof args.action === "string" && Object.hasOwn(verbs, args.action)
         ? verbs[args.action]
         : undefined;
-    if (verb) return `${verb} a browser dialog`;
+    if (verb) return translate(verb);
   }
   if (tool === "computer_browser_upload") {
     const count = readStringArray(args.files).length;
-    if (count > 0) return `Attach ${count === 1 ? "a file" : `${count} files`} in the browser`;
+    if (count > 0)
+      return count === 1
+        ? translate("Attach a file in the browser")
+        : translate("Attach {{count}} files in the browser", { count });
   }
   if (tool === "computer_browser_pointer") {
     const actions: Record<string, string> = {
@@ -337,7 +383,11 @@ function describeBrowserAction(
       drag: "Drag in the browser",
     };
     if (args.action === "scroll") {
-      return ["Scroll", describePayload("computer_scroll", args), "in the browser"]
+      return [
+        translate("Scroll"),
+        describePayload("computer_scroll", args, translate),
+        translate("in the browser"),
+      ]
         .filter(Boolean)
         .join(" ");
     }
@@ -345,9 +395,9 @@ function describeBrowserAction(
       typeof args.action === "string" && Object.hasOwn(actions, args.action)
         ? actions[args.action]
         : undefined;
-    if (action) return action;
+    if (action) return translate(action);
   }
-  return COMPUTER_TOOL_TITLES[tool];
+  return translate(COMPUTER_TOOL_TITLES[tool], { context: "computerTool" });
 }
 
 /** A page's domain is useful context; credentials, paths and query values are not a tool title. */
@@ -420,6 +470,7 @@ function describeParams(
   tool: ComputerToolName,
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
+  translate: typeof t,
 ): ReadonlyArray<{ readonly name: string; readonly value: string }> {
   const rows: Array<{ name: string; value: string }> = [];
   const nativeSpaceId = readNumber(args.space_id);
@@ -493,14 +544,16 @@ function describeParams(
     if (tool === "computer_browser_prepare" && args.allow_launch === true) {
       rows.push({
         name: "Browser",
-        value: args.windowed === true ? "Visible window" : "Background",
+        value: translate(args.windowed === true ? "Visible window" : "Background", {
+          context: "browser",
+        }),
       });
     }
   }
   // The off-screen flag changes what the launch does to the user's screen, so
   // the card shows it rather than letting "Open an app" read as ordinary.
   if (tool === "computer_launch_app" && args.hidden === true) {
-    rows.push({ name: "Hidden", value: "yes" });
+    rows.push({ name: "Hidden", value: translate("yes") });
   }
   // The pid is what the call actually targeted; the app name resolved into the
   // summary is the friendly gloss, not a substitute for the real argument.
@@ -521,7 +574,9 @@ function describeParams(
           ? kinds
               .map((kind) => {
                 const name = computerToolName(`computer_${kind}`);
-                return name ? COMPUTER_TOOL_TITLES[name] : "Action";
+                return name
+                  ? translate(COMPUTER_TOOL_TITLES[name], { context: "computerTool" })
+                  : translate("Action");
               })
               .join(" → ")
           : `${args.steps.length}`,
@@ -529,7 +584,10 @@ function describeParams(
       ),
     });
   }
-  return rows;
+  return rows.map(({ name, value }) => ({
+    name: translate(name, { context: "computerParameter" }),
+    value,
+  }));
 }
 
 function resolveWindow(

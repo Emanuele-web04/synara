@@ -31,6 +31,7 @@ import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { IconButton } from "./ui/icon-button";
 import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
+import { useTranslation } from "~/i18n";
 
 type DiffRenderMode = "stacked" | "split";
 
@@ -51,6 +52,8 @@ function DiffFileHeaderActionsMenu(props: {
   basePath: string | null;
   chatActions: DiffFileChatActions;
 }) {
+  const { t } = useTranslation();
+
   const copyPathToClipboard = useCopyPathToClipboard();
 
   return (
@@ -61,8 +64,8 @@ function DiffFileHeaderActionsMenu(props: {
             variant="ghost"
             size="icon-xs"
             shape="capsule"
-            label="File actions"
-            title="File actions"
+            label={t("File actions")}
+            title={t("File actions")}
             className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
           >
             <EllipsisIcon className="size-3.5" />
@@ -77,7 +80,7 @@ function DiffFileHeaderActionsMenu(props: {
             }}
           >
             <PencilIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
-            <span>Edit file</span>
+            <span>{t("Edit file")}</span>
           </MenuItem>
         ) : null}
         <MenuItem
@@ -86,7 +89,7 @@ function DiffFileHeaderActionsMenu(props: {
           }}
         >
           <MessageCircleIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
-          <span>Reference in chat</span>
+          <span>{t("Reference in chat")}</span>
         </MenuItem>
         <MenuItem
           onClick={() => {
@@ -94,11 +97,11 @@ function DiffFileHeaderActionsMenu(props: {
           }}
         >
           <MessageCircleIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
-          <span>Ask why this changed</span>
+          <span>{t("Ask why this changed")}</span>
         </MenuItem>
         <MenuItem onClick={() => copyPathToClipboard(props.filePath)}>
           <CopyIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
-          <span>Copy path</span>
+          <span>{t("Copy path")}</span>
         </MenuItem>
       </ComposerPickerMenuPopup>
     </Menu>
@@ -139,6 +142,8 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   chatActions?: DiffFileChatActions | undefined;
   onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
@@ -222,7 +227,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
         <LocalImagePreview
           src={filePath}
           cwd={props.workspaceRoot}
-          alt={`Preview of ${filePath}`}
+          alt={t("Preview of {{value0}}", { value0: filePath })}
           className="diff-render-file__image-preview"
           imageClassName="max-h-[320px]"
         />
@@ -242,11 +247,13 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
   chatActions?: DiffFileChatActions | undefined;
   onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   if (props.renderableFiles.length === 0) {
     return (
       <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 pb-2">
         <PanelStateMessage density="compact" fill="flex">
-          <p>No files in this diff.</p>
+          <p>{t("No files in this diff.")}</p>
         </PanelStateMessage>
       </FileDiffSurface>
     );

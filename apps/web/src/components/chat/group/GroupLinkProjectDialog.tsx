@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { SearchInput } from "~/components/ui/search-input";
+import { useTranslation } from "~/i18n";
 
 export function GroupLinkProjectDialog(props: {
   readonly open: boolean;
@@ -28,6 +29,8 @@ export function GroupLinkProjectDialog(props: {
   readonly onOpenChange: (open: boolean) => void;
   readonly onPick: (projectId: ProjectId) => void;
 }) {
+  const { t } = useTranslation();
+
   const [query, setQuery] = useState("");
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
@@ -71,24 +74,24 @@ export function GroupLinkProjectDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add repository</DialogTitle>
+          <DialogTitle>{t("Add repository")}</DialogTitle>
           <DialogDescription>
-            Link an existing project so the hub can work in its folder.
+            {t("Link an existing project so the hub can work in its folder.")}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
           <SearchInput
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search projects"
-            aria-label="Search projects to link"
+            placeholder={t("Search projects")}
+            aria-label={t("Search projects to link")}
           />
           <div className="max-h-72 overflow-y-auto">
             {candidates.length === 0 ? (
               <p className="px-2 py-6 text-center text-ui text-muted-foreground">
                 {query.trim().length > 0
-                  ? "No matching projects."
-                  : "No projects available to link."}
+                  ? t("No matching projects.")
+                  : t("No projects available to link.")}
               </p>
             ) : (
               <ul className="flex flex-col gap-0.5">

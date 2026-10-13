@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BrowserVaultMethods } from "@synara/contracts";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { useTranslation } from "~/i18n";
 
 type MasterAction = { kind: "setup" | "unlock" } | { kind: "reveal"; id: string };
 
@@ -15,6 +16,8 @@ export function BrowserVaultMaster({
   action: MasterAction;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [revealed, setRevealed] = useState<string | null>(null);
@@ -49,7 +52,7 @@ export function BrowserVaultMaster({
   const submit = async () => {
     if (busy) return;
     if (action.kind === "setup" && (password.length < 12 || password !== confirmation)) {
-      setError("Use at least 12 characters and enter the same password twice.");
+      setError(t("Use at least 12 characters and enter the same password twice."));
       return;
     }
     const request = ++generation.current;
@@ -78,7 +81,7 @@ export function BrowserVaultMaster({
       }
     } catch {
       if (request === generation.current)
-        setError("Could not verify the master password. Try again shortly.");
+        setError(t("Could not verify the master password. Try again shortly."));
     } finally {
       if (request === generation.current) setBusy(false);
     }
@@ -89,9 +92,9 @@ export function BrowserVaultMaster({
       {revealed !== null ? (
         <>
           <label className="block space-y-1 text-ui leading-snug">
-            <span>Password</span>
+            <span>{t("Password")}</span>
             <Input
-              aria-label="Revealed password"
+              aria-label={t("Revealed password")}
               value={revealed}
               readOnly
               autoComplete="off"
@@ -100,7 +103,7 @@ export function BrowserVaultMaster({
           </label>
           <div className="flex justify-end">
             <Button size="sm" variant="ghost" onClick={onDone}>
-              Hide password
+              {t("Hide password")}
             </Button>
           </div>
         </>
@@ -113,7 +116,7 @@ export function BrowserVaultMaster({
           }}
         >
           <label className="block space-y-1 text-ui leading-snug">
-            <span>{action.kind === "setup" ? "New master password" : "Master password"}</span>
+            <span>{action.kind === "setup" ? t("New master password") : t("Master password")}</span>
             <Input
               type="password"
               autoFocus
@@ -127,7 +130,7 @@ export function BrowserVaultMaster({
           {action.kind === "setup" ? (
             <>
               <label className="block space-y-1 text-ui leading-snug">
-                <span>Confirm master password</span>
+                <span>{t("Confirm master password")}</span>
                 <Input
                   type="password"
                   value={confirmation}
@@ -138,7 +141,9 @@ export function BrowserVaultMaster({
                 />
               </label>
               <p className="text-ui leading-snug text-muted-foreground">
-                Keep this password somewhere safe. A forgotten master password cannot be reset here.
+                {t(
+                  "Keep this password somewhere safe. A forgotten master password cannot be reset here.",
+                )}
               </p>
             </>
           ) : null}
@@ -149,16 +154,16 @@ export function BrowserVaultMaster({
           ) : null}
           <div className="flex justify-end gap-2">
             <Button type="button" size="sm" variant="ghost" onClick={onDone}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button type="submit" size="sm" disabled={busy || !password}>
               {busy
-                ? "Verifying..."
+                ? t("Verifying...")
                 : action.kind === "setup"
-                  ? "Set master password"
+                  ? t("Set master password")
                   : action.kind === "unlock"
-                    ? "Unlock"
-                    : "Reveal password"}
+                    ? t("Unlock")
+                    : t("Reveal password")}
             </Button>
           </div>
         </form>

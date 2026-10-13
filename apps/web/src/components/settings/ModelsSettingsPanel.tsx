@@ -46,6 +46,7 @@ import {
 } from "./SettingControls";
 import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPanelPrimitives";
 import { DebouncedSettingTextarea } from "./DebouncedSettingTextInput";
+import { useTranslation } from "~/i18n";
 
 const SOURCE_CONTROL_WRITING_OPTIONS: readonly {
   value: SourceControlWritingStyle;
@@ -106,6 +107,8 @@ export function ModelsSettingsPanel({
   resetEpoch,
   active,
 }: AppSettingsBinding & { readonly resetEpoch: number; readonly active: boolean }) {
+  const { t } = useTranslation();
+
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
@@ -197,7 +200,10 @@ export function ModelsSettingsPanel({
     selectedGitTextGenerationInstanceLabel &&
     selectedGitTextGenerationInstanceLabel !==
       PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
-      ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
+      ? t("{{value0}} · {{value1}}", {
+          value0: selectedGitTextGenerationInstanceLabel,
+          value1: selectedGitTextGenerationModelName,
+        })
       : selectedGitTextGenerationModelName;
   const selectedCustomModelProviderSettings =
     enabledCustomModelProviderSettings.find(
@@ -291,7 +297,7 @@ export function ModelsSettingsPanel({
       <button
         type="button"
         className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-        aria-label={`Remove ${row.slug}`}
+        aria-label={t("Remove {{value0}}", { value0: row.slug })}
         onClick={() => removeCustomModel(row.provider, row.slug)}
       >
         <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
@@ -313,11 +319,11 @@ export function ModelsSettingsPanel({
       <SettingsSection title="Generation defaults">
         <SettingsRow
           title="Source control writing style"
-          description={writingOption.description}
+          description={t(writingOption.description)}
           resetAction={
             isWritingStyleDirty ? (
               <SettingResetButton
-                label="source control writing style"
+                label={t("source control writing style")}
                 onClick={() =>
                   updateSettings({
                     sourceControlWritingStyle: defaults.sourceControlWritingStyle,
@@ -336,13 +342,13 @@ export function ModelsSettingsPanel({
                 );
                 if (option) updateSettings({ sourceControlWritingStyle: option.value });
               }}
-              ariaLabel="Source control writing style"
+              ariaLabel={t("Source control writing style")}
               triggerClassName="w-full sm:w-60"
-              valueContent={writingOption.label}
+              valueContent={t(writingOption.label)}
             >
               {SOURCE_CONTROL_WRITING_OPTIONS.map((option) => (
                 <SelectItem hideIndicator key={option.value} value={option.value}>
-                  {option.label}
+                  {t(option.label)}
                 </SelectItem>
               ))}
             </SettingsSelectControl>
@@ -352,8 +358,8 @@ export function ModelsSettingsPanel({
             <DebouncedSettingTextarea
               key={resetEpoch}
               className="mt-3 [&_textarea]:min-h-28 [&_textarea]:resize-y"
-              aria-label="Custom source control writing instructions"
-              placeholder="Keep titles concise. Use short bullet points in descriptions."
+              aria-label={t("Custom source control writing instructions")}
+              placeholder={t("Keep titles concise. Use short bullet points in descriptions.")}
               maxLength={MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH}
               value={settings.sourceControlCustomInstructions}
               onCommit={(value) => updateSettings({ sourceControlCustomInstructions: value })}
@@ -366,7 +372,7 @@ export function ModelsSettingsPanel({
           resetAction={
             isGitTextGenerationModelDirty ? (
               <SettingResetButton
-                label="git writing model"
+                label={t("git writing model")}
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
@@ -391,7 +397,7 @@ export function ModelsSettingsPanel({
                   textGenerationModel: model,
                 });
               }}
-              ariaLabel="Git text generation model"
+              ariaLabel={t("Git text generation model")}
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
@@ -411,7 +417,7 @@ export function ModelsSettingsPanel({
           description="Add custom model slugs for supported providers."
           resetAction={
             savedCustomModelRows.length > 0 ? (
-              <SettingResetButton label="custom models" onClick={resetCustomModels} />
+              <SettingResetButton label={t("custom models")} onClick={resetCustomModels} />
             ) : null
           }
         >
@@ -429,7 +435,7 @@ export function ModelsSettingsPanel({
                   <SelectTrigger
                     size="sm"
                     className="w-full sm:w-40"
-                    aria-label="Custom model provider"
+                    aria-label={t("Custom model provider")}
                   >
                     <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                   </SelectTrigger>
@@ -473,12 +479,12 @@ export function ModelsSettingsPanel({
                   onClick={() => addCustomModel(activeCustomModelProvider)}
                 >
                   <PlusIcon className="size-3.5" />
-                  Add
+                  {t("Add")}
                 </Button>
               </div>
             ) : (
               <p className="text-ui text-muted-foreground">
-                Enable a provider in Settings → Providers to add custom models.
+                {t("Enable a provider in Settings → Providers to add custom models.")}
               </p>
             )}
 
@@ -505,8 +511,8 @@ export function ModelsSettingsPanel({
                       onClick={() => setShowAllCustomModels((value) => !value)}
                     >
                       {showAllCustomModels
-                        ? "Show less"
-                        : `Show more (${overflowCustomModelRows.length})`}
+                        ? t("Show less")
+                        : t("Show more ({{value0}})", { value0: overflowCustomModelRows.length })}
                     </button>
                   </>
                 ) : null}

@@ -20,6 +20,7 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 export type DeviceRailAction = "home" | "screenshot" | "record" | "rotate" | "shutdown" | "detach";
 
@@ -82,6 +83,8 @@ export function DeviceControlRail(props: {
   landscape: boolean;
   onAction: (action: DeviceRailAction) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className={cn("flex items-center justify-center gap-1", DEVICE_RAIL_HEIGHT_CLASS)}>
       {DEVICE_RAIL_GROUPS.map((group, groupIndex) => (
@@ -92,7 +95,7 @@ export function DeviceControlRail(props: {
           {group.items.map((item) => {
             const isRecordStop = item.id === "record" && props.recording;
             const Icon = isRecordStop ? DeviceRecordStopIcon : item.Icon;
-            const label = isRecordStop ? "Stop recording" : item.label;
+            const label = isRecordStop ? t("Stop recording") : t(item.label);
             const pressed =
               item.id === "record"
                 ? props.recording
@@ -130,7 +133,9 @@ export function DeviceControlRail(props: {
                   }
                 />
                 <TooltipPopup side="top" sideOffset={6}>
-                  {item.shortcut ? `${label}  ${item.shortcut}` : label}
+                  {item.shortcut
+                    ? t("{{value0}}  {{value1}}", { value0: label, value1: item.shortcut })
+                    : label}
                 </TooltipPopup>
               </Tooltip>
             );

@@ -1,5 +1,6 @@
 import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { i18n, setLanguagePreference } from "~/i18n";
 
 import {
   deriveSubagentTaskEnds,
@@ -43,6 +44,166 @@ describe("deriveSubagentTaskEnds", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("localizes cached generated task and agent summaries without translating provider or user data", () => {
+    i18n.addResources("es", "translation", {
+      "{{value0}} out of {{value1}} {{value2}} completed":
+        "{{value0}} de {{value1}} {{value2}} completadas",
+      "Spawning {{value0}} {{value1}}": "Iniciando {{value0}} {{value1}}",
+      task: "tarea",
+      tasks: "tareas",
+      agent: "agente",
+      agents: "agentes",
+      Click_computerTool: "Hacer clic",
+      "on “{{label}}”": "en “{{label}}”",
+      "in {{target}}": "en {{target}}",
+      Read: "Leer",
+    });
+    const activities = [
+      makeActivity({
+        id: "localized-tasks",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        turnId: "turn-language",
+        payload: {
+          tasks: [
+            { task: "Settings", status: "completed" },
+            { task: "Open", status: "inProgress" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "localized-agent",
+        kind: "tool.updated",
+        summary: "Spawn agent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Spawn agent",
+          data: {
+            item: {
+              tool: "spawnAgent",
+              prompt: "Settings",
+              receiverAgents: [
+                { threadId: "child-1", agentNickname: "Open" },
+                { threadId: "child-2", agentNickname: "Save" },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "localized-read",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "command_execution",
+          title: "Read",
+          data: { item: { command: "cat Settings" } },
+        },
+      }),
+      makeActivity({
+        id: "localized-file-default",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: { requestKind: "file-read", title: "Tool", detail: "/repo/Settings" },
+      }),
+      makeActivity({
+        id: "localized-question",
+        sequence: 4,
+        kind: "user-input.requested",
+        summary: "Question from the provider",
+        payload: {
+          requestId: "question-language",
+          questions: [
+            {
+              id: "choice",
+              header: "Settings",
+              question: "Open",
+              options: [{ label: "Save", description: "Settings" }],
+            },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "localized-answer",
+        sequence: 5,
+        kind: "user-input.resolved",
+        summary: "Answer from the provider",
+        payload: { requestId: "question-language", answers: { choice: "Save" } },
+      }),
+    ];
+    const sourceSnapshot = structuredClone(activities);
+    try {
+      setLanguagePreference("en");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
+          ?.label,
+      ).toBe("1 out of 2 tasks completed");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find(
+          (entry) => entry.id === "localized-file-default",
+        ),
+      ).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
+      setLanguagePreference("es");
+      const entries = deriveWorkLogEntries(activities, undefined);
+      const computer = makeActivity({
+        id: "localized-computer",
+        kind: "tool.completed",
+        summary: "Computer Click",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "computer_click",
+          data: {
+            item: { tool: "computer_click", arguments: { label: "Save", app: "Settings" } },
+          },
+        },
+      });
+      expect(deriveWorkLogEntries([computer], undefined)).toMatchObject([
+        {
+          toolTitle: "Click on “Save” in Settings",
+          displayToolTitle: "Hacer clic en “Save” en Settings",
+        },
+      ]);
+      expect(entries.find((entry) => entry.id === "localized-tasks")).toMatchObject({
+        label: "1 de 2 tareas completadas",
+        detail: "Open",
+      });
+      expect(entries.find((entry) => entry.id === "localized-agent")).toMatchObject({
+        toolTitle: "Spawn agent",
+        subagentAction: {
+          tool: "spawnAgent",
+          summaryText: "Iniciando 2 agentes",
+          prompt: "Settings",
+        },
+        subagents: [{ nickname: "Open" }, { nickname: "Save" }],
+      });
+      expect(entries.find((entry) => entry.id === "localized-read")).toMatchObject({
+        toolTitle: "Read",
+        command: "cat Settings",
+      });
+      expect(entries.find((entry) => entry.id === "localized-file-default")).toMatchObject({
+        toolTitle: "Read",
+        displayToolTitle: "Leer",
+        detail: "/repo/Settings",
+      });
+      expect(entries.find((entry) => entry.id === "localized-answer")?.userInputExchange).toEqual([
+        { id: "choice", header: "Settings", question: "Open", options: ["Save"], answer: "Save" },
+      ]);
+      expect(activities).toEqual(sourceSnapshot);
+      setLanguagePreference("en");
+      expect(
+        deriveWorkLogEntries(activities, undefined).find((entry) => entry.id === "localized-tasks")
+          ?.label,
+      ).toBe("1 out of 2 tasks completed");
+      const defaultFileEntry = deriveWorkLogEntries(activities, undefined).find(
+        (entry) => entry.id === "localized-file-default",
+      );
+      expect(defaultFileEntry).toMatchObject({ toolTitle: "Read", detail: "/repo/Settings" });
+      expect(defaultFileEntry?.displayToolTitle).toBeUndefined();
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
   it("pairs an answered question with its answers in one exchange row", () => {
     const questions = [
       {

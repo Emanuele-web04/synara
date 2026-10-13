@@ -4,7 +4,7 @@
 // Exports: useSidebarThreadActions
 
 import { type ProjectId, ThreadId } from "@synara/contracts";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +65,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { getThreadFromState } from "../threadDerivation";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
+import { t, useTranslation } from "~/i18n";
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
 /**
@@ -86,7 +87,7 @@ const SETTLE_OVERRIDE_MAX_LIFETIME_MS = 15_000;
 async function unarchiveThreadIgnoringAlreadyRestored(threadId: ThreadId): Promise<void> {
   try {
     const api = readNativeApi();
-    if (!api) throw new Error("Unable to connect to the app server.");
+    if (!api) throw new Error(t("Unable to connect to the app server."));
     await unarchiveThreadFromClient(api.orchestration, threadId);
   } catch (error) {
     if (!isThreadAlreadyUnarchivedError(error, threadId)) throw error;
@@ -124,6 +125,8 @@ export function useSidebarThreadActions(input: {
   readonly sidebarThreadSummaryById: Readonly<Record<string, SidebarThreadSummary>>;
   readonly threadsHydrated: boolean;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const {
     activeSplitView,
     appSettings,
@@ -264,11 +267,11 @@ export function useSidebarThreadActions(input: {
         console.error("Failed to update pinned thread state", { threadId, error });
         toastManager.add({
           type: "error",
-          title: isPinned ? "Unable to unpin thread" : "Unable to pin thread",
+          title: isPinned ? t("Unable to unpin thread") : t("Unable to pin thread"),
         });
       });
     },
-    [pinnedThreadIdSet, setThreadPinned],
+    [pinnedThreadIdSet, setThreadPinned, t],
   );
 
   const [optimisticSettledMutationByThreadId, setOptimisticSettledMutationByThreadId] = useState<
@@ -380,7 +383,7 @@ export function useSidebarThreadActions(input: {
   const setThreadSettled = useCallback(
     async (threadId: ThreadId, isSettled: boolean) => {
       const api = readNativeApi();
-      if (!api) throw new Error("Unable to connect to the app server.");
+      if (!api) throw new Error(t("Unable to connect to the app server."));
       const routeVersionAtDispatch =
         closeNavigationInputRef.current.routeThreadId === threadId
           ? closeNavigationInputRef.current.routeVersion
@@ -442,7 +445,7 @@ export function useSidebarThreadActions(input: {
       if (isSettled) await navigateAfterThreadClosed(threadId, routeVersionAtDispatch);
       return isLatestRequest();
     },
-    [clearOptimisticThreadSettled, navigateAfterThreadClosed],
+    [clearOptimisticThreadSettled, navigateAfterThreadClosed, t],
   );
 
   const setThreadSettledWithToast = useCallback(
@@ -453,7 +456,7 @@ export function useSidebarThreadActions(input: {
           console.error("Failed to update settled thread state", { threadId, error });
           toastManager.add({
             type: "error",
-            title: settled ? "Unable to mark thread as done" : "Unable to undo done",
+            title: settled ? t("Unable to mark thread as done") : t("Unable to undo done"),
           });
           return false;
         });
@@ -466,7 +469,7 @@ export function useSidebarThreadActions(input: {
             allowCrossThreadVisibility: true,
             dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
             archiveUndo: {
-              message: "Marked as done",
+              message: t("Marked as done"),
               onUndo: async () => {
                 const restored = await updateSettled(false);
                 if (restored && returnToThreadOnUndo) {
@@ -483,7 +486,7 @@ export function useSidebarThreadActions(input: {
         });
       });
     },
-    [navigate, routeThreadId, setThreadSettled],
+    [navigate, routeThreadId, setThreadSettled, t],
   );
 
   const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
@@ -517,7 +520,9 @@ export function useSidebarThreadActions(input: {
             allowCrossThreadVisibility: true,
             dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
             archiveUndo: {
-              message: `Snoozed until ${formatSnoozeDeadline(deadline.toISOString())}`,
+              message: t("Snoozed until {{value0}}", {
+                value0: formatSnoozeDeadline(deadline.toISOString(), formatLocale),
+              }),
               onUndo: () => setThreadSnoozedUntil(threadId, previousSnoozedUntil),
             },
           },
@@ -549,7 +554,7 @@ export function useSidebarThreadActions(input: {
         }
       });
     },
-    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
+    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById, t, formatLocale],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
@@ -762,8 +767,8 @@ export function useSidebarThreadActions(input: {
       if (appSettings.confirmThreadDelete) {
         const api = readNativeApi();
         const confirmationMessage = [
-          `Delete thread "${thread.title}"?`,
-          "This permanently clears conversation history for this thread.",
+          t('Delete thread "{{value0}}"?', { value0: thread.title }),
+          t("This permanently clears conversation history for this thread."),
         ].join("\n");
         const confirmed = api
           ? await api.dialogs.confirm(confirmationMessage)
@@ -772,7 +777,7 @@ export function useSidebarThreadActions(input: {
       }
       await deleteThread(threadId);
     },
-    [deleteThread, appSettings.confirmThreadDelete, sidebarThreadSummaryById],
+    [deleteThread, appSettings.confirmThreadDelete, sidebarThreadSummaryById, t],
   );
 
   const releaseArchivedWorktree = useCallback(
@@ -852,8 +857,8 @@ export function useSidebarThreadActions(input: {
           if (!currentThread) {
             toastManager.add({
               type: "error",
-              title: "Could not restore thread",
-              description: "The thread no longer exists.",
+              title: t("Could not restore thread"),
+              description: t("The thread no longer exists."),
             });
             return false;
           }
@@ -871,8 +876,9 @@ export function useSidebarThreadActions(input: {
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Could not restore thread",
-            description: error instanceof Error ? error.message : "Unable to restore the thread.",
+            title: t("Could not restore thread"),
+            description:
+              error instanceof Error ? error.message : t("Unable to restore the thread."),
           });
           return false;
         }
@@ -881,7 +887,7 @@ export function useSidebarThreadActions(input: {
         pendingThreadIds.delete(restoreInput.threadId);
       });
     },
-    [navigate],
+    [navigate, t],
   );
 
   const showArchiveUndoToast = useCallback(
@@ -929,12 +935,12 @@ export function useSidebarThreadActions(input: {
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not archive thread",
-          description: error instanceof Error ? error.message : "Unable to archive the thread.",
+          title: t("Could not archive thread"),
+          description: error instanceof Error ? error.message : t("Unable to archive the thread."),
         });
       }
     },
-    [archiveThread, routeThreadId, showArchiveUndoToast],
+    [archiveThread, routeThreadId, showArchiveUndoToast, t],
   );
 
   const confirmAndArchiveThread = useCallback(
@@ -944,8 +950,8 @@ export function useSidebarThreadActions(input: {
       if (appSettings.confirmThreadArchive) {
         const api = readNativeApi();
         const confirmationMessage = [
-          `Archive thread "${thread.title}"?`,
-          "Archived threads are hidden from the sidebar but can be restored later.",
+          t('Archive thread "{{value0}}"?', { value0: thread.title }),
+          t("Archived threads are hidden from the sidebar but can be restored later."),
         ].join("\n");
         const confirmed = api
           ? await api.dialogs.confirm(confirmationMessage)
@@ -954,7 +960,7 @@ export function useSidebarThreadActions(input: {
       }
       await archiveThreadWithUndo(threadId);
     },
-    [archiveThreadWithUndo, appSettings.confirmThreadArchive, sidebarThreadSummaryById],
+    [archiveThreadWithUndo, appSettings.confirmThreadArchive, sidebarThreadSummaryById, t],
   );
 
   const archiveAllThreadsInProject = useCallback(
@@ -971,14 +977,18 @@ export function useSidebarThreadActions(input: {
       if (projectThreads.length === 0) {
         toastManager.add({
           type: "info",
-          title: "Nothing to archive",
-          description: `"${project.name}" has no threads to archive.`,
+          title: t("Nothing to archive"),
+          description: t('"{{value0}}" has no threads to archive.', { value0: project.name }),
         });
         return;
       }
       const archiveLines = [
-        `Archive ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
-        "Archived threads are hidden from the sidebar but can be restored later.",
+        t('Archive {{value0}} {{value1}} in "{{value2}}"?', {
+          value0: projectThreads.length,
+          value1: pluralize(projectThreads.length, "thread"),
+          value2: project.name,
+        }),
+        t("Archived threads are hidden from the sidebar but can be restored later."),
       ];
       const confirmed = api
         ? await api.dialogs.confirm(archiveLines.join("\n"))
@@ -1005,21 +1015,31 @@ export function useSidebarThreadActions(input: {
       if (archivedCount > 0) {
         toastManager.add({
           type: failureCount > 0 ? "warning" : "success",
-          title: archivedCount === 1 ? "Thread archived" : `Archived ${archivedCount} threads`,
+          title:
+            archivedCount === 1
+              ? t("Thread archived")
+              : t("Archived {{value0}} threads", { value0: archivedCount }),
           description:
             failureCount > 0
-              ? `Failed to archive ${failureCount} ${pluralize(failureCount, "thread")}.`
-              : `"${project.name}" cleared.`,
+              ? t("Failed to archive {{value0}} {{value1}}.", {
+                  value0: failureCount,
+                  value1: pluralize(failureCount, "thread"),
+                })
+              : t('"{{value0}}" cleared.', { value0: project.name }),
         });
       } else if (failureCount > 0) {
         toastManager.add({
           type: "error",
-          title: "Failed to archive threads",
-          description: `Could not archive ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
+          title: t("Failed to archive threads"),
+          description: t('Could not archive {{value0}} {{value1}} in "{{value2}}".', {
+            value0: failureCount,
+            value1: pluralize(failureCount, "thread"),
+            value2: project.name,
+          }),
         });
       }
     },
-    [archiveThread, projectById, sidebarThreads, removeFromSelection],
+    [archiveThread, projectById, sidebarThreads, removeFromSelection, t],
   );
 
   const deleteProjectThreads = useCallback(
@@ -1038,8 +1058,8 @@ export function useSidebarThreadActions(input: {
         if (options?.showEmptyToast ?? true) {
           toastManager.add({
             type: "info",
-            title: "Nothing to delete",
-            description: `"${project.name}" has no threads to delete.`,
+            title: t("Nothing to delete"),
+            description: t('"{{value0}}" has no threads to delete.', { value0: project.name }),
           });
         }
         return {
@@ -1052,8 +1072,12 @@ export function useSidebarThreadActions(input: {
       const confirmationMessage =
         options?.confirmMessage === undefined
           ? [
-              `Delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
-              "This permanently clears conversation history for these threads.",
+              t('Delete {{value0}} {{value1}} in "{{value2}}"?', {
+                value0: projectThreads.length,
+                value1: pluralize(projectThreads.length, "thread"),
+                value2: project.name,
+              }),
+              t("This permanently clears conversation history for these threads."),
             ].join("\n")
           : options.confirmMessage;
       if (confirmationMessage !== null) {
@@ -1097,17 +1121,27 @@ export function useSidebarThreadActions(input: {
         if (deletedCount > 0) {
           toastManager.add({
             type: failureCount > 0 ? "warning" : "success",
-            title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
+            title:
+              deletedCount === 1
+                ? t("Thread deleted")
+                : t("Deleted {{value0}} threads", { value0: deletedCount }),
             description:
               failureCount > 0
-                ? `Failed to delete ${failureCount} ${pluralize(failureCount, "thread")}.`
-                : `"${project.name}" cleared.`,
+                ? t("Failed to delete {{value0}} {{value1}}.", {
+                    value0: failureCount,
+                    value1: pluralize(failureCount, "thread"),
+                  })
+                : t('"{{value0}}" cleared.', { value0: project.name }),
           });
         } else if (failureCount > 0) {
           toastManager.add({
             type: "error",
-            title: "Failed to delete threads",
-            description: `Could not delete ${failureCount} ${pluralize(failureCount, "thread")} in "${project.name}".`,
+            title: t("Failed to delete threads"),
+            description: t('Could not delete {{value0}} {{value1}} in "{{value2}}".', {
+              value0: failureCount,
+              value1: pluralize(failureCount, "thread"),
+              value2: project.name,
+            }),
           });
         }
       }
@@ -1118,7 +1152,7 @@ export function useSidebarThreadActions(input: {
         projectName: project.name,
       };
     },
-    [deleteThread, projectById, sidebarThreads, removeFromSelection],
+    [deleteThread, projectById, sidebarThreads, removeFromSelection, t],
   );
 
   return {

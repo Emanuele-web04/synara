@@ -16,7 +16,8 @@ import {
   type TodoUpdateInput,
 } from "@synara/contracts";
 
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTime, formatRelativeTimeAgo } from "~/lib/relativeTime";
+import { t, getFormatLocale } from "~/i18n";
 import { canSessionAnswerPendingRequests, deriveActiveWorkStartedAt } from "../../session-logic";
 import type { SidebarThreadSummary } from "../../types";
 import { isThreadActivelyWorking } from "../Sidebar.logic";
@@ -151,17 +152,27 @@ export function deriveTaskStatus(input: {
 export function formatAgentActivity(
   status: TaskStatus,
   thread: Pick<SidebarThreadSummary, "latestTurn"> | null,
+  translate: typeof t = t,
+  locale = getFormatLocale(),
+  nowMs = Date.now(),
 ): string | null {
   if (!thread) return null;
   if (status.kind === "running" && status.workStartedAt) {
-    const elapsed = formatRelativeTime(status.workStartedAt);
-    return elapsed === "now" ? "Working" : `Working · ${elapsed}`;
+    const elapsed = formatRelativeTime(status.workStartedAt, nowMs, locale);
+    return Math.max(0, nowMs - Date.parse(status.workStartedAt)) < 60_000
+      ? translate("Working")
+      : translate("Working · {{elapsed}}", { elapsed });
   }
   if (status.kind === "review" && thread.latestTurn?.completedAt) {
-    const ago = formatRelativeTime(thread.latestTurn.completedAt);
-    return `${status.detail ?? "Finished"} ${ago === "now" ? "just now" : `${ago} ago`}`;
+    const sourceDetail = status.detail ?? "Finished";
+    const detail =
+      sourceDetail === "Finished" || sourceDetail === "Plan ready"
+        ? translate(sourceDetail)
+        : sourceDetail;
+    const ago = formatRelativeTimeAgo(thread.latestTurn.completedAt, nowMs, locale, translate);
+    return translate("{{detail}} {{time}}", { detail, time: ago });
   }
-  if (status.kind === "starting") return "Starting…";
+  if (status.kind === "starting") return translate("Starting…");
   return status.detail;
 }
 

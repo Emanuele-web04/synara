@@ -6,6 +6,7 @@ import {
 } from "~/lib/keepAwake";
 import { SettingResetButton, SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsRow, SettingsSection } from "./settings/SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 const KEEP_AWAKE_SEGMENTED_OPTIONS = KEEP_AWAKE_MODE_OPTIONS.map((option) => ({
   value: option.value,
@@ -26,6 +27,8 @@ export function KeepAwakeSettingsSection({
   defaultMode: KeepAwakeMode;
   onSelectMode: (mode: KeepAwakeMode) => void;
 }) {
+  const { t } = useTranslation();
+
   if (!state?.available) return null;
   return (
     <SettingsSection title="System">
@@ -36,7 +39,7 @@ export function KeepAwakeSettingsSection({
         resetAction={
           mode !== defaultMode ? (
             <SettingResetButton
-              label="keep computer awake"
+              label={t("keep computer awake")}
               onClick={() => onSelectMode(defaultMode)}
             />
           ) : null

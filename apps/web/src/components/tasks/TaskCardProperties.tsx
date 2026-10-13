@@ -13,6 +13,7 @@ import { TaskPillButton } from "./TaskCardPrimitives";
 import { TaskPriorityGlyph } from "./TaskGlyphs";
 import { TaskDueMenu, TaskPriorityMenu, TaskProjectMenu } from "./TaskPropertyMenus";
 import { formatDueLabel, todoPriorityLabel } from "./tasks.logic";
+import { useTranslation } from "~/i18n";
 
 const PILL_ICON_CLASS = "size-3.5 shrink-0 opacity-70";
 /** An unset property: a round icon-only pill. */
@@ -31,6 +32,8 @@ export function TaskCardProperties({
   now: Date;
   onUpdate: (input: TodoUpdateInput) => void;
 }) {
+  const { t } = useTranslation();
+
   const due = todo.dueDate ? formatDueLabel(todo.dueDate, now) : null;
   const projectName = todo.projectId ? (projectNameById.get(todo.projectId) ?? null) : null;
 
@@ -42,8 +45,8 @@ export function TaskCardProperties({
         onChange={(dueDate) => onUpdate({ id: todo.id, dueDate })}
         trigger={
           <TaskPillButton
-            aria-label={due ? `Due ${due.label}` : "Set a due day"}
-            title={due ? undefined : "Due day"}
+            aria-label={due ? t("Due {{value0}}", { value0: due.label }) : t("Set a due day")}
+            title={due ? undefined : t("Due day")}
             className={cn(
               !due && EMPTY_PILL_CLASS,
               due?.overdue && "text-status-failure hover:text-status-failure",
@@ -60,8 +63,10 @@ export function TaskCardProperties({
         onChange={(projectId) => onUpdate({ id: todo.id, projectId })}
         trigger={
           <TaskPillButton
-            aria-label={projectName ? `Project: ${projectName}` : "Set a project"}
-            title={projectName ? undefined : "Project"}
+            aria-label={
+              projectName ? t("Project: {{value0}}", { value0: projectName }) : t("Set a project")
+            }
+            title={projectName ? undefined : t("Project")}
             className={cn(!projectName && EMPTY_PILL_CLASS)}
           />
         }
@@ -74,8 +79,8 @@ export function TaskCardProperties({
         onChange={(priority) => onUpdate({ id: todo.id, priority })}
         trigger={
           <TaskPillButton
-            aria-label={`Priority: ${todoPriorityLabel(todo.priority)}`}
-            title={todo.priority === "none" ? "Priority" : undefined}
+            aria-label={t("Priority: {{value0}}", { value0: todoPriorityLabel(todo.priority) })}
+            title={todo.priority === "none" ? t("Priority") : undefined}
             className={cn(todo.priority === "none" && EMPTY_PILL_CLASS)}
           />
         }

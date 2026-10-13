@@ -12,6 +12,7 @@ import { formatTimestamp } from "../timestampFormat";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "../proposedPlan";
 import { ProposedPlanActions } from "./chat/ProposedPlanActions";
 import { DockPaneHeader } from "./chat/DockPaneHeader";
+import { useTranslation } from "~/i18n";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -52,6 +53,8 @@ const PlanSidebar = function PlanSidebar({
   timestampFormat,
   onClose,
 }: PlanSidebarProps) {
+  const { t, formatLocale } = useTranslation();
+
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -63,10 +66,10 @@ const PlanSidebar = function PlanSidebar({
       <DockPaneHeader
         title={
           <span className="flex min-w-0 items-center gap-2">
-            <span>Plan</span>
+            <span>{t("Plan")}</span>
             {activeTaskList ? (
               <span className="truncate text-ui-sm font-normal text-muted-foreground/60">
-                {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
+                {formatTimestamp(activeTaskList.createdAt, timestampFormat, formatLocale)}
               </span>
             ) : null}
           </span>
@@ -99,7 +102,7 @@ const PlanSidebar = function PlanSidebar({
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
-              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">Steps</p>
+              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">{t("Steps")}</p>
               {activeTaskList.tasks.map((task) => (
                 <div
                   key={`${task.status}:${task.task}`}
@@ -143,7 +146,7 @@ const PlanSidebar = function PlanSidebar({
                   className="size-3 text-muted-foreground/40"
                 />
                 <span className="text-ui-xs font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
+                  {planTitle ?? t("Full Plan")}
                 </span>
               </button>
               <DisclosureRegion open={proposedPlanExpanded}>
@@ -162,9 +165,9 @@ const PlanSidebar = function PlanSidebar({
           {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-ui-lg text-muted-foreground/40">No active plan yet.</p>
+              <p className="text-ui-lg text-muted-foreground/40">{t("No active plan yet.")}</p>
               <p className="mt-1 text-ui-sm text-muted-foreground/30">
-                Plans will appear here when generated.
+                {t("Plans will appear here when generated.")}
               </p>
             </div>
           ) : null}

@@ -48,6 +48,7 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
+import { useTranslation } from "~/i18n";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
@@ -260,6 +261,8 @@ export function ChatTranscriptPane({
   onResolveWorktreeSetup,
   findHighlightStore: findHighlightStoreProp,
 }: ChatTranscriptPaneProps) {
+  const { t } = useTranslation();
+
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
   const scrollButtonFrameStyle: CSSProperties | undefined =
@@ -529,7 +532,7 @@ export function ChatTranscriptPane({
               type="button"
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
-              aria-label="Scroll to bottom"
+              aria-label={t("Scroll to bottom")}
               aria-hidden={!scrollButtonVisible}
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(

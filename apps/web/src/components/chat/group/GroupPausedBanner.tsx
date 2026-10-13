@@ -10,11 +10,14 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 import { PauseIcon } from "~/lib/icons";
 import { Button } from "~/components/ui/button";
+import { useTranslation } from "~/i18n";
 
 export function GroupPausedBanner(props: {
   readonly projectId: ProjectId;
   readonly onResume: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
+
   const [busy, setBusy] = useState(false);
   return (
     <div
@@ -25,20 +28,20 @@ export function GroupPausedBanner(props: {
       )}
     >
       <PauseIcon className="size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">This hub is paused.</span>
+      <span className="min-w-0 flex-1">{t("This hub is paused.")}</span>
       <Button
         type="button"
         variant="ghost"
         size="sm"
         disabled={busy}
         className="h-6 shrink-0 px-2 text-ui"
-        aria-label={`Resume hub ${props.projectId}`}
+        aria-label={t("Resume hub {{value0}}", { value0: props.projectId })}
         onClick={() => {
           setBusy(true);
           void props.onResume().finally(() => setBusy(false));
         }}
       >
-        Resume
+        {t("Resume")}
       </Button>
     </div>
   );

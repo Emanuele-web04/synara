@@ -33,6 +33,7 @@ import { buildDelegationPrompt } from "./tasks.logic";
 import { useTaskDelegateChat } from "./useTaskDelegateChat";
 import { useTaskDelegateTarget } from "./useTaskDelegateTarget";
 import { useTaskDelegation } from "./useTaskDelegation";
+import { useTranslation } from "~/i18n";
 
 export function TaskHandOff({
   todo,
@@ -48,6 +49,8 @@ export function TaskHandOff({
   /** Set to this hand-off's Start while it is mounted. */
   startRef: RefObject<(() => void) | null>;
 }) {
+  const { t } = useTranslation();
+
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -102,8 +105,8 @@ export function TaskHandOff({
   });
 
   return (
-    <section aria-label="Hand it to an agent" className="flex flex-col gap-1.5">
-      <TaskCardLabel>Hand it to an agent</TaskCardLabel>
+    <section aria-label={t("Hand it to an agent")} className="flex flex-col gap-1.5">
+      <TaskCardLabel>{t("Hand it to an agent")}</TaskCardLabel>
       {existingChat ? null : (
         <div className="-ml-1.5 flex min-w-0 flex-wrap items-center gap-0.5">
           <ScratchModelPickers
@@ -129,7 +132,7 @@ export function TaskHandOff({
           onClick={() => setShowsMore((current) => !current)}
           className="text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
         >
-          {showsMore ? "Fewer options" : "More options"}
+          {showsMore ? t("Fewer options") : t("More options")}
         </button>
         <TaskActionButton
           disabled={!canStart}
@@ -137,7 +140,7 @@ export function TaskHandOff({
           className={cn("gap-2", isStarting && "cursor-progress")}
         >
           {isStarting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : null}
-          Start
+          {t("Start")}
         </TaskActionButton>
       </div>
     </section>

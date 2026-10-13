@@ -4,7 +4,7 @@
 //          full list in the right dock (SubagentsDockPane).
 // Layer: Environment panel UI
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { SubagentAvatarStack } from "../SubagentAvatar";
 import {
@@ -14,6 +14,7 @@ import {
   EnvironmentSectionLabel,
 } from "./EnvironmentRow";
 import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
+import { useTranslation } from "~/i18n";
 
 const SUMMARY_AVATAR_LIMIT = 3;
 
@@ -24,6 +25,8 @@ export function EnvironmentSubagentsSection({
   readonly roster: EnvironmentSubagentRoster;
   readonly onOpenList: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { active, previous } = roster;
   const total = active.length + previous.length;
   // No subagents yet: hide the whole section instead of showing an empty header row.
@@ -43,18 +46,23 @@ export function EnvironmentSubagentsSection({
         ]
           .filter(Boolean)
           .join(", ")
-      : `${total} ${pluralize(total, "subagent")}`;
-  const doneLabel = active.length > 0 && previous.length > 0 ? `${previous.length} done` : null;
+      : t("{{value0}} {{value1}}", { value0: total, value1: pluralize(total, "subagent") });
+  const doneLabel =
+    active.length > 0 && previous.length > 0
+      ? t("{{value0}} done", { value0: previous.length })
+      : null;
 
   return (
     <>
       <EnvironmentSectionDivider />
       <div className="flex flex-col gap-0.5" data-testid="environment-subagents-section">
-        <EnvironmentSectionLabel>Subagents</EnvironmentSectionLabel>
+        <EnvironmentSectionLabel>{t("Subagents")}</EnvironmentSectionLabel>
         <button
           type="button"
           className={ENVIRONMENT_ROW_CLASS_NAME}
-          aria-label={`Open subagents: ${[label, doneLabel].filter(Boolean).join(", ")}`}
+          aria-label={t("Open subagents: {{value0}}", {
+            value0: [label, doneLabel].filter(Boolean).join(", "),
+          })}
           onClick={onOpenList}
         >
           <EnvironmentRowBody

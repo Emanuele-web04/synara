@@ -16,6 +16,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
+import { useTranslation } from "~/i18n";
 
 export type AppRailMoreMenuEntry = {
   /** Shortcut key ("space:…" / "project:…"). */
@@ -43,14 +44,16 @@ export function AppRailMoreMenu({
   /** Studio has no rail button of its own, so "…" stands for it while it is open. */
   readonly active: boolean;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Menu>
       <SidebarIconButton
         render={<MenuTrigger />}
         icon={active ? RAIL_MORE_GLYPHS.active : RAIL_MORE_GLYPHS.idle}
         iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
-        label="More"
-        tooltip="More"
+        label={t("More")}
+        tooltip={t("More")}
         tooltipSide="right"
         aria-current={active ? "page" : undefined}
         className={appRailButtonClassName(active)}
@@ -63,13 +66,13 @@ export function AppRailMoreMenu({
         {onOpenStudio ? (
           <>
             <MenuGroup>
-              <MenuItem onClick={onOpenStudio}>Hubs</MenuItem>
+              <MenuItem onClick={onOpenStudio}>{t("Hubs")}</MenuItem>
             </MenuGroup>
             <MenuSeparator />
           </>
         ) : null}
         <MenuGroup>
-          <MenuGroupLabel>Spaces in the rail</MenuGroupLabel>
+          <MenuGroupLabel>{t("Spaces in the rail")}</MenuGroupLabel>
           {spaces.map((entry) => (
             <MenuCheckboxItem
               key={entry.key}
@@ -82,9 +85,9 @@ export function AppRailMoreMenu({
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
-          <MenuGroupLabel>Projects in the rail</MenuGroupLabel>
+          <MenuGroupLabel>{t("Projects in the rail")}</MenuGroupLabel>
           {projects.length === 0 ? (
-            <div className="px-2.5 py-1 text-ui text-muted-foreground">No projects yet</div>
+            <div className="px-2.5 py-1 text-ui text-muted-foreground">{t("No projects yet")}</div>
           ) : (
             projects.map((entry) => (
               <MenuCheckboxItem
@@ -99,7 +102,7 @@ export function AppRailMoreMenu({
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
-          <MenuItem onClick={onCustomize}>Customize…</MenuItem>
+          <MenuItem onClick={onCustomize}>{t("Customize…")}</MenuItem>
         </MenuGroup>
       </ComposerPickerMenuPopup>
     </Menu>

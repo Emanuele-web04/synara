@@ -9,6 +9,7 @@ import { cn } from "~/lib/utils";
 import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
+import { useTranslation } from "~/i18n";
 
 interface BrowserAnnotationChipProps extends Omit<
   ComponentPropsWithoutRef<"span">,
@@ -26,9 +27,11 @@ export function BrowserAnnotationChip({
   className,
   ...rest
 }: BrowserAnnotationChipProps) {
+  const { t } = useTranslation();
+
   const label = formatBrowserAnnotationLabel(annotation);
   const pageLabel = annotation.source.pageTitle || annotation.source.url;
-  const removeLabel = `Remove browser annotation ${annotation.ordinal}`;
+  const removeLabel = t("Remove browser annotation {{value0}}", { value0: annotation.ordinal });
   const trigger =
     variant === "list" ? (
       <span
@@ -37,7 +40,11 @@ export function BrowserAnnotationChip({
           onRemove && "pr-8",
           className,
         )}
-        aria-label={`Browser annotation ${annotation.ordinal}: ${label}, ${pageLabel}`}
+        aria-label={t("Browser annotation {{value0}}: {{value1}}, {{value2}}", {
+          value0: annotation.ordinal,
+          value1: label,
+          value2: pageLabel,
+        })}
         data-testid="browser-annotation-chip"
         {...rest}
       >
@@ -66,7 +73,11 @@ export function BrowserAnnotationChip({
           onRemove && "pr-5",
           className,
         )}
-        aria-label={`Browser annotation ${annotation.ordinal}: ${label}, ${pageLabel}`}
+        aria-label={t("Browser annotation {{value0}}: {{value1}}, {{value2}}", {
+          value0: annotation.ordinal,
+          value1: label,
+          value2: pageLabel,
+        })}
         data-testid="browser-annotation-chip"
         {...rest}
       >

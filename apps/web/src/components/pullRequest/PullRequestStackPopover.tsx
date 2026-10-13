@@ -17,6 +17,7 @@ import { cn } from "~/lib/utils";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
 import { PullRequestStackPosition } from "./PullRequestStackPosition";
 import { assessPullRequestStack } from "./pullRequestStack.logic";
+import { useTranslation } from "~/i18n";
 
 const ASSESSMENT_COLOR_CLASS = {
   ready: "text-status-open",
@@ -35,6 +36,8 @@ export function PullRequestStackPopover({
   currentNumber: number;
   onSelectPullRequest?: ((number: number) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const assessment = assessPullRequestStack(stack);
   const entriesTopDown = stack.entries.toReversed();
@@ -47,8 +50,12 @@ export function PullRequestStackPopover({
             variant="chrome-outline"
             size="xs"
             className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, "gap-1.5 px-2 font-normal")}
-            aria-label={`View stack ${stack.number}, pull request ${stack.position} of ${stack.size}`}
-            title={`Stack #${stack.number}`}
+            aria-label={t("View stack {{value0}}, pull request {{value1}} of {{value2}}", {
+              value0: stack.number,
+              value1: stack.position,
+              value2: stack.size,
+            })}
+            title={t("Stack #{{value0}}", { value0: stack.number })}
           >
             <PullRequestStackPosition stack={stack} appearance="plain" />
           </Button>
@@ -65,7 +72,8 @@ export function PullRequestStackPopover({
             {assessment.label}
           </div>
           <div className="mt-0.5 text-ui leading-snug text-muted-foreground">
-            Stack #{stack.number} · targets {stack.baseBranch}
+            {t("Stack #")}
+            {stack.number} {t("· targets")} {stack.baseBranch}
           </div>
         </div>
 

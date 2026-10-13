@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setLanguagePreference: (preference) => ipcRenderer.invoke(IPC.setLanguagePreference, preference),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),

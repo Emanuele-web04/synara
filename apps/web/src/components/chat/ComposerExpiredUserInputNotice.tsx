@@ -8,6 +8,7 @@ import {
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
 import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 export function ComposerExpiredUserInputNotice({
   threadId,
@@ -20,6 +21,8 @@ export function ComposerExpiredUserInputNotice({
   draft: PendingUserInputRecoveryDraft;
   onRestore: (prompt: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const dismiss = () => {
     const store = useComposerDraftStore.getState();
     const drafts = store.draftsByThreadId[threadId]?.pendingUserInputDrafts ?? {};
@@ -43,13 +46,17 @@ export function ComposerExpiredUserInputNotice({
       className={cn(COMPOSER_NOTICE_CONTENT_CLASS_NAME, "mb-2")}
       role="status"
     >
-      <p>These questions have expired. Restore your answers to review and send as a new message.</p>
+      <p>
+        {t(
+          "These questions have expired. Restore your answers to review and send as a new message.",
+        )}
+      </p>
       <div className="mt-2 flex flex-wrap gap-3">
         <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={restore}>
-          Restore answers
+          {t("Restore answers")}
         </button>
         <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={dismiss}>
-          Dismiss
+          {t("Dismiss")}
         </button>
       </div>
     </ComposerStackedPanel>

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { useTranslation } from "~/i18n";
 
 interface ThreadWorktreeHandoffDialogProps {
   open: boolean;
@@ -28,6 +29,8 @@ export function ThreadWorktreeHandoffDialog({
   onOpenChange,
   onConfirm,
 }: ThreadWorktreeHandoffDialogProps) {
+  const { t } = useTranslation();
+
   const busy = busyProp ?? false;
   const worktreeInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,9 +64,11 @@ export function ThreadWorktreeHandoffDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Hand off to worktree</DialogTitle>
+          <DialogTitle>{t("Hand off to worktree")}</DialogTitle>
           <DialogDescription>
-            Create a detached worktree from the current branch to continue working in parallel.
+            {t(
+              "Create a detached worktree from the current branch to continue working in parallel.",
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -75,7 +80,7 @@ export function ThreadWorktreeHandoffDialog({
           >
             <label className="grid gap-1.5">
               <span className="text-ui leading-snug font-medium text-foreground">
-                Worktree name
+                {t("Worktree name")}
               </span>
               <Input
                 ref={worktreeInputRef}
@@ -88,17 +93,17 @@ export function ThreadWorktreeHandoffDialog({
                     onOpenChange(false);
                   }
                 }}
-                placeholder="synara/feature-name"
+                placeholder={t("synara/feature-name")}
               />
             </label>
           </form>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
-            {busy ? "Handing off..." : "Hand off"}
+            {busy ? t("Handing off...") : t("Hand off")}
           </Button>
         </DialogFooter>
       </DialogPopup>

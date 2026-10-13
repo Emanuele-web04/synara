@@ -42,6 +42,7 @@ import {
   isWorkspaceSearchFilesystemPathQuery,
   resolveWorkspaceSearchFilesystemTarget,
 } from "./WorkspaceSearchPalette.logic";
+import { useTranslation } from "~/i18n";
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
@@ -286,7 +287,21 @@ export function WorkspaceSearchPalette(props: WorkspaceSearchPaletteProps) {
 }
 
 function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
-  const copy = MODE_COPY[props.mode];
+  const { t } = useTranslation();
+
+  const sourceCopy = MODE_COPY[props.mode];
+  const copy = {
+    groupLabel: t(sourceCopy.groupLabel),
+    placeholder: t(sourceCopy.placeholder),
+    prompt:
+      props.mode === "snippets"
+        ? t("Type at least {{value0}} characters to search code", {
+            value0: PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH,
+          })
+        : t(sourceCopy.prompt),
+    noResults: t(sourceCopy.noResults),
+    error: t(sourceCopy.error),
+  };
 
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
@@ -443,7 +458,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
       <CommandList className={LIST_CLASS}>
         {props.mode === "files" && openPathTarget ? (
           <CommandGroup>
-            <CommandGroupLabel className={GROUP_LABEL_CLASS}>Open path</CommandGroupLabel>
+            <CommandGroupLabel className={GROUP_LABEL_CLASS}>{t("Open path")}</CommandGroupLabel>
             <FileResultRow
               entry={openPathTarget}
               index={0}

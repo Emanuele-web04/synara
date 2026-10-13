@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n, setLanguagePreference } from "~/i18n";
 
 import { bootstrapPairingSession } from "./pairingBootstrap";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setLanguagePreference("system");
+});
 
 function makeDependencies(input: {
   readonly pathname?: string;
@@ -39,6 +45,39 @@ function makeDependencies(input: {
 }
 
 describe("bootstrapPairingSession", () => {
+  it("renders Spanish failure copy and document language without exposing the pairing credential", async () => {
+    i18n.addResourceBundle("es", "translation", {
+      "Pairing failed · Synara": "Error de vinculación · Synara",
+      "Secure pairing interrupted": "Vinculación segura interrumpida",
+      "This pairing link could not be used.": "No se pudo utilizar este enlace de vinculación.",
+    });
+    setLanguagePreference("en");
+    const root = { innerHTML: "", querySelector: () => ({ focus: vi.fn() }) };
+    const doc = { title: "", documentElement: { lang: "en" }, getElementById: () => root };
+    const addEventListener = vi.fn();
+    const replaceState = vi.fn();
+    vi.stubGlobal("localStorage", { getItem: () => '{"language":"es"}' });
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false })),
+    );
+    vi.stubGlobal("window", {
+      location: { pathname: "/pair", search: "", hash: "#token=PAIRING-SECRET", replace: vi.fn() },
+      history: { replaceState },
+      addEventListener,
+    });
+
+    await expect(bootstrapPairingSession()).resolves.toBe("failed");
+    expect(doc.documentElement.lang).toBe("es");
+    expect(doc.title).toBe("Error de vinculación · Synara");
+    expect(root.innerHTML).toContain("Vinculación segura interrumpida");
+    expect(root.innerHTML).toContain("No se pudo utilizar este enlace de vinculación.");
+    expect(root.innerHTML).not.toContain("PAIRING-SECRET");
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/pair");
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
   it("ignores every route except the dedicated pairing route", async () => {
     const test = makeDependencies({ pathname: "/" });
 

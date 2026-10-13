@@ -4,6 +4,7 @@
 // Exports: per-kind meta map, launcher items, and pane label/icon resolvers.
 
 import type { ReactNode } from "react";
+import { t } from "~/i18n";
 
 import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
@@ -60,8 +61,12 @@ const FALLBACK_RIGHT_DOCK_PANE_META: RightDockPaneMeta = {
 
 // Always resolve pane meta through this helper instead of indexing the map
 // directly, so an unknown kind degrades gracefully rather than throwing.
-export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta {
-  return RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
+export function getRightDockPaneMeta(
+  kind: RightDockPaneKind,
+  translate: typeof t = t,
+): RightDockPaneMeta {
+  const meta = RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
+  return { ...meta, label: translate(meta.label) };
 }
 
 // Empty-dock launchers prioritize the everyday workspace tools. Review only
@@ -85,17 +90,20 @@ const RIGHT_DOCK_LAUNCHER_LABELS: Partial<Record<RightDockPaneKind, string>> = {
   git: "Source control",
 };
 
-export function resolveRightDockLauncherItems(input: {
-  hasWorkspace: boolean;
-  hasGitRepository: boolean;
-  hasReview: boolean;
-  /**
-   * Simulators need a macOS server with Xcode. Off macOS the entry is hidden
-   * outright rather than shown disabled: there is nothing the user could do
-   * from this machine to make it work.
-   */
-  hasDeviceSupport?: boolean;
-}): readonly RightDockLauncherItem[] {
+export function resolveRightDockLauncherItems(
+  input: {
+    hasWorkspace: boolean;
+    hasGitRepository: boolean;
+    hasReview: boolean;
+    /**
+     * Simulators need a macOS server with Xcode. Off macOS the entry is hidden
+     * outright rather than shown disabled: there is nothing the user could do
+     * from this machine to make it work.
+     */
+    hasDeviceSupport?: boolean;
+  },
+  translate: typeof t = t,
+): readonly RightDockLauncherItem[] {
   return RIGHT_DOCK_LAUNCHER_ORDER.flatMap((kind) => {
     if (kind === "diff" && !input.hasReview) {
       return [];
@@ -109,12 +117,13 @@ export function resolveRightDockLauncherItems(input: {
     if (kind === "device" && input.hasDeviceSupport !== true) {
       return [];
     }
-    const meta = getRightDockPaneMeta(kind);
+    const meta = getRightDockPaneMeta(kind, translate);
+    const launcherLabel = RIGHT_DOCK_LAUNCHER_LABELS[kind];
     return [
       {
         kind,
         Icon: meta.Icon,
-        label: RIGHT_DOCK_LAUNCHER_LABELS[kind] ?? meta.label,
+        label: launcherLabel ? translate(launcherLabel) : meta.label,
       },
     ];
   });
@@ -125,8 +134,9 @@ export function resolveRightDockLauncherItems(input: {
 export function resolveRightDockPaneLabel(
   pane: RightDockPane,
   overrides?: Record<string, string | undefined>,
+  translate: typeof t = t,
 ): string {
-  return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind).label;
+  return overrides?.[pane.id] ?? getRightDockPaneMeta(pane.kind, translate).label;
 }
 
 export function buildRightDockPaneLabelOverrides(

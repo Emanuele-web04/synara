@@ -24,6 +24,7 @@ import { FolderIcon } from "~/lib/icons";
 import { ProjectEmojiGlyph } from "./ProjectSidebarIcon";
 import { Input } from "./ui/input";
 import { toggleVariants } from "./ui/toggle";
+import { useTranslation } from "~/i18n";
 
 const PICKER_TABS = ["emoji", "icons"] as const;
 type PickerTab = (typeof PICKER_TABS)[number];
@@ -59,6 +60,8 @@ export function ProjectAppearancePicker({
   /** Called after an emoji is chosen: there is nothing else to pick on that tab. */
   onEmojiPicked: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [tab, setTab] = useState<PickerTab>(value?.kind === "emoji" ? "emoji" : "icons");
   const [query, setQuery] = useState("");
   // The palette tints the icon grid as a preview. It only lands on the project once an icon
@@ -132,7 +135,7 @@ export function ProjectAppearancePicker({
     <div className="flex w-full flex-col gap-3">
       <div
         role="tablist"
-        aria-label="Project icon type"
+        aria-label={t("Project icon type")}
         onKeyDown={handleTabKeyDown}
         className="flex gap-1"
       >
@@ -159,7 +162,7 @@ export function ProjectAppearancePicker({
                 !active && "text-muted-foreground hover:text-foreground",
               )}
             >
-              {option === "emoji" ? "Emoji" : "Icons"}
+              {option === "emoji" ? t("Emoji") : t("Icons")}
             </button>
           );
         })}
@@ -176,14 +179,14 @@ export function ProjectAppearancePicker({
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={tab === "emoji" ? "Search emoji" : "Search icons"}
-          aria-label={tab === "emoji" ? "Search emoji" : "Search icons"}
+          placeholder={tab === "emoji" ? t("Search emoji") : t("Search icons")}
+          aria-label={tab === "emoji" ? t("Search emoji") : t("Search icons")}
         />
 
         {tab === "icons" ? (
           <div
             role="radiogroup"
-            aria-label="Color"
+            aria-label={t("Color")}
             onKeyDown={(event) => handleRadioGridKeyDown(event, "[data-project-color]")}
             className="grid grid-cols-8 gap-1"
           >
@@ -196,7 +199,7 @@ export function ProjectAppearancePicker({
                   role="radio"
                   data-project-color
                   aria-checked={selected}
-                  aria-label={option ? PROJECT_COLOR_LABELS[option] : "Default color"}
+                  aria-label={option ? PROJECT_COLOR_LABELS[option] : t("Default color")}
                   tabIndex={selected ? 0 : -1}
                   onClick={() => pickColor(option)}
                   className={cn(
@@ -223,7 +226,7 @@ export function ProjectAppearancePicker({
             icons.length > 0 ? (
               <div
                 role="radiogroup"
-                aria-label="Icon"
+                aria-label={t("Icon")}
                 onKeyDown={(event) =>
                   handleRadioGridKeyDown(event, "[data-project-icon]", { columns: GRID_COLUMNS })
                 }
@@ -260,13 +263,14 @@ export function ProjectAppearancePicker({
               </div>
             ) : (
               <p className="py-6 text-center text-ui-sm text-muted-foreground">
-                No icons match “{trimmedQuery}”.
+                {t("No icons match “")}
+                {trimmedQuery}”.
               </p>
             )
           ) : emoji.length > 0 ? (
             <div
               role="radiogroup"
-              aria-label="Emoji"
+              aria-label={t("Emoji")}
               onKeyDown={(event) =>
                 // Arrows only move focus here: choosing an emoji closes the picker, so it
                 // waits for Enter, Space, or a click.
@@ -301,7 +305,7 @@ export function ProjectAppearancePicker({
             </div>
           ) : (
             <p className="py-6 text-center text-ui-sm text-muted-foreground">
-              No emoji match. Paste any emoji to use it.
+              {t("No emoji match. Paste any emoji to use it.")}
             </p>
           )}
         </div>

@@ -6,6 +6,7 @@
 //          toDateTimeLocalValue, parseFutureDateTimeLocalValue, dispatchThreadSnoozedUntil
 
 import type { ThreadId } from "@synara/contracts";
+import { getFormatLocale, t } from "~/i18n";
 
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
@@ -33,16 +34,14 @@ export function resolveSnoozeDeadline(duration: SnoozeDuration, nowMs: number): 
   return deadline;
 }
 
-const SNOOZE_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-export function formatSnoozeDeadline(snoozedUntil: string): string {
-  return SNOOZE_DATE_FORMAT.format(new Date(snoozedUntil));
+export function formatSnoozeDeadline(snoozedUntil: string, locale = getFormatLocale()): string {
+  return new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(snoozedUntil));
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");
@@ -71,7 +70,7 @@ export function dispatchThreadSnoozedUntil(
 ): Promise<boolean> {
   const api = readNativeApi();
   if (!api) {
-    toastManager.add({ type: "error", title: "Unable to connect to the app server." });
+    toastManager.add({ type: "error", title: t("Unable to connect to the app server.") });
     return Promise.resolve(false);
   }
   return api.orchestration
@@ -86,7 +85,7 @@ export function dispatchThreadSnoozedUntil(
       () => {
         toastManager.add({
           type: "error",
-          title: snoozedUntil === null ? "Unable to return thread" : "Unable to snooze thread",
+          title: t(snoozedUntil === null ? "Unable to return thread" : "Unable to snooze thread"),
         });
         return false;
       },

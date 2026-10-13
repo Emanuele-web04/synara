@@ -5,6 +5,7 @@
 import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { TRANSCRIPT_SELECTION_ACTION_WIDTH_PX } from "./chatSelectionActions";
+import { useTranslation } from "~/i18n";
 
 interface TranscriptSelectionActionProps {
   left: number;
@@ -52,32 +53,34 @@ function TranscriptSelectionToolbarButton({
 }
 
 export function TranscriptSelectionAction(props: TranscriptSelectionActionProps) {
+  const { t } = useTranslation();
+
   return (
     <div
       data-transcript-selection-action="true"
       className="pointer-events-none fixed z-50 flex justify-center"
       style={{ left: props.left, top: props.top, width: TRANSCRIPT_SELECTION_ACTION_WIDTH_PX }}
       role="toolbar"
-      aria-label="Selection actions"
+      aria-label={t("Selection actions")}
     >
       {/* Sized to its labels and centered in the layout's slot, so labels never clip
           regardless of font size or which actions are present. */}
       <div className="pointer-events-auto inline-flex w-max max-w-[calc(100vw-16px)] shrink-0 items-center divide-x divide-[var(--color-border)] overflow-hidden rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-md">
         <TranscriptSelectionToolbarButton
-          label="Add to Chat"
+          label={t("Add to Chat")}
           onClick={props.onAddToChat}
           disabled={props.disabled}
         />
         {props.onAddToSide ? (
           <TranscriptSelectionToolbarButton
-            label="Add to Side"
+            label={t("Add to Side")}
             onClick={props.onAddToSide}
             disabled={props.disabled || props.sideDisabled}
           />
         ) : null}
         {props.onAddToNewChat ? (
           <TranscriptSelectionToolbarButton
-            label="Add to new Chat"
+            label={t("Add to new Chat")}
             onClick={props.onAddToNewChat}
             disabled={props.disabled}
           />

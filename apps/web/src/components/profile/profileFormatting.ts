@@ -3,40 +3,49 @@
 // Layer: web profile feature (no I/O, safe to use during html-to-image render).
 
 import type { ProviderKind } from "@synara/contracts";
+import { getFormatLocale, t } from "~/i18n";
 
 // Compact token/count formatting matching the reference card ("17bn", "538m", "1.2k").
-export function formatCompact(value: number | null | undefined): string {
+export function formatCompact(
+  value: number | null | undefined,
+  locale = getFormatLocale(),
+): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "—";
   }
   const abs = Math.abs(value);
   if (abs >= 1_000_000_000) {
-    return `${trimZero(value / 1_000_000_000)}bn`;
+    return `${trimZero(value / 1_000_000_000, locale)}bn`;
   }
   if (abs >= 1_000_000) {
-    return `${trimZero(value / 1_000_000)}m`;
+    return `${trimZero(value / 1_000_000, locale)}m`;
   }
   if (abs >= 1_000) {
-    return `${trimZero(value / 1_000)}k`;
+    return `${trimZero(value / 1_000, locale)}k`;
   }
   return `${Math.round(value)}`;
 }
 
-function trimZero(value: number): string {
+function trimZero(value: number, locale: string | undefined): string {
   const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1, useGrouping: false }).format(
+    rounded,
+  );
 }
 
 // Thousands-separated integer ("4,934").
-export function formatNumber(value: number | null | undefined): string {
+export function formatNumber(value: number | null | undefined, locale = getFormatLocale()): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "—";
   }
-  return WHOLE_NUMBER_FORMATTER.format(value);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
 }
 
-export function formatDays(value: number): string {
-  return `${formatNumber(value)} ${value === 1 ? "day" : "days"}`;
+export function formatDays(value: number, locale = getFormatLocale()): string {
+  return t(value === 1 ? "{{amount}} day" : "{{amount}} days", {
+    amount: formatNumber(value, locale),
+    count: value,
+  });
 }
 
 // Title-case a home-directory basename into a friendly display name.
@@ -65,7 +74,7 @@ export function normalizeHandle(value: string): string {
 }
 
 // Pretty short date for "peak day" tooltips ("Apr 3").
-export function formatShortDate(day: string | null): string | null {
+export function formatShortDate(day: string | null, locale = getFormatLocale()): string | null {
   if (!day) {
     return null;
   }
@@ -73,7 +82,11 @@ export function formatShortDate(day: string | null): string | null {
   if (!year || !month || !date) {
     return null;
   }
-  return MONTH_DAY_FORMATTER.format(new Date(Date.UTC(year, month - 1, date)));
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, date)));
 }
 
 export function formatProviderLabel(provider: ProviderKind): string {
@@ -101,15 +114,9 @@ export function formatProviderLabel(provider: ProviderKind): string {
   }
 }
 
-export function formatProfileUsageBasis(metric: "tokens" | "turns"): string {
-  return metric === "tokens" ? "tracked tokens" : "turns";
+export function formatProfileUsageBasis(
+  metric: "tokens" | "turns",
+  _locale = getFormatLocale(),
+): string {
+  return t(metric === "tokens" ? "tracked tokens" : "turns");
 }
-
-const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-// formatShortDate turns a day key into UTC midnight, so format in UTC or viewers
-// west of UTC see the previous day.
-const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  timeZone: "UTC",
-});

@@ -9,6 +9,7 @@
 // mergeSubagentSnapshots, and the row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
+import { t } from "~/i18n";
 
 import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
 import {
@@ -82,15 +83,18 @@ export function mergeSubagentSnapshots(
 
 // A row may exist before the Agent tool description streams in; until then it
 // reads as starting, and settles on a neutral label (never the raw provider id).
-function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
+function anonymousSubagentLabel(
+  statusKind: SubagentStatusKind | null,
+  translate: typeof t,
+): string {
   switch (statusKind) {
     case "completed":
     case "failed":
     case "stopped":
     case "idle":
-      return "Subagent";
+      return translate("Subagent");
     default:
-      return "Starting subagent…";
+      return translate("Starting subagent…");
   }
 }
 
@@ -99,19 +103,29 @@ export function toSubagentStripItem(
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
+  translate: typeof t = t,
 ): ComposerSubagentStripItem {
-  const statusLabel =
+  // Enrichment stores the source label because it also drives state. Translate
+  // only the final UI row, after classification, and preserve unknown labels.
+  const sourceStatusLabel =
     subagent.statusLabel ?? humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
   const statusKind = normalizeSubagentStatusKind(
-    statusLabel ?? subagent.rawStatus,
+    sourceStatusLabel ?? subagent.rawStatus,
     subagent.isActive,
   );
+  const statusLabel =
+    sourceStatusLabel &&
+    (normalizeSubagentStatusKind(sourceStatusLabel) !== null ||
+      sourceStatusLabel === "Connecting" ||
+      sourceStatusLabel === "Closed")
+      ? translate(sourceStatusLabel)
+      : sourceStatusLabel;
   const presentation = resolveSubagentPresentation({
     nickname: subagent.nickname,
     role: subagent.role,
     title: subagent.title,
     fallbackId: subagent.threadId,
-    placeholderLabel: anonymousSubagentLabel(statusKind),
+    placeholderLabel: anonymousSubagentLabel(statusKind, translate),
   });
   const modelLabel = formatSubagentModelLabel(subagent.model);
   const threadId = ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId);

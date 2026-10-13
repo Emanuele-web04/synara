@@ -1,5 +1,15 @@
 import "./httpRuntime";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
+import {
+  initializeDesktopI18n,
+  setDesktopLanguagePreference,
+  t,
+  translateNativeMenuRoles,
+} from "./i18n";
+import {
+  applyDesktopLanguagePreference,
+  readDesktopLanguagePreference,
+} from "./desktopPreferences";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
@@ -410,12 +420,16 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
+const DESKTOP_LANGUAGE_PREFERENCE_PATH = Path.join(STATE_DIR, "desktop-language.json");
 // Written by the renderer-mirrored agent cursor colors; read at each driver
 // session open so a persisted custom cursor survives app restarts.
 const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
+initializeDesktopI18n(readDesktopLanguagePreference(DESKTOP_LANGUAGE_PREFERENCE_PATH), () =>
+  app.isReady() ? app.getLocale() : new Intl.DateTimeFormat().resolvedOptions().locale,
+);
 const APP_USER_MODEL_ID = desktopIdentity.bundleId;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
@@ -1371,10 +1385,13 @@ async function rejectUnverifiableDesktopMigrationBundle(error: unknown): Promise
   writeDesktopLogHeader(`migration bundle source check failed message=${message}`);
   await dialog.showMessageBox({
     type: "error",
-    title: "Synara could not verify its server build",
-    message: "The migration source could not be checked safely.",
-    detail: `${message}\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
-    buttons: ["Quit"],
+    title: t("Synara could not verify its server build"),
+    message: t("The migration source could not be checked safely."),
+    detail: t(
+      "{{value0}}\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.",
+      { value0: message },
+    ),
+    buttons: [t("Quit")],
     defaultId: 0,
     noLink: true,
   });
@@ -1390,12 +1407,13 @@ async function rejectDesktopMigrationBundleMismatch(
   );
   await dialog.showMessageBox({
     type: "error",
-    title: "Synara's server build is stale",
-    message: "The built migration code does not match this checkout.",
-    detail:
-      `Expected ${mismatch.expectedDigest}, but the desktop bundle contains ` +
-      `${mismatch.actualDigest}.\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.`,
-    buttons: ["Quit"],
+    title: t("Synara's server build is stale"),
+    message: t("The built migration code does not match this checkout."),
+    detail: t(
+      "Expected {{value0}}, but the desktop bundle contains {{value1}}.\n\nRebuild with bun run build:desktop before starting Synara. The database was not opened.",
+      { value0: mismatch.expectedDigest, value1: mismatch.actualDigest },
+    ),
+    buttons: [t("Quit")],
     defaultId: 0,
     noLink: true,
   });
@@ -1429,7 +1447,10 @@ function isDesktopMigrationRecoveryPending(): boolean {
 /** Joins user-facing options as "a, b or c". */
 function formatRecoveryOptionList(options: ReadonlyArray<string>): string {
   if (options.length <= 1) return options[0] ?? "";
-  return `${options.slice(0, -1).join(", ")} or ${options[options.length - 1]}`;
+  return t("{{value0}} or {{value1}}", {
+    value0: options.slice(0, -1).join(", "),
+    value1: options[options.length - 1],
+  });
 }
 
 async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecoveryOutcome> {
@@ -1456,33 +1477,37 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
       }> = [
         restoreFailed
           ? {
-              label: "Try restore again",
-              detail: "retry the verified backup restore",
+              label: t("Try restore again"),
+              detail: t("retry the verified backup restore"),
               decision: "restore",
             }
           : {
-              label: "Restore backup and restart",
-              detail: "restore the verified pre-migration backup and restart",
+              label: t("Restore backup and restart"),
+              detail: t("restore the verified pre-migration backup and restart"),
               decision: "restore",
             },
       ];
       if (canInstallUpdate) {
         choices.push({
-          label: "Update Synara and restart",
-          detail: "install the newest Synara release, which may already contain the fix",
+          label: t("Update Synara and restart"),
+          detail: t("install the newest Synara release, which may already contain the fix"),
           decision: "install-update",
         });
       }
       if (releaseUrl !== null) {
         choices.push({
-          label: "Download latest release",
-          detail: `${canInstallUpdate ? "download that release" : "download the latest Synara release"} in a browser`,
+          label: t("Download latest release"),
+          detail: t("{{value0}} in a browser", {
+            value0: t(
+              canInstallUpdate ? "download that release" : "download the latest Synara release",
+            ),
+          }),
           decision: "open-release-page",
         });
       }
       choices.push({
-        label: "Quit",
-        detail: "quit without opening the database",
+        label: t("Quit"),
+        detail: t("quit without opening the database"),
         decision: "quit",
       });
 
@@ -1491,18 +1516,24 @@ async function handleDesktopMigrationRecovery(): Promise<DesktopMigrationRecover
         type: previousFailure === null ? "warning" : "error",
         title:
           previousFailure === null
-            ? "Synara needs to recover its database"
+            ? t("Synara needs to recover its database")
             : restoreFailed
-              ? "Migration recovery failed"
-              : "Synara could not update itself",
+              ? t("Migration recovery failed")
+              : t("Synara could not update itself"),
         message:
           previousFailure === null
-            ? "Synara stopped a database migration before it could finish safely."
+            ? t("Synara stopped a database migration before it could finish safely.")
             : restoreFailed
-              ? "The saved database backup could not be restored."
-              : "The newest Synara release could not be installed.",
-        detail: `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}You can ${options}. No provider or chat process will start until recovery succeeds.`,
-        buttons: choices.map((choice) => choice.label),
+              ? t("The saved database backup could not be restored.")
+              : t("The newest Synara release could not be installed."),
+        detail: t(
+          "{{value0}}You can {{value1}}. No provider or chat process will start until recovery succeeds.",
+          {
+            value0: previousFailure === null ? "" : `${previousFailure.message}\n\n`,
+            value1: options,
+          },
+        ),
+        buttons: choices.map((choice) => t(choice.label)),
         defaultId: 0,
         cancelId: choices.length - 1,
         noLink: true,
@@ -1675,7 +1706,14 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
     isQuitting = true;
-    dialog.showErrorBox("Synara failed to start", `Stage: ${stage}\n${message}${detail}`);
+    dialog.showErrorBox(
+      t("Synara failed to start"),
+      t("Stage: {{value0}}\n{{value1}}{{value2}}", {
+        value0: stage,
+        value1: message,
+        value2: detail,
+      }),
+    );
   }
   requestGracefulAppQuit(`fatal startup (${stage})`);
 }
@@ -1837,10 +1875,10 @@ function handleCheckForUpdatesMenuClick(): void {
     console.info("[desktop-updater] Manual update check requested, but updates are disabled.");
     void dialog.showMessageBox({
       type: "info",
-      title: "Updates unavailable",
-      message: "Automatic updates are not available right now.",
-      detail: disabledReason,
-      buttons: ["OK"],
+      title: t("Updates unavailable"),
+      message: t("Automatic updates are not available right now."),
+      detail: t(disabledReason),
+      buttons: [t("OK")],
     });
     return;
   }
@@ -1857,31 +1895,33 @@ async function checkForUpdatesFromMenu(): Promise<void> {
   if (updateState.status === "up-to-date") {
     void dialog.showMessageBox({
       type: "info",
-      title: "You're up to date!",
-      message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
-      buttons: ["OK"],
+      title: t("You're up to date!"),
+      message: t("Synara {{value0}} is currently the newest version available.", {
+        value0: updateState.currentVersion,
+      }),
+      buttons: [t("OK")],
     });
   } else if (updateState.status === "downloading" || updateState.status === "available") {
     void dialog.showMessageBox({
       type: "info",
-      title: "Update found",
-      message: "Synara is preparing the update in the background.",
-      buttons: ["OK"],
+      title: t("Update found"),
+      message: t("Synara is preparing the update in the background."),
+      buttons: [t("OK")],
     });
   } else if (updateState.status === "downloaded") {
     void dialog.showMessageBox({
       type: "info",
-      title: "Update ready",
-      message: "Click Update in the sidebar when you’re ready to restart and install it.",
-      buttons: ["OK"],
+      title: t("Update ready"),
+      message: t("Click Update in the sidebar when you’re ready to restart and install it."),
+      buttons: [t("OK")],
     });
   } else if (updateState.status === "error") {
     void dialog.showMessageBox({
       type: "warning",
-      title: "Update check failed",
-      message: "Could not check for updates.",
-      detail: updateState.message ?? "An unknown error occurred. Please try again later.",
-      buttons: ["OK"],
+      title: t("Update check failed"),
+      message: t("Could not check for updates."),
+      detail: updateState.message ?? t("An unknown error occurred. Please try again later."),
+      buttons: [t("OK")],
     });
   }
 }
@@ -1904,13 +1944,13 @@ function configureApplicationMenu(): void {
         { role: "zoomOut" },
       ]
     : [
-        { label: "Reset Zoom", click: () => resetWindowZoomFromMenu() },
+        { label: t("Reset Zoom"), click: () => resetWindowZoomFromMenu() },
         {
-          label: "Zoom In",
+          label: t("Zoom In"),
           click: () => adjustWindowZoomFromMenu(DESKTOP_MENU_ZOOM_FACTOR_STEP),
         },
         {
-          label: "Zoom Out",
+          label: t("Zoom Out"),
           click: () => adjustWindowZoomFromMenu(1 / DESKTOP_MENU_ZOOM_FACTOR_STEP),
         },
       ];
@@ -1921,12 +1961,12 @@ function configureApplicationMenu(): void {
       submenu: [
         { role: "about" },
         {
-          label: "Check for Updates...",
+          label: t("Check for Updates..."),
           click: () => handleCheckForUpdatesMenuClick(),
         },
         { type: "separator" },
         {
-          label: "Settings...",
+          label: t("Settings..."),
           accelerator: "CmdOrCtrl+,",
           click: () => dispatchMenuAction("open-settings"),
         },
@@ -1944,13 +1984,13 @@ function configureApplicationMenu(): void {
 
   template.push(
     {
-      label: "File",
+      label: t("File"),
       submenu: [
         ...(process.platform === "darwin"
           ? []
           : [
               {
-                label: "Settings...",
+                label: t("Settings..."),
                 ...acceleratorProps("CmdOrCtrl+,"),
                 click: () => dispatchMenuAction("open-settings"),
               },
@@ -1961,21 +2001,21 @@ function configureApplicationMenu(): void {
     },
     { role: "editMenu" },
     {
-      label: "View",
+      label: t("View"),
       submenu: [
         {
-          label: "New Terminal Tab",
+          label: t("New Terminal Tab"),
           ...acceleratorProps(desktopMenuAccelerators["terminal.new"]),
           click: () => dispatchMenuAction("new-terminal-tab"),
         },
         { type: "separator" },
         {
-          label: "Toggle Sidebar",
+          label: t("Toggle Sidebar"),
           ...acceleratorProps(desktopMenuAccelerators["sidebar.toggle"]),
           click: () => dispatchMenuAction("toggle-sidebar"),
         },
         {
-          label: "Toggle Browser",
+          label: t("Toggle Browser"),
           ...acceleratorProps(desktopMenuAccelerators["browser.toggle"]),
           click: () => dispatchMenuAction("toggle-browser"),
         },
@@ -1994,20 +2034,22 @@ function configureApplicationMenu(): void {
       role: "help",
       submenu: [
         {
-          label: "Keyboard Shortcuts",
+          label: t("Keyboard Shortcuts"),
           ...(keyboardShortcutsAccelerator ? { accelerator: keyboardShortcutsAccelerator } : {}),
           click: () => dispatchMenuAction("show-shortcuts"),
         },
         { type: "separator" },
         {
-          label: "Check for Updates...",
+          label: t("Check for Updates..."),
           click: () => handleCheckForUpdatesMenuClick(),
         },
       ],
     },
   );
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  const applicationMenu = Menu.buildFromTemplate(template);
+  translateNativeMenuRoles(applicationMenu, APP_DISPLAY_NAME);
+  Menu.setApplicationMenu(applicationMenu);
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -2172,7 +2214,10 @@ function initializeDesktopAppSnap(): void {
       const window = focusApp ? ensureMainWindowForAppSnap() : mainWindow;
       if (!sendAppSnapEvent(window, (webContents) => sendAppSnapError(webContents, error))) {
         showDesktopNotification({
-          title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
+          title:
+            error.code === "pending-capture-overflow"
+              ? t("AppSnap discarded")
+              : t("AppSnap failed"),
           body: error.message,
         });
       }
@@ -2817,11 +2862,12 @@ function restartAfterStartupBundleSwap(error: BundleChangedDuringStartupError): 
   void dialog
     .showMessageBox({
       type: "warning",
-      title: "Synara needs to restart",
-      message: "Synara changed while it was opening.",
-      detail:
+      title: t("Synara needs to restart"),
+      message: t("Synara changed while it was opening."),
+      detail: t(
         "The current process cannot safely read the replaced application bundle. Restart Synara to finish opening with one consistent version.",
-      buttons: ["Restart Synara"],
+      ),
+      buttons: [t("Restart Synara")],
       defaultId: 0,
     })
     .catch(() => undefined)
@@ -2873,11 +2919,12 @@ function startBundleSwapWatcher(): void {
     void dialog
       .showMessageBox({
         type: "warning",
-        title: "Synara was replaced on disk",
-        message: "The installed Synara app changed while it was running.",
-        detail:
+        title: t("Synara was replaced on disk"),
+        message: t("The installed Synara app changed while it was running."),
+        detail: t(
           "The interface keeps running from a safeguarded copy, but parts of the app loaded later can still read the replaced file. Restart now to pick up the new version safely.",
-        buttons: ["Restart Now", "Later"],
+        ),
+        buttons: [t("Restart Now"), t("Later")],
         defaultId: 0,
         cancelId: 1,
       })
@@ -3056,7 +3103,9 @@ function processInstallMarkerOnStartup(): void {
   }
 
   automaticUpdateActivitySuppressed = true;
-  const message = `Synara restarted, but update ${marker.toVersion} was not installed. Try again.`;
+  const message = t("Synara restarted, but update {{value0}} was not installed. Try again.", {
+    value0: marker.toVersion,
+  });
   setUpdateState(
     reduceDesktopUpdateStateOnInstallRestartFailure(
       updateState,
@@ -3488,7 +3537,10 @@ async function installLatestUpdateForMigrationRecovery(): Promise<string | null>
   }
 
   if (updateState.status === "up-to-date") {
-    return `Synara ${app.getVersion()} is already the newest release, so updating cannot repair this database.`;
+    return t(
+      "Synara {{version}} is already the newest release, so updating cannot repair this database.",
+      { version: app.getVersion() },
+    );
   }
   if (updateState.status !== "downloaded") {
     return updateState.message ?? "The update could not be downloaded.";
@@ -3543,7 +3595,7 @@ async function runDownloadedUpdateInstall(
   if (!artifact || !(await verifyUpdateArtifactIdentity(artifact))) {
     downloadedUpdateArtifact = null;
     await clearPendingUpdateCache("downloaded artifact identity is missing or changed");
-    const message = "The downloaded update could not be reverified. Download it again.";
+    const message = t("The downloaded update could not be reverified. Download it again.");
     setUpdateState(reduceDesktopUpdateStateOnDownloadFailure(updateState, message));
     console.error(`[desktop-updater] Refusing install handoff: ${message}`);
     return { accepted: false, completed: false };
@@ -3676,7 +3728,9 @@ async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Prom
   } catch (error) {
     downloadedUpdateArtifact = null;
     clearPendingUpdateCacheWhenSafe("downloaded artifact fingerprint failed");
-    const message = `The downloaded update could not be verified: ${formatErrorMessage(error)}`;
+    const message = t("The downloaded update could not be verified: {{value0}}", {
+      value0: formatErrorMessage(error),
+    });
     setUpdateState(reduceDesktopUpdateStateOnDownloadFailure(updateState, message));
     console.error(`[desktop-updater] ${message}`);
   }
@@ -4143,8 +4197,10 @@ function backendFailureDialogDetail(reason: string): string {
   const cause = summary.length > 0 ? summary : reason;
   return [
     cause,
-    "Synara paused automatic restarts so a failing backend can't keep respawning in the background.",
-    `Log file:\n${Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)}`,
+    t(
+      "Synara paused automatic restarts so a failing backend can't keep respawning in the background.",
+    ),
+    t("Log file:\n{{value0}}", { value0: Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME) }),
   ].join("\n\n");
 }
 
@@ -4172,10 +4228,12 @@ function presentBackendStartupGiveUp(reason: string): void {
     for (;;) {
       const result = await dialog.showMessageBox({
         type: "error",
-        title: "Synara's backend didn't start",
-        message: `Synara's backend failed to start ${BACKEND_MAX_CONSECUTIVE_START_FAILURES} times in a row.`,
+        title: t("Synara's backend didn't start"),
+        message: t("Synara's backend failed to start {{value0}} times in a row.", {
+          value0: BACKEND_MAX_CONSECUTIVE_START_FAILURES,
+        }),
         detail,
-        buttons: ["Try again", "Open logs", "Quit"],
+        buttons: [t("Try again"), t("Open logs"), t("Quit")],
         defaultId: 0,
         cancelId: 2,
         noLink: true,
@@ -4209,26 +4267,35 @@ function schemaTooNewRestoreDetail(
   restoreCandidate: ReturnType<typeof resolveDesktopMigrationRestoreCandidate>,
 ): string {
   if (restoreCandidate) {
-    return (
-      `Synara verified the exact pre-migration backup at:\n${restoreCandidate.backupPath}\n\n` +
-      `Its tracker ends at migration ${restoreCandidate.backupMigrationId}; its shared lineage is compatible ` +
-      "with this build, and it passed SQLite integrity checking."
+    return t(
+      "Synara verified the exact pre-migration backup at:\n{{value0}}\n\nIts tracker ends at migration {{value1}}; its shared lineage is compatible with this build, and it passed SQLite integrity checking.",
+      { value0: restoreCandidate.backupPath, value1: restoreCandidate.backupMigrationId },
     );
   }
 
   if (block.recovery.kind === "restore-available") {
-    return "The recorded backup does not match this desktop database exactly, so Synara will not restore it.";
+    return t(
+      "The recorded backup does not match this desktop database exactly, so Synara will not restore it.",
+    );
   }
 
   switch (block.recovery.reason) {
     case "missing-provenance":
-      return "No completed migration backup record exists for this database, so Synara cannot choose a backup safely.";
+      return t(
+        "No completed migration backup record exists for this database, so Synara cannot choose a backup safely.",
+      );
     case "invalid-provenance":
-      return "The completed migration backup record does not describe this exact database state.";
+      return t(
+        "The completed migration backup record does not describe this exact database state.",
+      );
     case "invalid-backup":
-      return "The exact recorded backup is missing, unreadable, or failed SQLite integrity checking.";
+      return t(
+        "The exact recorded backup is missing, unreadable, or failed SQLite integrity checking.",
+      );
     case "incompatible-backup":
-      return "The exact recorded backup has a schema or migration lineage this Synara build cannot open safely.";
+      return t(
+        "The exact recorded backup has a schema or migration lineage this Synara build cannot open safely.",
+      );
   }
 }
 
@@ -4256,19 +4323,19 @@ async function handleDesktopSchemaTooNewRecovery(
 
       if (restoreCandidate) {
         choices.push({
-          label: restoreFailed ? "Try restore again" : "Restore backup and restart",
+          label: restoreFailed ? t("Try restore again") : t("Restore backup and restart"),
           decision: "restore",
         });
       }
       if (canInstallUpdate) {
-        choices.push({ label: "Update Synara and restart", decision: "install-update" });
+        choices.push({ label: t("Update Synara and restart"), decision: "install-update" });
       }
       if (releaseUrl !== null) {
-        choices.push({ label: "Download latest release", decision: "open-release-page" });
+        choices.push({ label: t("Download latest release"), decision: "open-release-page" });
       }
       choices.push(
-        { label: "Open logs", decision: "open-logs" },
-        { label: "Quit", decision: "quit" },
+        { label: t("Open logs"), decision: "open-logs" },
+        { label: t("Quit"), decision: "quit" },
       );
 
       const result = await showDiagnosticStartupDialog(
@@ -4276,21 +4343,27 @@ async function handleDesktopSchemaTooNewRecovery(
           type: previousFailure === null ? "warning" : "error",
           title:
             previousFailure === null
-              ? "This database is newer than Synara"
+              ? t("This database is newer than Synara")
               : restoreFailed
-                ? "Database restore failed"
-                : "Synara could not update itself",
+                ? t("Database restore failed")
+                : t("Synara could not update itself"),
           message:
             previousFailure === null
-              ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+              ? t("Database migration {{value0}} is newer than this build supports ({{value1}}).", {
+                  value0: block.databaseMigrationId,
+                  value1: block.latestSupportedMigrationId,
+                })
               : restoreFailed
-                ? "The verified database backup could not be restored."
-                : "The newest Synara release could not be installed.",
-          detail:
-            `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
-            `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
-            "The backend and provider processes will remain stopped until you update, restore, or quit.",
-          buttons: choices.map((choice) => choice.label),
+                ? t("The verified database backup could not be restored.")
+                : t("The newest Synara release could not be installed."),
+          detail: t(
+            "{{value0}}{{value1}}\n\nThe backend and provider processes will remain stopped until you update, restore, or quit.",
+            {
+              value0: previousFailure === null ? "" : `${previousFailure.message}\n\n`,
+              value1: schemaTooNewRestoreDetail(block, restoreCandidate),
+            },
+          ),
+          buttons: choices.map((choice) => t(choice.label)),
           defaultId: 0,
           cancelId: choices.length - 1,
           noLink: true,
@@ -4363,16 +4436,19 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
             type: "error",
             title:
               previousFailure === null
-                ? "Synara could not verify migration recovery"
-                : "Synara could not update itself",
+                ? t("Synara could not verify migration recovery")
+                : t("Synara could not update itself"),
             message:
               previousFailure === null
-                ? "The backend stopped for database safety, but its recovery details were invalid."
-                : "The newest Synara release could not be installed.",
-            detail:
-              `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
-              "Synara will keep the backend and provider processes stopped. The recovery record is not trusted, so restoring from it is disabled; choose one of the safe actions below.",
-            buttons: choices.map((choice) => choice.label),
+                ? t(
+                    "The backend stopped for database safety, but its recovery details were invalid.",
+                  )
+                : t("The newest Synara release could not be installed."),
+            detail: t(
+              "{{value0}}Synara will keep the backend and provider processes stopped. The recovery record is not trusted, so restoring from it is disabled; choose one of the safe actions below.",
+              { value0: previousFailure === null ? "" : `${previousFailure.message}\n\n` },
+            ),
+            buttons: choices.map((choice) => t(choice.label)),
             defaultId: 0,
             cancelId: choices.length - 1,
             noLink: true,
@@ -4400,15 +4476,21 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
       const challenge = block.challenge;
       const result = await showBlockDialog({
         type: "warning",
-        title: "Synara found a different database migration history",
-        message: `Migration ${challenge.firstDivergedId} does not match this build.`,
-        detail:
-          `The database records "${challenge.recordedName}", while this build expects ` +
-          `"${challenge.expectedName}". Continuing will first save an exact backup in:\n` +
-          `${challenge.backupDirectory}\n\nSynara will then rewrite tracker rows from migration ` +
-          `${challenge.firstDivergedId} and replay through ${challenge.targetVersion}. ` +
-          "Older builds may no longer be able to open the upgraded database. No provider or chat process will start until you choose.",
-        buttons: ["Back up and continue", "Quit"],
+        title: t("Synara found a different database migration history"),
+        message: t("Migration {{value0}} does not match this build.", {
+          value0: challenge.firstDivergedId,
+        }),
+        detail: t(
+          'The database records "{{value0}}", while this build expects "{{value1}}". Continuing will first save an exact backup in:\n{{value2}}\n\nSynara will then rewrite tracker rows from migration {{value3}} and replay through {{value4}}. Older builds may no longer be able to open the upgraded database. No provider or chat process will start until you choose.',
+          {
+            value0: challenge.recordedName,
+            value1: challenge.expectedName,
+            value2: challenge.backupDirectory,
+            value3: challenge.firstDivergedId,
+            value4: challenge.targetVersion,
+          },
+        ),
+        buttons: [t("Back up and continue"), t("Quit")],
         defaultId: 0,
         cancelId: 1,
         noLink: true,
@@ -4426,12 +4508,14 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     if (block.kind === "migration-runtime-identity-mismatch") {
       await showBlockDialog({
         type: "error",
-        title: "Synara's server build does not match",
-        message: "The desktop and server migration code came from different builds.",
+        title: t("Synara's server build does not match"),
+        message: t("The desktop and server migration code came from different builds."),
         detail: app.isPackaged
-          ? "Update or reinstall Synara before starting it again. The database was not opened."
-          : "Rebuild with bun run build:desktop before starting Synara again. The database was not opened.",
-        buttons: ["Quit"],
+          ? t("Update or reinstall Synara before starting it again. The database was not opened.")
+          : t(
+              "Rebuild with bun run build:desktop before starting Synara again. The database was not opened.",
+            ),
+        buttons: [t("Quit")],
         defaultId: 0,
         noLink: true,
       });
@@ -4442,11 +4526,12 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     if (block.kind === "migration-recovery-required") {
       const result = await showBlockDialog({
         type: "warning",
-        title: "Synara needs to recover its database",
-        message: "A database migration did not finish safely.",
-        detail:
+        title: t("Synara needs to recover its database"),
+        message: t("A database migration did not finish safely."),
+        detail: t(
           "Restart Synara to open the verified backup recovery flow. Provider and chat processes will remain stopped until recovery completes.",
-        buttons: ["Restart and recover", "Quit"],
+        ),
+        buttons: [t("Restart and recover"), t("Quit")],
         defaultId: 0,
         cancelId: 1,
         noLink: true,
@@ -4462,24 +4547,28 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     const processDetail =
       block.ownerPid === null
-        ? "Synara could not verify the database lock. The lock may be left over from an interrupted startup, or another server may still be using it."
-        : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
+        ? t(
+            "Synara could not verify the database lock. The lock may be left over from an interrupted startup, or another server may still be using it.",
+          )
+        : t("Another Synara server (process {{value0}}) is already using this database.", {
+            value0: block.ownerPid,
+          });
     for (;;) {
       const result = await showBlockDialog({
         type: "warning",
         title:
           block.ownerPid === null
-            ? "Synara could not verify database ownership"
-            : "Synara is already running elsewhere",
+            ? t("Synara could not verify database ownership")
+            : t("Synara is already running elsewhere"),
         message:
           block.ownerPid === null
-            ? "Synara could not safely open your local data."
-            : "Your local Synara data is in use by another process.",
-        detail:
-          `${processDetail}\n\nClose any other Synara app or development server using this data, then try again. ` +
-          "If this keeps happening, open the logs to see the underlying lock error. Your data has not been changed.\n\n" +
-          `Log file:\n${Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)}`,
-        buttons: ["Try again", "Open logs", "Quit"],
+            ? t("Synara could not safely open your local data.")
+            : t("Your local Synara data is in use by another process."),
+        detail: t(
+          "{{value0}}\n\nClose any other Synara app or development server using this data, then try again. If this keeps happening, open the logs to see the underlying lock error. Your data has not been changed.\n\nLog file:\n{{value1}}",
+          { value0: processDetail, value1: Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME) },
+        ),
+        buttons: [t("Try again"), t("Open logs"), t("Quit")],
         defaultId: 0,
         cancelId: 2,
         noLink: true,
@@ -4894,7 +4983,10 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
 
   const window = mainWindow;
   if (!isMainRendererAvailable()) {
-    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(`Quit ${APP_DISPLAY_NAME}?`, null)
+    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(
+      t("Quit {{value0}}?", { value0: APP_DISPLAY_NAME }),
+      null,
+    )
       .catch((error) => {
         console.warn("[desktop] Failed to confirm app quit", error);
         return false;
@@ -5087,6 +5179,18 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.setTheme);
+  ipcMain.removeHandler(IPC.setLanguagePreference);
+  ipcMain.handle(IPC.setLanguagePreference, (event, rawPreference: unknown) => {
+    applyDesktopLanguagePreference(rawPreference, {
+      isTrustedSender:
+        event.sender === mainWindow?.webContents && event.senderFrame === event.sender.mainFrame,
+      preferencePath: DESKTOP_LANGUAGE_PREFERENCE_PATH,
+      onPreference: (language) => {
+        setDesktopLanguagePreference(language);
+        if (app.isReady()) configureApplicationMenu();
+      },
+    });
+  });
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
@@ -5409,7 +5513,10 @@ function registerIpcHandlers(): void {
         return {
           ok: false,
           error: "internal" as const,
-          message: `Synara is open, but Synara Beta could not be moved to the Trash: ${formatErrorMessage(error)}`,
+          message: t(
+            "Synara is open, but Synara Beta could not be moved to the Trash: {{value0}}",
+            { value0: formatErrorMessage(error) },
+          ),
         };
       }
     }
@@ -5690,14 +5797,14 @@ function createWindow(): BrowserWindow {
         });
       }
       if (params.dictionarySuggestions.length === 0) {
-        menuTemplate.push({ label: "No suggestions", enabled: false });
+        menuTemplate.push({ label: t("No suggestions"), enabled: false });
       }
       menuTemplate.push({ type: "separator" });
     }
 
     if (params.mediaType === "image") {
       menuTemplate.push({
-        label: "Copy Image",
+        label: t("Copy Image"),
         click: () => window.webContents.copyImageAt(params.x, params.y),
       });
       menuTemplate.push({ type: "separator" });
@@ -5751,7 +5858,7 @@ function createWindow(): BrowserWindow {
   if (process.platform === "darwin") {
     guardDesktopWindowClose(
       window,
-      `Close the ${APP_DISPLAY_NAME} window?`,
+      () => t("Close the {{app}} window?", { app: APP_DISPLAY_NAME }),
       () =>
         !isQuitting &&
         !desktopShutdownComplete &&
@@ -5916,24 +6023,26 @@ function presentRendererCrashRecovery(
 
   const message =
     response.cause === "reload-budget-exhausted"
-      ? `Synara's window crashed ${response.crashes} times in a row.`
-      : "Synara's window stopped unexpectedly.";
+      ? t("Synara's window crashed {{value0}} times in a row.", { value0: response.crashes })
+      : t("Synara's window stopped unexpectedly.");
   const detail = [
-    `The window's renderer process exited (${reason}).`,
+    t("The window's renderer process exited ({{reason}}).", { reason }),
     response.cause === "reload-budget-exhausted"
-      ? "Synara paused automatic reloads so a repeating crash can't keep reloading in the background."
-      : "This exit reason repeats on reload, so Synara did not retry automatically.",
-    `Log file:\n${Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)}`,
+      ? t(
+          "Synara paused automatic reloads so a repeating crash can't keep reloading in the background.",
+        )
+      : t("This exit reason repeats on reload, so Synara did not retry automatically."),
+    t("Log file:\n{{value0}}", { value0: Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME) }),
   ].join("\n\n");
 
   const task = (async () => {
     for (;;) {
       const result = await dialog.showMessageBox({
         type: "error",
-        title: "Synara's window stopped",
+        title: t("Synara's window stopped"),
         message,
         detail,
-        buttons: ["Reload", "Open logs", "Quit"],
+        buttons: [t("Reload"), t("Open logs"), t("Quit")],
         defaultId: 0,
         cancelId: 2,
         noLink: true,

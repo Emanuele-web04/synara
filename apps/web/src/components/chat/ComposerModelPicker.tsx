@@ -89,6 +89,7 @@ import {
   resolveVisibleProviderOptions,
 } from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
+import { useTranslation } from "~/i18n";
 
 export type ComposerModelSelectionOptions = {
   /** Provider options to commit together with the model (starred presets, row effort). */
@@ -178,6 +179,8 @@ function groupRowElements(
 }
 
 export function ComposerModelPicker(props: ComposerModelPickerProps) {
+  const { t } = useTranslation();
+
   const { onOpenChange, open, lockedProvider, threadId } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
@@ -580,8 +583,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               ref={searchInputRef}
               size="sm"
               type="search"
-              aria-label="Search models"
-              placeholder={tab === STARRED_TAB ? "Search starred…" : "Search models…"}
+              aria-label={t("Search models")}
+              placeholder={tab === STARRED_TAB ? t("Search starred…") : t("Search models…")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDownCapture={(event) => {
@@ -620,13 +623,13 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                   />
                 ) : null}
                 <span className="text-ui font-medium text-foreground">
-                  {openProviderTab?.label ?? "This account"} needs setup
+                  {openProviderTab?.label ?? t("This account")} {t("needs setup")}
                 </span>
                 <span className="text-ui-sm leading-snug text-muted-foreground">
                   {setupMessage}
                 </span>
                 <Button type="button" size="xs" variant="outline" onClick={openProviderSettings}>
-                  Open provider setup
+                  {t("Open provider setup")}
                 </Button>
               </div>
             ) : discoveryError ? (
@@ -635,7 +638,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               </div>
             ) : null}
             {setupMessage !== null ? null : isTabLoading ? (
-              <div className="space-y-2 px-2 py-2" aria-label="Loading models">
+              <div className="space-y-2 px-2 py-2" aria-label={t("Loading models")}>
                 {Array.from({ length: 5 }, (_, index) => (
                   <Skeleton
                     key={index}
@@ -669,10 +672,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             ) : (
               <div className="px-2 py-3 text-muted-foreground text-ui leading-relaxed">
                 {normalizedQuery.length > 0
-                  ? "No matches"
+                  ? t("No matches")
                   : tab === STARRED_TAB
-                    ? "Star a model to pin it here together with its effort and speed, then pick it in one click."
-                    : "No models found"}
+                    ? t(
+                        "Star a model to pin it here together with its effort and speed, then pick it in one click.",
+                      )
+                    : t("No models found")}
               </div>
             )}
           </div>

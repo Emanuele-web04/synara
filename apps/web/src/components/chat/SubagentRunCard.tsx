@@ -9,7 +9,7 @@
 // Exports: SubagentRunCard, SubagentIdentityLine
 
 import { ThreadId } from "@synara/contracts";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useNowMs } from "~/hooks/useNowMs";
@@ -41,6 +41,7 @@ import {
   type SubagentRunRow,
 } from "./SubagentRunCard.logic";
 import { useSubagentRunContext, type SubagentRunContextValue } from "./subagentRunContext";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_THREADS: SubagentRunContextValue["threads"] = [];
 const EMPTY_IDS: ReadonlySet<string> = new Set();
@@ -48,6 +49,8 @@ const EMPTY_TASK_ENDS: SubagentRunContextValue["taskEndByToolUseId"] = new Map()
 
 /** Name, role, and model of one subagent: the identity line every row shares. */
 export function SubagentIdentityLine({ item }: { item: ComposerSubagentStripItem }) {
+  const { t } = useTranslation();
+
   return (
     <span className="flex min-w-0 items-baseline gap-1.5" title={item.fullLabel}>
       <span className="min-w-0 truncate font-medium text-foreground/88">{item.primaryLabel}</span>
@@ -58,7 +61,7 @@ export function SubagentIdentityLine({ item }: { item: ComposerSubagentStripItem
         <span className="shrink-0 text-ui-sm text-muted-foreground/48">{item.modelLabel}</span>
       ) : null}
       {item.isBackground ? (
-        <span className="shrink-0 text-ui-sm text-muted-foreground/48">background</span>
+        <span className="shrink-0 text-ui-sm text-muted-foreground/48">{t("background")}</span>
       ) : null}
     </span>
   );
@@ -103,6 +106,8 @@ function SubagentRunRowView({
   depth: number;
   context: SubagentRunContextValue | null;
 }) {
+  const { t } = useTranslation();
+
   const [nestedOpen, setNestedOpen] = useState(false);
   const description = describeSubagentRunRow(row, { nowMs, allStopped });
   const live = row.phase === "running" || row.phase === "waiting" || row.phase === "starting";
@@ -126,7 +131,7 @@ function SubagentRunRowView({
           className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:after:ring-1 focus-visible:after:ring-ring/60 disabled:cursor-default"
           disabled={!openThread}
           onClick={openThread}
-          aria-label={`Open ${row.item.primaryLabel}`}
+          aria-label={t("Open {{value0}}", { value0: row.item.primaryLabel })}
         >
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <SubagentIdentityLine item={row.item} />
@@ -156,7 +161,7 @@ function SubagentRunRowView({
               ) : null}
               {description.detail?.kind === "was-running" ? (
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="shrink-0">→ was running</span>
+                  <span className="shrink-0">{t("→ was running")}</span>
                   <ActionText action={description.detail.action} />
                 </span>
               ) : null}
@@ -172,7 +177,10 @@ function SubagentRunRowView({
             aria-expanded={nestedOpen}
             onClick={() => setNestedOpen((open) => !open)}
           >
-            {`launched ${row.nested.length} ${pluralize(row.nested.length, "subagent")}`}
+            {t("launched {{value0}} {{value1}}", {
+              value0: row.nested.length,
+              value1: pluralize(row.nested.length, "subagent"),
+            })}
             <DisclosureChevron open={nestedOpen} className="size-3" />
           </Button>
         ) : null}
@@ -186,7 +194,7 @@ function SubagentRunRowView({
             onClick={openThread}
           >
             <ChatBubbleIcon className="size-3" />
-            Message
+            {t("Message")}
           </Button>
         ) : null}
         {live && depth === 0 && !row.item.isBackground && onBackground ? (
@@ -196,8 +204,8 @@ function SubagentRunRowView({
             size="icon-xs"
             className="shrink-0 opacity-0 transition-opacity group-hover/subagent-row:opacity-100 group-focus-within/subagent-row:opacity-100 focus-visible:opacity-100"
             onClick={() => void onBackground(row.item)}
-            aria-label="Run in background (ctrl+b)"
-            title="Run in background (ctrl+b)"
+            aria-label={t("Run in background (ctrl+b)")}
+            title={t("Run in background (ctrl+b)")}
           >
             <BackgroundTrayIcon className="size-3" />
           </Button>
@@ -209,10 +217,10 @@ function SubagentRunRowView({
             size="xs"
             className="shrink-0"
             onClick={() => void onStop(row.item)}
-            aria-label={`Stop ${row.item.primaryLabel}`}
+            aria-label={t("Stop {{value0}}", { value0: row.item.primaryLabel })}
           >
             <StopIcon className="size-2.5" />
-            Stop
+            {t("Stop")}
           </Button>
         ) : null}
         <ChevronRightIcon
@@ -251,6 +259,8 @@ function collectThreadIds(rows: ReadonlyArray<SubagentRunRow>): string[] {
 }
 
 export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
+  const { t } = useTranslation();
+
   const context = useSubagentRunContext();
   const threads = context?.threads ?? EMPTY_THREADS;
   const parentThreadId = context?.parentThreadId ?? null;
@@ -260,6 +270,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
   const card = useMemo(
     () =>
       deriveSubagentRunCard({
+        translate: t,
         subagents: workEntry.subagents ?? [],
         run: workEntry.subagentRun ?? { members: [] },
         threads,
@@ -269,6 +280,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
         taskEndByToolUseId: taskEnds,
       }),
     [
+      t,
       backgrounded,
       launchTurnLive,
       parentThreadId,
@@ -405,7 +417,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
             onClick={() => void Promise.all(liveItems.map((item) => onStop(item)))}
           >
             <StopIcon className="size-2.5" />
-            Stop all
+            {t("Stop all")}
           </Button>
         ) : null}
       </div>

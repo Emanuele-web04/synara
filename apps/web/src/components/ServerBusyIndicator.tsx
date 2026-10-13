@@ -6,6 +6,7 @@ import {
 } from "../serverBusyState";
 import { addWsTransportStateListener, type WsTransportState } from "../wsTransportEvents";
 import { StatusChip } from "./ui/status-chip";
+import { useTranslation } from "~/i18n";
 
 /** Shell status only: never inserts work or message rows into the transcript. */
 export function ServerBusyNotice({
@@ -15,12 +16,14 @@ export function ServerBusyNotice({
   snapshot: ServerBusySnapshot;
   reconnecting?: boolean;
 }) {
+  const { t } = useTranslation();
+
   if (!reconnecting && !snapshot.reason && snapshot.slowRequests === 0) return null;
   const title = reconnecting
-    ? "Reconnecting to Synara server"
+    ? t("Reconnecting to Synara server")
     : snapshot.reason === "recent-stall"
-      ? "Synara server recovered"
-      : "Synara server is busy";
+      ? t("Synara server recovered")
+      : t("Synara server is busy");
   const waiting =
     snapshot.pendingRequests === 1
       ? "1 request is still waiting."

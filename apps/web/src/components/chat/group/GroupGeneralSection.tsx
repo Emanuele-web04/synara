@@ -19,6 +19,7 @@ import {
   GROUP_NAME_MAX_CHARS,
   type GroupSettingsDraft,
 } from "./groupSettingsDialog.logic";
+import { useTranslation } from "~/i18n";
 
 // One option tile for the icon and colour grids: quiet until hovered, with a
 // hairline ring and a soft fill when selected.
@@ -40,6 +41,8 @@ export function GroupGeneralSection(props: {
   readonly projectCwd: string;
   readonly onChange: (patch: Partial<GroupSettingsDraft>) => void;
 }) {
+  const { t } = useTranslation();
+
   const { draft, onChange } = props;
   const selectedColorClassName =
     COORDINATOR_COLOR_OPTIONS.find((option) => option.key === draft.coordinatorColor)
@@ -49,31 +52,35 @@ export function GroupGeneralSection(props: {
       <SettingsSectionShell title="Hub">
         <SettingsCard>
           <div className="space-y-1.5 px-4 py-3">
-            <p className={cn(dialogFieldLabelClassName)}>Name</p>
+            <p className={cn(dialogFieldLabelClassName)}>{t("Name")}</p>
             <Input
               value={draft.name}
               maxLength={GROUP_NAME_MAX_CHARS}
               onChange={(event) => onChange({ name: event.target.value })}
-              placeholder="Hub name"
-              aria-label="Hub name"
+              placeholder={t("Hub name")}
+              aria-label={t("Hub name")}
             />
           </div>
           <div className="space-y-1.5 px-4 py-3">
             <div className="flex items-center justify-between gap-2">
-              <p className={cn(dialogFieldLabelClassName)}>Icon</p>
+              <p className={cn(dialogFieldLabelClassName)}>{t("Icon")}</p>
               <button
                 type="button"
-                aria-label="Use the default hub icon"
+                aria-label={t("Use the default hub icon")}
                 className={cn(
                   "cursor-pointer rounded-sm text-ui-sm text-muted-foreground transition-colors hover:text-foreground",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                 )}
                 onClick={() => onChange({ coordinatorIcon: "", coordinatorColor: "" })}
               >
-                Use default
+                {t("Use default")}
               </button>
             </div>
-            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Hub icon">
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label={t("Hub icon")}
+            >
               {COORDINATOR_ICON_OPTIONS.map(({ key, label, Icon }) => {
                 const selected = draft.coordinatorIcon === key;
                 return (
@@ -81,7 +88,7 @@ export function GroupGeneralSection(props: {
                     key={key}
                     type="button"
                     title={label}
-                    aria-label={`Hub icon ${label}`}
+                    aria-label={t("Hub icon {{value0}}", { value0: label })}
                     aria-pressed={selected}
                     className={appearanceOptionClassName(selected)}
                     onClick={() => onChange({ coordinatorIcon: selected ? "" : key })}
@@ -94,7 +101,7 @@ export function GroupGeneralSection(props: {
             <div
               className="flex flex-wrap items-center gap-1 pt-1"
               role="group"
-              aria-label="Hub icon color"
+              aria-label={t("Hub icon color")}
             >
               {COORDINATOR_COLOR_OPTIONS.map((option) => {
                 const selected = draft.coordinatorColor === option.key;
@@ -103,7 +110,7 @@ export function GroupGeneralSection(props: {
                     key={option.key}
                     type="button"
                     title={option.label}
-                    aria-label={`Hub icon color ${option.label}`}
+                    aria-label={t("Hub icon color {{value0}}", { value0: option.label })}
                     aria-pressed={selected}
                     className={appearanceOptionClassName(selected)}
                     onClick={() => onChange({ coordinatorColor: selected ? "" : option.key })}
@@ -118,13 +125,13 @@ export function GroupGeneralSection(props: {
             </div>
           </div>
           <div className="px-4 py-3">
-            <p className={cn(dialogFieldLabelClassName, "mb-1.5")}>Goal</p>
+            <p className={cn(dialogFieldLabelClassName, "mb-1.5")}>{t("Goal")}</p>
             <CharacterCountTextarea
               value={draft.goal}
               maxChars={GROUP_GOAL_MAX_CHARS}
               helper="The outcome you want the coordinator to work toward."
-              placeholder="What should this hub accomplish?"
-              aria-label="Hub goal"
+              placeholder={t("What should this hub accomplish?")}
+              aria-label={t("Hub goal")}
               onChange={(event) => onChange({ goal: event.target.value })}
             />
           </div>
@@ -145,7 +152,7 @@ export function GroupGeneralSection(props: {
                     DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers,
                   ),
                 )}
-                ariaLabel="Parallel threads"
+                ariaLabel={t("Parallel threads")}
                 onValueChange={(value) => onChange({ maxConcurrentWorkers: Number(value) })}
               >
                 {Array.from(
@@ -165,31 +172,31 @@ export function GroupGeneralSection(props: {
       <SettingsSectionShell title="Models">
         <SettingsCard>
           <GroupModelRow
-            title="Coordinator model"
-            description="Model for managing and creating threads."
+            title={t("Coordinator model")}
+            description={t("Model for managing and creating threads.")}
             selection={draft.coordinatorModelSelection}
             defaultSelection={props.defaultModelSelection}
             projectCwd={props.projectCwd}
             onChange={(next) => onChange({ coordinatorModelSelection: next })}
           />
           <GroupEffortRow
-            title="Coordinator effort"
-            description="Effort for managing and creating threads."
+            title={t("Coordinator effort")}
+            description={t("Effort for managing and creating threads.")}
             selection={draft.coordinatorModelSelection}
             projectCwd={props.projectCwd}
             onChange={(next) => onChange({ coordinatorModelSelection: next })}
           />
           <GroupModelRow
-            title="Thread model"
-            description="Default model for new threads."
+            title={t("Thread model")}
+            description={t("Default model for new threads.")}
             selection={draft.workerModelSelection}
             defaultSelection={props.defaultModelSelection}
             projectCwd={props.projectCwd}
             onChange={(next) => onChange({ workerModelSelection: next })}
           />
           <GroupEffortRow
-            title="Thread effort"
-            description="Default effort for new threads."
+            title={t("Thread effort")}
+            description={t("Default effort for new threads.")}
             selection={draft.workerModelSelection}
             projectCwd={props.projectCwd}
             onChange={(next) => onChange({ workerModelSelection: next })}

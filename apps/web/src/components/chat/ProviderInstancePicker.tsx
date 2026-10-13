@@ -31,6 +31,7 @@ import {
   resolveLiveProviderAvailability,
   type ProviderModelPickerInstance,
 } from "./ProviderModelPicker";
+import { useTranslation, t } from "~/i18n";
 
 export interface ProviderInstancePickerProps {
   readonly provider: ProviderKind;
@@ -46,18 +47,20 @@ export interface ProviderInstancePickerProps {
 }
 
 function pickerSectionLabel(provider: ProviderKind): string {
-  return provider === "codex" || provider === "claudeAgent" ? "Accounts" : "Profiles";
+  return provider === "codex" || provider === "claudeAgent" ? t("Accounts") : t("Profiles");
 }
 
 function manageLabel(provider: ProviderKind): string {
   return provider === "codex" || provider === "claudeAgent"
-    ? "Manage accounts…"
-    : "Manage profiles…";
+    ? t("Manage accounts…")
+    : t("Manage profiles…");
 }
 
 export const ProviderInstancePicker = memo(function ProviderInstancePicker(
   props: ProviderInstancePickerProps,
 ) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const instances = useMemo(
     () => props.providerInstances.filter((instance) => instance.provider === props.provider),
@@ -67,7 +70,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
     (instance) => instance.instanceId === props.selectedProviderInstanceId,
   );
   const selectedLabel = resolveProviderInstanceLabel(instances, props.selectedProviderInstanceId);
-  const triggerLabel = `Account: ${selectedLabel}`;
+  const triggerLabel = t("Account: {{value0}}", { value0: selectedLabel });
 
   const handleInstanceChange = useCallback(
     (value: string) => {
@@ -108,7 +111,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
             <MenuRadioItem value={props.selectedProviderInstanceId} disabled>
               <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
               <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
-                Unavailable
+                {t("Unavailable")}
               </span>
             </MenuRadioItem>
           ) : null}
@@ -121,10 +124,10 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
                     instanceId: instance.instanceId,
                   }),
                 )
-              : { disabled: true, label: "Disabled" };
+              : { disabled: true, label: t("Disabled") };
             const lockedSibling =
               props.selectionLocked && instance.instanceId !== props.selectedProviderInstanceId;
-            const statusLabel = lockedSibling ? "New thread" : availability.label;
+            const statusLabel = lockedSibling ? t("New thread") : availability.label;
             return (
               <MenuRadioItem
                 key={instance.instanceId}

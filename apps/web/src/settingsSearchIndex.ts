@@ -5,6 +5,7 @@
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
+import { i18n, t } from "~/i18n";
 import {
   settingRowAnchorId,
   SETTINGS_NAV_ITEMS,
@@ -58,6 +59,13 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
 // when rows are added, renamed, hidden conditionally, or represented as panel-level results.
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   // ── General ────────────────────────────────────────────────────────────────
+  {
+    id: "general:language",
+    section: "general",
+    title: "Language",
+    keywords:
+      "Choose the language used by the interface. System English Spanish Español idioma language",
+  },
   {
     id: "general:default-provider",
     section: "general",
@@ -661,7 +669,8 @@ const SETTINGS_SECTION_LABEL_BY_ID = new Map<SettingsSectionId, string>(
 );
 
 export function settingsSectionLabel(section: SettingsSectionId): string {
-  return SETTINGS_SECTION_LABEL_BY_ID.get(section) ?? section;
+  const label = SETTINGS_SECTION_LABEL_BY_ID.get(section);
+  return label === undefined ? section : t(label);
 }
 
 /**
@@ -684,8 +693,16 @@ export function rankSettingsSearchEntries(
   );
   const ranked = rankProviderDiscoveryItems(available, trimmed, (entry) => [
     { value: entry.title },
+    { value: i18n.t(entry.title, { lng: "es", defaultValue: entry.title }) },
     { value: entry.keywords, weight: 200 },
-    { value: settingsSectionLabel(entry.section), weight: 400 },
+    { value: i18n.t(entry.keywords, { lng: "es", defaultValue: entry.keywords }), weight: 200 },
+    { value: SETTINGS_SECTION_LABEL_BY_ID.get(entry.section) ?? entry.section, weight: 400 },
+    {
+      value: i18n.t(SETTINGS_SECTION_LABEL_BY_ID.get(entry.section) ?? entry.section, {
+        lng: "es",
+      }),
+      weight: 400,
+    },
   ]);
   return ranked.slice(0, limit);
 }

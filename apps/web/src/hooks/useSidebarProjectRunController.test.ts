@@ -5,6 +5,20 @@
 import { ProjectId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// These fixtures invoke the hook directly with a slot-based React harness.
+// Keep the real translator without requiring react-i18next's mounted context.
+vi.mock("~/i18n", async (importOriginal) => {
+  const runtime = await importOriginal<typeof import("~/i18n")>();
+  return {
+    ...runtime,
+    useTranslation: () => ({
+      t: runtime.t,
+      locale: runtime.i18n.language,
+      formatLocale: runtime.getFormatLocale() ?? "en",
+    }),
+  };
+});
+
 const reactHarness = vi.hoisted(() => {
   interface HookSlot {
     value?: unknown;

@@ -24,6 +24,7 @@ import {
 import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./composerStackedPanelStyles";
 import { findPullRequestAutoFixState } from "./environment/environmentPullRequest.logic";
 import { ComposerTipRow } from "./ComposerTipRow";
+import { useTranslation } from "~/i18n";
 
 interface ComposerPullRequestAutoFixHintProps {
   threadId: ThreadId;
@@ -41,6 +42,8 @@ export function ComposerPullRequestAutoFixHint({
   isWorking,
   attachedToPrevious,
 }: ComposerPullRequestAutoFixHintProps) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
   const dismissed = settings.dismissedPullRequestAutoFixHint;
@@ -58,7 +61,7 @@ export function ComposerPullRequestAutoFixHint({
           toastManager.add({
             type: "error",
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            title: "Couldn't turn on Auto-fix CI",
+            title: t("Couldn't turn on Auto-fix CI"),
             description: error instanceof Error ? error.message : undefined,
           });
         },

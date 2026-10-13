@@ -5,6 +5,7 @@
 
 import { Loader2Icon, MicIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
+import { useTranslation } from "~/i18n";
 
 export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   disabled?: boolean;
@@ -14,14 +15,16 @@ export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   durationLabel: string;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
+
   const isBusy = props.isTranscribing || props.isStarting === true;
   const label = props.isTranscribing
-    ? "Transcribing voice note"
+    ? t("Transcribing voice note")
     : props.isStarting
-      ? "Starting microphone"
+      ? t("Starting microphone")
       : props.isRecording
-        ? `Stop voice note (${props.durationLabel})`
-        : "Record voice note";
+        ? t("Stop voice note ({{value0}})", { value0: props.durationLabel })
+        : t("Record voice note");
 
   return (
     <Button

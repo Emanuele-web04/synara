@@ -9,6 +9,7 @@ import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { useTranslation } from "~/i18n";
 
 export function DockFilePane(props: {
   workspaceRoot: string | null;
@@ -18,6 +19,8 @@ export function DockFilePane(props: {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <WorkspaceFilePreview
       workspaceRoot={props.workspaceRoot}
@@ -26,7 +29,7 @@ export function DockFilePane(props: {
       markdownPreviewDefault
       emptyState={
         <PanelStateMessage density="compact" fill="flex">
-          <p>Click a file in the chat to preview it here.</p>
+          <p>{t("Click a file in the chat to preview it here.")}</p>
         </PanelStateMessage>
       }
       onReferenceInChat={props.onReferenceInChat}

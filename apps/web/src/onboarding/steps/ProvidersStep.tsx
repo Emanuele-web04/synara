@@ -29,6 +29,7 @@ import { ONBOARDING_TILE_CLASS_NAME } from "../layout";
 import { classifyProviderSetup, summarizeProviderSetup, type ProviderSetupState } from "../logic";
 import type { ProviderDetection } from "../useProviderDetection";
 import { ProviderConnectTerminal } from "./ProviderConnectTerminal";
+import { useTranslation } from "~/i18n";
 
 const EMPTY_STATUSES: readonly ServerProviderStatus[] = [];
 
@@ -120,6 +121,8 @@ function useDisabledProvidersDraft(): {
 }
 
 export function ProvidersStep(props: { readonly detection: ProviderDetection }) {
+  const { t } = useTranslation();
+
   const { detection } = props;
   const statuses = useDetectedProviderStatuses();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
@@ -208,12 +211,12 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                   {state === "detecting" ? (
                     <>
                       <Skeleton aria-hidden className="h-2.5 w-20 rounded-full" />
-                      <span className="sr-only">{presentation.label}</span>
+                      <span className="sr-only">{t(presentation.label)}</span>
                     </>
                   ) : (
                     <>
                       <StatusDot aria-hidden className={presentation.dotClassName} />
-                      {presentation.label}
+                      {t(presentation.label)}
                     </>
                   )}
                   {canConnectInline ? (
@@ -225,7 +228,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                         toggleConnect(descriptor.kind);
                       }}
                     >
-                      {isConnecting ? "Done" : "Sign in"}
+                      {isConnecting ? t("Done") : t("Sign in")}
                     </button>
                   ) : null}
                   {state === "not-installed" ? (
@@ -236,7 +239,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                       className={cn("ml-1", INLINE_ACTION_CLASS_NAME)}
                       onClick={(event) => event.stopPropagation()}
                     >
-                      Guide
+                      {t("Guide")}
                     </a>
                   ) : null}
                 </span>
@@ -244,7 +247,10 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
               <Checkbox
                 id={checkboxId}
                 checked={enabled}
-                aria-label={`${enabled ? "Disable" : "Enable"} ${descriptor.displayName}`}
+                aria-label={t("{{value0}} {{value1}}", {
+                  value0: t(enabled ? "Disable" : "Enable"),
+                  value1: descriptor.displayName,
+                })}
                 onCheckedChange={(checked) =>
                   setProviderDisabled(descriptor.kind, checked !== true)
                 }
@@ -257,13 +263,13 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
       <div className="flex items-center justify-between gap-3 text-ui text-muted-foreground">
         <span aria-live="polite">
           {summary.detecting > 0 ? (
-            "Detecting agents on this machine…"
+            t("Detecting agents on this machine…")
           ) : summary.checkFailed > 0 ? (
-            "Couldn't check all agents. Try Re-detect."
+            t("Couldn't check all agents. Try Re-detect.")
           ) : (
             <>
-              {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
-              {summary.notInstalled} not installed
+              {summary.connected} {t("connected ·")} {summary.needsSignIn} {t("need sign-in ·")}{" "}
+              {summary.notInstalled} {t("not installed")}
             </>
           )}
         </span>
@@ -277,7 +283,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
             className={cn("size-3.5", detection.detecting && "animate-spin")}
             aria-hidden
           />
-          Re-detect
+          {t("Re-detect")}
         </button>
       </div>
 
@@ -288,7 +294,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                 provider is detected as connected, but the terminal stays mounted. */}
             <div className="flex items-center justify-between text-ui text-muted-foreground">
               <span>
-                Signing in to {connecting.descriptor.displayName} ·{" "}
+                {t("Signing in to")} {connecting.descriptor.displayName} ·{" "}
                 <code className="text-foreground/80">{connectingSignInCommand}</code>
               </span>
               <button
@@ -297,7 +303,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                 onClick={finishConnect}
               >
                 <XIcon className="size-3.5" aria-hidden />
-                Done
+                {t("Done")}
               </button>
             </div>
             <ProviderConnectTerminal

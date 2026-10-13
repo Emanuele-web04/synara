@@ -22,12 +22,15 @@ import { useStore } from "~/store";
 import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "~/storeSelectors";
 import { useSettingsRestoreSignal } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 export function AdvancedSettingsPanel(props: {
   active: boolean;
   onOpenReleaseHistory: () => void;
   resetEpoch: number;
 }) {
+  const { t } = useTranslation();
+
   const configQuery = useQuery(serverConfigQueryOptions());
   const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
@@ -61,7 +64,7 @@ export function AdvancedSettingsPanel(props: {
     setIsOpeningKeybindings(true);
     const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
     if (!editor) {
-      setOpenKeybindingsError("No available editors found.");
+      setOpenKeybindingsError(t("No available editors found."));
       setIsOpeningKeybindings(false);
       return;
     }
@@ -69,13 +72,13 @@ export function AdvancedSettingsPanel(props: {
       .shell.openInEditor(keybindingsConfigPath, editor)
       .catch((error) => {
         setOpenKeybindingsError(
-          error instanceof Error ? error.message : "Unable to open keybindings file.",
+          error instanceof Error ? error.message : t("Unable to open keybindings file."),
         );
       })
       .finally(() => {
         setIsOpeningKeybindings(false);
       });
-  }, [availableEditors, keybindingsConfigPath]);
+  }, [availableEditors, keybindingsConfigPath, t]);
 
   const repairLocalState = useCallback(async () => {
     if (isRepairingLocalState) return;
@@ -96,21 +99,21 @@ export function AdvancedSettingsPanel(props: {
         syncServerReadModel(snapshot);
         toastManager.add({
           type: "success",
-          title: "Local state repaired",
-          description: "Project indexes were rebuilt without clearing existing chats.",
+          title: t("Local state repaired"),
+          description: t("Project indexes were rebuilt without clearing existing chats."),
         });
       })
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Repair failed",
-          description: error instanceof Error ? error.message : "Unable to repair local state.",
+          title: t("Repair failed"),
+          description: error instanceof Error ? error.message : t("Unable to repair local state."),
         });
       })
       .finally(() => {
         setIsRepairingLocalState(false);
       });
-  }, [isRepairingLocalState, syncServerReadModel]);
+  }, [isRepairingLocalState, syncServerReadModel, t]);
 
   const logoutCurrentSession = useCallback(async () => {
     if (isLoggingOut) return;
@@ -119,19 +122,21 @@ export function AdvancedSettingsPanel(props: {
     const result = await logoutCurrentBrowserSession({
       confirm: () =>
         api.dialogs.confirm(
-          "Sign out this browser?\n\nIts session and every live connection opened with it will be revoked.",
+          t(
+            "Sign out this browser?\n\nIts session and every live connection opened with it will be revoked.",
+          ),
         ),
       logout: () => api.server.logoutAuthSession(),
       navigate: (path) => window.location.assign(path),
       onError: (error) =>
         toastManager.add({
           type: "error",
-          title: "Sign out failed",
-          description: error instanceof Error ? error.message : "Unable to revoke this session.",
+          title: t("Sign out failed"),
+          description: error instanceof Error ? error.message : t("Unable to revoke this session."),
         }),
     });
     if (result !== "redirecting") setIsLoggingOut(false);
-  }, [isLoggingOut]);
+  }, [isLoggingOut, t]);
 
   if (!props.active) return null;
 
@@ -150,7 +155,7 @@ export function AdvancedSettingsPanel(props: {
                 disabled={isLoggingOut}
                 onClick={() => void logoutCurrentSession()}
               >
-                {isLoggingOut ? "Signing out..." : "Sign out"}
+                {isLoggingOut ? t("Signing out...") : t("Sign out")}
               </Button>
             }
           />
@@ -164,12 +169,12 @@ export function AdvancedSettingsPanel(props: {
           status={
             <>
               <span className="block break-all font-mono text-ui-sm text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
+                {keybindingsConfigPath ?? t("Resolving keybindings path...")}
               </span>
               {openKeybindingsError ? (
                 <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
               ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
+                <span className="mt-1 block">{t("Opens in your preferred editor.")}</span>
               )}
             </>
           }
@@ -180,7 +185,7 @@ export function AdvancedSettingsPanel(props: {
               disabled={!keybindingsConfigPath || isOpeningKeybindings}
               onClick={openKeybindingsFile}
             >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
+              {isOpeningKeybindings ? t("Opening...") : t("Open file")}
             </Button>
           }
         />
@@ -200,7 +205,7 @@ export function AdvancedSettingsPanel(props: {
               disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
               onClick={() => void repairLocalState()}
             >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              {isRepairingLocalState ? t("Repairing...") : t("Repair state")}
             </Button>
           }
         >
@@ -213,7 +218,7 @@ export function AdvancedSettingsPanel(props: {
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
                 <span className="text-ui leading-snug font-medium text-muted-foreground">
-                  What this does
+                  {t("What this does")}
                 </span>
                 <DisclosureChevron
                   open={showRecoveryTools}
@@ -228,8 +233,9 @@ export function AdvancedSettingsPanel(props: {
                 )}
               >
                 <div>
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
+                  {t(
+                    "Rebuilds local project indexes and refreshes project snapshots. Existing chats stay in place.",
+                  )}
                 </div>
               </DisclosureRegion>
             </div>
@@ -256,7 +262,7 @@ export function AdvancedSettingsPanel(props: {
               variant="outline"
               onClick={() => useFeatureTourStore.getState().open()}
             >
-              Replay feature tour
+              {t("Replay feature tour")}
             </Button>
           }
         />
@@ -265,7 +271,7 @@ export function AdvancedSettingsPanel(props: {
           description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
           control={
             <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
-              View release history
+              {t("View release history")}
             </Button>
           }
         />

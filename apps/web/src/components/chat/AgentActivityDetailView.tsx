@@ -3,7 +3,7 @@
 // Layer: Chat presentation component
 // Depends on: agentActivity.logic and ChatMarkdown
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -24,6 +24,7 @@ import {
   formatAgentActivityEntryTitle,
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
+import { useTranslation } from "~/i18n";
 
 const DETAIL_BOTTOM_INSET_PX = 64;
 
@@ -46,6 +47,8 @@ export function AgentActivityDetailView({
   onImageExpand,
   timestampFormat,
 }: AgentActivityDetailViewProps) {
+  const { t } = useTranslation();
+
   const chatTypographyStyle = getChatTranscriptTextStyle(chatFontSizePx);
   const footerTextStyle = getChatMessageFooterTextStyle(chatFontSizePx);
   const scrollStyle: CSSProperties = {
@@ -75,7 +78,7 @@ export function AgentActivityDetailView({
           onClick={onBack}
         >
           <ChevronLeftIcon className="size-3.5" />
-          <span>Back</span>
+          <span>{t("Back")}</span>
         </button>
 
         <div className="mt-3 border-b border-border/55 pb-4">
@@ -89,7 +92,10 @@ export function AgentActivityDetailView({
                   {detail.title}
                 </h2>
                 <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
-                  {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
+                  {t("{{value0}} {{value1}}", {
+                    value0: detail.entries.length,
+                    value1: pluralize(detail.entries.length, "update"),
+                  })}
                 </span>
               </div>
               {detail.summary ? (
@@ -102,7 +108,7 @@ export function AgentActivityDetailView({
         </div>
 
         {prompt ? (
-          <AgentActivitySection title="Prompt">
+          <AgentActivitySection title={t("Prompt")}>
             <ChatMarkdown
               text={prompt}
               cwd={markdownCwd}
@@ -114,7 +120,7 @@ export function AgentActivityDetailView({
         ) : null}
 
         {result ? (
-          <AgentActivitySection title="Result">
+          <AgentActivitySection title={t("Result")}>
             <ChatMarkdown
               text={result}
               cwd={markdownCwd}
@@ -125,7 +131,7 @@ export function AgentActivityDetailView({
           </AgentActivitySection>
         ) : null}
 
-        <AgentActivitySection title="Activity">
+        <AgentActivitySection title={t("Activity")}>
           <div className="divide-y divide-border/45">
             {detail.entries.map((entry) => (
               <AgentActivityEventRow
@@ -162,6 +168,8 @@ function AgentActivityEventRow(props: {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   timestampFormat: TimestampFormat;
 }) {
+  const { formatLocale } = useTranslation();
+
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
   const body =
@@ -176,7 +184,7 @@ function AgentActivityEventRow(props: {
           {title}
         </p>
         <p className="shrink-0 tabular-nums text-muted-foreground/38" style={props.footerTextStyle}>
-          {formatShortTimestamp(props.entry.createdAt, props.timestampFormat)}
+          {formatShortTimestamp(props.entry.createdAt, props.timestampFormat, formatLocale)}
         </p>
       </div>
       {body ? (

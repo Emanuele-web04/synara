@@ -13,10 +13,26 @@ vi.mock("electron", () => ({
 }));
 
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
+import { initializeDesktopI18n, t } from "./i18n";
 
 describe("showDesktopConfirmDialog", () => {
   beforeEach(() => {
     showMessageBoxMock.mockReset();
+    initializeDesktopI18n("en", () => "en-US");
+  });
+
+  it("uses Spanish buttons while leaving the caller's message untouched", async () => {
+    initializeDesktopI18n("es", () => "en-US");
+    showMessageBoxMock.mockResolvedValue({ response: 1 });
+    await expect(showDesktopConfirmDialog("Raw provider message", null)).resolves.toBe(true);
+    expect(showMessageBoxMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buttons: ["No", "Sí"],
+        message: "Raw provider message",
+        defaultId: 1,
+        cancelId: 0,
+      }),
+    );
   });
 
   it("returns false and does not open a dialog for empty messages", async () => {
@@ -60,6 +76,25 @@ describe("showDesktopConfirmDialog", () => {
 describe("guardDesktopWindowClose", () => {
   beforeEach(() => {
     showMessageBoxMock.mockReset();
+    initializeDesktopI18n("en", () => "en-US");
+  });
+
+  it("resolves a translated close message when closing, after a language change", async () => {
+    const window = Object.assign(new EventEmitter(), { isDestroyed: () => false, close: vi.fn() });
+    guardDesktopWindowClose(
+      window as unknown as BrowserWindow,
+      () => t("Quit {{app}}?", { app: "Synara" }),
+      () => true,
+    );
+    initializeDesktopI18n("es", () => "en-US");
+    showMessageBoxMock.mockResolvedValue({ response: 0 });
+    window.emit("close", { preventDefault: vi.fn() });
+    await vi.waitFor(() =>
+      expect(showMessageBoxMock).toHaveBeenCalledWith(
+        window,
+        expect.objectContaining({ message: "¿Salir de Synara?", buttons: ["No", "Sí"] }),
+      ),
+    );
   });
 
   function createWindow(shouldConfirm = () => true) {

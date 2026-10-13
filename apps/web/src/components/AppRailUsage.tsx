@@ -37,6 +37,7 @@ import {
 } from "./sidebarHoverCardStyles";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import { StatusChip } from "./ui/status-chip";
+import { useTranslation } from "~/i18n";
 
 // Every ring uses the same scale, so its colour alone says how much is left.
 const RING_TONE_CLASS_NAME: Record<RailUsageRingTone, { stroke: string; dot: string }> = {
@@ -64,6 +65,8 @@ function AppRailUsageRing({
   window: RailUsageWindow;
   onOpenUsageSettings: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { instance, label } = account;
   const provider = instance.driver;
   const model = useProviderUsageMenuModel(provider, {
@@ -99,7 +102,7 @@ function AppRailUsageRing({
         render={
           <button
             type="button"
-            aria-label={`${summary.ariaLabel}. Open usage settings`}
+            aria-label={t("{{value0}}. Open usage settings", { value0: summary.ariaLabel })}
             className={cn(
               appRailButtonClassName(false),
               "relative flex shrink-0 items-center justify-center",
@@ -180,7 +183,7 @@ function AppRailUsageRing({
             <div className="flex items-center gap-3 text-muted-foreground">
               {rings.map(({ row, tone }, index) => (
                 <StatusChip key={row.id} dotClassName={tone.dot}>
-                  {row.label} · {index === 0 ? "outer" : "inner"}
+                  {row.label} · {index === 0 ? t("outer") : t("inner")}
                 </StatusChip>
               ))}
             </div>

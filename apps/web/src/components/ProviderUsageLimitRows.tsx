@@ -10,6 +10,7 @@ import {
 import { StatusDot } from "~/components/ui/status-chip";
 
 import { UsageProgressTrack } from "./UsageProgressTrack";
+import { useTranslation } from "~/i18n";
 
 export type ProviderUsageLimitRowsSurface = "settings" | "popover";
 
@@ -67,6 +68,8 @@ function ProviderUsageTrack({
 }
 
 function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
+  const { t } = useTranslation();
+
   const trackProps = providerUsageProgressTrackProps(row);
 
   return (
@@ -75,7 +78,7 @@ function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
         <span className="text-ui leading-snug font-medium text-foreground">{row.label}</span>
         <StatusDot
           className={trackProps.markerClassName}
-          title={row.pace ? `Usage pace: ${row.pace.status}` : undefined}
+          title={row.pace ? t("Usage pace: {{value0}}", { value0: row.pace.status }) : undefined}
           aria-hidden
         />
       </div>

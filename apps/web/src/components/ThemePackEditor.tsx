@@ -45,6 +45,7 @@ import {
   getCodeThemeSeed,
   resolveThemePack,
 } from "../theme/theme.logic";
+import { useTranslation } from "~/i18n";
 
 type ThemePackEditorProps = {
   isActive?: boolean;
@@ -70,6 +71,8 @@ export function ThemePackEditor({
   isActive: isActiveProp,
   mode: modeProp,
 }: ThemePackEditorProps) {
+  const { t } = useTranslation();
+
   const {
     darkTheme,
     lightTheme,
@@ -111,28 +114,28 @@ export function ThemePackEditor({
   const codeThemeLabel =
     CODE_THEME_OPTIONS.find((option) => option.id === pack.codeThemeId)?.label ?? pack.codeThemeId;
   const isPristine = isDefaultThemePack(variant);
-  const titleLabel = variant === "dark" ? "Dark theme" : "Light theme";
+  const titleLabel = variant === "dark" ? t("Dark theme") : t("Light theme");
   const contextLabel = isActive
     ? mode === "system"
-      ? `System is currently using this ${variant} slot.`
-      : "This is the active theme right now."
+      ? t("System is currently using this {{value0}} slot.", { value0: variant })
+      : t("This is the active theme right now.")
     : mode === "system"
-      ? `Used when your system switches to ${variant}.`
-      : `Inactive while the app is locked to ${mode}.`;
+      ? t("Used when your system switches to {{value0}}.", { value0: variant })
+      : t("Inactive while the app is locked to {{value0}}.", { value0: mode });
 
   const handleCopy = async () => {
     try {
       await copyTextToClipboard(exportThemeString(variant));
       toastManager.add({
         type: "success",
-        title: "Theme copied",
-        description: `Copied the ${variant} theme share string.`,
+        title: t("Theme copied"),
+        description: t("Copied the {{value0}} theme share string.", { value0: variant }),
       });
     } catch {
       toastManager.add({
         type: "error",
-        title: "Copy failed",
-        description: "Unable to copy the theme share string.",
+        title: t("Copy failed"),
+        description: t("Unable to copy the theme share string."),
       });
     }
   };
@@ -156,7 +159,7 @@ export function ThemePackEditor({
                 ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
               )}
             >
-              Reset
+              {t("Reset")}
             </button>
           ) : null}
         </div>
@@ -167,7 +170,7 @@ export function ThemePackEditor({
             onClick={() => void handleCopy()}
             className={EDITOR_TEXT_ACTION_CLASS_NAME}
           >
-            Copy
+            {t("Copy")}
           </button>
           <Select
             value={pack.codeThemeId}
@@ -179,7 +182,7 @@ export function ThemePackEditor({
             <SelectTrigger
               size="sm"
               className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "ml-1 min-w-52 gap-2")}
-              aria-label={`${titleLabel} code theme`}
+              aria-label={t("{{value0}} code theme", { value0: titleLabel })}
             >
               <SelectValue className="flex-1 text-left">
                 <CodeThemeSelectOption label={codeThemeLabel} theme={theme} />
@@ -204,14 +207,17 @@ export function ThemePackEditor({
         <span>{contextLabel}</span>
         {!isActive ? (
           <Button variant="outline" size="xs" onClick={() => setTheme(variant)}>
-            Use {variant} theme
+            {t("Use")} {variant} {t("theme")}
           </Button>
         ) : null}
       </div>
       <div className="border-b border-[color:var(--color-border)] px-4 pb-3">
         <div
           role="img"
-          aria-label={`${titleLabel} preview: ${codeThemeLabel}`}
+          aria-label={t("{{value0}} preview: {{value1}}", {
+            value0: titleLabel,
+            value1: codeThemeLabel,
+          })}
           className="flex items-center justify-between gap-3 rounded-lg border p-3"
           style={
             {
@@ -231,16 +237,16 @@ export function ThemePackEditor({
               color: "var(--color-text-accent)",
             }}
           >
-            Accent preview
+            {t("Accent preview")}
           </span>
         </div>
       </div>
 
       <div className={SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME}>
-        <ThemeRow label="Accent">
+        <ThemeRow label={t("Accent")}>
           <ColorPill
             color={theme.accent}
-            ariaLabel={`${titleLabel} accent color`}
+            ariaLabel={t("{{value0}} accent color", { value0: titleLabel })}
             onChange={(next) => updateThemePack(variant, { accent: next })}
             onReset={
               theme.accent !== defaultTheme.accent
@@ -253,10 +259,10 @@ export function ThemePackEditor({
           />
         </ThemeRow>
 
-        <ThemeRow label="Background">
+        <ThemeRow label={t("Background")}>
           <ColorPill
             color={theme.surface}
-            ariaLabel={`${titleLabel} background color`}
+            ariaLabel={t("{{value0}} background color", { value0: titleLabel })}
             onChange={(next) => updateThemePack(variant, { surface: next })}
             onReset={
               theme.surface !== defaultTheme.surface
@@ -269,10 +275,10 @@ export function ThemePackEditor({
           />
         </ThemeRow>
 
-        <ThemeRow label="Foreground">
+        <ThemeRow label={t("Foreground")}>
           <ColorPill
             color={theme.ink}
-            ariaLabel={`${titleLabel} foreground color`}
+            ariaLabel={t("{{value0}} foreground color", { value0: titleLabel })}
             onChange={(next) => updateThemePack(variant, { ink: next })}
             onReset={
               theme.ink !== defaultTheme.ink
@@ -285,28 +291,28 @@ export function ThemePackEditor({
           />
         </ThemeRow>
 
-        <ThemeRow label="UI font">
+        <ThemeRow label={t("UI font")}>
           <div className="flex flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.ui ?? ""}
-              placeholder="System default"
-              ariaLabel={`${titleLabel} UI font`}
+              placeholder={t("System default")}
+              ariaLabel={t("{{value0}} UI font", { value0: titleLabel })}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
             {systemUiFont ? (
               <span className="text-ui-sm text-muted-foreground">
-                Use system UI font is on; theme fonts are not applied.
+                {t("Use system UI font is on; theme fonts are not applied.")}
               </span>
             ) : null}
           </div>
         </ThemeRow>
 
-        <ThemeRow label="Code font">
+        <ThemeRow label={t("Code font")}>
           <div className="flex flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.code ?? ""}
-              placeholder='"JetBrains Mono"'
-              ariaLabel={`${titleLabel} code font`}
+              placeholder={t('"JetBrains Mono"')}
+              ariaLabel={t("{{value0}} code font", { value0: titleLabel })}
               mono
               onChange={(next) =>
                 updateThemeFonts(variant, { code: next.length > 0 ? next : null })
@@ -316,13 +322,13 @@ export function ThemePackEditor({
         </ThemeRow>
 
         <div>
-          <ThemeRow label="Window">
+          <ThemeRow label={t("Window")}>
             <SettingsSegmentedControl
               value={theme.opaqueWindows ? "solid" : "translucent"}
               onValueChange={(value) =>
                 updateThemePack(variant, { opaqueWindows: value === "solid" })
               }
-              ariaLabel={`${titleLabel} window material`}
+              ariaLabel={t("{{value0}} window material", { value0: titleLabel })}
               options={WINDOW_MATERIAL_OPTIONS}
             />
           </ThemeRow>
@@ -333,34 +339,34 @@ export function ThemePackEditor({
                 "border-t border-[color:var(--color-border)]",
               )}
             >
-              <ThemeRow label="Sidebar only">
+              <ThemeRow label={t("Sidebar only")}>
                 <Switch
                   checked={translucency.sidebarOnly}
                   onCheckedChange={(checked) =>
                     setWindowTranslucency(variant, { sidebarOnly: checked })
                   }
-                  aria-label={`${titleLabel} translucent sidebar only`}
+                  aria-label={t("{{value0}} translucent sidebar only", { value0: titleLabel })}
                 />
               </ThemeRow>
-              <ThemeRow label="Opacity">
+              <ThemeRow label={t("Opacity")}>
                 <ThemeSlider
                   value={translucency.opacity}
                   min={WINDOW_TRANSLUCENCY_OPACITY_MIN}
                   max={100}
                   suffix="%"
                   onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
-                  ariaLabel={`${titleLabel} translucency opacity`}
+                  ariaLabel={t("{{value0}} translucency opacity", { value0: titleLabel })}
                 />
               </ThemeRow>
-              <ThemeRow label="Blur">
+              <ThemeRow label={t("Blur")}>
                 {translucency.blur !== null ? (
                   <Button
                     variant="outline"
                     size="xs"
                     onClick={() => setWindowTranslucency(variant, { blur: null })}
-                    aria-label={`${titleLabel} automatic background blur`}
+                    aria-label={t("{{value0}} automatic background blur", { value0: titleLabel })}
                   >
-                    {isActive && desktopBlurUnavailable ? "Unavailable, use Auto" : "Auto"}
+                    {isActive && desktopBlurUnavailable ? t("Unavailable, use Auto") : t("Auto")}
                   </Button>
                 ) : null}
                 <ThemeSlider
@@ -369,19 +375,19 @@ export function ThemePackEditor({
                   min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
                   max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
                   onChange={(next) => setWindowTranslucency(variant, { blur: next })}
-                  ariaLabel={`${titleLabel} background blur`}
+                  ariaLabel={t("{{value0}} background blur", { value0: titleLabel })}
                 />
               </ThemeRow>
             </div>
           </DisclosureRegion>
         </div>
 
-        <ThemeRow label="Contrast">
+        <ThemeRow label={t("Contrast")}>
           <ThemeSlider
             value={theme.contrast}
             max={100}
             onChange={(next) => updateThemePack(variant, { contrast: next })}
-            ariaLabel={`${titleLabel} contrast`}
+            ariaLabel={t("{{value0}} contrast", { value0: titleLabel })}
           />
         </ThemeRow>
       </div>
@@ -418,6 +424,8 @@ function ColorPill({
   onChange: (next: string) => void;
   onReset?: (() => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const commitTimerRef = useRef<number | null>(null);
   const pendingCommitRef = useRef<string | null>(null);
   const colorRef = useRef(color);
@@ -503,8 +511,8 @@ function ColorPill({
             "rounded-md p-1 text-[var(--color-text-foreground-tertiary)]",
             ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
           )}
-          aria-label={`Reset ${ariaLabel}`}
-          title="Reset to default"
+          aria-label={t("Reset {{value0}}", { value0: ariaLabel })}
+          title={t("Reset to default")}
         >
           <ResetGlyph />
         </button>
@@ -560,7 +568,7 @@ function ColorPill({
                 SETTINGS_CONTROL_RADIUS_CLASS_NAME,
                 "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-ui leading-snug uppercase outline-none focus:border-[color:var(--color-border-focus)]",
               )}
-              aria-label={`${ariaLabel} hex value`}
+              aria-label={t("{{value0}} hex value", { value0: ariaLabel })}
             />
           </div>
         </PopoverPopup>
@@ -570,6 +578,8 @@ function ColorPill({
 }
 
 function CodeThemeBadge({ theme }: { theme: ChromeTheme }) {
+  const { t } = useTranslation();
+
   return (
     <span
       aria-hidden
@@ -580,7 +590,7 @@ function CodeThemeBadge({ theme }: { theme: ChromeTheme }) {
         color: theme.accent,
       }}
     >
-      Aa
+      {t("Aa")}
     </span>
   );
 }
@@ -650,6 +660,8 @@ function ThemeSlider({
   onChange: (next: number) => void;
   ariaLabel: string;
 }) {
+  const { t } = useTranslation();
+
   const id = useId();
   const fillPct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
@@ -669,7 +681,7 @@ function ThemeSlider({
         }}
       />
       <span className="w-10 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
-        {valueLabel ?? `${value}${suffix}`}
+        {valueLabel ?? t("{{value0}}{{value1}}", { value0: value, value1: suffix })}
       </span>
     </div>
   );
@@ -684,6 +696,8 @@ function ImportThemeDialog({
   variant: ThemeVariant;
   onImport: (value: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -693,14 +707,14 @@ function ImportThemeDialog({
       onImport(value);
       toastManager.add({
         type: "success",
-        title: "Theme imported",
-        description: `Updated the ${variant} theme pack.`,
+        title: t("Theme imported"),
+        description: t("Updated the {{value0}} theme pack.", { value0: variant }),
       });
       setValue("");
       setError(null);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to import that theme string.");
+      setError(err instanceof Error ? err.message : t("Unable to import that theme string."));
     }
   };
 
@@ -709,18 +723,22 @@ function ImportThemeDialog({
       <DialogTrigger
         render={
           <button type="button" className={EDITOR_TEXT_ACTION_CLASS_NAME}>
-            Import
+            {t("Import")}
           </button>
         }
       />
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Import {variant} theme</DialogTitle>
+          <DialogTitle>
+            {t("Import {{variant}} theme", { variant: t(variant === "dark" ? "dark" : "light") })}
+          </DialogTitle>
           <p className="text-ui leading-snug text-muted-foreground">
-            Paste a{" "}
-            <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>{" "}
-            share string. The embedded variant must match {variant}, and the selected code theme
-            must exist for that variant.
+            {t("Paste a theme share string beginning with")}{" "}
+            <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>.{" "}
+            {t(
+              "The embedded variant must match {{variant}}, and the selected code theme must exist for that variant.",
+              { variant },
+            )}
           </p>
         </DialogHeader>
         <DialogPanel>
@@ -730,11 +748,11 @@ function ImportThemeDialog({
               setValue(event.target.value);
               setError(null);
             }}
-            placeholder='codex-theme-v1:{"codeThemeId":"linear",...}'
+            placeholder={t('codex-theme-v1:{"codeThemeId":"linear",...}')}
             spellCheck={false}
             rows={5}
             className="font-chat-code text-chat-code"
-            aria-label="Theme share string"
+            aria-label={t("Theme share string")}
           />
           {error ? <p className="mt-2 text-ui leading-snug text-destructive">{error}</p> : null}
         </DialogPanel>
@@ -742,7 +760,7 @@ function ImportThemeDialog({
           <DialogClose
             render={
               <Button variant="outline" type="button" size="sm">
-                Cancel
+                {t("Cancel")}
               </Button>
             }
           />
@@ -752,7 +770,7 @@ function ImportThemeDialog({
             disabled={value.trim().length === 0}
             onClick={handleSubmit}
           >
-            Import
+            {t("Import")}
           </Button>
         </DialogFooter>
       </DialogPopup>

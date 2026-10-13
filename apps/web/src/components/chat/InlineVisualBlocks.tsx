@@ -42,6 +42,7 @@ import { InlineVisualSurface, toneColor, toneTextClassName } from "./InlineVisua
 import { InlineVisualTable } from "./InlineVisualTable";
 import { decodeInlineVisualSpec, useInlineVisualState } from "./inlineVisualBlocks.logic";
 import { InlineVisualEmbedContext } from "./inlineVisualEmbedContext";
+import { useTranslation } from "~/i18n";
 
 export interface InlineVisualBlocksActions {
   /** Markdown links and file paths resolve against this. */
@@ -59,6 +60,8 @@ export function InlineVisualBlocks({
   readonly visual: InlineVisualActivityPayload;
   readonly actions: InlineVisualBlocksActions;
 }) {
+  const { t } = useTranslation();
+
   const { resolvedTheme } = useTheme();
   const source = useQuery(inlineVisualQueryOptions({ threadId, visualId: visual.visualId }));
   const spec = useMemo(
@@ -80,7 +83,7 @@ export function InlineVisualBlocks({
     return source.isError ? (
       <BlocksNotice
         title={visual.title}
-        message="Visual unavailable."
+        message={t("Visual unavailable.")}
         {...((source.error as { retryable?: boolean } | null)?.retryable === false
           ? {}
           : { onRetry: () => void source.refetch() })}
@@ -88,14 +91,14 @@ export function InlineVisualBlocks({
     ) : (
       <div
         role="status"
-        aria-label={`Loading ${visual.title}`}
+        aria-label={t("Loading {{value0}}", { value0: visual.title })}
         className="animate-pulse rounded-2xl bg-[color:color-mix(in_srgb,var(--foreground)_4%,transparent)]"
         style={{ height: visual.height || INLINE_VISUAL_DEFAULT_HEIGHT }}
       />
     );
   }
   if (spec === null) {
-    return <BlocksNotice title={visual.title} message="This visual needs a newer Synara." />;
+    return <BlocksNotice title={visual.title} message={t("This visual needs a newer Synara.")} />;
   }
   return (
     <figure
@@ -124,6 +127,8 @@ function BlocksNotice(props: {
   readonly message: string;
   readonly onRetry?: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className="flex items-center gap-2 rounded-xl border border-border/60 px-3 py-2 text-muted-foreground text-ui-sm"
@@ -133,7 +138,7 @@ function BlocksNotice(props: {
       <span className="min-w-0 flex-1">{props.message}</span>
       {props.onRetry ? (
         <Button size="xs" variant="outline" onClick={props.onRetry}>
-          Retry
+          {t("Retry")}
         </Button>
       ) : null}
     </div>
@@ -194,6 +199,8 @@ function LeafBlock({
 type BlockOf<T extends InlineVisualBlock["type"]> = Extract<InlineVisualBlock, { type: T }>;
 
 function StatsBlock({ block }: { readonly block: BlockOf<"stats"> }) {
+  const { t } = useTranslation();
+
   return (
     <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2.5">
       {block.items.map((item, index) => (
@@ -220,11 +227,11 @@ function StatsBlock({ block }: { readonly block: BlockOf<"stats"> }) {
               )}
             >
               {item.trend === "up" ? (
-                <ArrowUpIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label="up" />
+                <ArrowUpIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label={t("up")} />
               ) : item.trend === "down" ? (
-                <ArrowDownIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label="down" />
+                <ArrowDownIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label={t("down")} />
               ) : item.trend === "flat" ? (
-                <MinusIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label="flat" />
+                <MinusIcon className="mt-[0.15em] size-3.5 shrink-0" aria-label={t("flat")} />
               ) : null}
               {item.detail ? <span className="line-clamp-2">{item.detail}</span> : null}
             </span>
@@ -242,6 +249,8 @@ function ListBlock({
   readonly block: BlockOf<"list">;
   readonly stateKey: string;
 }) {
+  const { t } = useTranslation();
+
   const style = block.style ?? "bullets";
   const [checked, setChecked] = useInlineVisualState<ReadonlyArray<boolean>>(stateKey, () =>
     block.items.map((item) => item.status === "done"),
@@ -314,7 +323,7 @@ function ListBlock({
                 style === "numbered" ? undefined : { background: toneColor(item.tone) ?? undefined }
               }
             >
-              {style === "numbered" ? `${index + 1}.` : null}
+              {style === "numbered" ? t("{{value0}}.", { value0: index + 1 }) : null}
             </span>
             <span className="min-w-0">
               <span
@@ -367,26 +376,28 @@ function ListTag({
 }
 
 function StepMarker({ status }: { readonly status: BlockOf<"list">["items"][number]["status"] }) {
+  const { t } = useTranslation();
+
   const base =
     "relative z-10 flex size-[1.375rem] shrink-0 items-center justify-center rounded-full";
   switch (status) {
     case "done":
       return (
         <span className={cn(base, "bg-[var(--success)] text-[var(--background)]")}>
-          <CheckIcon className="size-3" aria-label="done" />
+          <CheckIcon className="size-3" aria-label={t("done")} />
         </span>
       );
     case "failed":
       return (
         <span className={cn(base, "bg-[var(--destructive)] text-[var(--background)]")}>
-          <XIcon className="size-3" aria-label="failed" />
+          <XIcon className="size-3" aria-label={t("failed")} />
         </span>
       );
     case "current":
       return (
         <span
           className={cn(base, "border-2 border-[var(--chart-accent)] bg-[var(--background)]")}
-          aria-label="current"
+          aria-label={t("current")}
         >
           <span className="size-2 rounded-full bg-[var(--chart-accent)]" />
         </span>
@@ -395,7 +406,7 @@ function StepMarker({ status }: { readonly status: BlockOf<"list">["items"][numb
       return (
         <span
           className={cn(base, "border border-[var(--chart-muted)] bg-[var(--background)]")}
-          aria-label="pending"
+          aria-label={t("pending")}
         />
       );
   }
@@ -427,6 +438,8 @@ function CalloutBlock({ block }: { readonly block: BlockOf<"callout"> }) {
 }
 
 function CompareBlock({ block }: { readonly block: BlockOf<"compare"> }) {
+  const { t } = useTranslation();
+
   return (
     <div className="grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-2.5">
       {block.options.map((option, index) => (
@@ -443,7 +456,7 @@ function CompareBlock({ block }: { readonly block: BlockOf<"compare"> }) {
               <span className="truncate font-medium">{option.title}</span>
               {option.highlight ? (
                 <span className="shrink-0 rounded-full bg-[color:color-mix(in_srgb,var(--chart-accent)_14%,transparent)] px-2 py-px text-chat-sm font-medium text-[color:color-mix(in_srgb,var(--chart-accent)_80%,var(--foreground))]">
-                  Recommended
+                  {t("Recommended")}
                 </span>
               ) : null}
             </div>
@@ -513,6 +526,8 @@ function TabsBlock({
   readonly stateKey: string;
   readonly actions: InlineVisualBlocksActions;
 }) {
+  const { t } = useTranslation();
+
   const [active, setActive] = useInlineVisualState(stateKey, "0");
   const tab = block.tabs[Number(active)] ?? block.tabs[0]!;
   return (
@@ -521,7 +536,7 @@ function TabsBlock({
         value={active}
         options={block.tabs.map((entry, index) => ({ value: String(index), label: entry.label }))}
         onValueChange={setActive}
-        ariaLabel="Views"
+        ariaLabel={t("Views")}
         className="-mx-1 w-full max-w-md"
       />
       <div className="flex min-w-0 flex-col gap-4">

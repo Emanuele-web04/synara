@@ -76,6 +76,7 @@ import {
   EnvironmentRow,
   EnvironmentSectionDivider,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 // Horizontal space (px) the docked card reserves on the right edge of the chat area.
 // Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
@@ -191,8 +192,10 @@ function EnvironmentRecapSection({
   recap: NonNullable<EnvironmentPanelProps["recap"]>;
   markdownCwd: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
-    <EnvironmentCollapsibleSection label="Recap">
+    <EnvironmentCollapsibleSection label={t("Recap")}>
       <div className="flex flex-col gap-1.5 pb-1.5">
         {recap.text ? (
           <div className="px-2">
@@ -258,6 +261,8 @@ export function EnvironmentPanel({
   onRegisterCommitAndPushTrigger,
   railBottom,
 }: EnvironmentPanelProps) {
+  const { t } = useTranslation();
+
   const githubRepository = githubRepositoryProp ?? null;
   const githubRepositories = githubRepositoriesProp ?? [];
   const groupFolderPath = groupFolderPathProp ?? null;
@@ -299,15 +304,15 @@ export function EnvironmentPanel({
       ) : null}
 
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
-        <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>{t("Environment")}</EnvironmentPanelTitle>
         {/*
           icon-xs centers the 14px gear inside a 28/24px box, insetting it ~7/5px from the
           content edge; pull it back so the glyph's right edge lines up with the rows' chevrons
           (which sit flush against the same px-2 gutter).
         */}
         <IconButton
-          label="Panel sections"
-          tooltip="Panel sections"
+          label={t("Panel sections")}
+          tooltip={t("Panel sections")}
           className="-mr-[7px] sm:-mr-[5px]"
           onClick={() =>
             void navigate({
@@ -338,7 +343,7 @@ export function EnvironmentPanel({
       {isGitRepo ? (
         <EnvironmentRow
           icon={<ChangesIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Changes"
+          label={t("Changes")}
           trailing={hasChanges ? <DiffStat insertions={additions} deletions={deletions} /> : null}
           disabled={changesDisabled}
           onClick={() => {
@@ -370,8 +375,8 @@ export function EnvironmentPanel({
                 if (!createSidechat) {
                   toastManager.add({
                     type: "warning",
-                    title: "Side chat is unavailable",
-                    description: "Open a server-backed main thread before starting a side chat.",
+                    title: t("Side chat is unavailable"),
+                    description: t("Open a server-backed main thread before starting a side chat."),
                   });
                   return;
                 }
@@ -380,11 +385,11 @@ export function EnvironmentPanel({
               .catch((error) => {
                 toastManager.add({
                   type: "error",
-                  title: "Could not start side chat",
+                  title: t("Could not start side chat"),
                   description:
                     error instanceof Error
                       ? error.message
-                      : "An error occurred while creating the side chat.",
+                      : t("An error occurred while creating the side chat."),
                 });
               });
           }}
@@ -428,11 +433,11 @@ export function EnvironmentPanel({
             })().catch((error) => {
               toastManager.add({
                 type: "error",
-                title: "Could not delete side chat",
+                title: t("Could not delete side chat"),
                 description:
                   error instanceof Error
                     ? error.message
-                    : "An error occurred while deleting the side chat.",
+                    : t("An error occurred while deleting the side chat."),
               });
             });
           }}
@@ -457,7 +462,7 @@ export function EnvironmentPanel({
       {settings.showEnvironmentUsage ? <EnvironmentUsageSection provider={activeProvider} /> : null}
 
       {settings.showEnvironmentRepository && githubRepository && onOpenGithubRepository ? (
-        <EnvironmentLabeledSection label="Repository">
+        <EnvironmentLabeledSection label={t("Repository")}>
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}

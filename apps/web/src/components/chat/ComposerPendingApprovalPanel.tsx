@@ -14,6 +14,7 @@ import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
+import { useTranslation } from "~/i18n";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
@@ -160,6 +161,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   isResponding,
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
+  const { t } = useTranslation();
   const parsed = parseApprovalDetail(approval.detail);
   const requestId = approval.requestId;
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
@@ -217,7 +219,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
+          {t(computerScope?.prompt ?? KIND_PROMPT[approval.requestKind])}
           {!computerScope && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
@@ -241,8 +243,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
           <ComposerChoiceRow
             key={action.decision}
             shortcut={index + 1}
-            label={action.label}
-            description={action.description}
+            label={t(action.label)}
+            description={t(action.description)}
             tone={action.tone}
             disabled={isResponding}
             onSelect={() => respondOnce(action)}
@@ -264,6 +266,8 @@ function ApprovalDetail({
   toolName?: string;
   toolParamsDisplay?: PendingApproval["toolParamsDisplay"];
 }) {
+  const { t } = useTranslation();
+
   if (permissionProfile) {
     return (
       <div className="mt-2">
@@ -274,7 +278,7 @@ function ApprovalDetail({
         ) : null}
         <pre
           className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-foreground/85"
-          title="Requested permission profile"
+          title={t("Requested permission profile")}
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
         </pre>
@@ -311,7 +315,11 @@ function ApprovalDetail({
       <div className="mt-2">
         <p
           className="truncate text-ui-lg font-medium leading-tight text-foreground/85"
-          title={parsed.fileDir ? `${parsed.fileDir}/${parsed.fileName}` : parsed.fileName}
+          title={
+            parsed.fileDir
+              ? t("{{value0}}/{{value1}}", { value0: parsed.fileDir, value1: parsed.fileName })
+              : parsed.fileName
+          }
         >
           {parsed.fileName}
         </p>
@@ -339,7 +347,9 @@ function ApprovalDetail({
     );
   }
 
-  return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+  return (
+    <p className="mt-2 text-ui text-muted-foreground/65">{t("Review the request to continue.")}</p>
+  );
 }
 
 function formatToolParameterValue(value: unknown): string {

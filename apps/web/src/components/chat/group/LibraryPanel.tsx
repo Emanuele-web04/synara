@@ -77,6 +77,7 @@ import {
   toggleLibraryDirectory,
 } from "./libraryPanel.logic";
 import { useGroupLibrary } from "./useGroupLibrary";
+import { useTranslation } from "~/i18n";
 
 export interface LibraryPanelProps {
   open: boolean;
@@ -108,6 +109,8 @@ function deletedPathFromCommitMessage(message: string): string | null {
 }
 
 export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanelProps) {
+  const { t, formatLocale } = useTranslation();
+
   const library = useGroupLibrary({ projectId, enabled: open && projectId !== null });
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<LibraryTypeFilter>("all");
@@ -229,12 +232,12 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       if (!api) return;
       const clicked = await api.contextMenu.show(
         [
-          { id: "rename" as const, label: "Rename" },
+          { id: "rename" as const, label: t("Rename") },
           ...(entry.kind === "directory"
-            ? [{ id: "upload-here" as const, label: "Upload here" }]
+            ? [{ id: "upload-here" as const, label: t("Upload here") }]
             : []),
-          { id: "delete" as const, label: "Delete" },
-          { id: "history" as const, label: "History" },
+          { id: "delete" as const, label: t("Delete") },
+          { id: "history" as const, label: t("History") },
         ],
         { x: event.clientX, y: event.clientY },
       );
@@ -255,7 +258,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         void showHistory(entry);
       }
     },
-    [pickUploadDirectory, showHistory],
+    [pickUploadDirectory, showHistory, t],
   );
 
   const confirmDelete = useCallback(async () => {
@@ -333,12 +336,12 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   const content = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1 px-2 pb-1 pt-0.5">
-        <EnvironmentPanelTitle>Library</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>{t("Library")}</EnvironmentPanelTitle>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton
             type="button"
-            label="Add files"
-            tooltip="Add files"
+            label={t("Add files")}
+            tooltip={t("Add files")}
             disabled={library.busy}
             onClick={() => pickUploadDirectory(undefined)}
           >
@@ -346,16 +349,16 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           </IconButton>
           <IconButton
             type="button"
-            label="Library history"
-            tooltip="History"
+            label={t("Library history")}
+            tooltip={t("History")}
             onClick={() => void showLibraryHistory()}
           >
             <HistoryIcon className="size-3.5" />
           </IconButton>
           <IconButton
             type="button"
-            label={fullHeight ? "Collapse library" : "Expand library"}
-            tooltip={fullHeight ? "Collapse" : "Expand"}
+            label={fullHeight ? t("Collapse library") : t("Expand library")}
+            tooltip={fullHeight ? t("Collapse") : t("Expand")}
             onClick={() => setFullHeight((current) => !current)}
           >
             {fullHeight ? (
@@ -364,7 +367,12 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               <PanelExpandIcon className="size-3.5" />
             )}
           </IconButton>
-          <IconButton type="button" label="Close library" tooltip="Close" onClick={onClose}>
+          <IconButton
+            type="button"
+            label={t("Close library")}
+            tooltip={t("Close")}
+            onClick={onClose}
+          >
             <XIcon className="size-3.5" />
           </IconButton>
         </div>
@@ -374,8 +382,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         <SearchInput
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search library..."
-          aria-label="Search library"
+          placeholder={t("Search library...")}
+          aria-label={t("Search library")}
         />
       </div>
 
@@ -388,15 +396,20 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             if (next !== null) setTypeFilter(next as LibraryTypeFilter);
           }}
         >
-          <SelectTrigger variant="ghost" size="xs" className="w-auto min-w-0" aria-label="Type">
+          <SelectTrigger
+            variant="ghost"
+            size="xs"
+            className="w-auto min-w-0"
+            aria-label={t("Type")}
+          >
             <SelectValue>
-              {TYPE_FILTER_OPTIONS.find((option) => option.value === typeFilter)?.label}
+              {t(TYPE_FILTER_OPTIONS.find((option) => option.value === typeFilter)!.label)}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup surface="composer">
             {TYPE_FILTER_OPTIONS.map((option) => (
               <SelectItem key={option.value} value={option.value}>
-                {option.label}
+                {t(option.label)}
               </SelectItem>
             ))}
           </SelectPopup>
@@ -405,8 +418,11 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           <SettingsSegmentedControl
             value={viewMode}
             onValueChange={setViewMode}
-            options={VIEW_MODE_OPTIONS}
-            ariaLabel="View mode"
+            options={VIEW_MODE_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.label),
+            }))}
+            ariaLabel={t("View mode")}
           />
         </div>
         <input
@@ -414,7 +430,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           type="file"
           multiple
           className="hidden"
-          aria-label="Upload files to the library"
+          aria-label={t("Upload files to the library")}
           onChange={(event) => void handleUploadChange(event.target.files)}
         />
       </div>
@@ -428,14 +444,14 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                 ? "border-destructive/40 text-destructive"
                 : "border-[color:var(--color-border)] text-muted-foreground",
             )}
-            title={remoteStatus.lastPushError ?? remoteStatus.lastPushAt ?? "Not pushed yet"}
+            title={remoteStatus.lastPushError ?? remoteStatus.lastPushAt ?? t("Not pushed yet")}
           >
             <CloudSyncIcon className="size-3" />
             {remoteStatus.lastPushError
-              ? "Push failed"
+              ? t("Push failed")
               : remoteStatus.lastPushAt
-                ? "Pushed"
-                : "Not pushed yet"}
+                ? t("Pushed")
+                : t("Not pushed yet")}
           </span>
         </div>
       ) : null}
@@ -451,8 +467,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           <div className="flex items-center px-2 pb-1">
             <button
               type="button"
-              aria-label={`Back to library from ${previewPath}`}
-              title="Back to library"
+              aria-label={t("Back to library from {{value0}}", { value0: previewPath })}
+              title={t("Back to library")}
               className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => setPreviewPath(null)}
             >
@@ -476,8 +492,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           <div className="flex items-center px-2 pb-1">
             <button
               type="button"
-              aria-label="Back to library from history"
-              title="Back to library"
+              aria-label={t("Back to library from history")}
+              title={t("Back to library")}
               className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => {
                 setHistoryPath(null);
@@ -487,20 +503,22 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               <ArrowLeftIcon className="size-3.5 shrink-0" />
               <span
                 className="min-w-0 truncate"
-                title={historyScope === "library" ? "Library" : historyPath}
+                title={historyScope === "library" ? t("Library") : historyPath}
               >
-                {historyScope === "library" ? "History" : `History — ${historyPath}`}
+                {historyScope === "library"
+                  ? t("History")
+                  : t("History — {{value0}}", { value0: historyPath })}
               </span>
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-1">
             {historyCommits === null ? (
               <PanelStateMessage density="compact" fill="flex">
-                <p>Loading history…</p>
+                <p>{t("Loading history…")}</p>
               </PanelStateMessage>
             ) : historyCommits.length === 0 ? (
               <PanelStateMessage density="compact" fill="flex">
-                <p>No versions yet.</p>
+                <p>{t("No versions yet.")}</p>
               </PanelStateMessage>
             ) : (
               <ul className="flex flex-col gap-0.5">
@@ -520,7 +538,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                           {commit.message}
                         </p>
                         <p className="text-ui-xs text-muted-foreground">
-                          {commit.sha.slice(0, 7)} · {formatRelativeTime(commit.at)}
+                          {commit.sha.slice(0, 7)} ·{" "}
+                          {formatRelativeTime(commit.at, undefined, formatLocale)}
                         </p>
                       </div>
                       {restorePath !== null && restoreSha !== undefined ? (
@@ -534,15 +553,18 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                               if (restored) {
                                 toastManager.add({
                                   type: "success",
-                                  title: "Restored",
-                                  description: `${restorePath} was restored from ${restoreSha.slice(0, 7)}.`,
+                                  title: t("Restored"),
+                                  description: t("{{value0}} was restored from {{value1}}.", {
+                                    value0: restorePath,
+                                    value1: restoreSha.slice(0, 7),
+                                  }),
                                 });
                                 void refreshHistory();
                               }
                             });
                           }}
                         >
-                          Restore
+                          {t("Restore")}
                         </Button>
                       ) : null}
                     </li>
@@ -568,10 +590,10 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                   key={key}
                   type="button"
                   className="flex items-center gap-0.5 text-left transition-colors hover:text-foreground"
-                  aria-label={`Sort by ${label}`}
+                  aria-label={t("Sort by {{value0}}", { value0: t(label) })}
                   onClick={() => setSort((current) => nextLibrarySort(current, key))}
                 >
-                  {label}
+                  {t(label)}
                   {sort.key === key ? (
                     sort.direction === "asc" ? (
                       <ArrowUpIcon className="size-2.5" />
@@ -587,9 +609,9 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             {emptyLibrary ? (
               <PanelStateMessage density="compact" fill="flex">
                 {query || typeFilter !== "all" ? (
-                  <p>No files match.</p>
+                  <p>{t("No files match.")}</p>
                 ) : (
-                  <p>No files yet. Add documents or artifacts for this hub.</p>
+                  <p>{t("No files yet. Add documents or artifacts for this hub.")}</p>
                 )}
               </PanelStateMessage>
             ) : viewMode === "grid" ? (
@@ -659,16 +681,17 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete {deleteTarget?.kind === "directory" ? "folder" : "file"} "{deleteTarget?.name}
+              {t("Delete")} {deleteTarget?.kind === "directory" ? t("folder") : t("file")} "
+              {deleteTarget?.name}
               "?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This removes it from the library. It can be restored from History.
+              {t("This removes it from the library. It can be restored from History.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
+              {t("Cancel")}
             </AlertDialogClose>
             <Button
               size="sm"
@@ -676,7 +699,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               disabled={library.busy}
               onClick={() => void confirmDelete()}
             >
-              Delete
+              {t("Delete")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -696,6 +719,8 @@ function LibraryListRow(props: {
   onOpen: (entry: LibraryEntry) => void;
   onContextMenu: (entry: LibraryEntry, event: ReactMouseEvent<HTMLElement>) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const { entry, depth } = props.row;
   return (
     <div
@@ -707,7 +732,7 @@ function LibraryListRow(props: {
           <Input
             autoFocus
             value={props.renameDraft}
-            aria-label={`Rename ${entry.name}`}
+            aria-label={t("Rename {{value0}}", { value0: entry.name })}
             className="h-6 flex-1 text-ui"
             onChange={(event) => props.onRenameDraftChange(event.target.value)}
             onKeyDown={(event) => {
@@ -739,7 +764,10 @@ function LibraryListRow(props: {
       )}
       <span className="pr-1 text-ui-xs text-muted-foreground/80">
         {entry.kind === "file"
-          ? `${formatBytes(entry.sizeBytes)} · ${formatRelativeTime(entry.modifiedAt)}`
+          ? t("{{value0}} · {{value1}}", {
+              value0: formatBytes(entry.sizeBytes),
+              value1: formatRelativeTime(entry.modifiedAt, undefined, formatLocale),
+            })
           : ""}
       </span>
     </div>
@@ -756,6 +784,8 @@ function LibraryGridTile(props: {
   onOpen: (entry: LibraryEntry) => void;
   onContextMenu: (entry: LibraryEntry, event: ReactMouseEvent<HTMLElement>) => void;
 }) {
+  const { t } = useTranslation();
+
   const { entry, depth } = props.row;
   if (props.renaming) {
     return (
@@ -763,7 +793,7 @@ function LibraryGridTile(props: {
         <Input
           autoFocus
           value={props.renameDraft}
-          aria-label={`Rename ${entry.name}`}
+          aria-label={t("Rename {{value0}}", { value0: entry.name })}
           className="h-6 flex-1 text-ui"
           onChange={(event) => props.onRenameDraftChange(event.target.value)}
           onKeyDown={(event) => {

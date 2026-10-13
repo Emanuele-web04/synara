@@ -38,6 +38,7 @@ import type { ProviderModelOption } from "../providerModelOptions";
 import { getClaudeArtifactCommandNotice } from "../lib/claudeArtifactCommands";
 import { compareProvidersByOrder } from "../providerOrdering";
 import type { ComposerThreadMentionSource, Project } from "../types";
+import { t, useTranslation } from "~/i18n";
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
@@ -62,14 +63,17 @@ function threadSuggestionTitle(title: string): string {
   return title.trim() || "Untitled thread";
 }
 
-function threadSuggestionContainerName(project: Project | undefined): string {
-  if (!project) return "Unknown project";
-  if (project.kind === "chat") return "Chats";
+function threadSuggestionContainerName(
+  project: Project | undefined,
+  translate: (message: string) => string = (message) => message,
+): string {
+  if (!project) return translate("Unknown project");
+  if (project.kind === "chat") return translate("Chats");
   // Group containers (legacy "studio" included) use their own title in mentions.
   if (isGroupContainerKind(project.kind)) {
-    return project.name.trim() || "Hubs";
+    return project.name.trim() || translate("Hubs");
   }
-  return project.name.trim() || project.folderName.trim() || "Untitled project";
+  return project.name.trim() || project.folderName.trim() || translate("Untitled project");
 }
 
 function threadSuggestionRecency(thread: ComposerThreadMentionSource): string {
@@ -209,12 +213,15 @@ export function resolveThreadMentionForThreadId(input: {
   };
 }
 
-export function buildThreadMentionComposerItems(input: {
-  readonly threads: readonly ComposerThreadMentionSource[];
-  readonly projects: readonly Project[];
-  readonly currentThreadId: string | null;
-  readonly query: string;
-}): ComposerCommandItem[] {
+export function buildThreadMentionComposerItems(
+  input: {
+    readonly threads: readonly ComposerThreadMentionSource[];
+    readonly projects: readonly Project[];
+    readonly currentThreadId: string | null;
+    readonly query: string;
+  },
+  translate: typeof t = t,
+): ComposerCommandItem[] {
   const candidates = buildThreadMentionCandidates(input);
   const query = normalizeProviderDiscoveryText(input.query);
   const ranked = (
@@ -225,14 +232,17 @@ export function buildThreadMentionComposerItems(input: {
         )
   ).slice(0, THREAD_MENTION_SUGGESTION_LIMIT);
 
-  return ranked.map(({ thread, title, projectName, mentionName }) => ({
+  return ranked.map(({ thread, title, mentionName }) => ({
     id: `thread:${thread.id}`,
     type: "thread" as const,
     threadId: thread.id,
     provider: thread.provider,
     mention: { name: mentionName, path: threadMentionPathForThreadId(thread.id) },
-    label: title,
-    description: projectName,
+    label: thread.title.trim() ? title : translate("Untitled thread"),
+    description: threadSuggestionContainerName(
+      input.projects.find((project) => project.id === thread.projectId),
+      translate,
+    ),
   }));
 }
 
@@ -305,6 +315,8 @@ export function useComposerCommandMenuItems(input: {
     readonly currentThreadId: string | null;
   };
 }): ComposerCommandItem[] {
+  const { t } = useTranslation();
+
   const {
     composerTrigger,
     provider,
@@ -382,7 +394,7 @@ export function useComposerCommandMenuItems(input: {
               id: "local-root",
               type: "local-root" as const,
               label: `@${LOCAL_FOLDER_MENTION_NAME}`,
-              description: "Browse folders on this computer",
+              description: t("Browse folders on this computer"),
             },
           ]
         : [];
@@ -395,10 +407,13 @@ export function useComposerCommandMenuItems(input: {
       description: entry.parentPath ?? "",
     }));
     const threadItems = threadMentionSources
-      ? buildThreadMentionComposerItems({
-          ...threadMentionSources,
-          query: composerTrigger.query,
-        })
+      ? buildThreadMentionComposerItems(
+          {
+            ...threadMentionSources,
+            query: composerTrigger.query,
+          },
+          t,
+        )
       : [];
     // Keep mention suggestions ordered by primary intent: plugins and chats
     // first, then local context, then subagent delegation targets.
@@ -427,7 +442,7 @@ export function useComposerCommandMenuItems(input: {
         type: "slash-command" as const,
         command: definition.command,
         label: definition.label,
-        description: definition.description,
+        description: t(definition.description),
         source: definition.source,
       }),
     );
@@ -456,7 +471,7 @@ export function useComposerCommandMenuItems(input: {
       provider,
       command: command.name,
       label: `/${command.name}`,
-      description: command.description ?? `Run ${provider} native command`,
+      description: command.description ?? t("Run {{value0}} native command", { value0: provider }),
       notice: getClaudeArtifactCommandNotice({
         provider,
         command: command.name,

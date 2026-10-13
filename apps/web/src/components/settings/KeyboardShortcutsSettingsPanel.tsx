@@ -38,12 +38,15 @@ import {
 } from "~/settingsPanelStyles";
 import { SettingsCard, SettingsEmptyState } from "./SettingsPanelPrimitives";
 import { ShortcutRecorderDialog, type ShortcutRecorderTarget } from "./ShortcutRecorderDialog";
+import { useTranslation } from "~/i18n";
 
 // Stable empty reference while the server config query is still loading.
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
 /** The live bindings as editor rows, and the one call that changes them. */
 function useShortcutEditor() {
+  const { t } = useTranslation();
+
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const queryClient = useQueryClient();
   const source: ShortcutEditorSource = {
@@ -68,8 +71,8 @@ function useShortcutEditor() {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
       toastManager.add({
         type: "error",
-        title: "Could not change shortcuts",
-        description: error instanceof Error ? error.message : "Try again.",
+        title: t("Could not change shortcuts"),
+        description: error instanceof Error ? error.message : t("Try again."),
       });
       return false;
     }
@@ -85,6 +88,8 @@ function useShortcutEditor() {
 
 /** Header action for the Keybindings section: puts every built-in shortcut back. */
 export function KeyboardShortcutsResetButton() {
+  const { t } = useTranslation();
+
   const { rows, isLoading, applyEdits } = useShortcutEditor();
   const [isResetting, setIsResetting] = useState(false);
   const customized = rows.some((row) => !row.isDefault);
@@ -102,7 +107,7 @@ export function KeyboardShortcutsResetButton() {
     setIsResetting(true);
     try {
       if (await applyEdits([{ type: "reset" }])) {
-        toastManager.add({ type: "success", title: "Shortcuts reset to defaults" });
+        toastManager.add({ type: "success", title: t("Shortcuts reset to defaults") });
       }
     } finally {
       setIsResetting(false);
@@ -118,12 +123,14 @@ export function KeyboardShortcutsResetButton() {
       onClick={() => void resetAll()}
     >
       <ResetIcon className="size-3.5" />
-      Reset all to defaults
+      {t("Reset all to defaults")}
     </Button>
   );
 }
 
 export function KeyboardShortcutsSettingsPanel() {
+  const { t } = useTranslation();
+
   const { source, rows, isLoading, applyEdits } = useShortcutEditor();
   const [query, setQuery] = useState("");
   const [recorderTarget, setRecorderTarget] = useState<ShortcutRecorderTarget | null>(null);
@@ -153,9 +160,9 @@ export function KeyboardShortcutsSettingsPanel() {
         <SearchInput
           type="search"
           nativeInput
-          placeholder="Search shortcuts"
+          placeholder={t("Search shortcuts")}
           value={query}
-          aria-label="Search shortcuts"
+          aria-label={t("Search shortcuts")}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape" && query.length > 0) {
@@ -173,7 +180,7 @@ export function KeyboardShortcutsSettingsPanel() {
       </div>
 
       {isLoading ? (
-        <SettingsEmptyState layout="status">Loading shortcuts…</SettingsEmptyState>
+        <SettingsEmptyState layout="status">{t("Loading shortcuts…")}</SettingsEmptyState>
       ) : filteredRows.length > 0 ? (
         <SettingsCard>
           {filteredRows.map((row) => (
@@ -187,7 +194,10 @@ export function KeyboardShortcutsSettingsPanel() {
           ))}
         </SettingsCard>
       ) : (
-        <SettingsEmptyState>No shortcuts match &ldquo;{query}&rdquo;.</SettingsEmptyState>
+        <SettingsEmptyState>
+          {t("No shortcuts match “")}
+          {query}&rdquo;.
+        </SettingsEmptyState>
       )}
 
       <ShortcutRecorderDialog
@@ -212,6 +222,8 @@ function ShortcutRow({
   onRecord: (binding: ShortcutEditorBinding | null) => void;
   onRemove: (binding: ShortcutEditorBinding) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn(
@@ -233,8 +245,11 @@ function ShortcutRow({
             <div key={binding.id} className="flex min-h-6 flex-wrap items-center gap-0.5">
               <ShortcutKbd shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
               <IconButton
-                label={`Change the shortcut ${binding.label} for ${row.label}`}
-                tooltip="Change shortcut"
+                label={t("Change the shortcut {{value0}} for {{value1}}", {
+                  value0: binding.label,
+                  value1: row.label,
+                })}
+                tooltip={t("Change shortcut")}
                 disabled={disabled}
                 onClick={() => onRecord(binding)}
               >
@@ -242,8 +257,8 @@ function ShortcutRow({
               </IconButton>
               {index === row.bindings.length - 1 ? (
                 <IconButton
-                  label={`Add another shortcut for ${row.label}`}
-                  tooltip="Add another shortcut"
+                  label={t("Add another shortcut for {{value0}}", { value0: row.label })}
+                  tooltip={t("Add another shortcut")}
                   className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/shortcut:opacity-100 pointer-coarse:opacity-100"
                   disabled={disabled}
                   onClick={() => onRecord(null)}
@@ -252,8 +267,11 @@ function ShortcutRow({
                 </IconButton>
               ) : null}
               <IconButton
-                label={`Remove the shortcut ${binding.label} from ${row.label}`}
-                tooltip="Remove shortcut"
+                label={t("Remove the shortcut {{value0}} from {{value1}}", {
+                  value0: binding.label,
+                  value1: row.label,
+                })}
+                tooltip={t("Remove shortcut")}
                 className="ml-auto"
                 disabled={disabled}
                 onClick={() => onRemove(binding)}
@@ -264,10 +282,10 @@ function ShortcutRow({
           ))
         ) : (
           <div className="flex min-h-6 flex-wrap items-center gap-0.5">
-            <span className="mr-1.5 text-ui text-muted-foreground">Unassigned</span>
+            <span className="mr-1.5 text-ui text-muted-foreground">{t("Unassigned")}</span>
             <IconButton
-              label={`Set a shortcut for ${row.label}`}
-              tooltip="Set shortcut"
+              label={t("Set a shortcut for {{value0}}", { value0: row.label })}
+              tooltip={t("Set shortcut")}
               disabled={disabled}
               onClick={() => onRecord(null)}
             >

@@ -9,6 +9,7 @@ import type { AutomationMode, AutomationWorktreeMode } from "@synara/contracts";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCommitDraft, useCommitDraftBlurHandlers } from "~/lib/automationInlineDraft";
 import { cn } from "~/lib/utils";
+import { t, useTranslation } from "~/i18n";
 
 export type SelectOption = {
   readonly value: string;
@@ -29,8 +30,9 @@ export const WORKTREE_OPTIONS: readonly SelectOption[] = [
   { value: "worktree", label: "Worktree" },
 ];
 
-export function worktreeModeLabel(mode: AutomationWorktreeMode): string {
-  return WORKTREE_OPTIONS.find((option) => option.value === mode)?.label ?? mode;
+export function worktreeModeLabel(mode: AutomationWorktreeMode, translate: typeof t = t): string {
+  const label = WORKTREE_OPTIONS.find((option) => option.value === mode)?.label;
+  return label ? translate(label) : mode;
 }
 
 export function DetailGroup({
@@ -158,6 +160,8 @@ export function InlineToggle({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <button
       type="button"
@@ -166,7 +170,7 @@ export function InlineToggle({
       onClick={() => onChange(!value)}
       className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
     >
-      {value ? "On" : "Off"}
+      {value ? t("On") : t("Off")}
     </button>
   );
 }

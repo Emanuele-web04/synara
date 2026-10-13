@@ -8,6 +8,7 @@ import type { Todo, TodoUpdateInput } from "@synara/contracts";
 import { type KeyboardEvent, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 export function useTaskRename(
   todo: Pick<Todo, "id" | "title">,
@@ -52,12 +53,14 @@ export function TaskRowTitle({
   isDone: boolean;
   rename: ReturnType<typeof useTaskRename>;
 }) {
+  const { t } = useTranslation();
+
   const { isEditing, draftTitle, setDraftTitle, startEditing, commitTitle, handleTitleKeyDown } =
     rename;
   if (isEditing) {
     return (
       <input
-        aria-label="Task title"
+        aria-label={t("Task title")}
         value={draftTitle}
         autoFocus
         onFocus={(event) => event.currentTarget.select()}
@@ -78,7 +81,7 @@ export function TaskRowTitle({
           startEditing();
         }
       }}
-      title="Double-click or press F2 to rename"
+      title={t("Double-click or press F2 to rename")}
       className={cn(
         "min-w-0 truncate text-left text-ui outline-none",
         isDone ? "text-muted-foreground" : "text-foreground",

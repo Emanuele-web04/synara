@@ -11,6 +11,7 @@ import { DiffPanelFileList, type DiffFileChatActions } from "./DiffPanelFileList
 import type { DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { DiffPanelLoadingState } from "./DiffPanelShell";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
+import { useTranslation } from "~/i18n";
 
 type DiffRenderMode = "stacked" | "split";
 
@@ -35,6 +36,8 @@ export const DiffPanelPatchViewport = memo(
     unavailableLabel: string;
     viewKind: "repo" | "turn";
   }) {
+    const { t } = useTranslation();
+
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
     const refreshStatus = props.refreshStatus ? (
       <p role="status" className="shrink-0 px-3 py-2 text-ui-xs text-muted-foreground/75">
@@ -81,7 +84,7 @@ export const DiffPanelPatchViewport = memo(
                 ? props.emptyLabel
                 : props.viewKind === "repo"
                   ? props.unavailableLabel
-                  : "No patch available for this selection."}
+                  : t("No patch available for this selection.")}
             </p>
           </PanelStateMessage>
         </div>

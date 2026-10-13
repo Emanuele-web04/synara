@@ -15,6 +15,7 @@ import {
   EnvironmentRow,
   EnvironmentSectionLabel,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 export interface EnvironmentAutomationPanelItem {
   readonly definition: AutomationDefinition;
@@ -27,13 +28,15 @@ export function EnvironmentAutomationsSection({
   readonly automations: readonly EnvironmentAutomationPanelItem[];
   readonly onOpenAutomation: (definition: AutomationDefinition) => void;
 }) {
+  const { t } = useTranslation();
+
   if (automations.length === 0) {
     return null;
   }
 
   return (
     <div className="flex flex-col gap-0.5">
-      <EnvironmentSectionLabel>Automations</EnvironmentSectionLabel>
+      <EnvironmentSectionLabel>{t("Automations")}</EnvironmentSectionLabel>
       {automations.map(({ definition }) => {
         const cadence = definition.enabled ? formatCadence(definition.schedule) : "Paused";
         return (
@@ -54,8 +57,8 @@ export function EnvironmentAutomationsSection({
                 {cadence}
               </span>
             }
-            aria-label={`Open automation ${definition.name}`}
-            title={`${definition.name} - ${cadence}`}
+            aria-label={t("Open automation {{value0}}", { value0: definition.name })}
+            title={t("{{value0}} - {{value1}}", { value0: definition.name, value1: cadence })}
             onClick={() => onOpenAutomation(definition)}
           />
         );

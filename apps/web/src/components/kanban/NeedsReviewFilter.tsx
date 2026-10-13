@@ -8,8 +8,11 @@
 
 import { Checkbox } from "../ui/checkbox";
 import { useKanbanUiStore } from "../../kanbanUiStore";
+import { useTranslation } from "~/i18n";
 
 export function NeedsReviewFilter() {
+  const { t } = useTranslation();
+
   const needsReviewEnabled = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
   const setNeedsReviewEnabled = useKanbanUiStore((state) => state.setKanbanNeedsReviewFilter);
   return (
@@ -18,7 +21,7 @@ export function NeedsReviewFilter() {
         checked={needsReviewEnabled}
         onCheckedChange={(checked) => setNeedsReviewEnabled(checked === true)}
       />
-      Needs review
+      {t("Needs review")}
     </label>
   );
 }

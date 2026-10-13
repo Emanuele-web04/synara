@@ -21,6 +21,7 @@ import {
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { SidebarMenuButton } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
+import { t, useTranslation } from "~/i18n";
 
 // Triggers local-only toast scenarios that are awkward to reproduce through real Git failures.
 function triggerActionFailedToasts(values: Record<ToggleFeatureFlagId, boolean>): void {
@@ -35,19 +36,21 @@ function triggerActionFailedToasts(values: Record<ToggleFeatureFlagId, boolean>)
 
   toastManager.add({
     type: "error",
-    title: "Action failed",
-    description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/synara",
+    title: t("Action failed"),
+    description: t("Error: Git command failed in /Users/ibrahime/Documents/Projects/synara"),
     data: toastData,
   });
   toastManager.add({
     type: "error",
-    title: "Action failed",
-    description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/synara",
+    title: t("Action failed"),
+    description: t("Error: Git command failed in /Users/ibrahime/Documents/Projects/synara"),
     data: toastData,
   });
 }
 
 export function DebugFeatureFlagsMenu() {
+  const { t } = useTranslation();
+
   const values = useFeatureFlags();
 
   return (
@@ -61,11 +64,11 @@ export function DebugFeatureFlagsMenu() {
         }
       >
         <FlagIcon className="size-[15px]" />
-        <span>Feature flags</span>
+        <span>{t("Feature flags")}</span>
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="top" className="min-w-72">
         <MenuGroup>
-          <MenuGroupLabel>Local feature flags</MenuGroupLabel>
+          <MenuGroupLabel>{t("Local feature flags")}</MenuGroupLabel>
           {FEATURE_FLAGS.map((flag) => {
             if (flag.kind === "action") {
               return (
@@ -106,7 +109,7 @@ export function DebugFeatureFlagsMenu() {
         </MenuGroup>
         <MenuSeparator />
         <div className="px-2 py-1.5 text-ui-xs leading-4 text-muted-foreground/58">
-          Stored only in this browser profile.
+          {t("Stored only in this browser profile.")}
         </div>
       </ComposerPickerMenuPopup>
     </Menu>

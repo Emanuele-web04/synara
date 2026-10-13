@@ -12,6 +12,7 @@ import { SelectionNewChatComposer } from "./SelectionNewChatComposer";
 
 import { type PendingTranscriptSelectionAction } from "./useTranscriptAssistantSelectionAction";
 import { TranscriptSelectionAction } from "./TranscriptSelectionAction";
+import { useTranslation } from "~/i18n";
 
 interface TranscriptSelectionActionLayerProps {
   action: PendingTranscriptSelectionAction | null;
@@ -30,6 +31,8 @@ interface TranscriptSelectionActionLayerProps {
 }
 
 export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionLayerProps) {
+  const { t } = useTranslation();
+
   const [composerAction, setComposerAction] = useState<PendingTranscriptSelectionAction | null>(
     null,
   );
@@ -77,8 +80,8 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
           .catch((error: unknown) => {
             toastManager.add({
               type: "error",
-              title: "Could not add selection to Side",
-              description: error instanceof Error ? error.message : "Try again.",
+              title: t("Could not add selection to Side"),
+              description: error instanceof Error ? error.message : t("Try again."),
             });
           })
           .finally(() => {

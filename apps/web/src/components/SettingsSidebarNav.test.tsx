@@ -4,6 +4,10 @@
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
 import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach } from "vitest";
+import { i18n, setLanguagePreference } from "../i18n";
+import { SettingsRow } from "./settings/SettingsPanelPrimitives";
 
 import { settingRowAnchorId } from "../settingsNavigation";
 import {
@@ -11,6 +15,47 @@ import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
 } from "../settingsSearchIndex";
+
+afterEach(() => setLanguagePreference("system"));
+
+describe("localized settings", () => {
+  it("keeps settings anchors based on source titles while rendering translated labels", () => {
+    i18n.addResourceBundle("es", "translation", {
+      "Default provider": "Proveedor predeterminado",
+      "Choose the provider used for new chats.": "Elige el proveedor para los nuevos chats.",
+    });
+    setLanguagePreference("es");
+    const html = renderToStaticMarkup(
+      <SettingsRow
+        title="Default provider"
+        description="Choose the provider used for new chats."
+      />,
+    );
+    expect(html).toContain('id="setting-default-provider"');
+    expect(html).toContain("Proveedor predeterminado");
+    expect(html).toContain("Elige el proveedor para los nuevos chats.");
+  });
+
+  it("finds both Spanish and English titles with the same deep links in either language", () => {
+    i18n.addResourceBundle("es", "translation", {
+      "Default provider": "Proveedor predeterminado",
+      Language: "Idioma",
+    });
+    for (const language of ["en", "es"] as const) {
+      setLanguagePreference(language);
+      for (const query of ["default provider", "proveedor predeterminado"]) {
+        const [result] = rankSettingsSearchEntries(query, 12);
+        expect(result?.id).toBe("general:default-provider");
+        expect(settingsSearchEntryTarget(result!)).toBe("setting-default-provider");
+      }
+      for (const query of ["language", "idioma"]) {
+        const [result] = rankSettingsSearchEntries(query, 12);
+        expect(result?.id).toBe("general:language");
+        expect(settingsSearchEntryTarget(result!)).toBe("setting-language");
+      }
+    }
+  });
+});
 
 describe("rankSettingsSearchEntries", () => {
   it("returns nothing for an empty query", () => {

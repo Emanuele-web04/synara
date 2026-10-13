@@ -13,6 +13,7 @@ import { ClockIcon } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useTranslation } from "~/i18n";
 
 export function AutomationCreatedCard({
   automationId,
@@ -31,6 +32,8 @@ export function AutomationCreatedCard({
   readonly metaFontSizePx?: number;
   readonly onOpen?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [currentProposalState, setCurrentProposalState] = useState(proposalState);
   const proposalListQuery = useQuery({
     queryKey: automationProposalListQueryKey,
@@ -69,10 +72,10 @@ export function AutomationCreatedCard({
             className="truncate text-[var(--color-text-foreground-secondary)]"
             style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
           >
-            {currentProposalState === "pending" ? "Suggested · " : ""}
+            {currentProposalState === "pending" ? t("Suggested · ") : ""}
             {cadenceLabel}
-            {currentProposalState === "accepted" ? " · Accepted" : ""}
-            {currentProposalState === "dismissed" ? " · Dismissed" : ""}
+            {currentProposalState === "accepted" ? t(" · Accepted") : ""}
+            {currentProposalState === "dismissed" ? t(" · Dismissed") : ""}
           </p>
         ) : null}
       </div>
@@ -84,7 +87,7 @@ export function AutomationCreatedCard({
       ) : null}
       {onOpen && currentProposalState !== "pending" ? (
         <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onOpen}>
-          Open
+          {t("Open")}
         </Button>
       ) : null}
     </div>

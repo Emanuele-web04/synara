@@ -43,6 +43,7 @@ import {
   stopAfterConsecutiveFailuresFromPolicyValue,
   type AutomationFailurePolicyValue,
 } from "./automationFailurePolicy";
+import { getFormatLocale, t } from "~/i18n";
 
 export const defaultModelSelection: ModelSelection = {
   provider: "codex",
@@ -221,18 +222,16 @@ export function updateWeeklyScheduleTime(
   return { ...schedule, timeOfDay };
 }
 
-const DATE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-export function formatDateTime(value: string | null): string {
-  if (!value) return "Not scheduled";
+export function formatDateTime(value: string | null, locale = getFormatLocale()): string {
+  if (!value) return t("Not scheduled");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return DATE_TIME_FORMATTER.format(date);
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function timezoneSuffix(schedule: AutomationSchedule): string {
@@ -248,33 +247,47 @@ function timezoneSuffix(schedule: AutomationSchedule): string {
   return " UTC";
 }
 
-function formatIntervalSchedule(seconds: number): string {
-  return seconds % 60 === 0 ? `Every ${seconds / 60} min` : `Every ${seconds} sec`;
+function formatIntervalSchedule(seconds: number, locale: string | undefined): string {
+  return seconds % 60 === 0
+    ? t("Every {{amount}} min", { amount: new Intl.NumberFormat(locale).format(seconds / 60) })
+    : t("Every {{amount}} sec", { amount: new Intl.NumberFormat(locale).format(seconds) });
 }
 
-function formatIntervalCadence(seconds: number): string {
-  if (seconds === 3600) return "Hourly";
-  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
-  return `Every ${seconds}s`;
+function formatIntervalCadence(seconds: number, locale: string | undefined): string {
+  if (seconds === 3600) return t("Hourly");
+  if (seconds % 3600 === 0)
+    return t("Every {{amount}}h", { amount: new Intl.NumberFormat(locale).format(seconds / 3600) });
+  if (seconds % 60 === 0)
+    return t("Every {{amount}}m", { amount: new Intl.NumberFormat(locale).format(seconds / 60) });
+  return t("Every {{amount}}s", { amount: new Intl.NumberFormat(locale).format(seconds) });
 }
 
-export function formatSchedule(schedule: AutomationSchedule): string {
+export function formatSchedule(schedule: AutomationSchedule, locale = getFormatLocale()): string {
   switch (schedule.type) {
     case "manual":
-      return "Manual";
+      return t("Manual");
     case "project-event":
-      return "Project events";
+      return t("Project events");
     case "once":
-      return `Once ${formatDateTime(schedule.runAt)}`;
+      return t("Once {{time}}", { time: formatDateTime(schedule.runAt, locale) });
     case "interval":
-      return formatIntervalSchedule(schedule.everySeconds);
+      return formatIntervalSchedule(schedule.everySeconds, locale);
     case "daily":
-      return `Daily ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("Daily {{time}}{{timezone}}", {
+        time: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "weekdays":
-      return `Weekdays ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("Weekdays {{time}}{{timezone}}", {
+        time: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "weekly":
-      return `Weekly ${weekdayLabel(schedule.dayOfWeek)} ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("Weekly {{day}} {{time}}{{timezone}}", {
+        day: weekdayLabel(schedule.dayOfWeek, locale),
+        time: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "cron":
       return `Cron ${schedule.expression} ${schedule.timezone}`;
   }
@@ -288,40 +301,54 @@ export function formatClockTime(timeOfDay: string): string {
   return `${hour}:${minutes ?? "00"}`;
 }
 
-export function formatCadence(schedule: AutomationSchedule): string {
+export function formatCadence(schedule: AutomationSchedule, locale = getFormatLocale()): string {
   switch (schedule.type) {
     case "manual":
-      return "Manual";
+      return t("Manual");
     case "project-event":
-      return "On project events";
+      return t("On project events");
     case "once":
-      return formatDateTime(schedule.runAt);
+      return formatDateTime(schedule.runAt, locale);
     case "interval":
-      return formatIntervalCadence(schedule.everySeconds);
+      return formatIntervalCadence(schedule.everySeconds, locale);
     case "daily":
-      return `Daily at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("Daily at {{time}}", { time: formatClockTime(schedule.timeOfDay) });
     case "weekdays":
-      return `Weekdays at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("Weekdays at {{time}}", { time: formatClockTime(schedule.timeOfDay) });
     case "weekly":
-      return `${weekdayLabel(schedule.dayOfWeek)} at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("{{day}} at {{time}}", {
+        day: weekdayLabel(schedule.dayOfWeek, locale),
+        time: formatClockTime(schedule.timeOfDay),
+      });
     case "cron":
       return `Cron ${schedule.expression}`;
   }
 }
 
-function formatIntervalCadenceLong(seconds: number): string {
-  if (seconds === 3600) return "Hourly";
-  if (seconds % 3600 === 0) return `Every ${seconds / 3600} hours`;
-  if (seconds === 60) return "Every minute";
-  if (seconds % 60 === 0) return `Every ${seconds / 60} minutes`;
-  return seconds === 1 ? "Every second" : `Every ${seconds} seconds`;
+function formatIntervalCadenceLong(seconds: number, locale: string | undefined): string {
+  if (seconds === 3600) return t("Hourly");
+  if (seconds % 3600 === 0)
+    return t("Every {{amount}} hours", {
+      amount: new Intl.NumberFormat(locale).format(seconds / 3600),
+    });
+  if (seconds === 60) return t("Every minute");
+  if (seconds % 60 === 0)
+    return t("Every {{amount}} minutes", {
+      amount: new Intl.NumberFormat(locale).format(seconds / 60),
+    });
+  return seconds === 1
+    ? t("Every second")
+    : t("Every {{amount}} seconds", { amount: new Intl.NumberFormat(locale).format(seconds) });
 }
 
 /** Like {@link formatCadence} but with interval units spelled out ("Every 5 minutes"). */
-export function formatCadenceLong(schedule: AutomationSchedule): string {
+export function formatCadenceLong(
+  schedule: AutomationSchedule,
+  locale = getFormatLocale(),
+): string {
   return schedule.type === "interval"
-    ? formatIntervalCadenceLong(schedule.everySeconds)
-    : formatCadence(schedule);
+    ? formatIntervalCadenceLong(schedule.everySeconds, locale)
+    : formatCadence(schedule, locale);
 }
 
 /**
@@ -329,22 +356,40 @@ export function formatCadenceLong(schedule: AutomationSchedule): string {
  * A past-due `nextRunAt` (scheduler catching up) also reads "now". Null when unscheduled
  * or unparseable so callers can drop the segment entirely.
  */
-export function formatNextRun(nextRunAt: string | null, now: number = Date.now()): string | null {
+export function formatNextRun(
+  nextRunAt: string | null,
+  now: number = Date.now(),
+  locale = getFormatLocale(),
+): string | null {
   if (!nextRunAt) return null;
   const time = new Date(nextRunAt).getTime();
   if (Number.isNaN(time)) return null;
   const seconds = Math.round((time - now) / 1000);
-  if (seconds < 60) return "now";
+  if (seconds < 60) return t("now");
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return minutes === 1 ? "in 1 minute" : `in ${minutes} minutes`;
+  if (minutes < 60)
+    return t(minutes === 1 ? "in {{amount}} minute" : "in {{amount}} minutes", {
+      amount: new Intl.NumberFormat(locale).format(minutes),
+      count: minutes,
+    });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return hours === 1 ? "in 1 hour" : `in ${hours} hours`;
+  if (hours < 24)
+    return t(hours === 1 ? "in {{amount}} hour" : "in {{amount}} hours", {
+      amount: new Intl.NumberFormat(locale).format(hours),
+      count: hours,
+    });
   const days = Math.round(hours / 24);
-  return days === 1 ? "in 1 day" : `in ${days} days`;
+  return t(days === 1 ? "in {{amount}} day" : "in {{amount}} days", {
+    amount: new Intl.NumberFormat(locale).format(days),
+    count: days,
+  });
 }
 
-export function weekdayLabel(value: number): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
+export function weekdayLabel(value: number, locale = getFormatLocale()): string {
+  const day = Number.isInteger(value) && value >= 0 && value <= 6 ? value : 0;
+  return new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(
+    new Date(Date.UTC(2026, 9, 4 + day)),
+  );
 }
 
 // --- Thread automation lookups ---------------------------------------------
@@ -570,7 +615,11 @@ export function automationFastIntervalLimitMessage(form: AutomationFormState): s
     schedule.everySeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
     (maxIterations === null || maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS)
   ) {
-    return `Intervals under one minute need max iterations set to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
+    return t("Intervals under one minute need max iterations set to {{amount}} runs or fewer.", {
+      amount: new Intl.NumberFormat(getFormatLocale()).format(
+        DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
+      ),
+    });
   }
   return null;
 }
@@ -689,9 +738,11 @@ export function acknowledgedRiskIdsForFormWarnings(
 /** Error for an automation name draft, or null when saveable. */
 export function automationNameError(name: string): string | null {
   const trimmed = name.trim();
-  if (!trimmed) return "Add a name";
+  if (!trimmed) return t("Add a name");
   if (trimmed.length > AUTOMATION_NAME_MAX_LENGTH) {
-    return `Name must be ${AUTOMATION_NAME_MAX_LENGTH} characters or fewer`;
+    return t("Name must be {{amount}} characters or fewer", {
+      amount: new Intl.NumberFormat(getFormatLocale()).format(AUTOMATION_NAME_MAX_LENGTH),
+    });
   }
   return null;
 }
@@ -705,7 +756,7 @@ const CRON_FIELD_PATTERN = /^[\d*,/-]+$/;
 export function automationCronExpressionError(expression: string): string | null {
   const fields = expression.trim().split(/\s+/).filter(Boolean);
   if (fields.length !== 5 || !fields.every((field) => CRON_FIELD_PATTERN.test(field))) {
-    return "Use a 5-field cron expression (minute hour day month weekday)";
+    return t("Use a 5-field cron expression (minute hour day month weekday)");
   }
   return null;
 }
@@ -713,11 +764,11 @@ export function automationCronExpressionError(expression: string): string | null
 /** Error for a schedule timezone draft, or null when it names a real IANA timezone. */
 export function automationTimezoneError(timezone: string): string | null {
   const trimmed = timezone.trim();
-  if (!trimmed) return "Add a timezone";
+  if (!trimmed) return t("Add a timezone");
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: trimmed });
   } catch {
-    return "Unknown timezone";
+    return t("Unknown timezone");
   }
   return null;
 }
@@ -725,9 +776,11 @@ export function automationTimezoneError(timezone: string): string | null {
 /** Error for an automation prompt draft, or null when saveable. */
 export function automationPromptError(prompt: string): string | null {
   const trimmed = prompt.trim();
-  if (!trimmed) return "Add a prompt";
+  if (!trimmed) return t("Add a prompt");
   if (trimmed.length > AUTOMATION_PROMPT_MAX_LENGTH) {
-    return `Prompt must be ${AUTOMATION_PROMPT_MAX_LENGTH.toLocaleString("en-US")} characters or fewer`;
+    return t("Prompt must be {{amount}} characters or fewer", {
+      amount: new Intl.NumberFormat(getFormatLocale()).format(AUTOMATION_PROMPT_MAX_LENGTH),
+    });
   }
   return null;
 }
@@ -746,9 +799,9 @@ export function automationFormSubmitBlockReason(
   if (nameError) return nameError;
   const promptError = automationPromptError(form.prompt);
   if (promptError) return promptError;
-  if (!form.projectId) return "Pick a project";
+  if (!form.projectId) return t("Pick a project");
   if (automationRequiresTargetThread(form.mode) && !form.targetThreadId) {
-    return "Pick a target thread";
+    return t("Pick a target thread");
   }
   const fastIntervalMessage = automationFastIntervalLimitMessage(form);
   if (fastIntervalMessage) return fastIntervalMessage;
@@ -756,10 +809,11 @@ export function automationFormSubmitBlockReason(
     form.scheduleKind === "custom" &&
     (!form.intervalAmount.trim() || Number.parseInt(form.intervalAmount, 10) <= 0)
   ) {
-    return "Set a valid interval";
+    return t("Set a valid interval");
   }
-  if (form.scheduleKind === "cron" && !form.cronExpression.trim()) return "Add a cron expression";
-  if (form.scheduleKind === "once" && !form.onceRunAt.trim()) return "Pick a run time";
+  if (form.scheduleKind === "cron" && !form.cronExpression.trim())
+    return t("Add a cron expression");
+  if (form.scheduleKind === "once" && !form.onceRunAt.trim()) return t("Pick a run time");
   if (
     (form.scheduleKind === "daily" ||
       form.scheduleKind === "weekdays" ||
@@ -767,7 +821,7 @@ export function automationFormSubmitBlockReason(
       form.scheduleKind === "weekly") &&
     !form.timezone.trim()
   ) {
-    return "Add a timezone";
+    return t("Add a timezone");
   }
   if (
     (form.scheduleKind === "daily" ||
@@ -775,14 +829,14 @@ export function automationFormSubmitBlockReason(
       form.scheduleKind === "weekly") &&
     !TIME_OF_DAY_PATTERN.test(form.timeOfDay)
   ) {
-    return "Set a valid time";
+    return t("Set a valid time");
   }
   if (
     warnings.some(
       (warning) => warning.requiresAcknowledgement && !acknowledgedWarningIds.has(warning.id),
     )
   ) {
-    return "Acknowledge the flagged risks first";
+    return t("Acknowledge the flagged risks first");
   }
   return null;
 }

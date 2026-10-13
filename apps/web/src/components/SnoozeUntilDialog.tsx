@@ -5,6 +5,7 @@
 
 import { parseFutureDateTimeLocalValue, toDateTimeLocalValue } from "../lib/threadSnooze";
 import { RenameDialog } from "./RenameDialog";
+import { useTranslation } from "~/i18n";
 
 export function SnoozeUntilDialog({
   open,
@@ -17,6 +18,8 @@ export function SnoozeUntilDialog({
   onOpenChange: (open: boolean) => void;
   onSnooze: (deadline: Date) => void;
 }) {
+  const { t } = useTranslation();
+
   const initialValue = toDateTimeLocalValue(
     currentSnoozedUntil !== null
       ? new Date(currentSnoozedUntil)
@@ -25,8 +28,8 @@ export function SnoozeUntilDialog({
   return (
     <RenameDialog
       open={open}
-      title="Snooze until"
-      description="The chat returns with a reminder at this time."
+      title={t("Snooze until")}
+      description={t("The chat returns with a reminder at this time.")}
       initialValue={initialValue}
       inputType="datetime-local"
       saveLabel="Snooze"

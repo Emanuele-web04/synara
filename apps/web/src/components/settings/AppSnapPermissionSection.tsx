@@ -21,6 +21,7 @@ import { StatusDot } from "~/components/ui/status-chip";
 import { toastManager } from "~/components/ui/toast";
 import { AppSnapPermissionGuide } from "./AppSnapPermissionGuide";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 export interface AppSnapPermissionPaneDescriptor {
   readonly pane: DesktopAppSnapSettingsPane;
@@ -85,6 +86,7 @@ const PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
 };
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex items-center gap-1.5 text-ui-xs font-medium text-muted-foreground">
       <StatusDot
@@ -97,7 +99,7 @@ function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPerm
               : "bg-[color:var(--color-border)]"
         }
       />
-      {PERMISSION_LABELS[permission]}
+      {t(PERMISSION_LABELS[permission])}
     </span>
   );
 }
@@ -197,6 +199,8 @@ export function AppSnapPermissionSection({
    */
   readonly showRecheck?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [recheckPending, setRecheckPending] = useState(false);
   const requestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const onStateChangeRef = useRef(onStateChange);
@@ -252,14 +256,14 @@ export function AppSnapPermissionSection({
   useEffect(() => {
     if (!guidePane) return;
     if (appSnapPanePermission(state, guidePane) !== "granted") return;
-    const paneLabel = PANE_LABELS[guidePane];
+    const paneLabel = t(PANE_LABELS[guidePane]);
     onGuidePaneChange(null);
     toastManager.add({
       type: "success",
-      title: "Permission granted",
-      description: `${paneLabel} is ready for ${feature}.`,
+      title: t("Permission granted"),
+      description: t("{{value0}} is ready for {{value1}}.", { value0: paneLabel, value1: feature }),
     });
-  }, [guidePane, state, feature, onGuidePaneChange]);
+  }, [guidePane, state, feature, onGuidePaneChange, t]);
 
   async function recheckPermissions() {
     const bridge = window.desktopBridge?.appSnap;
@@ -276,16 +280,16 @@ export function AppSnapPermissionSection({
       if (next.status === "permission-required") {
         toastManager.add({
           type: "info",
-          title: "Permissions unchanged",
-          description: "Use Grant next to a permission to walk through setup.",
+          title: t("Permissions unchanged"),
+          description: t("Use Grant next to a permission to walk through setup."),
         });
       }
     } catch (error) {
       if (!requestGuard.isCurrent(requestId)) return;
       toastManager.add({
         type: "error",
-        title: "Could not check permissions",
-        description: error instanceof Error ? error.message : "Permission check failed.",
+        title: t("Could not check permissions"),
+        description: error instanceof Error ? error.message : t("Permission check failed."),
       });
     } finally {
       if (requestGuard.isCurrent(requestId)) setRecheckPending(false);
@@ -300,8 +304,8 @@ export function AppSnapPermissionSection({
         return (
           <SettingsRow
             key={pane}
-            title={title}
-            description={description}
+            title={t(title)}
+            description={t(description)}
             control={
               <div className="flex items-center gap-2">
                 <AppSnapPermissionBadge permission={permission} />
@@ -320,7 +324,7 @@ export function AppSnapPermissionSection({
                       }
                     }}
                   >
-                    {guideOpen ? "Hide steps" : "Grant"}
+                    {guideOpen ? t("Hide steps") : t("Grant")}
                   </Button>
                 ) : null}
               </div>
@@ -361,10 +365,10 @@ export function AppSnapPermissionSection({
               {recheckPending ? (
                 <>
                   <Spinner className="size-3" />
-                  Rechecking…
+                  {t("Rechecking…")}
                 </>
               ) : (
-                "Recheck permissions"
+                t("Recheck permissions")
               )}
             </Button>
           }

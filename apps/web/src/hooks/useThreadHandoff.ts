@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: useThreadHandoff.ts
 // Purpose: Hands a thread to another provider, in place or in a new thread.
 // Layer: Web hook
@@ -64,6 +65,8 @@ function waitForProviderHandoffOutcome(
 }
 
 export function useThreadHandoff() {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
@@ -79,16 +82,16 @@ export function useThreadHandoff() {
   ) => {
     const api = readNativeApi();
     if (!api) {
-      throw new Error("Native API not found");
+      throw new Error(t("Native API not found"));
     }
 
     const project = projects.find((entry) => entry.id === thread.projectId);
     if (!project) {
-      throw new Error("Project not found for handoff thread.");
+      throw new Error(t("Project not found for handoff thread."));
     }
 
     if (!canCreateThreadHandoff({ thread })) {
-      throw new Error("This thread cannot be handed off yet.");
+      throw new Error(t("This thread cannot be handed off yet."));
     }
     const sourceProviderInstanceId =
       thread.session?.providerInstanceId ??
@@ -99,7 +102,7 @@ export function useThreadHandoff() {
       targetProvider === thread.modelSelection.provider &&
       targetInstanceId === sourceProviderInstanceId
     ) {
-      throw new Error("This handoff target is not available for the current thread.");
+      throw new Error(t("This handoff target is not available for the current thread."));
     }
     const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: targetProvider,
@@ -110,7 +113,7 @@ export function useThreadHandoff() {
     if (!targetAvailability.usable) {
       throw new Error(
         targetAvailability.usable
-          ? "This handoff target is not available for the current thread."
+          ? t("This handoff target is not available for the current thread.")
           : targetAvailability.unavailableReason,
       );
     }
@@ -142,7 +145,9 @@ export function useThreadHandoff() {
     if (
       !canContinueThreadHandoff({ sourceProvider: thread.modelSelection.provider, targetProvider })
     ) {
-      throw new Error("Hand off to a new thread to switch between accounts of the same provider.");
+      throw new Error(
+        t("Hand off to a new thread to switch between accounts of the same provider."),
+      );
     }
     const prepared = await prepareThreadHandoff(thread, targetProvider, targetProviderInstanceId);
     const modelSelection = explicitModelSelection ?? prepared.modelSelection;
@@ -159,10 +164,14 @@ export function useThreadHandoff() {
     const outcome = await waitForProviderHandoffOutcome(thread.id, commandId);
     const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
     if (outcome.status === "failed") {
-      throw new Error(`${targetName} could not start: ${outcome.detail}`);
+      throw new Error(
+        t("{{value0}} could not start: {{value1}}", { value0: targetName, value1: outcome.detail }),
+      );
     }
     if (outcome.status === "pending") {
-      throw new Error(`${targetName} is still starting. Try again once it is ready.`);
+      throw new Error(
+        t("{{value0}} is still starting. Try again once it is ready.", { value0: targetName }),
+      );
     }
   };
 
