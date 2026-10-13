@@ -120,6 +120,7 @@ export const BrowserCookieImportInput = Schema.Union([
 ]);
 export type BrowserCookieImportInput = typeof BrowserCookieImportInput.Type;
 export const BrowserPasswordImportInput = Schema.Struct({
+  operationId: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
   browser: BrowserInventorySourceId,
   profile: Schema.String.check(Schema.isMaxLength(4096)),
   confirmed: Schema.Literal(true),
@@ -130,6 +131,7 @@ export type BrowserPasswordImportResult =
   | {
       ok: false;
       code:
+        | "cancelled"
         | "source_missing"
         | "reader_failed"
         | "keychain_unavailable"
@@ -185,6 +187,7 @@ export interface BrowserVaultMethods {
   inventoryChromiumProfiles(): Promise<typeof BrowserInventoryList.Type>;
   importCookies(input: BrowserCookieImportInput): Promise<BrowserCookieImportResult>;
   cancelCookieImport(): Promise<void>;
+  cancelPasswordImport(operationId: string): Promise<void>;
   importPasswords(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult>;
   onChanged(listener: () => void): () => void;
 }

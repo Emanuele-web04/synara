@@ -154,3 +154,41 @@ it("reads only the requested profile and never scans a broken unrelated browser"
     }),
   ).toMatchObject({ ok: true, imported: 1 });
 });
+
+it("cancels only the matching password operation before vault writes", async () => {
+  await makeProfile();
+  const vault = {
+    snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+    importPasswords: vi.fn(async () => ({ imported: 1, skipped: 0, provenanceSaved: true })),
+  } as unknown as BrowserVault;
+  let signal!: AbortSignal;
+  const keychain = vi.fn(
+    (_browser: string, nextSignal?: AbortSignal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal = nextSignal!;
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+  );
+  const importer = new BrowserPasswordImport(vault, keychain, home);
+  const pending = importer.import({
+    browser: "chrome",
+    profile: "Default",
+    confirmed: true,
+    operationId: "first",
+  });
+  await vi.waitFor(() => expect(keychain).toHaveBeenCalled());
+  importer.cancel("another-operation");
+  expect(signal.aborted).toBe(false);
+  importer.cancel("first");
+  expect(await pending).toEqual({ ok: false, code: "cancelled", platform: "macos" });
+  expect(vault.importPasswords).not.toHaveBeenCalled();
+  keychain.mockImplementation(async () => "test-safe-storage");
+  const next = importer.import({
+    browser: "chrome",
+    profile: "Default",
+    confirmed: true,
+    operationId: "second",
+  });
+  importer.cancel("first");
+  expect(await next).toMatchObject({ ok: true, imported: 1 });
+});

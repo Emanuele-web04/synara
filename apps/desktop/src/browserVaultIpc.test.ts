@@ -71,6 +71,7 @@ describe("browser vault IPC", () => {
       BROWSER_IPC_CHANNELS.vault.reveal,
       BROWSER_IPC_CHANNELS.vault.importCookies,
       BROWSER_IPC_CHANNELS.vault.cancelCookieImport,
+      BROWSER_IPC_CHANNELS.vault.cancelPasswordImport,
       BROWSER_IPC_CHANNELS.vault.importPasswords,
       BROWSER_IPC_CHANNELS.vault.cookieProfiles,
     ]) {

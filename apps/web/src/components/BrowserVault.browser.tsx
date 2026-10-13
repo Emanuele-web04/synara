@@ -52,6 +52,7 @@ beforeEach(() => {
       platform: "macos" as const,
       warnings: [],
     })),
+    cancelPasswordImport: vi.fn(async () => {}),
     cancelCookieImport: vi.fn(async () => {}),
     importPasswords: vi.fn(async () => ({
       ok: true as const,
@@ -426,6 +427,7 @@ describe("browser saved logins", () => {
       .element(page.getByRole("status"))
       .toHaveTextContent("Google Chrome — Personal: 1 imported, 1 skipped.");
     expect(api.importPasswords).toHaveBeenCalledWith({
+      operationId: expect.any(String),
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -529,6 +531,7 @@ describe("browser saved logins", () => {
     await expect.element(page.getByRole("status")).toHaveTextContent("1 imported, 0 skipped");
     expect(api.setupMaster).toHaveBeenCalledWith("throwaway-master-password");
     expect(api.importPasswords).toHaveBeenCalledWith({
+      operationId: expect.any(String),
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -999,4 +1002,81 @@ it("propagates embedded master setup busy state to the onboarding/settings owner
   } finally {
     await screen.unmount();
   }
+});
+
+it.each(["target_capacity", "target_eviction", "target_failed"] as const)(
+  "stops a session batch after %s",
+  async (code) => {
+    const api = harness.api!;
+    vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Google Chrome" }]);
+    vi.mocked(api.cookieProfiles).mockResolvedValue([
+      { id: "Default", name: "Personal" },
+      { id: "Profile 1", name: "Work" },
+    ]);
+    vi.mocked(api.importCookies).mockResolvedValue({ ok: false, code, platform: "macos" });
+    await render(<BrowserImportPanel api={api} />);
+    await page.getByRole("checkbox", { name: /I authorize Synara and its agents/ }).click();
+    await page.getByRole("button", { name: "Import selected sessions" }).click();
+    await vi.waitFor(() => expect(api.importCookies).toHaveBeenCalledOnce());
+    await expect
+      .element(page.getByRole("button", { name: "Import selected sessions" }))
+      .toBeDisabled();
+  },
+);
+it("does not report discovery as a running cookie mutation", async () => {
+  const api = harness.api!;
+  vi.mocked(api.cookieSources).mockImplementation(() => new Promise(() => {}));
+  const busy = vi.fn();
+  const screen = await render(
+    <BrowserCookieImport
+      api={api}
+      destination={{
+        threadId: ThreadId.makeUnsafe("discovery-test"),
+        tabId: "discovery-tab",
+        origin: null,
+      }}
+      onBusyChange={busy}
+    />,
+  );
+  await page.getByRole("button", { name: "Import browser cookies" }).click();
+  expect(busy).not.toHaveBeenCalledWith(true);
+  await screen.unmount();
+});
+it("cancels the active password operation and skips later profiles", async () => {
+  const api = harness.api!;
+  vi.mocked(api.inventoryChromiumProfiles).mockResolvedValue([
+    {
+      id: "chrome",
+      name: "Google Chrome",
+      profileStatus: "available",
+      profiles: ["Default", "Profile 1"].map((id) => ({
+        id,
+        name: id,
+        isDefault: id === "Default",
+        cookieCount: null,
+        passwordCount: null,
+        cookieStatus: "available" as const,
+        passwordStatus: "available" as const,
+      })),
+    },
+  ]);
+  let settle!: (result: { ok: false; code: "cancelled"; platform: "macos" }) => void;
+  vi.mocked(api.importPasswords).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+  );
+  vi.mocked(api.cancelPasswordImport).mockImplementation(async () => {
+    settle({ ok: false, code: "cancelled", platform: "macos" });
+  });
+  await render(<BrowserPasswordImport api={api} />);
+  await page.getByRole("checkbox", { name: /I authorize Synara/ }).click();
+  await page.getByRole("button", { name: "Import selected passwords" }).click();
+  await page.getByRole("button", { name: "Cancel password import" }).click();
+  await expect.element(page.getByRole("status")).toHaveTextContent("Password import cancelled.");
+  expect(api.importPasswords).toHaveBeenCalledOnce();
+  expect(api.cancelPasswordImport).toHaveBeenCalledWith(
+    vi.mocked(api.importPasswords).mock.calls[0]?.[0].operationId,
+  );
 });

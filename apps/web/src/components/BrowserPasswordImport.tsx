@@ -21,6 +21,8 @@ function countLabel(count: number | null, kind: string, status: string) {
 
 function failureMessage(result: Extract<BrowserPasswordImportResult, { ok: false }>) {
   switch (result.code) {
+    case "cancelled":
+      return "Password import cancelled.";
     case "permission_denied":
       return "macOS denied access to this browser's saved-password key. Approve the Keychain prompt and retry.";
     case "keychain_unavailable":
@@ -65,6 +67,8 @@ export function BrowserPasswordImport({
   const [vaultAction, setVaultAction] = useState<"setup" | "unlock" | null>(null);
   const [vaultStatus, setVaultStatus] = useState<"loading" | "ready" | "error">("loading");
   const [masterAction, setMasterAction] = useState<"setup" | "unlock" | null>(null);
+  const cancelRequested = useRef(false);
+  const activeOperation = useRef<string | null>(null);
   const inventoryRequest = useRef(0);
   const vaultRequest = useRef(0);
 
@@ -131,14 +135,19 @@ export function BrowserPasswordImport({
 
   const run = async () => {
     if (busy || masterBusy || disabled || !confirmed || selectedProfiles.length === 0) return;
+    cancelRequested.current = false;
     setBusy(true);
     onBusyChange?.(true);
     setStatus(null);
     const outcomes: string[] = [];
     try {
       for (const { browser, profile } of selectedProfiles) {
+        if (cancelRequested.current) break;
+        const operationId = crypto.randomUUID();
+        activeOperation.current = operationId;
         try {
           const result = await api.importPasswords({
+            operationId,
             browser: browser.id,
             profile: profile.id,
             confirmed: true,
@@ -148,14 +157,19 @@ export function BrowserPasswordImport({
               ? `${browser.name} — ${profile.name}: ${result.imported} imported, ${result.skipped} skipped${result.warnings.length ? "; provenance could not be saved" : ""}.`
               : `${browser.name} — ${profile.name}: ${failureMessage(result)}`,
           );
+          if (!result.ok && result.code === "cancelled") break;
           if (!result.ok && result.code === "vault_locked") {
             void refreshVaultAccess();
+            break;
           }
+          if (!result.ok && result.code === "vault_failed") break;
         } catch {
           outcomes.push(`${browser.name} — ${profile.name}: Synara could not finish this import.`);
+          break;
         }
       }
     } finally {
+      activeOperation.current = null;
       setStatus(outcomes.join(" "));
       setBusy(false);
       setConfirmed(false);
@@ -299,7 +313,27 @@ export function BrowserPasswordImport({
               {status}
             </p>
           ) : null}
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {busy ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  cancelRequested.current = true;
+                  const operationId = activeOperation.current;
+                  if (operationId)
+                    void api
+                      .cancelPasswordImport(operationId)
+                      .catch(() =>
+                        setStatus(
+                          "Cancellation could not be sent. The remaining profiles will be skipped.",
+                        ),
+                      );
+                }}
+              >
+                Cancel password import
+              </Button>
+            ) : null}
             <Button
               size="sm"
               disabled={

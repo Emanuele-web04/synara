@@ -67,7 +67,8 @@ export function BrowserCookieImport({
   const [source, setSource] = useState("");
   const [profile, setProfile] = useState("");
   const [importBusy, setBusy] = useState(false);
-  const busy = importBusy || disabled;
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const busy = importBusy || discoveryBusy || disabled;
   useEffect(() => onBusyChange?.(importBusy), [importBusy, onBusyChange]);
   const [status, setStatus] = useState<string | null>(null);
   const [scope, setScope] = useState<"site" | "profile">(destination.origin ? "site" : "profile");
@@ -86,7 +87,7 @@ export function BrowserCookieImport({
     setConfirmed(false);
     setProfile("");
     setProfiles([]);
-    setBusy(true);
+    setDiscoveryBusy(true);
     setStatus(null);
     try {
       const choices = await api.cookieProfiles(browser);
@@ -98,13 +99,13 @@ export function BrowserCookieImport({
       if (request === generation.current)
         setStatus("Profiles could not be read. Check browser installation and system permissions.");
     } finally {
-      if (request === generation.current) setBusy(false);
+      if (request === generation.current) setDiscoveryBusy(false);
     }
   };
 
   const load = async () => {
     setOpen(true);
-    setBusy(true);
+    setDiscoveryBusy(true);
     setStatus(null);
     const request = ++generation.current;
     try {
@@ -114,12 +115,12 @@ export function BrowserCookieImport({
       if (choices[0]) await loadProfiles(choices[0].id);
       else {
         setStatus("Cookie import is unavailable on this platform.");
-        setBusy(false);
+        setDiscoveryBusy(false);
       }
     } catch {
       if (request === generation.current) {
         setStatus("Cookie import is unavailable. Sign in directly in the browser instead.");
-        setBusy(false);
+        setDiscoveryBusy(false);
       }
     }
   };

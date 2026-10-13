@@ -167,7 +167,13 @@ export function BrowserSessionImport({
             confirmed: true,
           });
           setResults((current) => ({ ...current, [key]: resultMessage(result) }));
-          if (!result.ok && result.code === "cancelled") break;
+          if (
+            !result.ok &&
+            (result.code === "cancelled" ||
+              result.code.startsWith("target_") ||
+              result.code === "redaction_capacity")
+          )
+            break;
         } catch {
           setResults((current) => ({
             ...current,
@@ -175,7 +181,7 @@ export function BrowserSessionImport({
               ? "Import cancelled. Some cookies may already have been copied; review the session before retrying."
               : "Import stopped before Synara could verify the result. Retry this profile.",
           }));
-          if (cancelRequested.current) break;
+          break;
         }
       }
     } finally {

@@ -363,6 +363,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.invoke(IPC.browser.vault.inventoryChromiumProfiles),
       importCookies: (input) => ipcRenderer.invoke(IPC.browser.vault.importCookies, input),
       cancelCookieImport: () => ipcRenderer.invoke(IPC.browser.vault.cancelCookieImport),
+      cancelPasswordImport: (operationId) =>
+        ipcRenderer.invoke(IPC.browser.vault.cancelPasswordImport, operationId),
       importPasswords: (input) => ipcRenderer.invoke(IPC.browser.vault.importPasswords, input),
       onChanged: (listener) => {
         const wrapped = () => listener();

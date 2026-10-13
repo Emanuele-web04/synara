@@ -32,14 +32,14 @@ class KeychainError extends Error {
   }
 }
 
-function readMacKeychainSecret(browser: string): Promise<string> {
+function readMacKeychainSecret(browser: string, signal?: AbortSignal): Promise<string> {
   const keychain = Object.hasOwn(KEYCHAIN_SOURCES, browser) ? KEYCHAIN_SOURCES[browser] : undefined;
   if (!keychain) return Promise.reject(new KeychainError("keychain_unavailable"));
   return new Promise((resolve, reject) => {
     execProcessFile(
       "/usr/bin/security",
       ["find-generic-password", "-w", "-a", keychain.account, "-s", keychain.service],
-      { encoding: "utf8", timeout: 15_000, maxBuffer: 4_096, killSignal: "SIGKILL" },
+      { signal, encoding: "utf8", timeout: 15_000, maxBuffer: 4_096, killSignal: "SIGKILL" },
       (error, stdout) => {
         if (error) {
           const message = String(error.message);
@@ -72,23 +72,49 @@ function platform(): "macos" | "windows" | "linux" {
 }
 
 export class BrowserPasswordImport {
+  private active: { operationId: string | undefined; controller: AbortController } | undefined;
+
+  cancel(operationId: string): void {
+    if (this.active?.operationId === operationId) this.active.controller.abort();
+  }
   constructor(
     private readonly vault: BrowserVault,
     private readonly getKeychainSecret: (
       browser: string,
+      signal?: AbortSignal,
     ) => Promise<string> = readMacKeychainSecret,
     private readonly home = homedir(),
     private readonly getProfile = inventoryChromiumPasswordProfile,
   ) {}
 
   async import(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult> {
+    if (this.active) return { ok: false, code: "vault_failed", platform: platform() };
+    const active = { operationId: input.operationId, controller: new AbortController() };
+    this.active = active;
+    try {
+      return await this.importProfile(input, active.controller.signal);
+    } finally {
+      if (this.active === active) this.active = undefined;
+    }
+  }
+
+  private async importProfile(
+    input: BrowserPasswordImportInput,
+    signal: AbortSignal,
+  ): Promise<BrowserPasswordImportResult> {
     const currentPlatform = platform();
+    const cancelled = (): BrowserPasswordImportResult => ({
+      ok: false,
+      code: "cancelled",
+      platform: currentPlatform,
+    });
     if (input.confirmed !== true)
       return { ok: false, code: "reader_failed", platform: currentPlatform };
     if (currentPlatform !== "macos")
       return { ok: false, code: "unsupported_platform", platform: currentPlatform };
 
     const profile = await this.getProfile(this.home, input.browser, input.profile);
+    if (signal.aborted) return cancelled();
     if (!profile) return { ok: false, code: "source_missing", platform: currentPlatform };
     if (profile.count === 0) return { ok: true, imported: 0, skipped: 0, warnings: [] };
     if (profile.count === null || profile.status !== "available")
@@ -104,8 +130,13 @@ export class BrowserPasswordImport {
 
     let passphrase: string;
     try {
-      passphrase = await this.getKeychainSecret(input.browser);
+      passphrase = await this.getKeychainSecret(input.browser, signal);
+      if (signal.aborted) {
+        passphrase = "";
+        return cancelled();
+      }
     } catch (error) {
+      if (signal.aborted) return cancelled();
       const code = error instanceof KeychainError ? error.keychainFailure : "keychain_unavailable";
       return { ok: false, code, platform: currentPlatform };
     }
@@ -117,8 +148,10 @@ export class BrowserPasswordImport {
         input.browser,
         input.profile,
         passphrase,
+        signal,
       );
     } catch (error) {
+      if (signal.aborted) return cancelled();
       const code = error instanceof BrowserPasswordReadError ? error.code : "reader_failed";
       return {
         ok: false,
@@ -133,6 +166,10 @@ export class BrowserPasswordImport {
     }
 
     try {
+      if (signal.aborted) {
+        read.logins.length = 0;
+        return cancelled();
+      }
       const result = await this.vault.importPasswords(read.logins);
       read.logins.length = 0;
       return {

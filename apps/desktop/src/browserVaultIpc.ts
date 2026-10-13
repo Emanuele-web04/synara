@@ -69,6 +69,14 @@ export function registerBrowserVaultIpc(
     requireCookies().import(Schema.decodeUnknownSync(BrowserCookieImportInput)(input)),
   );
   handle(channels.cancelCookieImport, () => requireCookies().cancel());
+  handle(channels.cancelPasswordImport, (input) => {
+    if (!passwords) throw new Error("Password import is unavailable.");
+    passwords.cancel(
+      Schema.decodeUnknownSync(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)))(
+        input,
+      ),
+    );
+  });
   handle(channels.importPasswords, (input) => {
     if (!passwords) throw new Error("Password import is unavailable.");
     return passwords.import(Schema.decodeUnknownSync(BrowserPasswordImportInput)(input));
