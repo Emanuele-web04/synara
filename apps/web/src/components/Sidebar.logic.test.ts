@@ -30,6 +30,7 @@ import {
   isHiddenProjectAgentCoordinatorThread,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveAutomationCountBadge,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
@@ -168,6 +169,18 @@ describe("resolvePullRequestReviewBadge", () => {
     expect(resolvePullRequestReviewBadge({ count: 1, incomplete: false })?.accessibleLabel).toBe(
       "1 pull request is waiting for your review",
     );
+  });
+});
+
+describe("resolveAutomationCountBadge", () => {
+  it("counts configured automations and hides the badge at zero or before load", () => {
+    expect(resolveAutomationCountBadge(undefined)).toBeNull();
+    expect(resolveAutomationCountBadge(0)).toBeNull();
+    expect(resolveAutomationCountBadge(2)).toEqual({
+      text: "2",
+      accessibleLabel: "2 automations",
+    });
+    expect(resolveAutomationCountBadge(1)?.accessibleLabel).toBe("1 automation");
   });
 });
 
