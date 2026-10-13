@@ -22,6 +22,55 @@ const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
   dia: { account: "Dia", service: "Dia Safe Storage" },
 };
 
+function importPlatform(): Extract<BrowserCookieImportResult, { ok: false }>["platform"] {
+  return process.platform === "darwin"
+    ? "macos"
+    : process.platform === "win32"
+      ? "windows"
+      : "linux";
+}
+
+function cookieImportFailure(result: {
+  cookieReaderStage?: unknown;
+  cookieReaderCode?: unknown;
+  cookieSyncFailureCode?: unknown;
+  cookiePermissionDenied?: unknown;
+}): Extract<BrowserCookieImportResult, { ok: false }> {
+  const stages = ["acquisition", "parse", "decrypt", "decode", "query", "discovery"] as const;
+  const stage = stages.find((stage) => stage === result.cookieReaderStage);
+  const transferCode = result.cookieSyncFailureCode;
+  let code: Extract<BrowserCookieImportResult, { ok: false }>["code"];
+  if (result.cookiePermissionDenied === true) code = "permission_denied";
+  else if (
+    result.cookieReaderCode === "source_too_large" ||
+    result.cookieReaderCode === "resource_exhausted"
+  )
+    code = "source_too_large";
+  else if (
+    transferCode === "redaction_capacity" ||
+    transferCode === "target_capacity" ||
+    transferCode === "target_eviction" ||
+    transferCode === "target_failed"
+  ) {
+    code = transferCode;
+  } else if (result.cookieReaderCode === "timed_out") code = "timed_out";
+  else if (
+    ["no_selected_source", "no_discovered_source"].includes(
+      typeof result.cookieReaderCode === "string" ? result.cookieReaderCode : "",
+    )
+  )
+    code = "source_missing";
+  else if (result.cookieReaderCode === "reader_unavailable") code = "reader_unavailable";
+  else if (result.cookieReaderCode) code = "reader_failed";
+  else code = "transfer_failed";
+  return {
+    ok: false,
+    code,
+    platform: importPlatform(),
+    ...(stage ? { stage } : {}),
+  };
+}
+
 function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
@@ -242,49 +291,7 @@ export class BrowserCookieImport {
         });
         interrupt.signal.throwIfAborted();
         if (!result.ok) {
-          const stages = [
-            "acquisition",
-            "parse",
-            "decrypt",
-            "decode",
-            "query",
-            "discovery",
-          ] as const;
-          const stage = stages.find((stage) => stage === result.cookieReaderStage);
-          const transferCode = result.cookieSyncFailureCode;
-          let code: Extract<BrowserCookieImportResult, { ok: false }>["code"];
-          if (result.cookiePermissionDenied) code = "permission_denied";
-          else if (
-            result.cookieReaderCode === "source_too_large" ||
-            result.cookieReaderCode === "resource_exhausted"
-          )
-            code = "source_too_large";
-          else if (
-            transferCode === "redaction_capacity" ||
-            transferCode === "target_capacity" ||
-            transferCode === "target_eviction" ||
-            transferCode === "target_failed"
-          ) {
-            code = transferCode;
-          } else if (result.cookieReaderCode === "timed_out") code = "timed_out";
-          else if (
-            ["no_selected_source", "no_discovered_source"].includes(result.cookieReaderCode ?? "")
-          )
-            code = "source_missing";
-          else if (result.cookieReaderCode === "reader_unavailable") code = "reader_unavailable";
-          else if (result.cookieReaderCode) code = "reader_failed";
-          else code = "transfer_failed";
-          return {
-            ok: false,
-            code,
-            platform:
-              process.platform === "darwin"
-                ? "macos"
-                : process.platform === "win32"
-                  ? "windows"
-                  : "linux",
-            ...(stage ? { stage } : {}),
-          };
+          return cookieImportFailure(result);
         }
         await assertTarget();
         interrupt.signal.throwIfAborted();
@@ -307,12 +314,7 @@ export class BrowserCookieImport {
           skipped: result.skipped,
           sessionRestore,
           browser: input.browser,
-          platform:
-            process.platform === "darwin"
-              ? "macos"
-              : process.platform === "win32"
-                ? "windows"
-                : "linux",
+          platform: importPlatform(),
           warnings: (result.warnings ?? []).map(({ code, count }) => ({ code, count })),
         };
       } finally {
@@ -324,16 +326,19 @@ export class BrowserCookieImport {
         await browser?.close();
       }
     } catch (error) {
-      if (!this.cancellationRequested) throw error;
+      if (!this.cancellationRequested) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          ("cookieReaderCode" in error || "cookiePermissionDenied" in error)
+        )
+          return cookieImportFailure(error);
+        throw error;
+      }
       return {
         ok: false,
         code: "cancelled",
-        platform:
-          process.platform === "darwin"
-            ? "macos"
-            : process.platform === "win32"
-              ? "windows"
-              : "linux",
+        platform: importPlatform(),
       };
     } finally {
       this.activeStop = undefined;

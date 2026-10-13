@@ -562,3 +562,24 @@ describe("human-only cookie import", () => {
     },
   );
 });
+
+it.each(["resource_exhausted", "source_too_large"])(
+  "translates %s during profile preflight",
+  async (code) => {
+    const { importer, releaseHumanOperation } = fixture();
+    mocks.profiles.mockRejectedValueOnce(
+      Object.assign(new Error("private profile detail"), {
+        cookieReaderCode: code,
+        cookieReaderStage: "discovery",
+      }),
+    );
+    expect(await importer.import({ ...input, browser: "helium" })).toEqual({
+      ok: false,
+      code: "source_too_large",
+      platform,
+      stage: "discovery",
+    });
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
+  },
+);

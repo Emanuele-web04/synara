@@ -308,11 +308,15 @@ export async function inventoryChromiumPasswordProfile(
   );
 }
 
-async function cookieStore(folder: string): Promise<string | undefined> {
+async function cookieStore(
+  folder: string,
+  browser: ChromiumInventorySourceId,
+): Promise<string | undefined> {
+  const root = storePath(folder, "Cookies");
+  if (["helium", "aside", "dia"].includes(browser) && (await isRealFile(root))) return root;
   const network = storePath(folder, "Network", "Cookies");
   if ((await isRealDirectory(storePath(folder, "Network"))) && (await isRealFile(network)))
     return network;
-  const root = storePath(folder, "Cookies");
   return (await isRealFile(root)) ? root : undefined;
 }
 
@@ -373,7 +377,7 @@ async function readLocalState(
   }
 }
 
-/** Counts local Chromium stores without reading or decrypting any secret. */
+/** Discovers profile/store metadata; database queries require an explicit import. */
 export async function listChromiumProfileInventory(
   home = homedir(),
   applicationRoots = ["/Applications", join(home, "Applications")],
@@ -403,35 +407,22 @@ export async function listChromiumProfileInventory(
     const profiles = discovery.folders.map((folder) => {
       const id = folder === root ? source.name : folder.slice(root.length + 1);
       return (async () => {
-        let cookie: {
-          count: number | null;
-          status: ChromiumProfileInventory["cookieStatus"];
-        };
+        let cookies: string | undefined;
         try {
-          const cookies = await cookieStore(folder);
-          cookie = cookies
-            ? await countRows(
-                cookies,
-                "cookies",
-                "SELECT COUNT(*) AS count FROM (SELECT 1 FROM cookies LIMIT 100001)",
-              )
-            : { count: null, status: "unavailable" };
+          cookies = await cookieStore(folder, source.id);
         } catch {
-          cookie = { count: null, status: "unavailable" };
+          cookies = undefined;
         }
-        let password: { count: number | null; status: ChromiumProfileInventory["passwordStatus"] };
-        try {
-          const loginStore = storePath(folder, "Login Data");
-          password = (await isRealFile(loginStore))
-            ? await countRows(
-                loginStore,
-                "logins",
-                "SELECT COUNT(*) AS count FROM (SELECT 1 FROM logins WHERE blacklisted_by_user = 0 AND octet_length(password_value) > 0 LIMIT 100001)",
-              )
-            : { count: null, status: "unavailable" };
-        } catch {
-          password = { count: null, status: "unavailable" };
-        }
+        const loginStore = storePath(folder, "Login Data");
+        const cookieAvailable =
+          cookies !== undefined &&
+          (await isBoundedChromiumDatabase(
+            cookies,
+            ["helium", "aside", "dia"].includes(source.id)
+              ? 64 * 1024 * 1024
+              : MAX_CHROMIUM_DATABASE_BYTES,
+          ));
+        const passwordAvailable = await isBoundedChromiumDatabase(loginStore);
         return {
           id,
           name: Object.hasOwn(localState.names, id)
@@ -443,10 +434,10 @@ export async function listChromiumProfileInventory(
             id === source.name ||
             localState.last[0] === id ||
             (localState.last.length === 0 && id === "Default"),
-          cookieCount: cookie.count,
-          passwordCount: password.count,
-          cookieStatus: cookie.status,
-          passwordStatus: password.status,
+          cookieCount: null,
+          passwordCount: null,
+          cookieStatus: cookieAvailable ? ("available" as const) : ("unavailable" as const),
+          passwordStatus: passwordAvailable ? ("available" as const) : ("unavailable" as const),
         };
       })();
     });

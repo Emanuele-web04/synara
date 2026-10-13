@@ -2,12 +2,13 @@ import { chmod, mkdir, mkdtemp, rm, writeFile, symlink, truncate } from "node:fs
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserInventoryList } from "@synara/contracts";
 import { Schema } from "effect";
 import {
   CHROMIUM_INVENTORY_SOURCES,
   listChromiumProfileInventory,
+  inventoryChromiumPasswordProfile,
 } from "./chromiumProfileInventory";
 
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -79,7 +80,7 @@ afterEach(async () => {
 });
 
 describe("macOS Chromium profile inventory", () => {
-  it("discovers only installed catalog candidates with profile stores and counts without decrypting", async () => {
+  it("discovers installed catalog candidates and profile metadata without querying stores", async () => {
     for (const source of CHROMIUM_INVENTORY_SOURCES) await install(source);
     const inventory = await scan();
     expect(Schema.decodeUnknownSync(BrowserInventoryList)(inventory)).toEqual(inventory);
@@ -109,29 +110,29 @@ describe("macOS Chromium profile inventory", () => {
           id: "Default",
           name: "Work",
           isDefault: true,
-          cookieCount: 2,
-          passwordCount: 2,
+          cookieCount: null,
+          passwordCount: null,
           cookieStatus: "available",
           passwordStatus: "available",
         },
       ],
     });
     expect(inventory.map(({ profiles }) => profiles[0]?.cookieCount)).toEqual(
-      CHROMIUM_INVENTORY_SOURCES.map(() => 2),
+      CHROMIUM_INVENTORY_SOURCES.map(() => null),
     );
     expect(inventory.find(({ id }) => id === "opera")?.profiles[0]).toMatchObject({
       id: "Opera",
       name: "Opera",
       isDefault: true,
-      cookieCount: 2,
-      passwordCount: 2,
+      cookieCount: null,
+      passwordCount: null,
     });
     expect(inventory.find(({ id }) => id === "opera-gx")?.profiles[0]).toMatchObject({
       id: "Opera GX",
       name: "Opera GX",
       isDefault: true,
-      cookieCount: 2,
-      passwordCount: 2,
+      cookieCount: null,
+      passwordCount: null,
     });
   });
 
@@ -161,7 +162,7 @@ describe("macOS Chromium profile inventory", () => {
     ]);
   });
 
-  it("reports unavailable counts for malformed stores and excludes uninstalled browser data", async () => {
+  it("discovers malformed store metadata and validates it only on explicit import", async () => {
     const source = CHROMIUM_INVENTORY_SOURCES[0];
     const { loginPath } = await install(source);
     await rm(loginPath);
@@ -176,10 +177,14 @@ describe("macOS Chromium profile inventory", () => {
     const inventory = await scan();
     expect(inventory.map(({ id }) => id)).toEqual(["chrome"]);
     expect(inventory[0]?.profiles[0]).toMatchObject({
-      cookieCount: 2,
+      cookieCount: null,
       cookieStatus: "available",
       passwordCount: null,
-      passwordStatus: "unavailable",
+      passwordStatus: "available",
+    });
+    expect(await inventoryChromiumPasswordProfile(home, source.id, "Default")).toEqual({
+      count: null,
+      status: "unavailable",
     });
   });
 
@@ -211,8 +216,8 @@ describe("macOS Chromium profile inventory", () => {
           id: "Default",
           name: "Main",
           isDefault: true,
-          cookieCount: 3,
-          passwordCount: 1,
+          cookieCount: null,
+          passwordCount: null,
         },
       ],
     });
@@ -223,8 +228,8 @@ describe("macOS Chromium profile inventory", () => {
     await install(source);
     expect((await scan()).find(({ id }) => id === "opera")?.profiles[0]).toMatchObject({
       id: "Opera",
-      cookieCount: 2,
-      passwordCount: 2,
+      cookieCount: null,
+      passwordCount: null,
     });
   });
 
@@ -239,12 +244,12 @@ describe("macOS Chromium profile inventory", () => {
       expect(inventory.find(({ id }) => id === "chrome")?.profiles[0]).toMatchObject({
         cookieCount: null,
         cookieStatus: "unavailable",
-        passwordCount: 2,
+        passwordCount: null,
         passwordStatus: "available",
       });
       expect(inventory.find(({ id }) => id === "aside")?.profiles[0]).toMatchObject({
-        cookieCount: 2,
-        passwordCount: 2,
+        cookieCount: null,
+        passwordCount: null,
       });
     } finally {
       await chmod(join(chrome.profile, "Network"), 0o700);
@@ -261,7 +266,7 @@ describe("macOS Chromium profile inventory", () => {
       expect(chromeInventory?.profileStatus).toBe("unavailable");
       expect(chromeInventory?.profiles).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: "Default", cookieCount: 2, passwordCount: 2 }),
+          expect.objectContaining({ id: "Default", cookieCount: null, passwordCount: null }),
           expect.objectContaining({
             id: "Profile 1",
             cookieCount: null,
@@ -293,15 +298,15 @@ describe("macOS Chromium profile inventory", () => {
         profiles: [],
       });
       expect(inventory.find(({ id }) => id === "aside")?.profiles[0]).toMatchObject({
-        cookieCount: 2,
-        passwordCount: 2,
+        cookieCount: null,
+        passwordCount: null,
       });
     } finally {
       await chmod(deniedApps, 0o700);
     }
   });
 
-  it("reports a busy database as locked without losing other profile counts", async () => {
+  it("discovers busy stores without opening their databases", async () => {
     const source = CHROMIUM_INVENTORY_SOURCES[0];
     const { cookiePath } = await install(source);
     const lock = new DatabaseSync(cookiePath);
@@ -310,8 +315,8 @@ describe("macOS Chromium profile inventory", () => {
       const inventory = await scan();
       expect(inventory[0]?.profiles[0]).toMatchObject({
         cookieCount: null,
-        cookieStatus: "locked",
-        passwordCount: 2,
+        cookieStatus: "available",
+        passwordCount: null,
         passwordStatus: "available",
       });
     } finally {
@@ -339,24 +344,27 @@ describe("Linux Chromium profile inventory", () => {
     ["Chromium", "snap/chromium/current/.config/chromium", "chromium"],
     ["Opera", ".config/opera", "opera"],
     ["Vivaldi", ".config/vivaldi", "vivaldi"],
-  ])("counts %s cookie and password rows without decrypting", async (_name, root, id) => {
-    await installLinuxProfile(root);
+  ])(
+    "discovers %s cookie and password stores without inspecting database rows",
+    async (_name, root, id) => {
+      await installLinuxProfile(root);
 
-    const inventory = await scan();
-    expect(Schema.decodeUnknownSync(BrowserInventoryList)(inventory)).toEqual(inventory);
-    expect(inventory.map(({ id: browser }) => browser)).toEqual([id]);
-    expect(inventory[0]?.profiles).toEqual([
-      {
-        id: "Default",
-        name: "Work",
-        isDefault: true,
-        cookieCount: 3,
-        passwordCount: 1,
-        cookieStatus: "available",
-        passwordStatus: "available",
-      },
-    ]);
-  });
+      const inventory = await scan();
+      expect(Schema.decodeUnknownSync(BrowserInventoryList)(inventory)).toEqual(inventory);
+      expect(inventory.map(({ id: browser }) => browser)).toEqual([id]);
+      expect(inventory[0]?.profiles).toEqual([
+        {
+          id: "Default",
+          name: "Work",
+          isDefault: true,
+          cookieCount: null,
+          passwordCount: null,
+          cookieStatus: "available",
+          passwordStatus: "available",
+        },
+      ]);
+    },
+  );
 
   it("prefers a Flatpak profile root when it is the installed Chrome data store", async () => {
     await installLinuxProfile(".var/app/com.google.Chrome/config/google-chrome");
@@ -364,7 +372,7 @@ describe("Linux Chromium profile inventory", () => {
       {
         id: "chrome",
         profileStatus: "available",
-        profiles: [{ cookieCount: 3, passwordCount: 1 }],
+        profiles: [{ cookieCount: null, passwordCount: null }],
       },
     ]);
   });
@@ -375,7 +383,7 @@ describe("Linux Chromium profile inventory", () => {
       {
         id: "chromium",
         profileStatus: "available",
-        profiles: [{ cookieCount: 3, passwordCount: 1 }],
+        profiles: [{ cookieCount: null, passwordCount: null }],
       },
     ]);
   });
@@ -451,7 +459,7 @@ it.each(["string", "array", "null", "oversized-name"])(
   },
 );
 it.each(["cookiePath", "loginPath"] as const)(
-  "rejects oversized WAL before counting %s",
+  "rejects oversized WAL before offering %s",
   async (key) => {
     const source = CHROMIUM_INVENTORY_SOURCES[0];
     const stores = await install(source);
@@ -481,3 +489,35 @@ it("uses profile ids for names absent from Local State own properties", async ()
     ]),
   );
 });
+
+it("does not prepare SQLite statements during automatic discovery", async () => {
+  const source = CHROMIUM_INVENTORY_SOURCES[0];
+  await install(source);
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  try {
+    expect((await scan()).find(({ id }) => id === source.id)?.profiles[0]).toMatchObject({
+      cookieCount: null,
+      passwordCount: null,
+      passwordStatus: "available",
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  } finally {
+    prepare.mockRestore();
+  }
+  expect(await inventoryChromiumPasswordProfile(home, source.id, "Default")).toEqual({
+    count: 2,
+    status: "available",
+  });
+});
+it.each(["helium", "aside", "dia"])(
+  "uses the custom %s reader's root-store priority",
+  async (id) => {
+    const source = CHROMIUM_INVENTORY_SOURCES.find((candidate) => candidate.id === id)!;
+    const { profile } = await install(source);
+    await writeFile(join(profile, "Cookies"), "");
+    await truncate(join(profile, "Cookies"), 64 * 1024 * 1024 + 1);
+    expect((await scan()).find((candidate) => candidate.id === id)?.profiles[0]?.cookieStatus).toBe(
+      "unavailable",
+    );
+  },
+);

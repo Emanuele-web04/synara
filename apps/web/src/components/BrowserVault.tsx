@@ -45,7 +45,8 @@ export function BrowserVaultDialog() {
   const [acting, setBusy] = useState(false);
   const [cookiesBusy, setCookiesBusy] = useState(false);
   const [passwordsBusy, setPasswordsBusy] = useState(false);
-  const busy = acting || cookiesBusy || passwordsBusy;
+  const [masterBusy, setMasterBusy] = useState(false);
+  const busy = acting || cookiesBusy || passwordsBusy || masterBusy;
   const busyRef = useRef(busy);
   busyRef.current = busy;
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -175,6 +176,8 @@ export function BrowserVaultDialog() {
                 <BrowserVaultMaster
                   key={master.kind}
                   api={api}
+                  disabled={acting || cookiesBusy || passwordsBusy}
+                  onBusyChange={setMasterBusy}
                   action={master}
                   onDone={() => {
                     setMaster(null);
@@ -294,6 +297,8 @@ export function BrowserVaultDialog() {
                             <BrowserVaultMaster
                               key={login.id}
                               api={api}
+                              disabled={acting || cookiesBusy || passwordsBusy}
+                              onBusyChange={setMasterBusy}
                               action={master}
                               onDone={() => setMaster(null)}
                             />
@@ -395,13 +400,13 @@ export function BrowserVaultDialog() {
                       key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
                       api={api}
                       destination={destination}
-                      disabled={acting || passwordsBusy}
+                      disabled={acting || passwordsBusy || masterBusy}
                       onBusyChange={setCookiesBusy}
                     />
                   ) : null}
                   <BrowserPasswordImport
                     api={api}
-                    disabled={acting || cookiesBusy}
+                    disabled={acting || cookiesBusy || masterBusy}
                     onBusyChange={setPasswordsBusy}
                   />
                 </>

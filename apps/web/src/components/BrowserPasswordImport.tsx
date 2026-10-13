@@ -14,7 +14,8 @@ type Inventory = Awaited<ReturnType<BrowserVaultMethods["inventoryChromiumProfil
 
 function countLabel(count: number | null, kind: string, status: string) {
   if (status === "locked") return `${kind}: locked`;
-  if (count === null) return `${kind}: unavailable`;
+  if (status === "unavailable") return `${kind}: unavailable`;
+  if (count === null) return kind;
   return `${count} ${kind}`;
 }
 
@@ -58,6 +59,7 @@ export function BrowserPasswordImport({
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [masterBusy, setMasterBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [inventoryStatus, setInventoryStatus] = useState<"loading" | "ready" | "error">("loading");
   const [vaultAction, setVaultAction] = useState<"setup" | "unlock" | null>(null);
@@ -128,7 +130,7 @@ export function BrowserPasswordImport({
   );
 
   const run = async () => {
-    if (busy || disabled || !confirmed || selectedProfiles.length === 0) return;
+    if (busy || masterBusy || disabled || !confirmed || selectedProfiles.length === 0) return;
     setBusy(true);
     onBusyChange?.(true);
     setStatus(null);
@@ -157,7 +159,7 @@ export function BrowserPasswordImport({
       setStatus(outcomes.join(" "));
       setBusy(false);
       setConfirmed(false);
-      onBusyChange?.(false);
+      onBusyChange?.(masterBusy);
     }
   };
 
@@ -210,7 +212,7 @@ export function BrowserPasswordImport({
                         <label className="flex items-start gap-2">
                           <Checkbox
                             checked={selected[id] === true}
-                            disabled={busy || disabled}
+                            disabled={busy || masterBusy || disabled}
                             onCheckedChange={(checked) =>
                               setSelected((current) => ({ ...current, [id]: checked === true }))
                             }
@@ -247,6 +249,11 @@ export function BrowserPasswordImport({
           {masterAction ? (
             <BrowserVaultMaster
               api={api}
+              disabled={busy || disabled}
+              onBusyChange={(value) => {
+                setMasterBusy(value);
+                onBusyChange?.(busy || value);
+              }}
               action={{ kind: masterAction }}
               onDone={() => {
                 setMasterAction(null);
@@ -254,7 +261,12 @@ export function BrowserPasswordImport({
               }}
             />
           ) : (
-            <Button size="sm" variant="outline" onClick={() => setMasterAction(vaultAction)}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || masterBusy || disabled}
+              onClick={() => setMasterAction(vaultAction)}
+            >
               {vaultAction === "setup" ? "Set up Saved Logins" : "Unlock Saved Logins"}
             </Button>
           )}
@@ -274,7 +286,7 @@ export function BrowserPasswordImport({
           <label className="flex items-start gap-2">
             <Checkbox
               checked={confirmed}
-              disabled={busy || disabled || selectedProfiles.length === 0}
+              disabled={busy || masterBusy || disabled || selectedProfiles.length === 0}
               onCheckedChange={(checked) => setConfirmed(checked === true)}
             />
             <span>
@@ -292,6 +304,7 @@ export function BrowserPasswordImport({
               size="sm"
               disabled={
                 busy ||
+                masterBusy ||
                 disabled ||
                 !confirmed ||
                 selectedProfiles.length === 0 ||

@@ -921,3 +921,82 @@ describe("browser saved logins", () => {
     await expect.element(page.getByText("No saved logins.")).toBeVisible();
   });
 });
+
+it("blocks vault dismissal and sibling imports until master unlock settles", async () => {
+  const api = harness.api!;
+  state = { ...state, protection: { ...state.protection, locked: true } };
+  let finish!: () => void;
+  vi.mocked(api.unlock).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          state = { ...state, protection: { ...state.protection, locked: false } };
+          resolve();
+        };
+      }),
+  );
+  const screen = await render(
+    <>
+      <BrowserVaultButton />
+      <BrowserVaultDialog />
+    </>,
+  );
+  try {
+    await page.getByRole("button", { name: "Saved logins" }).click();
+    await page.getByRole("button", { name: "Unlock", exact: true }).click();
+    const password = page.getByLabelText("Master password", { exact: true });
+    await password.fill("synthetic-master");
+    (await password.element())
+      .closest("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(api.unlock).toHaveBeenCalledOnce());
+    await expect.element(page.getByRole("button", { name: "Back to browser" })).toBeDisabled();
+    await expect
+      .element(page.getByRole("switch", { name: "Allow agents to find saved accounts" }))
+      .toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+    await (
+      await page.getByRole("dialog").element()
+    ).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    finish();
+    await expect.element(page.getByRole("button", { name: "Back to browser" })).toBeEnabled();
+  } finally {
+    await screen.unmount();
+  }
+});
+it("propagates embedded master setup busy state to the onboarding/settings owner", async () => {
+  const api = harness.api!;
+  state = { ...state, protection: { configured: false, locked: true, osProtected: false } };
+  vi.mocked(api.cookieSources).mockResolvedValue([{ id: "chrome", name: "Chrome" }]);
+  vi.mocked(api.cookieProfiles).mockResolvedValue([{ id: "Default", name: "Personal" }]);
+  let finish!: () => void;
+  vi.mocked(api.setupMaster).mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          state = { ...state, protection: { configured: true, locked: false, osProtected: false } };
+          resolve();
+        };
+      }),
+  );
+  const busy = vi.fn();
+  const screen = await render(<BrowserImportPanel api={api} onBusyChange={busy} />);
+  try {
+    await page.getByRole("button", { name: "Set up Saved Logins" }).click();
+    await page.getByLabelText("New master password").fill("synthetic-master-password");
+    await page.getByLabelText("Confirm master password").fill("synthetic-master-password");
+    await page.getByRole("button", { name: "Set master password", exact: true }).click();
+    await vi.waitFor(() => expect(busy).toHaveBeenLastCalledWith(true));
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select Chrome Personal" }))
+      .toBeDisabled();
+    finish();
+    await vi.waitFor(() => expect(busy).toHaveBeenLastCalledWith(false));
+    await expect
+      .element(page.getByRole("checkbox", { name: "Select Chrome Personal" }))
+      .toBeEnabled();
+  } finally {
+    await screen.unmount();
+  }
+});
