@@ -995,6 +995,10 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       expect(subscribeShellRequestCount).toBe(1);
+      // The first welcome must not restart the open chat's stream: that would
+      // interrupt its snapshot and load the whole transcript a second time.
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
     } finally {
       await mounted.cleanup();
     }
@@ -2379,12 +2383,6 @@ describe("EventRouter scoped orchestration sync", () => {
         { timeout: 4_000, interval: 16 },
       );
       sendThreadEventPush(bufferedEvent);
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
       const subscribeCountBeforeMaterialization =
         subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
       const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
