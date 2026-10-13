@@ -485,6 +485,9 @@ function SettingsRouteView() {
     ...(settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder
       ? ["Thread sort order"]
       : []),
+    ...(settings.sidebarThreadAttentionFirst !== defaults.sidebarThreadAttentionFirst
+      ? ["Working and unread on top"]
+      : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
       ? ["Hubs section"]
@@ -913,6 +916,15 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
+
+        {renderBooleanSettingRow({
+          settingKey: "sidebarThreadAttentionFirst",
+          title: "Working and unread on top",
+          description:
+            "With Recently active order, move working and unread threads above the rest. The list holds still while your pointer is over it.",
+          resetLabel: "working and unread on top",
+          ariaLabel: "Move working and unread threads to the top of the sidebar",
+        })}
       </SettingsSection>
 
       <SettingsSection title="Sidebar sections">

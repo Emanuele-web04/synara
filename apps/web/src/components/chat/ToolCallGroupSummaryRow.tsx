@@ -13,7 +13,7 @@ import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
   BotIcon,
-  FileIcon,
+  FileReadIcon,
   GlobeIcon,
   type LucideIcon,
   PencilIcon,
@@ -40,7 +40,7 @@ import {
 function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   switch (summary.iconCategory) {
     case "read":
-      return FileIcon;
+      return FileReadIcon;
     case "search":
       return SearchIcon;
     case "command":

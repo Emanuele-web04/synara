@@ -1178,6 +1178,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const waitForRuntimeIdleStop = (threadId: ThreadId): Effect.Effect<void> =>
       Effect.promise(() => runtimeIdleStopsInFlight.get(threadId) ?? Promise.resolve());
 
+    const acquireRuntimeIdleStopFence = (threadId: ThreadId): (() => void) => {
+      let release!: () => void;
+      const fence = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      runtimeIdleStopsInFlight.set(threadId, fence);
+      return () => {
+        if (runtimeIdleStopsInFlight.get(threadId) === fence) {
+          runtimeIdleStopsInFlight.delete(threadId);
+        }
+        release();
+      };
+    };
+
     const targetedChildInterruptKey = (
       threadId: ThreadId,
       turnId: TurnId,
@@ -1351,12 +1365,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           existingIdleStop !== undefined ||
           runtimeIdleTimers.has(threadId) ||
           runtimeIdleCandidates.has(threadId);
-        const waitForExistingIdleStop =
-          existingIdleStop !== undefined ? Effect.promise(() => existingIdleStop) : Effect.void;
+        // A sweep can publish its fence while we await an interruption. Drain
+        // the current owner before invalidating its generation, without an async gap.
+        const claimIdleWork: Effect.Effect<void> = Effect.suspend(() => {
+          const stop = runtimeIdleStopsInFlight.get(threadId);
+          return stop
+            ? Effect.promise(() => stop).pipe(Effect.andThen(claimIdleWork))
+            : Effect.sync(() => clearRuntimeIdleTimer(threadId));
+        });
         return waitForInterruptionFence.pipe(
-          Effect.andThen(waitForExistingIdleStop),
-          Effect.tap(() => Effect.sync(() => clearRuntimeIdleTimer(threadId))),
-          Effect.flatMap(() => waitForRuntimeIdleStop(threadId)),
+          Effect.andThen(claimIdleWork),
           Effect.flatMap(() =>
             Effect.acquireUseRelease(
               Effect.sync(() => {
@@ -4690,87 +4708,174 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         } else if (!isExpectedIdleStopCurrent()) {
           return false;
         }
+        let runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
         let stoppedState:
           | { readonly binding: ProviderRuntimeBinding; readonly resumeCursor: unknown }
           | undefined;
-        const manualIdleStopBarrier = options?.manualIdleStopBarrier;
-        return yield* lifecycle.run(
-          input.threadId,
-          (lease) =>
+        let releaseIdleStopFence: (() => void) | undefined;
+        return yield* lifecycle
+          .run(
+            input.threadId,
+            (lease) =>
+              Effect.gen(function* () {
+                // Once teardown succeeded, persist that irreversible retirement even
+                // if a runtime event displaced its idle generation while draining.
+                if (!stoppedState) return false;
+                const { binding, resumeCursor } = stoppedState;
+                clearLiveRuntimeTasks(input.threadId);
+                yield* withBindingWriteLock(
+                  input.threadId,
+                  Effect.gen(function* () {
+                    // Teardown can drain a newer native cursor through the event
+                    // consumer. Prefer that completed write under its same lock.
+                    const latest = Option.getOrUndefined(
+                      yield* directory.getBinding(input.threadId),
+                    );
+                    const queuedCursorWrite = latestRuntimeCursorWriteByThread.get(input.threadId);
+                    const retiredCursor =
+                      queuedCursorWrite !== undefined &&
+                      queuedCursorWrite.version > runtimeCursorWriteBaseline
+                        ? queuedCursorWrite.resumeCursor
+                        : resumeCursor;
+                    yield* directory.upsert({
+                      threadId: input.threadId,
+                      provider: binding.provider,
+                      providerInstanceId: binding.providerInstanceId,
+                      ...(binding.adapterKey !== undefined
+                        ? { adapterKey: binding.adapterKey }
+                        : {}),
+                      ...(binding.runtimeMode !== undefined
+                        ? { runtimeMode: binding.runtimeMode }
+                        : {}),
+                      status: "stopped",
+                      lifecycleGeneration: lease.generation,
+                      resumeCursor: retiredCursor,
+                      runtimePayload: {
+                        ...runtimePayloadRecord(latest?.runtimePayload ?? binding.runtimePayload),
+                        activeTurnId: null,
+                        lastRuntimeEvent:
+                          options?.requireAgentGatewayCredentialRotation === true
+                            ? "provider.interruptRuntimeFenced"
+                            : "provider.stopRuntimeSession",
+                        lastRuntimeEventAt: new Date().toISOString(),
+                        lifecycleGeneration: lease.generation,
+                        ...(options?.requireAgentGatewayCredentialRotation === true
+                          ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
+                          : {}),
+                      },
+                    });
+                  }),
+                );
+                lease.commit();
+                retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
+                return true;
+              }),
             Effect.gen(function* () {
-              if (!stoppedState || !isExpectedIdleStopCurrent()) return false;
-              const { binding, resumeCursor } = stoppedState;
-              clearLiveRuntimeTasks(input.threadId);
-              yield* withBindingWriteLock(
-                input.threadId,
-                directory.upsert({
-                  threadId: input.threadId,
-                  provider: binding.provider,
-                  providerInstanceId: binding.providerInstanceId,
-                  ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-                  ...(binding.runtimeMode !== undefined
-                    ? { runtimeMode: binding.runtimeMode }
-                    : {}),
-                  status: "stopped",
-                  lifecycleGeneration: lease.generation,
-                  resumeCursor,
-                  runtimePayload: {
-                    ...runtimePayloadRecord(binding.runtimePayload),
-                    activeTurnId: null,
-                    lastRuntimeEvent:
-                      options?.requireAgentGatewayCredentialRotation === true
-                        ? "provider.interruptRuntimeFenced"
-                        : "provider.stopRuntimeSession",
-                    lastRuntimeEventAt: new Date().toISOString(),
-                    lifecycleGeneration: lease.generation,
-                    ...(options?.requireAgentGatewayCredentialRotation === true
-                      ? { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: true }
-                      : {}),
-                  },
-                }),
+              if (!isExpectedIdleStopCurrent()) return;
+              if (rawInput.onlyIfIdleSince !== undefined) {
+                // Acquire only after the lifecycle lock. An explicit Stop holding
+                // that lock may itself be waiting for an earlier idle cleanup.
+                releaseIdleStopFence = acquireRuntimeIdleStopFence(input.threadId);
+              }
+              const manualIdleStopBarrier = options?.manualIdleStopBarrier;
+              const admitted =
+                manualIdleStopBarrier !== undefined && expectedIdleGeneration !== undefined
+                  ? yield* prepareManualIdleRuntimeStop(input.threadId, expectedIdleGeneration)
+                  : undefined;
+              if (admitted && manualIdleStopBarrier)
+                runtimeIdleStopsInFlight.set(input.threadId, manualIdleStopBarrier);
+              const binding =
+                admitted?.binding ??
+                Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+              if (!binding || !isExpectedIdleStopCurrent()) return;
+              const adapter = admitted?.adapter ?? (yield* getAdapterForBinding(binding));
+              const hasActiveSession = admitted ? true : yield* adapter.hasSession(input.threadId);
+              let resumeCursor = admitted ? admitted.resumeCursor : binding.resumeCursor;
+              if (admitted) runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
+              if (!isExpectedIdleStopCurrent()) return;
+              if (!admitted && hasActiveSession) {
+                const activeSessions = yield* adapter.listSessions();
+                const activeSession = activeSessions.find(
+                  (session) => session.threadId === input.threadId,
+                );
+                if (
+                  rawInput.onlyIfIdleSince !== undefined &&
+                  (!activeSession ||
+                    activeSession.status === "connecting" ||
+                    activeSession.status === "running" ||
+                    activeSession.activeTurnId !== undefined ||
+                    !Number.isFinite(Date.parse(activeSession.updatedAt)) ||
+                    Date.parse(activeSession.updatedAt) > Date.parse(rawInput.onlyIfIdleSince))
+                )
+                  return;
+                if (activeSession?.resumeCursor !== undefined) {
+                  // A live cursor supersedes writes completed before this read,
+                  // including writes while stop waited for its lifecycle lock.
+                  resumeCursor = activeSession.resumeCursor;
+                  runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
+                }
+              }
+              if (rawInput.onlyIfIdleSince !== undefined) {
+                // Runs before generation rotation, with new dispatch fenced.
+                // Re-read after async adapter probes: the sweep's old
+                // lastSeenAt and an idle projection are not evidence of idleness.
+                const current = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+                const cutoff = Date.parse(rawInput.onlyIfIdleSince);
+                const lastSeen = Date.parse(current?.lastSeenAt ?? "");
+                if (
+                  !current ||
+                  !Number.isFinite(cutoff) ||
+                  !Number.isFinite(lastSeen) ||
+                  lastSeen > cutoff ||
+                  runtimeActiveTurnId(current.runtimePayload) !== undefined ||
+                  (dispatchStateByThread.get(input.threadId)?.inFlightGenerations.size ?? 0) > 0 ||
+                  (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0
+                )
+                  return;
+              }
+              // An inactive runtime can retain an unreaped process tree. Keep
+              // its generation current through both exit proof and text drain.
+              if (!isExpectedIdleStopCurrent()) return;
+              yield* settleConcurrentTeardowns(
+                [adapter.stopSession(input.threadId), flushRuntimeText(input.threadId)],
+                (teardown) => teardown,
               );
-              lease.commit();
-              retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
-              return true;
+              stoppedState = { binding, resumeCursor };
             }),
-          Effect.gen(function* () {
-            if (!isExpectedIdleStopCurrent()) return;
-            const admitted =
-              manualIdleStopBarrier !== undefined && expectedIdleGeneration !== undefined
-                ? yield* prepareManualIdleRuntimeStop(input.threadId, expectedIdleGeneration)
-                : undefined;
-            if (admitted && manualIdleStopBarrier)
-              runtimeIdleStopsInFlight.set(input.threadId, manualIdleStopBarrier);
-            const binding =
-              admitted?.binding ??
-              Option.getOrUndefined(yield* directory.getBinding(input.threadId));
-            if (!binding || !isExpectedIdleStopCurrent()) return;
-            const adapter = admitted?.adapter ?? (yield* getAdapterForBinding(binding));
-            const hasActiveSession = admitted ? true : yield* adapter.hasSession(input.threadId);
-            let resumeCursor = admitted ? admitted.resumeCursor : binding.resumeCursor;
-            if (!isExpectedIdleStopCurrent()) return;
-            if (!admitted && hasActiveSession) {
-              const activeSessions = yield* adapter.listSessions();
-              const activeSession = activeSessions.find(
-                (session) => session.threadId === input.threadId,
-              );
-              if (activeSession?.resumeCursor !== undefined)
-                resumeCursor = activeSession.resumeCursor;
-            }
-            // An inactive runtime can retain an unreaped process tree. Keep
-            // its generation current through both exit proof and text drain.
-            if (!isExpectedIdleStopCurrent()) return;
-            yield* settleConcurrentTeardowns(
-              [adapter.stopSession(input.threadId), flushRuntimeText(input.threadId)],
-              (teardown) => teardown,
-            );
-            if (isExpectedIdleStopCurrent()) stoppedState = { binding, resumeCursor };
-          }),
-        );
+          )
+          .pipe(Effect.ensuring(Effect.sync(() => releaseIdleStopFence?.())));
       });
 
     const stopRuntimeSession: StopRuntimeSession = (rawInput) =>
-      stopRuntimeSessionInternal(rawInput).pipe(Effect.asVoid);
+      rawInput.onlyIfIdleSince === undefined
+        ? stopRuntimeSessionInternal(rawInput).pipe(Effect.asVoid)
+        : Effect.suspend(() => {
+            if (runtimeIdleStopsInFlight.has(rawInput.threadId)) {
+              return waitForRuntimeIdleStop(rawInput.threadId).pipe(
+                Effect.andThen(stopRuntimeSession(rawInput)),
+              );
+            }
+            const displacedTimer =
+              runtimeIdleTimers.has(rawInput.threadId) ||
+              runtimeIdleCandidates.has(rawInput.threadId);
+            clearRuntimeIdleTimer(rawInput.threadId);
+            const generation = runtimeIdleGenerations.get(rawInput.threadId)!;
+            return stopRuntimeSessionInternal(rawInput, generation).pipe(
+              Effect.asVoid,
+              Effect.ensuring(
+                Effect.sync(() => {
+                  // Rejected stale sweeps must not cancel a freshly armed normal
+                  // timeout. A newer owner or successful retirement needs no timer.
+                  if (
+                    displacedTimer &&
+                    isRuntimeIdleGenerationCurrent(rawInput.threadId, generation)
+                  )
+                    scheduleRuntimeIdleStop(rawInput.threadId);
+                  else retireRuntimeIdleGeneration(rawInput.threadId, generation);
+                }),
+              ),
+            );
+          });
 
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
@@ -4917,12 +5022,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           });
         }),
       );
-      const stopPromise = Effect.runPromise(stopEffect).finally(() => {
-        if (runtimeIdleStopsInFlight.get(threadId) === stopPromise) {
-          runtimeIdleStopsInFlight.delete(threadId);
-        }
-      });
-      runtimeIdleStopsInFlight.set(threadId, stopPromise);
+      const release = acquireRuntimeIdleStopFence(threadId);
+      void Effect.runPromise(stopEffect).finally(release);
     };
 
     const clearSessionResumeCursor: NonNullable<

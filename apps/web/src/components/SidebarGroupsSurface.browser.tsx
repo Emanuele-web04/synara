@@ -144,8 +144,12 @@ function Harness(props: { threadsHydrated: boolean; callbacks: Callbacks }) {
         projectSidebarDataById={props.callbacks.dataById}
         threadsHydrated={props.threadsHydrated}
         visualActiveThreadId={null}
-        threadSortOrder="updated_at"
-        onThreadSortOrderChange={() => {}}
+        threadSortMenuProps={{
+          threadSortOrder: "updated_at",
+          onThreadSortOrderChange: () => {},
+          threadAttentionFirst: true,
+          onThreadAttentionFirstChange: () => {},
+        }}
         renderThreadRow={(thread) => (
           <li key={thread.id} data-testid={`thread-row-${thread.id}`}>
             {thread.title}

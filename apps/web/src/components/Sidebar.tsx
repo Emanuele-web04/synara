@@ -54,6 +54,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   lazy,
   startTransition,
   useMemo,
@@ -363,6 +364,7 @@ import {
 import { ShortcutKbd } from "./ui/kbd";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuGroup,
   MenuItem,
   MenuRadioGroup,
@@ -488,6 +490,10 @@ import {
   useSidebarProjectRunController,
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
+import {
+  useHeldSidebarThreadSortKeys,
+  useIsPointerWithin,
+} from "../hooks/useSidebarThreadOrderHold";
 import { useThreadActionShortcuts } from "../hooks/useThreadActionShortcuts";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
@@ -867,14 +873,11 @@ type SortableProjectHandleProps = Pick<
 
 function ProjectSortMenu({
   projectSortOrder,
-  threadSortOrder,
   onProjectSortOrderChange,
-  onThreadSortOrderChange,
-}: {
+  ...threadSortMenuProps
+}: ThreadSortMenuProps & {
   projectSortOrder: SidebarProjectSortOrder;
-  threadSortOrder: SidebarThreadSortOrder;
   onProjectSortOrderChange: (sortOrder: SidebarProjectSortOrder) => void;
-  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
 }) {
   return (
     <Menu>
@@ -913,10 +916,7 @@ function ProjectSortMenu({
           <div className="px-2 pt-2 pb-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort threads
           </div>
-          <ThreadSortMenuItems
-            threadSortOrder={threadSortOrder}
-            onThreadSortOrderChange={onThreadSortOrderChange}
-          />
+          <ThreadSortMenuItems {...threadSortMenuProps} />
         </MenuGroup>
       </ComposerPickerMenuPopup>
     </Menu>
@@ -1046,38 +1046,52 @@ function SidebarHelpMenu({
   );
 }
 
+export type ThreadSortMenuProps = {
+  threadSortOrder: SidebarThreadSortOrder;
+  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  threadAttentionFirst: boolean;
+  onThreadAttentionFirstChange: (attentionFirst: boolean) => void;
+};
+
 function ThreadSortMenuItems({
   threadSortOrder,
   onThreadSortOrderChange,
-}: {
-  threadSortOrder: SidebarThreadSortOrder;
-  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-}) {
+  threadAttentionFirst,
+  onThreadAttentionFirstChange,
+}: ThreadSortMenuProps) {
   return (
-    <MenuRadioGroup
-      value={threadSortOrder}
-      onValueChange={(value) => {
-        onThreadSortOrderChange(value as SidebarThreadSortOrder);
-      }}
-    >
-      {(Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>).map(
-        ([value, label]) => (
+    <>
+      <MenuRadioGroup
+        value={threadSortOrder}
+        onValueChange={(value) => {
+          onThreadSortOrderChange(value as SidebarThreadSortOrder);
+        }}
+      >
+        {(
+          Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>
+        ).map(([value, label]) => (
           <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-ui leading-snug">
             {label}
           </MenuRadioItem>
-        ),
-      )}
-    </MenuRadioGroup>
+        ))}
+      </MenuRadioGroup>
+      {/* "Created at" is a plain creation-time list, so the toggle only applies to activity order. */}
+      <MenuCheckboxItem
+        variant="switch"
+        checked={threadAttentionFirst}
+        disabled={threadSortOrder === "created_at"}
+        onCheckedChange={(checked) => {
+          onThreadAttentionFirstChange(checked === true);
+        }}
+        className="min-h-7 py-1 sm:text-ui leading-snug"
+      >
+        Working and unread on top
+      </MenuCheckboxItem>
+    </>
   );
 }
 
-export function ChatSortMenu({
-  threadSortOrder,
-  onThreadSortOrderChange,
-}: {
-  threadSortOrder: SidebarThreadSortOrder;
-  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-}) {
+export function ChatSortMenu(props: ThreadSortMenuProps) {
   return (
     <Menu>
       <SidebarIconButton
@@ -1092,10 +1106,7 @@ export function ChatSortMenu({
           <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort chats
           </div>
-          <ThreadSortMenuItems
-            threadSortOrder={threadSortOrder}
-            onThreadSortOrderChange={onThreadSortOrderChange}
-          />
+          <ThreadSortMenuItems {...props} />
         </MenuGroup>
       </ComposerPickerMenuPopup>
     </Menu>
@@ -1446,6 +1457,28 @@ export default function Sidebar() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+  const pendingThreadRowAnchorRef = useRef<{
+    threadId: ThreadId;
+    row: HTMLElement;
+    viewport: HTMLElement;
+    top: number;
+    scrollTop: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const anchor = pendingThreadRowAnchorRef.current;
+    pendingThreadRowAnchorRef.current = null;
+    if (
+      !anchor ||
+      anchor.threadId !== routeThreadId ||
+      !anchor.row.isConnected ||
+      anchor.viewport.scrollTop !== anchor.scrollTop
+    ) {
+      return;
+    }
+    // Keep the activated row in place when navigation replaces the subagent subtree.
+    // Native anchoring can instead hold an earlier row; scroll bounds still apply.
+    anchor.viewport.scrollTop += anchor.row.getBoundingClientRect().top - anchor.top;
+  }, [routeThreadId]);
   const routeProjectId = useParams({
     strict: false,
     select: (params) =>
@@ -1864,6 +1897,9 @@ export default function Sidebar() {
     }
 
     const timeout = window.setTimeout(() => {
+      if (pendingThreadRowAnchorRef.current?.threadId === optimisticActiveThreadId) {
+        pendingThreadRowAnchorRef.current = null;
+      }
       setOptimisticActiveThreadId((current) =>
         current === optimisticActiveThreadId ? null : current,
       );
@@ -2260,6 +2296,7 @@ export default function Sidebar() {
             isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
         ),
         appSettings.sidebarThreadSortOrder,
+        { attentionFirst: appSettings.sidebarThreadAttentionFirst },
       )[0];
       if (!latestThread) return;
 
@@ -2268,28 +2305,35 @@ export default function Sidebar() {
         params: { threadId: latestThread.id },
       });
     },
-    [appSettings.sidebarThreadSortOrder, displaySidebarThreads, hideAutomationRunThreads, navigate],
+    [
+      appSettings.sidebarThreadAttentionFirst,
+      appSettings.sidebarThreadSortOrder,
+      displaySidebarThreads,
+      hideAutomationRunThreads,
+      navigate,
+    ],
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
     async (projectId: ProjectId, snapshot: OrchestrationShellSnapshot): Promise<boolean> => {
+      // The store may already contain events newer than this response. Rank
+      // each candidate from its coherent normalized summary, including visits.
+      const summaries = useStore.getState().sidebarThreadSummaryById;
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
+          .flatMap((thread) => {
+            const summary = summaries[thread.id];
+            return summary ? [summary] : [];
+          })
           .filter(
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
               thread.snoozedUntil == null &&
               !isSidechatThread(thread),
-          )
-          .map((thread) => ({
-            id: thread.id,
-            createdAt: thread.createdAt,
-            updatedAt: thread.updatedAt,
-            latestUserMessageAt: thread.latestUserMessageAt,
-            snoozeReminderAt: thread.snoozeReminderAt,
-          })),
+          ),
         appSettings.sidebarThreadSortOrder,
+        { attentionFirst: appSettings.sidebarThreadAttentionFirst },
       )[0];
       if (latestThread) {
         await navigate({
@@ -2301,7 +2345,12 @@ export default function Sidebar() {
 
       return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate],
+    [
+      appSettings.sidebarThreadAttentionFirst,
+      appSettings.sidebarThreadSortOrder,
+      handleNewThread,
+      navigate,
+    ],
   );
 
   const openExistingProjectFromSnapshot = useCallback(
@@ -2312,22 +2361,23 @@ export default function Sidebar() {
         return false;
       }
 
+      // The store may already contain events newer than this response. Rank
+      // each candidate from its coherent normalized summary, including visits.
+      const summaries = useStore.getState().sidebarThreadSummaryById;
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
+          .flatMap((thread) => {
+            const summary = summaries[thread.id];
+            return summary ? [summary] : [];
+          })
           .filter(
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
               thread.snoozedUntil == null,
-          )
-          .map((thread) => ({
-            id: thread.id,
-            createdAt: thread.createdAt,
-            updatedAt: thread.updatedAt,
-            latestUserMessageAt: thread.latestUserMessageAt,
-            snoozeReminderAt: thread.snoozeReminderAt,
-          })),
+          ),
         appSettings.sidebarThreadSortOrder,
+        { attentionFirst: appSettings.sidebarThreadAttentionFirst },
       )[0];
       if (latestThread) {
         await navigate({
@@ -2340,7 +2390,13 @@ export default function Sidebar() {
       setProjectExpanded(projectId, true);
       return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate, setProjectExpanded],
+    [
+      appSettings.sidebarThreadAttentionFirst,
+      appSettings.sidebarThreadSortOrder,
+      handleNewThread,
+      navigate,
+      setProjectExpanded,
+    ],
   );
 
   // Poll the server read model briefly after project.create so we only recover from fresh state.
@@ -2470,7 +2526,9 @@ export default function Sidebar() {
   const resolveBackTargetForThreads = useCallback(
     (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
       const latestThread =
-        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder, {
+          attentionFirst: appSettings.sidebarThreadAttentionFirst,
+        })[0] ?? null;
       const availableThreadIds = new Set<string>(threads.map((thread) => thread.id));
       if (extraAvailableThreadIds) {
         for (const threadId of extraAvailableThreadIds) {
@@ -2486,7 +2544,12 @@ export default function Sidebar() {
         latestThreadId: latestThread?.id ?? null,
       });
     },
-    [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
+    [
+      appSettings.sidebarThreadAttentionFirst,
+      appSettings.sidebarThreadSortOrder,
+      lastThreadRoute,
+      splitViewsById,
+    ],
   );
 
   // Fresh unsent chats have a route id but no persisted sidebar summary yet. Keep those draft
@@ -3888,6 +3951,21 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
+  // Capture at activation, after selection modifiers and before the route changes layout.
+  const activateThreadRow = (threadId: ThreadId, row: HTMLElement) => {
+    const viewport = row.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    pendingThreadRowAnchorRef.current =
+      viewport && threadId !== routeThreadId
+        ? {
+            threadId,
+            row,
+            viewport,
+            top: row.getBoundingClientRect().top,
+            scrollTop: viewport.scrollTop,
+          }
+        : null;
+    activateThreadFromSidebarIntent(threadId);
+  };
   // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
   // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
   const openThreadPullRequest = useCallback(
@@ -3946,6 +4024,7 @@ export default function Sidebar() {
     projectById,
     sidebarThreads: displaySidebarThreads,
     sidebarThreadSortOrder: appSettings.sidebarThreadSortOrder,
+    sidebarThreadAttentionFirst: appSettings.sidebarThreadAttentionFirst,
     routeThreadId,
     routeProjectId,
     isOnKanban,
@@ -4412,16 +4491,48 @@ export default function Sidebar() {
     () => groupSidebarThreadsByProjectId(displaySidebarTreeThreads),
     [displaySidebarTreeThreads],
   );
+  // Rows hold still while the pointer is over the list, so opening an unread
+  // chat or a chat starting work never moves the row the user is about to click.
+  const [sidebarContentElement, setSidebarContentElement] = useState<HTMLDivElement | null>(null);
+  const isPointerOverSidebarContent = useIsPointerWithin(sidebarContentElement);
+  const sidebarThreadAttentionFirst = appSettings.sidebarThreadAttentionFirst;
+  const heldSidebarThreadSortKeys = useHeldSidebarThreadSortKeys({
+    threads: displaySidebarTreeThreads,
+    sortOrder: appSettings.sidebarThreadSortOrder,
+    attentionFirst: sidebarThreadAttentionFirst,
+    hold: isPointerOverSidebarContent,
+  });
+  const threadSortMenuProps = useMemo<ThreadSortMenuProps>(
+    () => ({
+      threadSortOrder: appSettings.sidebarThreadSortOrder,
+      onThreadSortOrderChange: (sortOrder) => {
+        updateSettings({ sidebarThreadSortOrder: sortOrder });
+      },
+      threadAttentionFirst: sidebarThreadAttentionFirst,
+      onThreadAttentionFirstChange: (attentionFirst) => {
+        updateSettings({ sidebarThreadAttentionFirst: attentionFirst });
+      },
+    }),
+    [appSettings.sidebarThreadSortOrder, sidebarThreadAttentionFirst, updateSettings],
+  );
   const sortedSidebarThreadsByProjectId = useMemo(() => {
     const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
     for (const [projectId, projectThreads] of sidebarThreadsByProjectId) {
       byProjectId.set(
         projectId,
-        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder),
+        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder, {
+          attentionFirst: sidebarThreadAttentionFirst,
+          heldKeys: heldSidebarThreadSortKeys,
+        }),
       );
     }
     return byProjectId;
-  }, [appSettings.sidebarThreadSortOrder, sidebarThreadsByProjectId]);
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    heldSidebarThreadSortKeys,
+    sidebarThreadAttentionFirst,
+    sidebarThreadsByProjectId,
+  ]);
   const handleProjectTitlePointerDownCapture = useCallback(() => {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
@@ -4471,6 +4582,7 @@ export default function Sidebar() {
       threads: sortThreadsForSidebar(
         chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
         appSettings.sidebarThreadSortOrder,
+        { attentionFirst: sidebarThreadAttentionFirst, heldKeys: heldSidebarThreadSortKeys },
       ),
       forceVisibleThreadId: routeActiveSidebarThreadId ?? undefined,
     });
@@ -4479,6 +4591,8 @@ export default function Sidebar() {
     chatSectionExpanded,
     chatProjects,
     routeActiveSidebarThreadId,
+    heldSidebarThreadSortKeys,
+    sidebarThreadAttentionFirst,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
@@ -4649,12 +4763,18 @@ export default function Sidebar() {
       sortedSidebarThreadsByProjectId,
       threads: displaySidebarTreeThreads,
       memberThreadIdsByProjectId,
-      sortThreads: (threads) => sortThreadsForSidebar(threads, sidebarThreadSortOrder),
+      sortThreads: (threads) =>
+        sortThreadsForSidebar(threads, sidebarThreadSortOrder, {
+          attentionFirst: sidebarThreadAttentionFirst,
+          heldKeys: heldSidebarThreadSortKeys,
+        }),
     });
   }, [
     displaySidebarTreeThreads,
     groupProjects,
+    heldSidebarThreadSortKeys,
     isOnGroups,
+    sidebarThreadAttentionFirst,
     sidebarThreadSortOrder,
     sortedSidebarThreadsByProjectId,
     summariesByProjectId,
@@ -4841,7 +4961,11 @@ export default function Sidebar() {
   }, [isOnSettings, routeSearch.splitViewId, routeThreadId]);
 
   const handleThreadClick = useCallback(
-    (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
+    (
+      event: MouseEvent<HTMLElement>,
+      threadId: ThreadId,
+      orderedProjectThreadIds: readonly ThreadId[],
+    ) => {
       const isMac = isMacNavigatorPlatform();
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const isShiftClick = event.shiftKey;
@@ -4858,9 +4982,9 @@ export default function Sidebar() {
         return;
       }
 
-      activateThreadFromSidebarIntent(threadId);
+      activateThreadRow(threadId, event.currentTarget);
     },
-    [activateThreadFromSidebarIntent, rangeSelectTo, toggleThreadSelection],
+    [activateThreadRow, rangeSelectTo, toggleThreadSelection],
   );
 
   const classicVisibleSidebarThreadIds = useMemo(() => {
@@ -5307,7 +5431,7 @@ export default function Sidebar() {
                   ),
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-            onClick={() => activateThreadFromSidebarIntent(thread.id)}
+            onClick={(event) => activateThreadRow(thread.id, event.currentTarget)}
             onDoubleClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -5317,7 +5441,7 @@ export default function Sidebar() {
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                activateThreadFromSidebarIntent(thread.id);
+                activateThreadRow(thread.id, event.currentTarget);
               }
             }}
             onContextMenu={(event) => {
@@ -5470,7 +5594,7 @@ export default function Sidebar() {
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
-                  activateThreadFromSidebarIntent(thread.id);
+                  activateThreadRow(thread.id, event.currentTarget);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
@@ -5702,7 +5826,7 @@ export default function Sidebar() {
     // in place instead of sliding left. Focus is read from the group because the
     // name container itself is not focusable — the row's button is.
     const projectToolbarReserveClassName =
-      "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
+      "group-hover/project-header:pr-[4.75rem] project-header-focus:pr-[4.75rem]";
     // Configured display name only — folder identity lives in the hover card (#1000).
     const projectRowLabel = resolveSidebarProjectRowLabel(project);
 
@@ -7062,7 +7186,7 @@ export default function Sidebar() {
           </div>
         ) : null}
         <div className={isMobile ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents"}>
-          <SidebarContent className="gap-0 font-system-ui">
+          <SidebarContent ref={setSidebarContentElement} className="gap-0 font-system-ui">
             {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
               <SidebarGroup className="px-2 pt-2 pb-0">
                 <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
@@ -7185,10 +7309,7 @@ export default function Sidebar() {
                       projectSidebarDataById={groupProjectSidebarDataById}
                       threadsHydrated={threadsHydrated}
                       visualActiveThreadId={visualActiveSidebarThreadId}
-                      threadSortOrder={appSettings.sidebarThreadSortOrder}
-                      onThreadSortOrderChange={(sortOrder) => {
-                        updateSettings({ sidebarThreadSortOrder: sortOrder });
-                      }}
+                      threadSortMenuProps={threadSortMenuProps}
                       renderThreadRow={renderThreadRow}
                       renderListSectionHeader={renderListSectionHeader}
                       renderPinnedThreadsSection={renderPinnedThreadsSection}
@@ -7288,13 +7409,10 @@ export default function Sidebar() {
                           ) : null}
                           <ProjectSortMenu
                             projectSortOrder={appSettings.sidebarProjectSortOrder}
-                            threadSortOrder={appSettings.sidebarThreadSortOrder}
                             onProjectSortOrderChange={(sortOrder) => {
                               updateSettings({ sidebarProjectSortOrder: sortOrder });
                             }}
-                            onThreadSortOrderChange={(sortOrder) => {
-                              updateSettings({ sidebarThreadSortOrder: sortOrder });
-                            }}
+                            {...threadSortMenuProps}
                           />
                           <SidebarIconButton
                             icon={AddPlusIcon}
@@ -7421,12 +7539,7 @@ export default function Sidebar() {
                       </div>
                     </SidebarMenuButton>
                     <SidebarSectionToolbar placement="overlay" revealOnHover>
-                      <ChatSortMenu
-                        threadSortOrder={appSettings.sidebarThreadSortOrder}
-                        onThreadSortOrderChange={(sortOrder) => {
-                          updateSettings({ sidebarThreadSortOrder: sortOrder });
-                        }}
-                      />
+                      <ChatSortMenu {...threadSortMenuProps} />
                       <SidebarIconButton
                         icon={NewThreadIcon}
                         label="Open new chat home"

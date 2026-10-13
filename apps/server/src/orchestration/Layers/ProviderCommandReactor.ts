@@ -4229,15 +4229,30 @@ const make = Effect.gen(function* () {
   const resolveFirstTurnThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
     messageId: string,
+    sourceEventSequence: number,
+    titleSequence?: number,
   ) {
-    const thread = yield* resolveThread(threadId);
-    if (!thread) return null;
-    const userMessages = thread.messages.filter(
-      (message) =>
-        message.role === "user" &&
-        (message.source === "native" || message.source === "async-user-input"),
-    );
-    return userMessages.length === 1 && userMessages[0]?.id === messageId ? thread : null;
+    // The detail snapshot is a capped tail; only the durable first user send owns naming.
+    const first = yield* orchestrationEngine
+      .readThreadEventsThrough(threadId, 0, sourceEventSequence, ["thread.message-sent"])
+      .pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.message-sent" &&
+            event.payload.role === "user" &&
+            (event.payload.source === "native" || event.payload.source === "async-user-input"),
+        ),
+        Stream.runHead,
+      );
+    if (
+      Option.isNone(first) ||
+      first.value.type !== "thread.message-sent" ||
+      first.value.payload.messageId !== messageId ||
+      // A queued promotion is newer than its message; manual naming is fenced at the send.
+      (titleSequence !== undefined && titleSequence > first.value.sequence)
+    )
+      return null;
+    return yield* resolveThread(threadId);
   });
 
   const dispatchTurnForThread = Effect.fnUntraced(function* (
@@ -4353,6 +4368,7 @@ const make = Effect.gen(function* () {
 
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly sourceEventSequence: number;
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly messageId: string;
@@ -4366,7 +4382,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
+    const thread = yield* resolveFirstTurnThread(
+      input.threadId,
+      input.messageId,
+      input.sourceEventSequence,
+    );
     if (!thread) return;
 
     const oldBranch = input.branch;
@@ -4429,6 +4449,7 @@ const make = Effect.gen(function* () {
   // Only auto-rename placeholder titles that still reflect the first-turn draft state.
   const maybeGenerateAndRenameThreadTitleForFirstTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly sourceEventSequence: number;
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
@@ -4438,7 +4459,12 @@ const make = Effect.gen(function* () {
     const expectedTitleSequence = yield* orchestrationEngine.getThreadTitleHighWaterSequence(
       input.threadId,
     );
-    const thread = yield* resolveFirstTurnThread(input.threadId, input.messageId);
+    const thread = yield* resolveFirstTurnThread(
+      input.threadId,
+      input.messageId,
+      input.sourceEventSequence,
+      expectedTitleSequence,
+    );
     if (!thread) return;
 
     const fallbackTitle = buildPromptThreadTitleFallback(
@@ -4731,6 +4757,7 @@ const make = Effect.gen(function* () {
 
       yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
         threadId: event.payload.threadId,
+        sourceEventSequence: event.sequence,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
         messageId: message.id,
@@ -4739,6 +4766,7 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.forkScoped);
       yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
         threadId: event.payload.threadId,
+        sourceEventSequence: event.sequence,
         messageId: message.id,
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),

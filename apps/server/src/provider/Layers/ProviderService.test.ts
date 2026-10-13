@@ -27,6 +27,7 @@ import {
   type ProviderKind,
   ProviderSessionStartInput,
   RuntimeItemId,
+  RuntimeTaskId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
@@ -1689,6 +1690,73 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("preserves a pending send before the adapter exposes its active turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-reaper-pending-send");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const accepted = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const originalSend = routing.codex.sendTurn.getMockImplementation()!;
+      routing.codex.sendTurn.mockImplementationOnce((input) =>
+        Deferred.succeed(accepted, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(originalSend(input)),
+        ),
+      );
+      const sending = yield* provider
+        .sendTurn({ threadId, input: "continue the goal", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(accepted);
+      const stops = routing.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({ threadId, onlyIfIdleSince: new Date().toISOString() });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      yield* Deferred.succeed(release, undefined);
+      const sent = yield* Fiber.join(sending);
+      assert.isDefined(sent.turnId);
+      assert.isTrue(yield* routing.codex.adapter.hasSession(threadId));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("settles explicit Stop when an idle sweep arrives during teardown", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-reaper-overlap");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stopping = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const originalStop = routing.codex.stopSession.getMockImplementation()!;
+      routing.codex.stopSession.mockImplementationOnce((id) =>
+        Deferred.succeed(stopping, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(originalStop(id)),
+        ),
+      );
+      const explicitStop = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+      yield* Deferred.await(stopping);
+      const sweep = yield* provider.stopRuntimeSession!({
+        threadId,
+        onlyIfIdleSince: new Date().toISOString(),
+      }).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(explicitStop);
+      yield* Fiber.join(sweep);
+      assert.isTrue(Option.isNone(yield* directory.getBinding(threadId)));
+      assert.isFalse(yield* routing.codex.adapter.hasSession(threadId));
+    }),
+  );
+
   it.effect("starts another provider on a Codex thread only after a continuation reset", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -7261,6 +7329,199 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           ),
         ),
       );
+    }),
+  );
+
+  it.effect(
+    "persists completed retirement when late task ownership displaces the idle generation",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-reaper-late-terminal-retirement");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const originalStop = idleCleanup.codex.stopSession.getMockImplementation()!;
+        idleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(originalStop(id)),
+          ),
+        );
+        const stopping = yield* provider.stopRuntimeSession!({
+          threadId,
+          onlyIfIdleSince: new Date(Date.now() + 60_000).toISOString(),
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const drainedCursor = { resume: "cursor-drained-during-stop" };
+        idleCleanup.codex.updateSession(threadId, (session) => ({
+          ...session,
+          resumeCursor: drainedCursor,
+        }));
+        idleCleanup.codex.emit({
+          type: "turn.tasks.updated",
+          eventId: asEventId("reaper-drained-cursor"),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          payload: { tasks: [] },
+        });
+        yield* waitUntilEffect(
+          () =>
+            directory
+              .getBinding(threadId)
+              .pipe(
+                Effect.map(
+                  (binding) =>
+                    Option.isSome(binding) &&
+                    JSON.stringify(binding.value.resumeCursor) === JSON.stringify(drainedCursor),
+                ),
+              ),
+          500,
+          10,
+          "drained cursor persisted before teardown completes",
+        );
+        idleCleanup.codex.emit({
+          type: "task.started",
+          eventId: asEventId("reaper-late-task"),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe("late-task"),
+            taskType: "agent",
+            status: "running",
+          },
+        });
+        yield* waitUntilEffect(
+          () => provider.hasLiveRuntimeTasks!({ threadId }),
+          500,
+          10,
+          "late task ownership observed during retirement",
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stopping);
+        assert.isFalse(yield* idleCleanup.codex.adapter.hasSession(threadId));
+        const retired = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(retired.status, "stopped");
+        assert.deepEqual(retired.resumeCursor, drainedCursor);
+      }),
+  );
+
+  it.effect("keeps a newer live cursor over an event cursor persisted before the live probe", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-reaper-live-cursor-after-event");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      const earlierCursor = { resume: "earlier-event-cursor" };
+      const latestCursor = { resume: "newer-live-cursor" };
+      const hasSession = idleCleanup.codex.hasSession.getMockImplementation()!;
+      idleCleanup.codex.hasSession.mockImplementationOnce((id) =>
+        Effect.gen(function* () {
+          idleCleanup.codex.updateSession(threadId, (session) => ({
+            ...session,
+            resumeCursor: earlierCursor,
+          }));
+          idleCleanup.codex.emit({
+            type: "turn.tasks.updated",
+            eventId: asEventId("reaper-pre-probe-cursor"),
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            threadId,
+            payload: { tasks: [] },
+          });
+          yield* waitUntilEffect(
+            () =>
+              directory
+                .getBinding(threadId)
+                .pipe(
+                  Effect.map(
+                    (binding) =>
+                      Option.isSome(binding) &&
+                      JSON.stringify(binding.value.resumeCursor) === JSON.stringify(earlierCursor),
+                  ),
+                ),
+            500,
+            10,
+            "older cursor persisted before the live read",
+          );
+          idleCleanup.codex.updateSession(threadId, (session) => ({
+            ...session,
+            resumeCursor: latestCursor,
+          }));
+          return yield* hasSession(id);
+        }).pipe(Effect.orDie),
+      );
+      yield* provider.stopRuntimeSession!({
+        threadId,
+        onlyIfIdleSince: new Date(Date.now() + 60_000).toISOString(),
+      });
+      assert.deepEqual(
+        Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+        latestCursor,
+      );
+    }),
+  );
+
+  it.effect("restores the normal idle timeout after a stale reaper stop is rejected", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-reaper-rejected-idle-timer");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      const cutoff = new Date(Date.now() - 60_000).toISOString();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("reaper-rejected-terminal"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        payload: { state: "completed" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  Option.isSome(binding) &&
+                  Date.parse(binding.value.lastSeenAt ?? "") > Date.parse(cutoff),
+              ),
+            ),
+        500,
+        10,
+        "terminal event persisted",
+      );
+      // Let the terminal event also arm the service's normal 100ms idle timer.
+      yield* sleep(20);
+      const stops = idleCleanup.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({ threadId, onlyIfIdleSince: cutoff });
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, stops);
+      yield* waitUntil(
+        () => idleCleanup.codex.stopSession.mock.calls.length > stops,
+        1000,
+        10,
+        "normal idle cleanup after rejected reaper",
+      );
+      assert.equal(Option.getOrThrow(yield* directory.getBinding(threadId)).status, "stopped");
     }),
   );
 
