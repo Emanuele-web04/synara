@@ -195,7 +195,18 @@ export function describeExternalMcpProjects(input: {
 export function describeExternalMcpPermissions(
   capabilities: ReadonlyArray<ExternalMcpCapability>,
 ): string {
-  const descriptions = ["Create and follow its own tasks"];
+  const descriptions: string[] = [];
+  const canFollow = capabilities.includes("tasks:read") || capabilities.includes("tasks:wait");
+  if (capabilities.includes("tasks:create")) {
+    descriptions.push(canFollow ? "Create and follow its own tasks" : "Create its own tasks");
+  } else if (canFollow) {
+    descriptions.push("Follow permitted tasks");
+  } else if (capabilities.includes("projects:read")) {
+    descriptions.push("Discover allowed projects");
+  }
+  if (capabilities.includes("usage:read")) {
+    descriptions.push("Read usage for all provider accounts");
+  }
   if (capabilities.includes("tasks:read-project")) {
     descriptions.push("Read other tasks in selected projects");
   }
