@@ -167,7 +167,7 @@ it("shows installation and auth beside activity switches with visible setup guid
   await expect
     .element(page.getByRole("switch", { name: "Disable OpenCode", exact: true }))
     .toBeChecked();
-  for (const descriptor of PROVIDER_DESCRIPTORS) {
+  for (const descriptor of PROVIDER_DESCRIPTORS.filter(({ kind }) => kind !== "external")) {
     const guide = page.getByRole("link", {
       name: `${descriptor.displayName} setup guide`,
       exact: true,
@@ -175,6 +175,9 @@ it("shows installation and auth beside activity switches with visible setup guid
     await expect.element(guide).toBeVisible();
     expect(guide.element().getAttribute("href")).toBe(descriptor.setupDocsHref);
   }
+  expect(
+    page.getByRole("link", { name: "External Agent setup guide", exact: true }).query(),
+  ).toBeNull();
 });
 
 it("keeps disabled providers only in a collapsed recovery list", async () => {

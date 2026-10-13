@@ -45,6 +45,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           requestedAt: "2026-10-10T10:00:00.000Z",
           sourceProposedPlanThreadId: null,
           sourceProposedPlanId: null,
+          externalAgentRevisionId: null,
+          spawningProfileId: null,
         };
         yield* turns.replacePendingTurnStart(request);
         yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
@@ -67,6 +69,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           checkpointRef: null,
           checkpointStatus: null,
           checkpointFiles: [],
+          externalAgentRevisionId: null,
+          spawningProfileId: null,
         });
         yield* turns.deletePendingTurnStartByThreadId({ threadId });
         // A lagging checkpoint consumer now handles the original domain request.
@@ -470,6 +474,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "running",
         requestedAt: now,
         startedAt: now,
@@ -486,6 +492,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         sourceProposedPlanThreadId: null,
         sourceProposedPlanId: null,
         assistantMessageId: null,
+        externalAgentRevisionId: null,
+        spawningProfileId: null,
         state: "completed",
         requestedAt: now,
         startedAt: now,

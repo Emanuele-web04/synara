@@ -16,9 +16,17 @@ import {
   type AuthRevokePairingLinkInput,
   type AuthSessionState,
   type AuthWebSocketTokenResult,
+  type CapabilityEvidenceBadge,
+  type CapabilityEvidenceDemoteInput,
+  type CapabilityEvidenceRecordInput,
+  type CapabilityEvidenceQuery,
+  type ExternalAgentProfileCreateInput,
+  type ExternalAgentProfileGetInput,
+  type ExternalAgentProfileTombstoneInput,
+  type ExternalAgentProfileUpdateInput,
+  type ConnectionCandidateListInput,
+  type ConnectionPlanResolveInput,
   type ExternalMcpCreateIntegrationInput,
-  type ExternalMcpCreateIntegrationResult,
-  type ExternalMcpIntegration,
   type ExternalMcpRefreshPairingInput,
   type ExternalMcpRevokeIntegrationInput,
   type ThreadId,
@@ -30,6 +38,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type RuntimeTurnFeedbackInput,
   type ServerProviderStatusesUpdatedPayload,
   type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
@@ -778,6 +787,30 @@ export function createWsNativeApi(): NativeApi {
       // probes to finish; onboarding shows an error if this deadline expires.
       refreshProviders: () =>
         transport.request(WS_METHODS.serverRefreshProviders, undefined, { timeoutMs: 180_000 }),
+      listExternalAgentProfiles: () =>
+        transport.request(WS_METHODS.serverListExternalAgentProfiles),
+      getExternalAgentProfile: (input: ExternalAgentProfileGetInput) =>
+        transport.request(WS_METHODS.serverGetExternalAgentProfile, input),
+      createExternalAgentProfile: (input: ExternalAgentProfileCreateInput) =>
+        transport.request(WS_METHODS.serverCreateExternalAgentProfile, input),
+      updateExternalAgentProfile: (input: ExternalAgentProfileUpdateInput) =>
+        transport.request(WS_METHODS.serverUpdateExternalAgentProfile, input),
+      tombstoneExternalAgentProfile: (input: ExternalAgentProfileTombstoneInput) =>
+        transport.request(WS_METHODS.serverTombstoneExternalAgentProfile, input),
+      queryCapabilityEvidence: (input: CapabilityEvidenceQuery) =>
+        transport.request(WS_METHODS.capabilityEvidenceQuery, input),
+      recordCapabilityEvidence: (input: CapabilityEvidenceRecordInput) =>
+        transport.request(WS_METHODS.capabilityEvidenceRecord, input),
+      demoteCapabilityEvidence: (input: CapabilityEvidenceDemoteInput) =>
+        transport.request(WS_METHODS.capabilityEvidenceDemote, input),
+      queryCapabilityEvidenceBadge: (input: CapabilityEvidenceBadge) =>
+        transport.request(WS_METHODS.capabilityEvidenceBadge, input),
+      recordRuntimeTurnFeedback: (input: RuntimeTurnFeedbackInput) =>
+        transport.request(WS_METHODS.runtimeTurnFeedbackRecord, input),
+      listConnectionCandidates: (input: ConnectionCandidateListInput) =>
+        transport.request(WS_METHODS.serverListConnectionCandidates, input),
+      resolveConnectionPlan: (input: ConnectionPlanResolveInput) =>
+        transport.request(WS_METHODS.serverResolveConnectionPlan, input),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.
       updateProvider: (input) =>

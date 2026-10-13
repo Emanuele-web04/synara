@@ -41,6 +41,9 @@ import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
 import projectionTurnsWorkspaceInitializationSchema from "./133_ProjectionTurnsWorkspaceInitialization.ts";
 import forkSourceMessageSchema from "./134_ProjectionThreadsForkSourceMessage.ts";
 
+import externalAgentProfilesSchema from "./136_ExternalAgentProfiles.ts";
+import externalAgentLifecycleSchema from "./138_ExternalAgentLifecycle.ts";
+
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
   Layer.provideMerge(
@@ -85,6 +88,8 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* sidechatContextSchema;
         yield* threadSnoozeSchema;
         yield* projectSourceFoldersSchema;
+        yield* externalAgentProfilesSchema;
+        yield* externalAgentLifecycleSchema;
         yield* projectionTurnsWorkspaceInitializationSchema;
         yield* forkSourceMessageSchema;
 

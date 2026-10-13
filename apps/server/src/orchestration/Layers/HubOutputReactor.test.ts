@@ -163,6 +163,8 @@ describe("HubOutputReactor", () => {
               turnId,
               pendingMessageId: messageId,
               sourceProposedPlanThreadId: null,
+              externalAgentRevisionId: null,
+              spawningProfileId: null,
               sourceProposedPlanId: null,
               assistantMessageId: null,
               state: "running",

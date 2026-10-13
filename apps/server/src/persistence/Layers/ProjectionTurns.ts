@@ -77,7 +77,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count,
           checkpoint_ref,
           checkpoint_status,
-          checkpoint_files_json
+          checkpoint_files_json,
+          external_agent_revision_id,
+          spawning_profile_id
         )
         VALUES (
           ${row.threadId},
@@ -94,7 +96,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.checkpointTurnCount},
           ${row.checkpointRef},
           ${row.checkpointStatus},
-          ${row.checkpointFiles}
+          ${row.checkpointFiles},
+          ${row.externalAgentRevisionId},
+          ${row.spawningProfileId}
         )
         ON CONFLICT (thread_id, turn_id)
         DO UPDATE SET
@@ -115,7 +119,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count = excluded.checkpoint_turn_count,
           checkpoint_ref = excluded.checkpoint_ref,
           checkpoint_status = excluded.checkpoint_status,
-          checkpoint_files_json = excluded.checkpoint_files_json
+          checkpoint_files_json = excluded.checkpoint_files_json,
+          external_agent_revision_id = excluded.external_agent_revision_id,
+          spawning_profile_id = excluded.spawning_profile_id
       `,
   });
 
@@ -150,7 +156,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count,
           checkpoint_ref,
           checkpoint_status,
-          checkpoint_files_json
+          checkpoint_files_json,
+          external_agent_revision_id,
+          spawning_profile_id
         )
         VALUES (
           ${row.threadId},
@@ -167,7 +175,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           NULL,
           NULL,
           NULL,
-          '[]'
+          '[]',
+          ${row.externalAgentRevisionId},
+          ${row.spawningProfileId}
         )
       `,
   });
@@ -205,6 +215,8 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
           requested_at AS "requestedAt",
+          external_agent_revision_id AS "externalAgentRevisionId",
+          spawning_profile_id AS "spawningProfileId",
           started_without_git_workspace AS "startedWithoutGitWorkspace"
         FROM projection_turns
         WHERE thread_id = ${threadId}
@@ -237,7 +249,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          external_agent_revision_id AS "externalAgentRevisionId",
+          spawning_profile_id AS "spawningProfileId"
         FROM projection_turns
         WHERE thread_id = ${threadId}
         ORDER BY
@@ -271,7 +285,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          external_agent_revision_id AS "externalAgentRevisionId",
+          spawning_profile_id AS "spawningProfileId"
         FROM projection_turns
         WHERE thread_id = ${threadId}
           AND turn_id = ${turnId}
@@ -299,7 +315,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           checkpoint_turn_count AS "checkpointTurnCount",
           checkpoint_ref AS "checkpointRef",
           checkpoint_status AS "checkpointStatus",
-          checkpoint_files_json AS "checkpointFiles"
+          checkpoint_files_json AS "checkpointFiles",
+          external_agent_revision_id AS "externalAgentRevisionId",
+          spawning_profile_id AS "spawningProfileId"
         FROM projection_turns
         WHERE thread_id IN ${sql.in([...new Set(input.map((entry) => entry.threadId))])}
           AND turn_id IN ${sql.in([...new Set(input.map((entry) => entry.turnId))])}

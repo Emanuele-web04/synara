@@ -10,7 +10,9 @@ describe("visibleProviderDescriptors", () => {
     const visible = visibleProviderDescriptors((feature) => feature !== "omp");
     expect(visible.some((d) => d.kind === "omp")).toBe(false);
     expect(visible.map((d) => d.kind)).toEqual(
-      PROVIDER_DESCRIPTORS.filter((d) => d.kind !== "omp").map((d) => d.kind),
+      PROVIDER_DESCRIPTORS.filter((d) => d.kind !== "omp" && d.kind !== "external").map(
+        (d) => d.kind,
+      ),
     );
   });
 
@@ -18,6 +20,8 @@ describe("visibleProviderDescriptors", () => {
     const visible = visibleProviderDescriptors((feature) =>
       isBetaFeatureEnabled(feature, "production"),
     );
-    expect(visible).toEqual(PROVIDER_DESCRIPTORS);
+    expect(visible).toEqual(PROVIDER_DESCRIPTORS.filter((d) => d.kind !== "external"));
+    expect(visible.some((d) => d.kind === "external")).toBe(false);
+    expect(PROVIDER_DESCRIPTORS.some((d) => d.kind === "external")).toBe(true);
   });
 });

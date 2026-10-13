@@ -7,6 +7,8 @@
  * @module ProjectionTurnRepository
  */
 import {
+  AgentProfileId,
+  AgentProfileRevisionId,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -50,6 +52,10 @@ export const ProjectionTurn = Schema.Struct({
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
+  // KAR-529 attribution: the external agent revision this turn ran, and the
+  // spawning profile that pinned it. NULL for built-in provider turns.
+  externalAgentRevisionId: Schema.NullOr(AgentProfileRevisionId),
+  spawningProfileId: Schema.NullOr(AgentProfileId),
 });
 export type ProjectionTurn = typeof ProjectionTurn.Type;
 
@@ -72,6 +78,8 @@ export const ProjectionTurnById = Schema.Struct({
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
   checkpointFiles: Schema.Array(OrchestrationCheckpointFile),
+  externalAgentRevisionId: Schema.NullOr(AgentProfileRevisionId),
+  spawningProfileId: Schema.NullOr(AgentProfileId),
 });
 export type ProjectionTurnById = typeof ProjectionTurnById.Type;
 
@@ -81,6 +89,10 @@ export const ProjectionPendingTurnStart = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   requestedAt: IsoDateTime,
+  // KAR-529 attribution: the external agent revision + spawning profile pinned
+  // by the turn start. NULL for built-in provider turns.
+  externalAgentRevisionId: Schema.NullOr(AgentProfileRevisionId),
+  spawningProfileId: Schema.NullOr(AgentProfileId),
   /** True when the turn began before its workspace was initialized as a Git repository. */
   startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
