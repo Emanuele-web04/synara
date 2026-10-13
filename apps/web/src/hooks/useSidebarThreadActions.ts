@@ -107,6 +107,7 @@ export function useSidebarThreadActions(input: {
     | "archiveDeletesOrphanedWorktree"
     | "confirmThreadArchive"
     | "confirmThreadDelete"
+    | "sidebarThreadAttentionFirst"
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
@@ -684,6 +685,7 @@ export function useSidebarThreadActions(input: {
             deletedThreadId: threadId,
             deletedThreadIds: opts.deletedThreadIds ?? new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
+            attentionFirst: appSettings.sidebarThreadAttentionFirst,
           }),
           deletedPaneInActiveSplit: activeSplitView
             ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
@@ -736,6 +738,7 @@ export function useSidebarThreadActions(input: {
     },
     [
       activeSplitView,
+      appSettings.sidebarThreadAttentionFirst,
       appSettings.sidebarThreadSortOrder,
       clearComposerDraftForThread,
       clearProjectDraftThreadById,

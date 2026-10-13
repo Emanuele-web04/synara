@@ -15655,6 +15655,176 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it.each([
+    { manualTitle: null, extraMessages: 0 },
+    { manualTitle: "New thread", extraMessages: 0 },
+    { manualTitle: "Investigate why the server stops responding", extraMessages: 0 },
+    { manualTitle: null, extraMessages: 2_001 },
+  ])(
+    "keeps first-send naming ownership during replay ($manualTitle, $extraMessages)",
+    async ({ manualTitle, extraMessages }) => {
+      const harness = await createHarness({ startReactor: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const firstPrompt = "Investigate why the server stops responding";
+      const now = new Date().toISOString();
+      harness.generateThreadTitle.mockImplementation(() =>
+        Effect.succeed({ title: "Server recovery" }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("title-backlog-placeholder"),
+          threadId,
+          title: extraMessages > 0 ? "New thread" : firstPrompt,
+        }),
+      );
+      // A restart can replay the first send after later user messages are durable.
+      // Eligibility belongs to the first message, not the current message count.
+      for (const [index, text] of [firstPrompt, "Please preserve the current UI"].entries()) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`title-backlog-send-${index}`),
+            threadId,
+            message: {
+              messageId: asMessageId(`title-backlog-message-${index}`),
+              role: "user",
+              text,
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          }),
+        );
+      }
+      expect(
+        (await readHarnessThread(harness))?.messages.filter((message) => message.role === "user"),
+      ).toHaveLength(2);
+      if (manualTitle !== null) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("title-backlog-manual"),
+            threadId,
+            title: manualTitle,
+          }),
+        );
+      }
+      if (extraMessages > 0) {
+        // Fill the real projection window with later narration without creating provider calls.
+        // The first durable user send must still own naming after it falls outside that window.
+        await harness.persistWithoutLivePublication(
+          Array.from({ length: extraMessages }, (_, index) => ({
+            eventId: asEventId(`title-backlog-narration-${index}`),
+            aggregateKind: "thread" as const,
+            aggregateId: threadId,
+            occurredAt: now,
+            commandId: null,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            type: "thread.message-sent" as const,
+            payload: {
+              threadId,
+              messageId: asMessageId(`title-backlog-narration-${index}`),
+              role: "assistant" as const,
+              text: "Working",
+              turnId: null,
+              streaming: false,
+              source: "native" as const,
+              createdAt: now,
+              updatedAt: now,
+            },
+          })),
+        );
+        const detail = await Effect.runPromise(
+          harness.projectionSnapshotQuery.getThreadDetailById(threadId),
+        );
+        expect(
+          Option.getOrThrow(detail).messages.some(
+            (message) => message.id === asMessageId("title-backlog-message-0"),
+          ),
+        ).toBe(false);
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("title-window-later-send"),
+            threadId,
+            message: {
+              messageId: asMessageId("title-window-later-message"),
+              role: "user",
+              text: "A later prompt must not own first naming",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          }),
+        );
+      }
+      await harness.startReactor();
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalled();
+      if (manualTitle !== null || extraMessages > 0) {
+        expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.title).toBe(manualTitle ?? "New thread");
+      } else {
+        await waitFor(async () => (await readHarnessThread(harness))?.title === "Server recovery");
+        expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+        expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(firstPrompt);
+      }
+    },
+  );
+
+  it("preserves a manual generic title assigned before the first queued send is promoted", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("title-first-queued");
+    await seedQueuedTurnBehindLiveTurn(harness, {
+      liveTurnId: asTurnId("title-queue-active"),
+      messageId,
+      text: "Name the first queued message",
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("title-queue-manual"),
+        threadId,
+        title: "New thread",
+      }),
+    );
+    const now = new Date().toISOString();
+    const thread = await readHarnessThread(harness);
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("title-queue-ready"),
+        threadId,
+        session: { ...thread!.session!, status: "ready", activeTurnId: null, updatedAt: now },
+        createdAt: now,
+      }),
+    );
+    // Promotion is a new start event for the old message; it must not move the naming fence.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.dispatch-queued",
+        commandId: CommandId.makeUnsafe("title-queue-promote"),
+        threadId,
+        messageId,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalled();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.title).toBe("New thread");
+  });
+
   it("renames generic OpenCode first-turn thread titles using text generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {

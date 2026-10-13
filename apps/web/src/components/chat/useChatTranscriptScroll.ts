@@ -678,6 +678,9 @@ export function useChatTranscriptScroll({
     onMessagesTouchMoveBase,
     onMessagesTouchStartBase,
     onMessagesWheelBase,
+    // Gestures over an inline visual's frame, forwarded by the frame: the same
+    // path as a wheel on the list, so they can detach follow but never rearm it.
+    onEmbeddedScrollIntent: onMessagesScrollGesture,
   };
 }
 
