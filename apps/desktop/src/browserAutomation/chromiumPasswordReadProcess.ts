@@ -45,7 +45,14 @@ async function callWorker<T>(
     });
   } catch (cause) {
     if (signal.aborted) throw signal.reason ?? cause;
-    throw error(cause instanceof BoundedNodeProcessError ? cause.code : "reader_failed");
+    const code = cause instanceof BoundedNodeProcessError ? cause.code : "reader_failed";
+    throw error(
+      code === "input_too_large" || code === "output_too_large"
+        ? "source_too_large"
+        : code === "timed_out"
+          ? "timed_out"
+          : "reader_failed",
+    );
   }
   let response: { ok?: boolean; code?: string; profile?: T; result?: T };
   try {
