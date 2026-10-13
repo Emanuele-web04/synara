@@ -1,6 +1,7 @@
 import { CheckIcon, CopyIcon } from "~/lib/icons";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "./button";
+import { useTranslation } from "~/i18n";
 
 /** Shared by toast copy actions and inline diagnostic reports. */
 export function CopyTextButton({
@@ -12,8 +13,12 @@ export function CopyTextButton({
   label: string;
   className?: string;
 }) {
+  const { t } = useTranslation();
+
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  const title = isCopied ? `Copied ${label}` : `Copy ${label}`;
+  const title = isCopied
+    ? t("Copied {{value0}}", { value0: label })
+    : t("Copy {{value0}}", { value0: label });
   return (
     <Button
       aria-label={title}
@@ -24,7 +29,7 @@ export function CopyTextButton({
       onClick={() => copyToClipboard(text, undefined)}
     >
       {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      <span>{isCopied ? "Copied" : `Copy ${label}`}</span>
+      <span>{isCopied ? t("Copied") : t("Copy {{value0}}", { value0: label })}</span>
     </Button>
   );
 }

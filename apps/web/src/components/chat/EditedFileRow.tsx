@@ -15,6 +15,7 @@ import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { OpenInPicker } from "./OpenInPicker";
 import { resolveEditedFilePathTargets } from "./editedFilePathActions";
+import { useTranslation } from "~/i18n";
 
 interface EditedFileRowProps {
   filePath: string;
@@ -41,6 +42,8 @@ const EDITED_FILE_EDITOR_ORDER: ReadonlyArray<EditorId> = [
 ];
 
 export function EditedFileRow(props: EditedFileRowProps) {
+  const { t } = useTranslation();
+
   const copyPathToClipboard = useCopyPathToClipboard();
   const { absolutePath, relativePath } = resolveEditedFilePathTargets(
     props.filePath,
@@ -60,7 +63,7 @@ export function EditedFileRow(props: EditedFileRowProps) {
     >
       <button
         type="button"
-        aria-label={`Review changes to ${props.filePath}`}
+        aria-label={t("Review changes to {{value0}}", { value0: props.filePath })}
         className="group/file-row flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent py-1 pl-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         onClick={props.onReview}
       >
@@ -108,7 +111,7 @@ export function EditedFileRow(props: EditedFileRowProps) {
               }}
             >
               <CopyIcon className={MENU_ICON_CLASS_NAME} />
-              <span>Copy absolute path</span>
+              <span>{t("Copy absolute path")}</span>
             </MenuItem>
             <MenuItem
               disabled={relativePath === null}
@@ -117,7 +120,7 @@ export function EditedFileRow(props: EditedFileRowProps) {
               }}
             >
               <CopyIcon className={MENU_ICON_CLASS_NAME} />
-              <span>Copy relative path</span>
+              <span>{t("Copy relative path")}</span>
             </MenuItem>
           </>
         }

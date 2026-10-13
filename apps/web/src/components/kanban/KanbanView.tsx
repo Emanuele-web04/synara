@@ -27,6 +27,7 @@ import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
 import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
 import { useKanbanUiStore, type KanbanViewMode } from "../../kanbanUiStore";
+import { useTranslation } from "~/i18n";
 
 const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; label: string }> = [
   { value: "v2", label: "Attention" },
@@ -34,6 +35,8 @@ const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; label: string }
 ];
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
@@ -164,22 +167,25 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
                 size="icon-xs"
                 variant="ghost"
                 onClick={handleBackToOverview}
-                aria-label="Back to all projects"
+                aria-label={t("Back to all projects")}
               >
                 <ArrowLeftIcon className="size-3.5" />
               </Button>
             ) : null}
             <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
-              {projectBoard ? projectBoard.projectName : "Kanban"}
+              {projectBoard ? projectBoard.projectName : t("Kanban")}
             </h2>
             <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-              {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+              {projectBoard ? projectBoard.totalCount : board.totalCount} {t("tasks")}
             </span>
             {projectBoard ? null : <TasksViewSwitch current="kanban" />}
             <FilterPillGroup
-              ariaLabel="Board view"
+              ariaLabel={t("Board view")}
               value={kanbanViewMode}
-              options={BOARD_VIEW_OPTIONS}
+              options={BOARD_VIEW_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
               onChange={setKanbanViewMode}
             />
             <NewTaskButton

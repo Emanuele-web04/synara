@@ -41,6 +41,7 @@ import {
 } from "./floatingBrowserPanel.logic";
 import { LazyBrowserPanel } from "./ChatThreadSurfacePrimitives";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { useTranslation } from "~/i18n";
 
 interface FloatingBrowserPanelProps {
   threadId: ThreadId;
@@ -77,6 +78,8 @@ function hostSize(host: HTMLElement): FloatingBrowserPanelHostSize {
 }
 
 export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
+  const { t } = useTranslation();
+
   const hostRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const activeInteractionCleanupRef = useRef<(() => void) | null>(null);
@@ -330,7 +333,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         ref={panelRef}
         data-floating-browser-panel="true"
         role="region"
-        aria-label="Floating browser"
+        aria-label={t("Floating browser")}
         className="group/floating-browser pointer-events-auto absolute flex flex-col overflow-visible rounded-2xl border border-border bg-popover/95 text-foreground shadow-[0_12px_48px_-12px_rgb(0_0_0/0.25)] backdrop-blur-xl"
         style={{
           left: `${panelRect.left}px`,
@@ -355,7 +358,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         </div>
         <button
           type="button"
-          aria-label="Expand browser"
+          aria-label={t("Expand browser")}
           data-floating-browser-preview-shield="true"
           className="absolute inset-0 z-50 cursor-grab rounded-[inherit] active:cursor-grabbing"
           onPointerDown={(event) => startHandleGesture(event, true)}
@@ -372,8 +375,8 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
               type="button"
               variant="ghost"
               size="icon-xs"
-              label="Floating browser actions"
-              tooltip="Drag to move, click for actions"
+              label={t("Floating browser actions")}
+              tooltip={t("Drag to move, click for actions")}
               tooltipSide="bottom"
               data-floating-browser-header="true"
               aria-expanded={controlsOpen}
@@ -392,8 +395,8 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  label="Open browser in sidebar"
-                  tooltip="Open browser in sidebar"
+                  label={t("Open browser in sidebar")}
+                  tooltip={t("Open browser in sidebar")}
                   tooltipSide="bottom"
                   className="size-6 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                   onPointerDown={(event) => event.stopPropagation()}
@@ -409,8 +412,8 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
                   type="button"
                   variant="ghost"
                   size="icon-xs"
-                  label="Close floating browser"
-                  tooltip="Close floating browser"
+                  label={t("Close floating browser")}
+                  tooltip={t("Close floating browser")}
                   tooltipSide="bottom"
                   className="size-6 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                   onPointerDown={(event) => event.stopPropagation()}
@@ -441,5 +444,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
 }
 
 export function FloatingBrowserPanelFallback() {
-  return <PanelStateMessage>Loading browser...</PanelStateMessage>;
+  const { t } = useTranslation();
+
+  return <PanelStateMessage>{t("Loading browser...")}</PanelStateMessage>;
 }

@@ -103,6 +103,7 @@ import { deriveToolFailureSummary } from "../../lib/toolCallDetails";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../../lib/disclosureMotion";
 import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
+import { t, useTranslation } from "~/i18n";
 
 // Rest tone is the shared quiet-label gray (same one the composer pickers use for
 // their effort/thinking labels) so a tool row and the picker below it read as one
@@ -421,14 +422,16 @@ function capitalizePhrase(value: string): string {
   return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
 }
 
-function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+function toolWorkEntryHeading(workEntry: TimelineWorkEntry, translate: typeof t): string {
+  if (workEntry.displayToolTitle) return capitalizePhrase(workEntry.displayToolTitle);
   if (computerToolName(workEntry.toolName)) {
     // Work-log projection already resolves the action and target. The generic
     // MCP presentation would replace that with "Synara clicked the desktop".
     const title = normalizeCompactToolLabel(workEntry.toolTitle ?? "");
     if (title && !isGenericToolTitle(title) && !computerToolName(title))
       return capitalizePhrase(title);
-    return describeComputerToolCall({ toolName: workEntry.toolName, args: undefined })!.summary;
+    return describeComputerToolCall({ toolName: workEntry.toolName, args: undefined }, translate)!
+      .summary;
   }
   // Task progress is semantic copy, not a tool lifecycle status. Preserve the
   // trailing "completed" instead of passing it through the compact tool-label
@@ -451,13 +454,17 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
-function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
+function combineWorkEntryDisplayText(
+  heading: string,
+  preview: string | null,
+  translate: typeof t,
+): string {
   if (!preview) {
     return heading;
   }
   return normalizeToolTextForComparison(heading) === normalizeToolTextForComparison(preview)
     ? heading
-    : `${heading} ${preview}`;
+    : translate("{{value0}} {{value1}}", { value0: heading, value1: preview });
 }
 
 // Shell command rows read "Ran <command>" with the command verbatim; a plain
@@ -519,18 +526,22 @@ export function renderWorkEntrySentence(parts: WorkEntryDisplayParts): ReactNode
 // on ("Read calc.py", "Ran `ls`"). Lifecycle state is never spelled out here —
 // the verb already carries the tense and `liveActivityMetaText` covers the rest.
 // Shared with the live tool-group line, which wears its newest call's sentence.
-export function workEntryDisplayParts(workEntry: TimelineWorkEntry): WorkEntryDisplayParts {
+export function workEntryDisplayParts(
+  workEntry: TimelineWorkEntry,
+  translate: typeof t = t,
+): WorkEntryDisplayParts {
   const commandDisplay = commandRowDisplay(workEntry);
   if (commandDisplay) {
+    const heading = translate(commandDisplay.heading, { context: "command" });
     return {
-      heading: commandDisplay.heading,
+      heading,
       preview: commandDisplay.object,
-      displayText: `${commandDisplay.heading} ${commandDisplay.object}`,
+      displayText: `${heading} ${commandDisplay.object}`,
       commandLiteral: commandDisplay.literal ? commandDisplay.object : null,
     };
   }
   const webFetchUrl = extractWebFetchUrl(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
+  const heading = toolWorkEntryHeading(workEntry, translate);
   const rawPreview = workEntryPreview(workEntry);
   const preview =
     !isGitHubMcpToolCall(workEntry) &&
@@ -546,7 +557,7 @@ export function workEntryDisplayParts(workEntry: TimelineWorkEntry): WorkEntryDi
     : (isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary") &&
         preview
       ? preview
-      : combineWorkEntryDisplayText(heading, preview);
+      : combineWorkEntryDisplayText(heading, preview, translate);
   return { heading, preview, displayText, commandLiteral: null };
 }
 
@@ -559,11 +570,11 @@ function commandTooltipContent(command: string, displayText: string) {
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
       <div className="space-y-2">
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Summary</div>
+          <div className="text-muted-foreground/70">{t("Summary")}</div>
           <div>{displayText}</div>
         </div>
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Raw call</div>
+          <div className="text-muted-foreground/70">{t("Raw call")}</div>
           <code className="block whitespace-pre-wrap break-words font-chat-code text-chat-code text-foreground/92">
             {command}
           </code>
@@ -621,6 +632,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   onEnableComputerControl?: () => void;
   timestampFormat: TimestampFormat;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   // Defaults are applied in the body (not in the destructuring pattern): a default
   // value inside a destructuring pattern makes React Compiler bail out on the whole
   // component, silently dropping memoization for every tool-call row.
@@ -676,7 +689,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
             : isMcpToolRow
               ? "mcp"
               : undefined;
-  const displayParts = workEntryDisplayParts(workEntry);
+  const displayParts = workEntryDisplayParts(workEntry, t);
   const { heading, preview, displayText } = displayParts;
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
@@ -995,7 +1008,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                         className="text-ui-xs text-muted-foreground"
                         dateTime={workEntry.createdAt}
                       >
-                        {formatTimestamp(workEntry.createdAt, timestampFormat)}
+                        {formatTimestamp(workEntry.createdAt, timestampFormat, formatLocale)}
                       </time>
                       <pre className="whitespace-pre-wrap break-words font-chat-code">
                         {monitorNotification.output}
@@ -1056,6 +1069,8 @@ export function EditedFileRowContent(props: {
   fontSizePx: number;
   compact: boolean;
 }) {
+  const { t } = useTranslation();
+
   const { filePath, additions, deletions, fontSizePx, compact } = props;
   const hasStat = (additions ?? 0) + (deletions ?? 0) > 0;
   return (
@@ -1074,7 +1089,7 @@ export function EditedFileRowContent(props: {
         className={cn("font-system-ui shrink-0", WORK_ROW_MUTED_HOVER_TONE["file-row"])}
         style={{ fontSize: `${fontSizePx}px` }}
       >
-        Edited
+        {t("Edited")}
       </span>
       <span
         className={cn(
@@ -1144,23 +1159,25 @@ function providerContextLifecycleReasonLabel(
 ): string {
   switch (reason) {
     case "conversation-rebuilt":
-      return "Conversation rebuilt from a summary";
+      return t("Conversation rebuilt from a summary");
     case "fork-from-earlier-turn":
-      return "Fork rebuilt up to the chosen turn";
+      return t("Fork rebuilt up to the chosen turn");
     case "fresh-session":
-      return "New session started";
+      return t("New session started");
     case "interrupt-escalation":
-      return "Turn stop escalated to a session restart";
+      return t("Turn stop escalated to a session restart");
     case "native-history-unavailable":
-      return "Previous history unavailable";
+      return t("Previous history unavailable");
     case "native-resume-failed":
-      return "Could not resume the previous session";
+      return t("Could not resume the previous session");
   }
 }
 
 function ProviderContextLifecycleDetails(props: {
   info: NonNullable<TimelineWorkEntry["providerContextLifecycle"]>;
 }) {
+  const { t } = useTranslation();
+
   const { info } = props;
   const provider =
     PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === info.provider)?.displayName ??
@@ -1168,26 +1185,30 @@ function ProviderContextLifecycleDetails(props: {
   return (
     <div className="space-y-3" data-provider-context-lifecycle-details="true">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
-        <dt className="text-muted-foreground/56">Provider</dt>
+        <dt className="text-muted-foreground/56">{t("Provider")}</dt>
         <dd className="text-foreground/84">{provider}</dd>
-        <dt className="text-muted-foreground/56">Previous history</dt>
+        <dt className="text-muted-foreground/56">{t("Previous history")}</dt>
         <dd className="text-foreground/84">
-          {info.nativeHistory === "available" ? "Available" : "Lost"}
+          {info.nativeHistory === "available" ? t("Available") : t("Lost")}
         </dd>
-        <dt className="text-muted-foreground/56">Session restarted</dt>
-        <dd className="text-foreground/84">{info.sessionRestarted ? "Yes" : "No"}</dd>
-        <dt className="text-muted-foreground/56">Why</dt>
+        <dt className="text-muted-foreground/56">{t("Session restarted")}</dt>
+        <dd className="text-foreground/84">{info.sessionRestarted ? t("Yes") : t("No")}</dd>
+        <dt className="text-muted-foreground/56">{t("Why")}</dt>
         <dd className="text-foreground/84">
           {providerContextLifecycleReasonLabel(info.restartReason)}
         </dd>
-        <dt className="text-muted-foreground/56">Summary included</dt>
+        <dt className="text-muted-foreground/56">{t("Summary included")}</dt>
         <dd className="text-foreground/84">
-          {info.recapInjected ? `${info.recapCharacters.toLocaleString()} characters` : "No"}
+          {info.recapInjected
+            ? t("{{value0}} characters", { value0: info.recapCharacters.toLocaleString() })
+            : t("No")}
         </dd>
       </dl>
       {info.recapPreview ? (
         <section className="space-y-2">
-          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Summary preview</h3>
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">
+            {t("Summary preview")}
+          </h3>
           <pre
             className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
             data-session-context-recap-preview="true"
@@ -1196,7 +1217,7 @@ function ProviderContextLifecycleDetails(props: {
           </pre>
           {info.recapPreviewTruncated ? (
             <p className="text-ui-xs text-muted-foreground/56">
-              Showing a short preview of the summary sent with your message.
+              {t("Showing a short preview of the summary sent with your message.")}
             </p>
           ) : null}
         </section>
@@ -1214,45 +1235,54 @@ function providerModelLabel(
       ?.displayName ?? selection.provider;
   const summary = resolveThreadModelSummary(selection);
   const modelLabel = summary
-    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? ` · ${fastModeNotice?.label ?? "Fast"}` : ""}`
+    ? t("{{value0}}{{value1}}", {
+        value0: formatThreadModelSummaryLabel(summary),
+        value1: summary.fastMode ? ` · ${fastModeNotice?.label ?? "Fast"}` : "",
+      })
     : selection.model;
-  return `${displayName} · ${modelLabel}`;
+  return t("{{value0}} · {{value1}}", { value0: displayName, value1: modelLabel });
 }
 
 export function ProviderHandoffDetails(props: {
   info: NonNullable<TimelineWorkEntry["providerHandoff"]>;
 }) {
+  const { t } = useTranslation();
+
   const { info } = props;
   return (
     <div className="space-y-3" data-provider-handoff-details="true">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
-        <dt className="text-muted-foreground/56">From</dt>
+        <dt className="text-muted-foreground/56">{t("From")}</dt>
         <dd className="text-foreground/84">
           {providerModelLabel(info.sourceModelSelection, info.sourceFastModeNotice)}
         </dd>
-        <dt className="text-muted-foreground/56">To</dt>
+        <dt className="text-muted-foreground/56">{t("To")}</dt>
         <dd className="text-foreground/84">
           {providerModelLabel(info.targetModelSelection, info.targetFastModeNotice)}
         </dd>
         {info.status === "failed" ? (
           <>
-            <dt className="text-muted-foreground/56">Error</dt>
+            <dt className="text-muted-foreground/56">{t("Error")}</dt>
             <dd className="text-foreground/84">
-              {info.failureDetail ?? "The session did not start."}
+              {info.failureDetail ?? t("The session did not start.")}
             </dd>
           </>
         ) : (
           <>
-            <dt className="text-muted-foreground/56">Context</dt>
+            <dt className="text-muted-foreground/56">{t("Context")}</dt>
             <dd className="text-foreground/84">
-              {info.contextText ? `${info.contextText.length.toLocaleString()} characters` : "None"}
+              {info.contextText
+                ? t("{{value0}} characters", { value0: info.contextText.length.toLocaleString() })
+                : t("None")}
             </dd>
           </>
         )}
       </dl>
       {info.status === "completed" && info.contextText ? (
         <section className="space-y-2">
-          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Transferred context</h3>
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">
+            {t("Transferred context")}
+          </h3>
           <pre
             className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
             data-provider-handoff-context="true"
@@ -1260,7 +1290,7 @@ export function ProviderHandoffDetails(props: {
             {info.contextText}
           </pre>
           <p className="text-ui-xs text-muted-foreground/56">
-            Sent ahead of your next message so the new model can continue this thread.
+            {t("Sent ahead of your next message so the new model can continue this thread.")}
           </p>
         </section>
       ) : null}

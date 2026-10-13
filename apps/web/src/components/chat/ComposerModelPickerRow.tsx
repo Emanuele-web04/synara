@@ -31,6 +31,7 @@ import { ModelStarButton } from "./ModelStarButton";
 import { PICKER_PANEL_ROW_SELECTED_CLASS_NAME } from "./pickerPanelStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
+import { useTranslation } from "~/i18n";
 
 // Each row resolves its own traits, so a long catalog only recomputes the rows whose
 // inputs changed instead of the whole list on every keystroke.
@@ -50,6 +51,8 @@ export function ComposerModelPickerRow(props: {
   onToggleStar: (entry: StarredModel) => void;
   onUnstarModel: (entry: Pick<StarredModel, "provider" | "instanceId" | "model">) => void;
 }) {
+  const { t } = useTranslation();
+
   const { row } = props;
   const selection = getComposerTraitSelection(
     row.provider,
@@ -85,8 +88,8 @@ export function ComposerModelPickerRow(props: {
       iconClassName="size-3.5"
       label={
         starred
-          ? `Remove ${row.name} from starred`
-          : `Star ${row.name} with its current effort and speed`
+          ? t("Remove {{value0}} from starred", { value0: row.name })
+          : t("Star {{value0}} with its current effort and speed", { value0: row.name })
       }
       onToggle={() =>
         row.preset === null && starred ? props.onUnstarModel(row) : props.onToggleStar(starEntry)
@@ -160,7 +163,9 @@ export function ComposerModelPickerRow(props: {
       </MenuSubTrigger>
       <ComposerPickerMenuSubPopup>
         <MenuGroup>
-          <MenuGroupLabel>{row.provider === "opencode" ? "Variant" : "Effort"}</MenuGroupLabel>
+          <MenuGroupLabel>
+            {row.provider === "opencode" ? t("Variant") : t("Effort")}
+          </MenuGroupLabel>
           <MenuRadioGroup value={selection.effort ?? ""}>
             {effortLevels.map((level) => (
               <MenuRadioItem
@@ -169,7 +174,7 @@ export function ComposerModelPickerRow(props: {
                 onClick={() => onSelectEffort(row, level.value)}
               >
                 {level.label}
-                {level.value === selection.defaultEffort ? " (default)" : ""}
+                {level.value === selection.defaultEffort ? t(" (default)") : ""}
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>

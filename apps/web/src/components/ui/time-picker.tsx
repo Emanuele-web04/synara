@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 const HOURS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTES = Array.from({ length: 60 }, (_, index) => index);
@@ -37,18 +38,20 @@ export function TimePicker({
   readonly onChange: (value: string) => void;
   readonly className?: string;
 }) {
+  const { t } = useTranslation();
+
   const { hour, minute } = parseTime(value);
   return (
     <div className={cn("flex h-44 items-stretch gap-1", className)} data-slot="time-picker">
       <TimeColumn
-        ariaLabel="Hour"
+        ariaLabel={t("Hour")}
         selected={hour}
         values={HOURS}
         onSelect={(next) => onChange(`${pad(next)}:${pad(minute)}`)}
       />
       <div className="w-px shrink-0 self-stretch bg-border" />
       <TimeColumn
-        ariaLabel="Minute"
+        ariaLabel={t("Minute")}
         selected={minute}
         values={MINUTES}
         onSelect={(next) => onChange(`${pad(hour)}:${pad(next)}`)}

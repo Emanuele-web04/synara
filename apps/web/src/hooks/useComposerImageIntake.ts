@@ -1,3 +1,4 @@
+import { t } from "~/i18n";
 // FILE: useComposerImageIntake.ts
 // Purpose: Serializes image preparation, exposes pending UI state, and cancels stale draft work.
 // Layer: Web composer hook
@@ -11,7 +12,7 @@ import {
   type ComposerImageBuildResult,
 } from "../lib/composerSend";
 
-const ATTACHMENT_LIMIT_ERROR = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`;
+const ATTACHMENT_LIMIT_ERROR = "You can attach up to {{value0}} references per message.";
 
 function revokePreparedImages(images: readonly ComposerImageAttachment[]): void {
   if (typeof URL === "undefined") return;
@@ -68,12 +69,14 @@ export class ComposerImageIntakeQueue {
         const rejectedAtCapacity =
           acceptedCount < result.images.length &&
           job.existingAttachmentCount() >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
-        const error = rejectedAtCapacity ? ATTACHMENT_LIMIT_ERROR : result.error;
+        const error = rejectedAtCapacity
+          ? t(ATTACHMENT_LIMIT_ERROR, { value0: PROVIDER_SEND_TURN_MAX_ATTACHMENTS })
+          : result.error;
         job.onError(error);
       })
       .catch((cause) => {
         if (this.#isStale(generation)) return;
-        job.onError(cause instanceof Error ? cause.message : "Synara could not prepare image.");
+        job.onError(cause instanceof Error ? cause.message : t("Synara could not prepare image."));
       })
       .finally(() => {
         if (this.#isStale(generation)) return;

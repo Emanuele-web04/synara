@@ -6,6 +6,7 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
 import { SettingsCard, SettingsRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 const STORAGE_KEY = "synara:computer-getting-started:v1";
 
@@ -15,6 +16,8 @@ export function ComputerGettingStarted({
 }: {
   readonly appSnapAvailable: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [acknowledged, setAcknowledged] = useLocalStorage(STORAGE_KEY, false, Schema.Boolean);
   const [requestedOpen, setRequestedOpen] = useState(false);
   const open = !acknowledged || requestedOpen;
@@ -34,7 +37,7 @@ export function ComputerGettingStarted({
           onClick={() => (open ? dismiss() : setRequestedOpen(true))}
         >
           <DisclosureChevron open={open} />
-          {open ? "Hide guide" : "Show guide"}
+          {open ? t("Hide guide") : t("Show guide")}
         </Button>
       }
     >
@@ -55,12 +58,12 @@ export function ComputerGettingStarted({
         </SettingsCard>
         {appSnapAvailable ? (
           <p className="mt-3 px-2 text-ui-sm text-muted-foreground">
-            AppSnap is separate: it attaches a window image without giving the agent control.
+            {t("AppSnap is separate: it attaches a window image without giving the agent control.")}
           </p>
         ) : null}
         {!acknowledged ? (
           <Button className="mt-3" size="sm" variant="outline" onClick={dismiss}>
-            Got it
+            {t("Got it")}
           </Button>
         ) : null}
       </DisclosureRegion>

@@ -15,6 +15,7 @@ import type { TaskRowModel } from "../tasks/tasks.logic";
 import type { useTodoMutations } from "../tasks/useTodos";
 import type { InboxTasks as InboxTaskRows } from "./inbox.logic";
 import { Group } from "./InboxTaskList";
+import { useTranslation } from "~/i18n";
 
 export function InboxTasks({
   tasks,
@@ -32,6 +33,8 @@ export function InboxTasks({
   onUpdate: ReturnType<typeof useTodoMutations>["updateTodo"];
   onOpenTasks: () => void;
 }) {
+  const { t } = useTranslation();
+
   const quickAddRef = useRef<HTMLInputElement>(null);
   const renderRow = (row: TaskRowModel) => (
     <TaskListItem
@@ -47,7 +50,7 @@ export function InboxTasks({
 
   return (
     <Group
-      label="Today’s tasks"
+      label={t("Today’s tasks")}
       count={tasks.open.length}
       action={
         <button
@@ -55,19 +58,23 @@ export function InboxTasks({
           onClick={onOpenTasks}
           className="text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
         >
-          All tasks
+          {t("All tasks")}
         </button>
       }
     >
       {tasks.open.length + tasks.doneToday.length > 0 ? (
         <div className="flex max-h-80 flex-col gap-0.5 overflow-y-auto">
           {tasks.open.length > 0 ? (
-            <div role="list" aria-label="To do today" className="flex flex-col gap-0.5">
+            <div role="list" aria-label={t("To do today")} className="flex flex-col gap-0.5">
               {tasks.open.map(renderRow)}
             </div>
           ) : null}
           {tasks.doneToday.length > 0 ? (
-            <div role="list" aria-label="Done today" className="flex flex-col gap-0.5 opacity-80">
+            <div
+              role="list"
+              aria-label={t("Done today")}
+              className="flex flex-col gap-0.5 opacity-80"
+            >
               {tasks.doneToday.map(renderRow)}
             </div>
           ) : null}
@@ -75,7 +82,7 @@ export function InboxTasks({
       ) : null}
       <TaskQuickAdd
         inputRef={quickAddRef}
-        placeholder="Add a task for today, or press Tab to hand it to an agent"
+        placeholder={t("Add a task for today, or press Tab to hand it to an agent")}
         onCreate={(title, options) => selection.addTask(title, options, { dueDate: today })}
       />
     </Group>

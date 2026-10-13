@@ -25,6 +25,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { CopyTextButton } from "../ui/copyTextButton";
 import { IconButton } from "../ui/icon-button";
+import { useTranslation } from "~/i18n";
 
 /**
  * An inline visual. The box holds the agent's expected height while the
@@ -38,6 +39,8 @@ export function InlineVisualFrame(props: {
   readonly visual: InlineVisualActivityPayload;
   readonly onScrollIntent?: ((upward: boolean) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   // Browsers cannot intercept a document navigating its own iframe before the
   // network request. Execute agent HTML only where the native guard can do so.
   return isElectron ? (
@@ -45,7 +48,9 @@ export function InlineVisualFrame(props: {
   ) : (
     <InlineVisualNotice
       title={props.visual.title}
-      message="HTML visuals are available in Synara Beta desktop. Use native components in the browser."
+      message={t(
+        "HTML visuals are available in Synara Beta desktop. Use native components in the browser.",
+      )}
     />
   );
 }
@@ -59,6 +64,8 @@ function DesktopInlineVisualFrame({
   readonly visual: InlineVisualActivityPayload;
   readonly onScrollIntent?: ((upward: boolean) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const theme = useInlineVisualTheme();
   const visualDocument = useQuery(
     inlineVisualQueryOptions({ threadId, visualId: visual.visualId }),
@@ -93,8 +100,8 @@ function DesktopInlineVisualFrame({
               "absolute end-1 top-1 flex items-center gap-0.5 rounded-md border border-border/60 bg-popover/90 p-0.5 opacity-0 shadow-xs backdrop-blur-sm focus-within:opacity-100 group-hover/inline-visual:opacity-100 pointer-coarse:opacity-100",
             )}
           >
-            <CopyTextButton text={html} label="source" className="text-ui-xs" />
-            <IconButton label="Reload visual" tooltip="Reload" onClick={reload}>
+            <CopyTextButton text={html} label={t("source")} className="text-ui-xs" />
+            <IconButton label={t("Reload visual")} tooltip={t("Reload")} onClick={reload}>
               <RotateCcwIcon className="size-3.5" />
             </IconButton>
           </div>
@@ -102,14 +109,14 @@ function DesktopInlineVisualFrame({
       ) : stopped ? (
         <InlineVisualNotice
           title={visual.title}
-          message="This visual stopped because it could not stay isolated."
+          message={t("This visual stopped because it could not stay isolated.")}
           action="Reload"
           onAction={reload}
         />
       ) : visualDocument.isError ? (
         <InlineVisualNotice
           title={visual.title}
-          message="Visual unavailable."
+          message={t("Visual unavailable.")}
           {...(isRetryable(visualDocument.error)
             ? { action: "Retry", onAction: () => void visualDocument.refetch() }
             : {})}
@@ -120,7 +127,7 @@ function DesktopInlineVisualFrame({
           style={{ height: clampInlineVisualHeight(visual.height) }}
           role="status"
         >
-          Loading visual…
+          {t("Loading visual…")}
         </div>
       )}
     </figure>

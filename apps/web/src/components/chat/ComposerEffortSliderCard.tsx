@@ -27,6 +27,7 @@ import {
 } from "./composerTraits";
 import { FastModeToggle } from "./TraitsPicker";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
+import { useTranslation } from "~/i18n";
 
 type ComposerEffortSliderCardProps = {
   provider: ProviderKind;
@@ -48,6 +49,8 @@ const CARD_ICON_BUTTON_CLASS_NAME =
 // radio menu exactly; changes commit immediately and keep the menu open so the label
 // and thumb update in place.
 export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
+  const { t } = useTranslation();
+
   const { provider, threadId, model, modelOptions, prompt, onPromptChange } = props;
   const selection = getComposerTraitSelection(
     provider,
@@ -69,7 +72,8 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
 
   const ladderIndex = resolveComposerEffortLadderIndex(selection);
   const activeLevel = effortLevels[ladderIndex];
-  const statusLabel = resolveComposerTraitStatusLabel(selection) ?? activeLevel?.label ?? "Effort";
+  const statusLabel =
+    resolveComposerTraitStatusLabel(selection) ?? activeLevel?.label ?? t("Effort");
   const effortIsDefault = ultrathinkPromptControlled || effort === defaultEffort;
   const canReset = fastModeEnabled || !effortIsDefault;
 
@@ -120,7 +124,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
             render={
               <button
                 type="button"
-                aria-label="Reset effort and speed"
+                aria-label={t("Reset effort and speed")}
                 disabled={!canReset}
                 className={cn(
                   CARD_ICON_BUTTON_CLASS_NAME,
@@ -133,7 +137,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
             <ResetIcon aria-hidden="true" className="size-3.5" />
           </TooltipTrigger>
           <TooltipPopup side="top" variant="picker">
-            Reset to defaults
+            {t("Reset to defaults")}
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -147,14 +151,14 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           showStepMarks
           magnetic
           disabled={ultrathinkPromptControlled}
-          aria-label="Reasoning effort"
+          aria-label={t("Reasoning effort")}
           getAriaValueText={(index) => effortLevels[index]?.label ?? String(index)}
           onValueChange={handleSliderChange}
         />
       </div>
       {ultrathinkPromptControlled ? (
         <div className="px-1 pt-1 text-muted-foreground/80 text-ui leading-snug">
-          Remove Ultrathink from the prompt to change effort.
+          {t("Remove Ultrathink from the prompt to change effort.")}
         </div>
       ) : null}
     </div>

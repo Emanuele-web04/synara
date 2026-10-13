@@ -27,6 +27,7 @@ import {
   type SpaceIconValue,
 } from "./SpaceIcon";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 const FIELD_LABEL_CLASS_NAME = dialogFieldLabelClassName;
 
@@ -54,6 +55,8 @@ export function SpaceEditorDialog(props: {
   onOpenChange: (open: boolean) => void;
   onSubmit: (value: SpaceEditorValue) => Promise<void> | void;
 }) {
+  const { t } = useTranslation();
+
   const isVoid = props.mode === "void";
   const iconOptions = isVoid ? VOID_SPACE_ICON_OPTIONS : SPACE_ICON_OPTIONS;
   const defaultIcon: SpaceIconValue = isVoid ? DEFAULT_VOID_SPACE_ICON : DEFAULT_SPACE_ICON;
@@ -115,7 +118,7 @@ export function SpaceEditorDialog(props: {
       await props.onSubmit({ name: trimmedName, icon });
       props.onOpenChange(false);
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Unable to save the space.");
+      setSubmitError(error instanceof Error ? error.message : t("Unable to save the space."));
       setSubmitting(false);
     }
   };
@@ -125,14 +128,24 @@ export function SpaceEditorDialog(props: {
       <DialogPopup className="max-w-sm">
         <DialogHeader>
           <DialogTitle>
-            {props.mode === "create" ? "New space" : isVoid ? "Edit unfiled group" : "Edit space"}
+            {props.mode === "create"
+              ? t("New space")
+              : isVoid
+                ? t("Edit unfiled group")
+                : t("Edit space")}
           </DialogTitle>
           <DialogDescription>
             {props.mode === "create"
-              ? "Group projects into a focused work context. Projects you add while a space is open land in it."
+              ? t(
+                  "Group projects into a focused work context. Projects you add while a space is open land in it.",
+                )
               : isVoid
-                ? "Name the group that holds projects you haven't filed into a space. This is a local preference — the projects in it stay where they are."
-                : "Rename this space or give it a different icon. Its projects stay where they are."}
+                ? t(
+                    "Name the group that holds projects you haven't filed into a space. This is a local preference — the projects in it stay where they are.",
+                  )
+                : t(
+                    "Rename this space or give it a different icon. Its projects stay where they are.",
+                  )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
@@ -142,7 +155,7 @@ export function SpaceEditorDialog(props: {
               and then repeat the message as its description. */}
           <div className="space-y-1.5">
             <label htmlFor={nameInputId} className={cn("block", FIELD_LABEL_CLASS_NAME)}>
-              Name
+              {t("Name")}
             </label>
             <Input
               id={nameInputId}
@@ -162,7 +175,7 @@ export function SpaceEditorDialog(props: {
                   void submit();
                 }
               }}
-              placeholder={isVoid ? "Unfiled" : "Work"}
+              placeholder={isVoid ? t("Unfiled") : t("Work")}
             />
             {visibleNameError ? (
               <p id={nameErrorId} role="alert" className="text-ui-xs text-destructive">
@@ -173,7 +186,7 @@ export function SpaceEditorDialog(props: {
 
           <fieldset>
             <legend id={iconLegendId} className={cn("mb-2", FIELD_LABEL_CLASS_NAME)}>
-              Icon
+              {t("Icon")}
             </legend>
             <div
               role="radiogroup"
@@ -192,7 +205,7 @@ export function SpaceEditorDialog(props: {
                     role="radio"
                     data-space-icon
                     aria-checked={selected}
-                    aria-label={option.label}
+                    aria-label={t(option.label)}
                     // Roving tabindex: the whole grid is one tab stop.
                     tabIndex={selected ? 0 : -1}
                     onClick={() => {
@@ -220,10 +233,10 @@ export function SpaceEditorDialog(props: {
         </DialogPanel>
         <DialogFooter>
           <Button variant="ghost" onClick={() => props.onOpenChange(false)} disabled={submitting}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button onClick={() => void submit()} disabled={Boolean(nameError) || submitting}>
-            {submitting ? "Saving…" : props.mode === "create" ? "Create space" : "Save"}
+            {submitting ? t("Saving…") : props.mode === "create" ? t("Create space") : t("Save")}
           </Button>
         </DialogFooter>
       </DialogPopup>

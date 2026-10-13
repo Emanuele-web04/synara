@@ -6,6 +6,7 @@
 
 import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { i18n, setLanguagePreference } from "~/i18n";
 
 import {
   deriveWorkLogEntries,
@@ -46,6 +47,86 @@ function subagentRows(rows: ComposerSubagentStripRow[]): ComposerSubagentStripIt
 }
 
 describe("deriveComposerSubagentStripItems", () => {
+  it.each([
+    ["completed", "Completed", "Completado", false],
+    ["running", "Running", "En curso", true],
+  ] as const)(
+    "keeps %s source state stable when presenting enriched rows in Spanish",
+    (rawStatus, sourceLabel, translatedLabel, isActive) => {
+      i18n.addResources("es", "translation", {
+        Completed: "Completado",
+        Running: "En curso",
+      });
+      const entries = [
+        workEntry({
+          id: "localized-state",
+          turnId: "turn-1",
+          subagents: [subagent({ threadId: "sub-1", nickname: "Settings", rawStatus })],
+        }),
+      ];
+      try {
+        setLanguagePreference("es");
+        const enriched = enrichSubagentWorkEntries(entries, [], null);
+        expect(enriched[0]?.subagents?.[0]).toMatchObject({ rawStatus, statusLabel: sourceLabel });
+        const rows = subagentRows(
+          deriveComposerSubagentStripItems({
+            workEntries: enriched,
+            liveTurnId: TurnId.makeUnsafe("turn-1"),
+          }),
+        );
+        expect(rows[0]).toMatchObject({
+          primaryLabel: "Settings",
+          statusKind: rawStatus,
+          statusLabel: translatedLabel,
+          isActive,
+        });
+        expect(collectRunningSubagentStripItems(rows)).toHaveLength(isActive ? 1 : 0);
+        setLanguagePreference("en");
+        expect(
+          subagentRows(
+            deriveComposerSubagentStripItems({
+              workEntries: enriched,
+              liveTurnId: TurnId.makeUnsafe("turn-1"),
+            }),
+          )[0]?.statusLabel,
+        ).toBe(sourceLabel);
+      } finally {
+        setLanguagePreference("en");
+      }
+    },
+  );
+
+  it("keeps a source-only enriched completion usable after changing language", () => {
+    try {
+      setLanguagePreference("es");
+      const enriched = enrichSubagentWorkEntries(
+        [
+          workEntry({
+            id: "source-status",
+            turnId: "turn-1",
+            subagents: [subagent({ threadId: "sub-1", statusLabel: "Completed" })],
+          }),
+        ],
+        [],
+        null,
+      );
+      expect(enriched[0]?.subagents?.[0]?.statusLabel).toBe("Completed");
+      const rows = subagentRows(
+        deriveComposerSubagentStripItems({
+          workEntries: enriched,
+          liveTurnId: TurnId.makeUnsafe("turn-1"),
+        }),
+      );
+      expect(rows[0]).toMatchObject({
+        statusKind: "completed",
+        statusLabel: "Completado",
+        isActive: false,
+      });
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
   it("keeps prior running background rows alongside subagents from the live turn", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [

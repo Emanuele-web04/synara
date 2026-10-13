@@ -21,6 +21,7 @@ import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
+import { useTranslation } from "~/i18n";
 
 export interface OnboardingProjectResult {
   readonly projectId: ProjectId;
@@ -36,6 +37,8 @@ export function ProjectStep(props: {
   /** Project creation is not abortable; the dialog blocks navigation while it runs. */
   onBusyChange: (busy: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   const { settings } = useAppSettings();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
@@ -78,7 +81,7 @@ export function ProjectStep(props: {
       });
       setPath("");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not add the project.");
+      setError(caught instanceof Error ? caught.message : t("Could not add the project."));
     } finally {
       setSubmitting(false);
     }
@@ -94,7 +97,7 @@ export function ProjectStep(props: {
         await addProject(picked);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not open the folder picker.");
+      setError(caught instanceof Error ? caught.message : t("Could not open the folder picker."));
     } finally {
       setPicking(false);
     }
@@ -113,14 +116,14 @@ export function ProjectStep(props: {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-2" role="group" aria-label="Add projects from">
+      <div className="flex gap-2" role="group" aria-label={t("Add projects from")}>
         <Button
           size="sm"
           variant={showImport ? "ghost" : "secondary"}
           disabled={busy}
           onClick={() => setShowImport(false)}
         >
-          Existing folder
+          {t("Existing folder")}
         </Button>
         <Button
           size="sm"
@@ -128,7 +131,7 @@ export function ProjectStep(props: {
           disabled={busy}
           onClick={() => setShowImport(true)}
         >
-          Import from Codex or Claude
+          {t("Import from Codex or Claude")}
         </Button>
       </div>
       {showImport ? (
@@ -153,12 +156,12 @@ export function ProjectStep(props: {
             >
               <FolderAddIcon className="size-[22px] text-foreground/70" aria-hidden="true" />
               {picking ? (
-                <span>Opening the folder picker…</span>
+                <span>{t("Opening the folder picker…")}</span>
               ) : (
                 <span>
-                  Drop a folder here, or{" "}
+                  {t("Drop a folder here, or")}{" "}
                   <span className="underline decoration-dotted decoration-[1.5px] underline-offset-[5px]">
-                    browse
+                    {t("browse")}
                   </span>
                 </span>
               )}
@@ -176,8 +179,12 @@ export function ProjectStep(props: {
                   setPath(event.target.value);
                   setError(null);
                 }}
-                placeholder={homeDir ? `${homeDir}/code/my-repo` : "/path/to/repository"}
-                aria-label="Project folder path"
+                placeholder={
+                  homeDir
+                    ? t("{{value0}}/code/my-repo", { value0: homeDir })
+                    : t("/path/to/repository")
+                }
+                aria-label={t("Project folder path")}
                 spellCheck={false}
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -190,7 +197,7 @@ export function ProjectStep(props: {
               className={cn(FIELD_CONTROL_CLASS_NAME, "shrink-0 px-4")}
               disabled={submitting || path.trim().length === 0}
             >
-              Add
+              {t("Add")}
             </Button>
           </form>
 
@@ -202,7 +209,7 @@ export function ProjectStep(props: {
         </>
       )}
       {props.results.length > 0 ? (
-        <ul className="flex flex-col gap-1.5" aria-label="Added projects">
+        <ul className="flex flex-col gap-1.5" aria-label={t("Added projects")}>
           {props.results.map((result) => (
             <li
               key={result.projectId}
@@ -219,7 +226,7 @@ export function ProjectStep(props: {
                 )}
               >
                 <CheckIcon className="size-3" aria-hidden />
-                {result.created ? "Added" : "Already linked"}
+                {result.created ? t("Added") : t("Already linked")}
               </span>
             </li>
           ))}

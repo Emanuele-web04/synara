@@ -67,6 +67,7 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import type { ThreadWorkspacePatch } from "../types";
+import { useTranslation } from "~/i18n";
 
 function WorktreeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon className={className} />;
@@ -162,13 +163,17 @@ export function RuntimeUsageControls({
   className,
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
+  const { t } = useTranslation();
+
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
   const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
   const runtimeModePending = activeRuntimeMode !== undefined && activeRuntimeMode !== runtimeMode;
   const pendingDescription = runtimeModePending
-    ? ` Applies next turn. This turn still uses ${RUNTIME_MODE_PRESENTATION[activeRuntimeMode].label}.`
+    ? t(" Applies next turn. This turn still uses {{value0}}.", {
+        value0: RUNTIME_MODE_PRESENTATION[activeRuntimeMode].label,
+      })
     : "";
   const hideLabel = hideLabelProp ?? false;
   return (
@@ -191,7 +196,11 @@ export function RuntimeUsageControls({
                   runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={`${runtimePresentation.label}: ${runtimePresentation.description}.${pendingDescription} Click to change permissions.`}
+                title={t("{{value0}}: {{value1}}.{{value2}} Click to change permissions.", {
+                  value0: runtimePresentation.label,
+                  value1: runtimePresentation.description,
+                  value2: pendingDescription,
+                })}
               />
             }
           >
@@ -205,7 +214,7 @@ export function RuntimeUsageControls({
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
                 {runtimePresentation.label}
-                {runtimeModePending ? " (next turn)" : ""}
+                {runtimeModePending ? t(" (next turn)") : ""}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -254,7 +263,7 @@ export function RuntimeUsageControls({
             {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
               <>
                 <MenuSeparator />
-                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
+                <MenuItem onClick={requestCurrentAppSnap}>{t("Share current app")}</MenuItem>
               </>
             ) : null}
           </ComposerPickerMenuPopup>
@@ -280,6 +289,8 @@ export default function BranchToolbar({
   showEnvironmentPicker: showEnvironmentPickerProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
+  const { t } = useTranslation();
+
   const handoffBusy = handoffBusyProp ?? false;
   const variant = variantProp ?? "toolbar";
   const showBranchSelector = showBranchSelectorProp ?? true;
@@ -514,7 +525,7 @@ export default function BranchToolbar({
                 <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
                   <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
                     <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                    <span className="min-w-0 flex-1 truncate">{t("Rate limits remaining")}</span>
                     <DisclosureChevron
                       open={rateLimitsOpen}
                       className="text-[var(--color-text-foreground-secondary)]"

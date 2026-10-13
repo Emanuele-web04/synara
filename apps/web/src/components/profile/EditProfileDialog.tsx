@@ -19,6 +19,7 @@ import { normalizeHandle } from "./profileFormatting";
 import { PROFILE_AVATAR_COLORS } from "./useProfileAvatarColor";
 import { AvatarImageError, compressAvatarImage } from "./avatarImage";
 import { ProfileAvatar } from "./ProfileAvatar";
+import { useTranslation } from "~/i18n";
 
 // Inputs and footer buttons share one fixed height + radius so every control in
 // the dialog reads as the same size. The visible border keeps the fields legible
@@ -81,6 +82,8 @@ function EditProfileDialogContent({
   avatarImage,
   onSave,
 }: Omit<EditProfileDialogProps, "open">) {
+  const { t } = useTranslation();
+
   const [draftName, setDraftName] = useState(name);
   const [draftHandle, setDraftHandle] = useState(handle.replace(/^@+/, ""));
   const [draftColor, setDraftColor] = useState(avatarColor);
@@ -99,7 +102,9 @@ function EditProfileDialogContent({
     try {
       setDraftImage(await compressAvatarImage(file));
     } catch (cause) {
-      setError(cause instanceof AvatarImageError ? cause.message : "Could not process that image.");
+      setError(
+        cause instanceof AvatarImageError ? cause.message : t("Could not process that image."),
+      );
     } finally {
       setProcessing(false);
     }
@@ -117,7 +122,7 @@ function EditProfileDialogContent({
 
   return (
     <>
-      <DialogTitle className="px-4 pt-4 text-lg">Edit profile</DialogTitle>
+      <DialogTitle className="px-4 pt-4 text-lg">{t("Edit profile")}</DialogTitle>
 
       <div className="flex flex-col gap-4 px-4 pt-3">
         {/* Avatar */}
@@ -133,7 +138,7 @@ function EditProfileDialogContent({
             <button
               type="button"
               onClick={() => setShowEditor((value) => !value)}
-              aria-label="Edit avatar"
+              aria-label={t("Edit avatar")}
               className={cn(
                 "absolute bottom-0 end-0 flex size-7 items-center justify-center rounded-full",
                 "bg-black/45 text-white backdrop-blur-sm transition-colors hover:bg-black/60",
@@ -166,7 +171,11 @@ function EditProfileDialogContent({
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <CentralIcon name="add-image" className="size-3.5" />
-                  {processing ? "Processing…" : draftImage ? "Replace photo" : "Upload photo"}
+                  {processing
+                    ? t("Processing…")
+                    : draftImage
+                      ? t("Replace photo")
+                      : t("Upload photo")}
                 </Button>
                 {draftImage && (
                   <Button
@@ -180,7 +189,7 @@ function EditProfileDialogContent({
                     }}
                   >
                     <CentralIcon name="trash-can-simple" className="size-3.5" />
-                    Remove
+                    {t("Remove")}
                   </Button>
                 )}
               </div>
@@ -191,7 +200,7 @@ function EditProfileDialogContent({
                     key={color}
                     type="button"
                     onClick={() => setDraftColor(color)}
-                    aria-label={`Use ${color}`}
+                    aria-label={t("Use {{value0}}", { value0: color })}
                     className={cn(
                       "size-5 rounded-full transition-transform hover:scale-110",
                       !draftImage &&
@@ -205,7 +214,7 @@ function EditProfileDialogContent({
 
               {draftImage && (
                 <p className="text-center text-ui leading-snug text-muted-foreground">
-                  Colors apply when no photo is set.
+                  {t("Colors apply when no photo is set.")}
                 </p>
               )}
             </div>
@@ -216,16 +225,16 @@ function EditProfileDialogContent({
 
         {/* Fields */}
         <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
-          <Field label="Display name">
+          <Field label={t("Display name")}>
             <InputGroup className={fieldControlClassName}>
               <InputGroupInput
                 value={draftName}
                 onChange={(event) => setDraftName(event.target.value)}
-                placeholder="Your name"
+                placeholder={t("Your name")}
               />
             </InputGroup>
           </Field>
-          <Field label="Username">
+          <Field label={t("Username")}>
             <InputGroup className={fieldControlClassName}>
               <InputGroupAddon>
                 <InputGroupText>@</InputGroupText>
@@ -235,7 +244,7 @@ function EditProfileDialogContent({
                 onChange={(event) =>
                   setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
                 }
-                placeholder="username"
+                placeholder={t("username")}
               />
             </InputGroup>
           </Field>
@@ -246,7 +255,7 @@ function EditProfileDialogContent({
         <DialogClose
           render={<Button variant="ghost" size="default" className={dialogButtonClassName} />}
         >
-          Cancel
+          {t("Cancel")}
         </DialogClose>
         <Button
           variant="default"
@@ -255,7 +264,7 @@ function EditProfileDialogContent({
           onClick={handleSave}
           disabled={processing}
         >
-          Save
+          {t("Save")}
         </Button>
       </div>
     </>

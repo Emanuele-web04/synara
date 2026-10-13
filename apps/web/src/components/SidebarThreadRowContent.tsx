@@ -5,7 +5,7 @@
 import { useMemo, type ReactNode } from "react";
 
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { useThreadHasPendingDraft } from "../composerDraftStore";
 import { createSubagentSiblingSummariesSelector, createThreadSelector } from "../storeSelectors";
@@ -25,6 +25,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarDraftGlyph } from "./SidebarStatusTrailingGlyph";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { t, useTranslation } from "~/i18n";
 
 export interface SidebarThreadTerminalStatus {
   label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
@@ -41,14 +42,21 @@ function ProviderAvatarWithTerminal({
   terminalStatus: SidebarThreadTerminalStatus | null;
   terminalCount: number;
 }) {
+  const { t } = useTranslation();
+
   const provider = thread.session?.provider ?? thread.modelSelection.provider;
   const handoffSourceProvider = thread.handoff?.sourceProvider ?? null;
   const handoffTooltip = resolveThreadHandoffBadgeLabel(thread);
   const showBadge = terminalCount > 1 || terminalStatus !== null;
   const badgeTooltip =
     terminalCount > 1
-      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
-      : (terminalStatus?.label ?? "Terminal open");
+      ? t("{{value0}} {{value1}} open", {
+          value0: terminalCount,
+          value1: pluralize(terminalCount, "terminal"),
+        })
+      : terminalStatus
+        ? t(terminalStatus.label)
+        : t("Terminal open");
   const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
 
   const hasHandoff = Boolean(handoffSourceProvider);
@@ -141,7 +149,7 @@ function renderSubagentLabel(input: {
       <span className="font-medium">{presentation.nickname ?? presentation.primaryLabel}</span>
       {supportingLabel ? (
         <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
-          {presentation.role ? `(${presentation.role})` : supportingLabel}
+          {presentation.role ? t("({{value0}})", { value0: presentation.role }) : supportingLabel}
         </span>
       ) : null}
     </span>
@@ -202,6 +210,8 @@ export function SidebarThreadRowContent({
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
 }) {
+  const { t } = useTranslation();
+
   const subagentIndentPx = subagentIndentPxProp ?? 0;
   const isSubagentThread = Boolean(thread.parentThreadId);
   // A child row's dot carries its state (running/done/failed/stopped), the
@@ -217,7 +227,9 @@ export function SidebarThreadRowContent({
         <span
           className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
           style={{ marginLeft: `${subagentIndentPx}px` }}
-          title={humanizeSubagentStatus(subagentStatusKind) ?? undefined}
+          title={
+            subagentStatusKind ? t(humanizeSubagentStatus(subagentStatusKind) ?? "") : undefined
+          }
         >
           <span
             aria-hidden="true"
@@ -275,10 +287,10 @@ export function SidebarThreadRowContent({
         {hasPendingDraft ? <SidebarDraftGlyph /> : null}
         {!isSubagentThread && pendingStatusColorClass ? (
           <span
-            aria-label="Pending approval"
+            aria-label={t("Pending approval")}
             className={cn("shrink-0 text-ui-xs font-medium", pendingStatusColorClass)}
           >
-            Pending
+            {t("Pending")}
           </span>
         ) : null}
         {variant === "pinned" ? suffix : null}

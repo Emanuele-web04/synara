@@ -9,6 +9,7 @@ import { cn, getNavigatorPlatform, isWindowsPlatform } from "~/lib/utils";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { toastManager } from "./ui/toast";
+import { t, useTranslation } from "~/i18n";
 
 const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isMaximized: false,
@@ -39,7 +40,7 @@ function reportWindowControlError(title: string, error: unknown): void {
   toastManager.add({
     type: "error",
     title,
-    description: error instanceof Error ? error.message : "Please try again.",
+    description: error instanceof Error ? error.message : t("Please try again."),
   });
 }
 
@@ -64,6 +65,8 @@ function CaptionSvg({ children }: { children: ReactNode }) {
 }
 
 export function DesktopWindowControls({ className }: { className?: string }) {
+  const { t } = useTranslation();
+
   const [windowState, setWindowState] = useState<DesktopWindowState>(DEFAULT_WINDOW_STATE);
   const customTitleBarActive = useDesktopCustomTitleBarActive();
   const platform = getNavigatorPlatform();
@@ -106,8 +109,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     >
       <button
         type="button"
-        aria-label="Minimize"
-        title="Minimize"
+        aria-label={t("Minimize")}
+        title={t("Minimize")}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
           void controls.minimize().catch((error: unknown) => {
@@ -125,8 +128,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
       </button>
       <button
         type="button"
-        aria-label={isMaximized ? "Restore" : "Maximize"}
-        title={isMaximized ? "Restore" : "Maximize"}
+        aria-label={isMaximized ? t("Restore") : t("Maximize")}
+        title={isMaximized ? t("Restore") : t("Maximize")}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
           void controls
@@ -147,8 +150,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
       </button>
       <button
         type="button"
-        aria-label="Close"
-        title="Close"
+        aria-label={t("Close")}
+        title={t("Close")}
         className={cn(CAPTION_BUTTON_CLASS, CLOSE_BUTTON_CLASS)}
         onClick={() => {
           void controls.close().catch((error: unknown) => {

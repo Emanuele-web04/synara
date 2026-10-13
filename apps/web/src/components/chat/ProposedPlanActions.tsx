@@ -9,6 +9,7 @@ import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { IconButton } from "../ui/icon-button";
 import { toastManager } from "../ui/toast";
+import { useTranslation } from "~/i18n";
 
 type PlanActionVariant = "outline" | "ghost";
 
@@ -29,6 +30,8 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
   buttonClassName,
   iconClassName,
 }: ProposedPlanActionsProps) {
+  const { t } = useTranslation();
+
   const variant = variantProp ?? "outline";
   const [isDownloading, setIsDownloading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -36,12 +39,12 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
   const markdown = useMemo(() => normalizePlanMarkdownForExport(planMarkdown), [planMarkdown]);
   const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
     onCopy: () => {
-      toastManager.add({ type: "success", title: "Plan copied as markdown" });
+      toastManager.add({ type: "success", title: t("Plan copied as markdown") });
     },
     onError: (error) => {
       toastManager.add({
         type: "error",
-        title: "Could not copy plan",
+        title: t("Could not copy plan"),
         description: error.message,
       });
     },
@@ -56,8 +59,8 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
     if (!api || !workspaceRoot) {
       toastManager.add({
         type: "error",
-        title: "Workspace path is unavailable",
-        description: "This thread does not have a workspace path to download into.",
+        title: t("Workspace path is unavailable"),
+        description: t("This thread does not have a workspace path to download into."),
       });
       return;
     }
@@ -72,15 +75,15 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
       .then((result) => {
         toastManager.add({
           type: "success",
-          title: "Plan downloaded",
+          title: t("Plan downloaded"),
           description: result.relativePath,
         });
       })
       .catch((error) => {
         toastManager.add({
           type: "error",
-          title: "Could not download plan",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: t("Could not download plan"),
+          description: error instanceof Error ? error.message : t("An error occurred."),
         });
       })
       .finally(() => setIsDownloading(false));
@@ -93,8 +96,8 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
     if (!api.dialogs.saveFile) {
       toastManager.add({
         type: "error",
-        title: "Export is unavailable",
-        description: "Exporting plans requires the desktop app.",
+        title: t("Export is unavailable"),
+        description: t("Exporting plans requires the desktop app."),
       });
       return;
     }
@@ -110,15 +113,15 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
         if (!filePath) return;
         toastManager.add({
           type: "success",
-          title: "Plan exported",
+          title: t("Plan exported"),
           description: filePath,
         });
       })
       .catch((error) => {
         toastManager.add({
           type: "error",
-          title: "Could not export plan",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: t("Could not export plan"),
+          description: error instanceof Error ? error.message : t("An error occurred."),
         });
       })
       .finally(() => setIsExporting(false));
@@ -127,7 +130,7 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
   return (
     <div className={cn("flex items-center gap-1", className)}>
       <PlanActionButton
-        label="Download to .plan folder"
+        label={t("Download to .plan folder")}
         onClick={handleDownload}
         variant={variant}
         className={buttonClassName}
@@ -136,7 +139,7 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
         <ArrowDownIcon className={cn("size-3.5", iconClassName)} />
       </PlanActionButton>
       <PlanActionButton
-        label="Export markdown file"
+        label={t("Export markdown file")}
         onClick={handleExport}
         variant={variant}
         className={buttonClassName}
@@ -145,7 +148,7 @@ export const ProposedPlanActions = memo(function ProposedPlanActions({
         <ArrowUpIcon className={cn("size-3.5", iconClassName)} />
       </PlanActionButton>
       <PlanActionButton
-        label={isCopied ? "Copied" : "Copy as markdown"}
+        label={isCopied ? t("Copied") : t("Copy as markdown")}
         onClick={handleCopy}
         variant={variant}
         className={buttonClassName}

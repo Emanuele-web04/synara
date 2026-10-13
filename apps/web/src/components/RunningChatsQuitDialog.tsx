@@ -26,6 +26,7 @@ import {
   type RunningChatsQuitCopy,
 } from "~/lib/runningChatsQuitConfirmation";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 export interface RunningChatsQuitDecision {
   /** Remember the listed chats and continue them automatically on the next launch. */
@@ -103,6 +104,8 @@ function RunningChatsQuitDialogContent({
   readonly quitting: boolean;
   readonly onQuit: (decision: RunningChatsQuitDecision) => void;
 }) {
+  const { t } = useTranslation();
+
   const { settings, updateSettings } = useAppSettings();
   const resume = settings.resumeChatsAfterQuit;
   const resumeCheckboxId = useId();
@@ -161,7 +164,7 @@ function RunningChatsQuitDialogContent({
             render={<Button variant="ghost" size="sm" className={cn(uiFont, "gap-1.5")} />}
           >
             {copy.stayLabel}
-            <span className={KEY_HINT_CLASS}>Esc</span>
+            <span className={KEY_HINT_CLASS}>{t("Esc")}</span>
           </AlertDialogClose>
           <Button
             autoFocus={chats.length > 0}

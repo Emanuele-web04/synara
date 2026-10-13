@@ -77,6 +77,7 @@ import {
 import { routeSplitBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import { cn } from "~/lib/utils";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { useTranslation } from "~/i18n";
 
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
@@ -103,6 +104,8 @@ function SplitPaneEmbeddedPanel(props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
 }) {
+  const { t } = useTranslation();
+
   const dockState = useRightDockStore(selectRightDockState(props.threadId));
   const terminalPane = dockState.open
     ? dockState.panes.find((pane) => pane.id === dockState.activePaneId && pane.kind === "terminal")
@@ -212,7 +215,7 @@ function SplitPaneEmbeddedPanel(props: {
       {subagentsPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DockPaneHeader
-            title="Subagents"
+            title={t("Subagents")}
             closeLabel="Hide subagents"
             onClose={props.onClosePanel}
           />
@@ -221,11 +224,11 @@ function SplitPaneEmbeddedPanel(props: {
       ) : terminalPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DockPaneHeader
-            title="Terminal"
+            title={t("Terminal")}
             closeLabel="Hide terminal"
             onClose={props.onClosePanel}
           />
-          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("Loading terminal...")}</PanelStateMessage>}>
             <DockTerminalPane
               hostThreadId={props.threadId}
               paneId={terminalPane.id}
@@ -236,7 +239,7 @@ function SplitPaneEmbeddedPanel(props: {
           </Suspense>
         </div>
       ) : panel === "browser" ? (
-        <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+        <Suspense fallback={<PanelStateMessage>{t("Loading browser...")}</PanelStateMessage>}>
           <LazyBrowserPanel
             mode="sidebar"
             threadId={props.threadId}
@@ -269,6 +272,8 @@ function SplitPaneEmptyState(props: {
   excludedThreadIds: ReadonlySet<ThreadId>;
   onSelectThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn(
@@ -278,7 +283,9 @@ function SplitPaneEmptyState(props: {
       onMouseDown={props.onFocus}
     >
       <div className="w-full max-w-sm space-y-4">
-        <p className="text-center text-ui-lg font-medium text-foreground/70">Select a chat</p>
+        <p className="text-center text-ui-lg font-medium text-foreground/70">
+          {t("Select a chat")}
+        </p>
         <div className="max-h-[60vh] space-y-1 overflow-y-auto">
           {props.threads.map((thread) => {
             const isUsed = props.excludedThreadIds.has(thread.id);

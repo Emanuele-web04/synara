@@ -9,6 +9,7 @@ import { ShortcutKbd } from "~/components/ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PlusIcon } from "~/lib/icons";
 import { NEW_TASK_SHORTCUT_LABEL } from "~/lib/newTaskShortcut";
+import { useTranslation } from "~/i18n";
 
 export function NewTaskButton({
   onClick,
@@ -17,6 +18,8 @@ export function NewTaskButton({
   onClick: () => void;
   disabled?: boolean | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Tooltip>
       <TooltipTrigger
@@ -29,13 +32,13 @@ export function NewTaskButton({
             onClick={onClick}
           >
             <PlusIcon className="size-3.5" />
-            New task
+            {t("New task")}
           </Button>
         }
       />
       <TooltipPopup side="bottom">
         <span className="flex items-center gap-2">
-          New task
+          {t("New task")}
           <ShortcutKbd shortcutLabel={NEW_TASK_SHORTCUT_LABEL} />
         </span>
       </TooltipPopup>

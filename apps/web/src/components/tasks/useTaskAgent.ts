@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: useTaskAgent.ts
 // Purpose: The live agent state the task inspector shows for a delegated to-do (what the
 //          chat's thread holds: pending requests, recent activity, the latest reply) and the
@@ -33,6 +34,8 @@ import type { TaskStatusKind } from "./tasks.logic";
 const RECENT_ACTIVITY_LIMIT = 4;
 
 export function useTaskAgentThread(threadId: ThreadId, statusKind: TaskStatusKind) {
+  const { t } = useTranslation();
+
   // Activities and pending requests live on the thread detail, which is only streamed
   // for subscribed threads — hold one for as long as the inspector shows this chat.
   useEffect(() => retainThreadDetailSubscription(threadId), [threadId]);
@@ -70,6 +73,7 @@ export function useTaskAgentThread(threadId: ThreadId, statusKind: TaskStatusKin
         activeTurnStartedAt: thread.latestTurn?.startedAt ?? null,
         latestTurnState: thread.latestTurn?.state ?? null,
         latestTurnCompletedAt: thread.latestTurn?.completedAt ?? null,
+        translate: t,
       })
         // Reasoning is the chat's to show; approval rows restate the inline approval card.
         .filter(
@@ -81,7 +85,7 @@ export function useTaskAgentThread(threadId: ThreadId, statusKind: TaskStatusKin
         )
         .slice(-RECENT_ACTIVITY_LIMIT)
     );
-  }, [latestTurnId, statusKind, thread]);
+  }, [latestTurnId, statusKind, thread, t]);
   const latestReply = useMemo(() => {
     if (!thread || statusKind !== "review") return null;
     // Only the delegated (latest) turn's answer; an older one in a reused chat isn't it.
@@ -102,6 +106,8 @@ export function useTaskAgentActions(
   threadId: ThreadId,
   threadRuntimeMode: RuntimeMode | undefined,
 ) {
+  const { t } = useTranslation();
+
   const [respondingKey, setRespondingKey] = useState<string | null>(null);
   const [isStopping, setIsStopping] = useState(false);
 
@@ -128,8 +134,8 @@ export function useTaskAgentActions(
       // The chat shows the error too, but this panel is where the user answered.
       toastManager.add({
         type: "error",
-        title: "Couldn't send your answer",
-        description: error instanceof Error ? error.message : "Try again from the chat.",
+        title: t("Couldn't send your answer"),
+        description: error instanceof Error ? error.message : t("Try again from the chat."),
       });
     } finally {
       setRespondingKey(null);
@@ -142,8 +148,8 @@ export function useTaskAgentActions(
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Couldn't stop the agent",
-        description: error instanceof Error ? error.message : "Unexpected error.",
+        title: t("Couldn't stop the agent"),
+        description: error instanceof Error ? error.message : t("Unexpected error."),
       });
     } finally {
       setIsStopping(false);

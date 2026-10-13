@@ -201,6 +201,7 @@ import {
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { t, useTranslation } from "~/i18n";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -283,6 +284,8 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  const { t } = useTranslation();
+
   useAppTypography();
   useAppDensity();
   useChatWidth();
@@ -341,7 +344,7 @@ function RootRouteView() {
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
             <p className="text-ui leading-snug text-muted-foreground">
-              Connecting to {APP_DISPLAY_NAME} server...
+              {t("Connecting to")} {APP_DISPLAY_NAME} {t("server...")}
             </p>
           </div>
         </div>
@@ -386,12 +389,14 @@ function RootRouteView() {
 }
 
 function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) {
+  const { t } = useTranslation();
+
   const title =
     issue.action === "update-client"
-      ? "This Synara client needs an update."
+      ? t("This Synara client needs an update.")
       : issue.action === "update-server"
-        ? "The Synara server needs an update."
-        : "Synara needs to reconnect with a matching build.";
+        ? t("The Synara server needs an update.")
+        : t("Synara needs to reconnect with a matching build.");
   const guidance =
     issue.action === "update-client"
       ? "Update or reload this client, then reconnect."
@@ -411,7 +416,7 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{issue.message}</p>
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{guidance}</p>
         <p className="mt-4 text-ui leading-snug text-muted-foreground/80">
-          Client {APP_VERSION} · Server {issue.serverBuild}
+          {t("Client")} {APP_VERSION} {t("· Server")} {issue.serverBuild}
         </p>
         <div className="mt-5">
           <Button
@@ -419,7 +424,7 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
             className={dialogActionButtonClassName}
             onClick={() => window.location.reload()}
           >
-            Reload app
+            {t("Reload app")}
           </Button>
         </div>
       </section>
@@ -553,11 +558,11 @@ async function runProviderUpdateAll(params: {
     trackedToast?.toastId ??
     toastManager.add({
       type: "loading",
-      title: "Updating providers...",
+      title: t("Updating providers..."),
       description:
         providers.length === 1
-          ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
-          : `Updating ${providers.length} providers.`,
+          ? t("Updating {{value0}}.", { value0: providerStatusDisplayName(providers[0]!) })
+          : t("Updating {{value0}} providers.", { value0: providers.length }),
       timeout: 0,
     });
   activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
@@ -571,11 +576,11 @@ async function runProviderUpdateAll(params: {
 
   toastManager.update(toastId, {
     type: "loading",
-    title: "Updating providers...",
+    title: t("Updating providers..."),
     description:
       providers.length === 1
-        ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
-        : `Updating ${providers.length} providers.`,
+        ? t("Updating {{value0}}.", { value0: providerStatusDisplayName(providers[0]!) })
+        : t("Updating {{value0}} providers.", { value0: providers.length }),
     actionProps: undefined,
     data: { onClose: dismissProgressToast },
     timeout: 0,
@@ -669,11 +674,13 @@ async function runProviderUpdateAll(params: {
       type: "error",
       title:
         failures.length === providers.length
-          ? "Provider updates failed"
-          : "Some provider updates failed",
+          ? t("Provider updates failed")
+          : t("Some provider updates failed"),
       description:
         manualCommands.length > 0
-          ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+          ? t("{{failures}}\n\nCopy the commands below to update manually in a terminal.", {
+              failures: failureLines,
+            })
           : failureLines,
       data: {
         onClose: dismissProgressToast,
@@ -689,9 +696,9 @@ async function runProviderUpdateAll(params: {
     type: "success",
     title:
       providers.length === 1
-        ? `${providerStatusDisplayName(providers[0]!)} updated`
-        : `${providers.length} providers updated`,
-    description: "New sessions will use the refreshed provider tools.",
+        ? t("{{value0}} updated", { value0: providerStatusDisplayName(providers[0]!) })
+        : t("{{value0}} providers updated", { value0: providers.length }),
+    description: t("New sessions will use the refreshed provider tools."),
     data: { onClose: dismissProgressToast },
     timeout: 6000,
   });
@@ -702,6 +709,8 @@ function ProviderUpdateNotifications({
 }: {
   readonly liveVersionCheckCompleted: boolean;
 }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
@@ -765,12 +774,15 @@ function ProviderUpdateNotifications({
     const providerName = providerStatusDisplayName(firstProvider);
     const title =
       outdatedProviders.length === 1
-        ? `${providerName} update available`
-        : `${outdatedProviders.length} provider updates available`;
+        ? t("{{value0}} update available", { value0: providerName })
+        : t("{{value0}} provider updates available", { value0: outdatedProviders.length });
     const description =
       outdatedProviders.length === 1
-        ? `${providerName} has a newer version available.`
-        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+        ? t("{{value0}} has a newer version available.", { value0: providerName })
+        : t("Updates available for {{provider}} and {{count}} more providers.", {
+            provider: providerName,
+            count: additionalCount,
+          });
 
     let toastId!: ProviderUpdateToastId;
     const closeTrackedPrompt = () => {
@@ -983,6 +995,8 @@ function GlobalWhatsNewSurface() {
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
+  const { t } = useTranslation();
+
   const message = errorMessage(error);
   const details = errorDetails(error);
 
@@ -995,12 +1009,12 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
         <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
-        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{t("Something went wrong.")}</h1>
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
-            Try again
+            {t("Try again")}
           </Button>
           <Button
             size="sm"
@@ -1008,14 +1022,14 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
             className={dialogActionButtonClassName}
             onClick={() => window.location.reload()}
           >
-            Reload app
+            {t("Reload app")}
           </Button>
         </div>
 
         <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
           <summary className="cursor-pointer list-none px-3 py-2 text-ui leading-snug font-medium text-muted-foreground">
-            <span className="group-open:hidden">Show error details</span>
-            <span className="hidden group-open:inline">Hide error details</span>
+            <span className="group-open:hidden">{t("Show error details")}</span>
+            <span className="hidden group-open:inline">{t("Hide error details")}</span>
           </summary>
           <pre className="max-h-56 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs text-foreground/85">
             {details}
@@ -1035,7 +1049,7 @@ function errorMessage(error: unknown): string {
     return error;
   }
 
-  return "An unexpected router error occurred.";
+  return t("An unexpected router error occurred.");
 }
 
 function errorDetails(error: unknown): string {
@@ -1229,6 +1243,8 @@ function releaseOrphanedThreadDetail(input: {
 }
 
 function EventRouter() {
+  const { t } = useTranslation();
+
   useDeviceEventBridge();
   useComputerEventBridge();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
@@ -1665,8 +1681,8 @@ function EventRouter() {
           toastManager.add({
             id: `stream-overflow:retry-failed:${threadId}`,
             type: "error",
-            title: "Unable to resume thread updates",
-            description: "Try again when the server responds.",
+            title: t("Unable to resume thread updates"),
+            description: t("Try again when the server responds."),
             data: { threadId },
           });
         }
@@ -2441,9 +2457,10 @@ function EventRouter() {
       toastManager.add({
         id: toastId,
         type: "error",
-        title: "Workspace updates paused",
-        description:
+        title: t("Workspace updates paused"),
+        description: t(
           "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        ),
         timeout: 0,
         actionProps: {
           children: "Retry updates",
@@ -2460,8 +2477,8 @@ function EventRouter() {
               toastManager.add({
                 id: "stream-overflow:shell:retry-failed",
                 type: "error",
-                title: "Unable to resume workspace updates",
-                description: "Try again when the server responds.",
+                title: t("Unable to resume workspace updates"),
+                description: t("Try again when the server responds."),
               });
             });
           },
@@ -2485,12 +2502,17 @@ function EventRouter() {
       if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
         const toastId = threadOverflowToastId(threadId);
         const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
-        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
+        const threadLabel = threadTitle
+          ? t("“{{value0}}”", { value0: threadTitle })
+          : t("this thread");
         toastManager.add({
           id: toastId,
           type: "error",
-          title: "Thread updates paused",
-          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
+          title: t("Thread updates paused"),
+          description: t(
+            "The update stream for {{value0}} could not keep up after repeated retries. Retry to resume updates.",
+            { value0: threadLabel },
+          ),
           timeout: 0,
           data: { threadId },
           actionProps: {
@@ -2537,7 +2559,7 @@ function EventRouter() {
         if (event.cliKind || currentCliKind !== null) {
           terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
+            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : t("Terminal"),
           });
         }
       }
@@ -2635,7 +2657,7 @@ function EventRouter() {
 
       toastManager.add({
         type: "warning",
-        title: "Invalid keybindings configuration",
+        title: t("Invalid keybindings configuration"),
         description: issue.message,
         actionProps: {
           children: "Open keybindings.json",
@@ -2652,9 +2674,9 @@ function EventRouter() {
               .catch((error) => {
                 toastManager.add({
                   type: "error",
-                  title: "Unable to open keybindings file",
+                  title: t("Unable to open keybindings file"),
                   description:
-                    error instanceof Error ? error.message : "Unknown error opening file.",
+                    error instanceof Error ? error.message : t("Unknown error opening file."),
                 });
               });
           },

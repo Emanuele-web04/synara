@@ -9,6 +9,7 @@ import { displayLabelFor } from "~/pinnedMessages";
 
 import { EnvironmentEditableChecklistRow } from "./EnvironmentEditableChecklistRow";
 import { EnvironmentCollapsibleSection } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 interface EnvironmentPinnedSectionProps {
   pins: readonly PinnedMessage[];
@@ -28,11 +29,13 @@ export function EnvironmentPinnedSection({
   onUnpin,
   onRename,
 }: EnvironmentPinnedSectionProps) {
+  const { t } = useTranslation();
+
   if (pins.length === 0) {
     return null;
   }
   return (
-    <EnvironmentCollapsibleSection label="Pinned">
+    <EnvironmentCollapsibleSection label={t("Pinned")}>
       <ul className="flex flex-col">
         {pins.map((pin) => (
           <PinnedMessageRow
@@ -65,9 +68,11 @@ const PinnedMessageRow = function PinnedMessageRow({
   onUnpin: (messageId: MessageId) => void;
   onRename: (messageId: MessageId, label: string | null) => void;
 }) {
+  const { t } = useTranslation();
+
   const available = text !== undefined;
   const resolvedLabel = displayLabelFor(pin, text);
-  const displayLabel = resolvedLabel.length > 0 ? resolvedLabel : "(message unavailable)";
+  const displayLabel = resolvedLabel.length > 0 ? resolvedLabel : t("(message unavailable)");
 
   return (
     <EnvironmentEditableChecklistRow

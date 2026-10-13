@@ -19,6 +19,7 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME,
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
+import { useTranslation } from "~/i18n";
 
 /** Keys a search field inside a menu must let through so list navigation keeps working. */
 export const MENU_NAVIGATION_KEYS = new Set([
@@ -52,6 +53,8 @@ export function PickerPanelShell(props: {
    */
   variant?: "default" | "plain";
 }) {
+  const { t } = useTranslation();
+
   const {
     searchPlaceholder: searchPlaceholderProp,
     query: queryProp,
@@ -66,7 +69,7 @@ export function PickerPanelShell(props: {
     listMaxHeightClassName,
     variant: variantProp,
   } = props;
-  const searchPlaceholder = searchPlaceholderProp ?? "Search";
+  const searchPlaceholder = searchPlaceholderProp ?? t("Search");
   const query = queryProp ?? "";
   const stopSearchKeyPropagation = stopSearchKeyPropagationProp ?? false;
   const autoFocusSearch = autoFocusSearchProp ?? false;

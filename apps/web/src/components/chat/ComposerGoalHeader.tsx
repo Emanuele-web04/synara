@@ -26,6 +26,7 @@ import {
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
 } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 /**
  * Elapsed pursuit time for a goal, or null when the thread predates goal timing
@@ -71,6 +72,8 @@ export function ComposerGoalHeader({
   attachedToPrevious: attachedToPreviousProp,
   canPause = true,
 }: ComposerGoalHeaderProps) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const attachedToPrevious = attachedToPreviousProp ?? false;
   const paused = (goalPausedAt ?? null) !== null;
@@ -86,7 +89,7 @@ export function ComposerGoalHeader({
         <ComposerStackedPanelRowMain>
           <GoalIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           <ComposerStackedPanelRowLabel className="shrink-0">
-            {canPause ? (paused ? "Goal paused" : "Pursuing goal") : "Goal"}
+            {canPause ? (paused ? t("Goal paused") : t("Pursuing goal")) : t("Goal")}
           </ComposerStackedPanelRowLabel>
           {open ? null : (
             <span
@@ -105,14 +108,14 @@ export function ComposerGoalHeader({
           ) : null}
         </ComposerStackedPanelRowMain>
         <div className="flex shrink-0 items-center gap-0">
-          <IconButton variant="ghost" size="icon-chip" label="Edit goal" onClick={onEdit}>
+          <IconButton variant="ghost" size="icon-chip" label={t("Edit goal")} onClick={onEdit}>
             <PencilIcon />
           </IconButton>
           {canPause ? (
             <IconButton
               variant="ghost"
               size="icon-chip"
-              label={paused ? "Resume goal" : "Pause goal"}
+              label={paused ? t("Resume goal") : t("Pause goal")}
               onClick={() => void onSetPaused(!paused)}
             >
               {paused ? <PlayOutlineIcon /> : <PauseOutlineIcon />}
@@ -121,7 +124,7 @@ export function ComposerGoalHeader({
           <IconButton
             variant="ghost"
             size="icon-chip"
-            label="Delete goal"
+            label={t("Delete goal")}
             onClick={() => void onClear()}
           >
             <TrashCanIcon />
@@ -129,7 +132,7 @@ export function ComposerGoalHeader({
           <IconButton
             variant="ghost"
             size="icon-chip"
-            label={open ? "Collapse goal" : "Expand goal"}
+            label={open ? t("Collapse goal") : t("Expand goal")}
             aria-expanded={open}
             onClick={() => setOpen((current) => !current)}
           >

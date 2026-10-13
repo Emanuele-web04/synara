@@ -5,6 +5,7 @@
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
+import { t } from "~/i18n";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
 import {
   COMPUTER_TOOL_TITLES,
@@ -125,6 +126,8 @@ interface SynaraMcpToolPresentation {
   readonly running: string;
   readonly completed: string;
   readonly failed: string;
+  readonly cancelled?: string;
+  readonly localized?: boolean;
 }
 
 // Historical messages still contain retired tools; presentation does not expose them to agents.
@@ -525,21 +528,27 @@ function resolveSynaraBrowserToolName(
   return null;
 }
 
-function fallbackSynaraMcpToolPresentation(toolName: string): SynaraMcpToolPresentation {
+function fallbackSynaraMcpToolPresentation(
+  toolName: string,
+  translate: typeof t,
+): SynaraMcpToolPresentation {
   const action =
     toolName
       .replace(/^synara_/, "")
       .replace(/_+/g, " ")
-      .trim() || "an action";
+      .trim() || translate("an action");
   return {
-    running: `Synara is handling ${action}`,
-    completed: `Synara handled ${action}`,
-    failed: `Synara couldn't handle ${action}`,
+    running: translate("Synara is handling {{action}}", { action }),
+    completed: translate("Synara handled {{action}}", { action }),
+    failed: translate("Synara couldn't handle {{action}}", { action }),
+    cancelled: translate("Synara stopped handling {{action}}", { action }),
+    localized: true,
   };
 }
 
 function resolveSynaraMcpToolPresentation(
   candidates: ReadonlyArray<string | null | undefined>,
+  translate: typeof t,
 ): SynaraMcpToolPresentation | null {
   for (const candidate of candidates) {
     if (!candidate) {
@@ -573,22 +582,25 @@ function resolveSynaraMcpToolPresentation(
     if (normalizedCandidate.startsWith("synara_is_handling_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_is_handling_".length)}`,
+        translate,
       );
     }
     if (normalizedCandidate.startsWith("synara_handled_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_handled_".length)}`,
+        translate,
       );
     }
     if (normalizedCandidate.startsWith("synara_couldn_t_handle_")) {
       return fallbackSynaraMcpToolPresentation(
         `synara_${normalizedCandidate.slice("synara_couldn_t_handle_".length)}`,
+        translate,
       );
     }
     if (!toolName) {
       continue;
     }
-    return fallbackSynaraMcpToolPresentation(toolName);
+    return fallbackSynaraMcpToolPresentation(toolName, translate);
   }
   return null;
 }
@@ -609,27 +621,37 @@ export function isSynaraBrowserToolCall(input: SynaraMcpToolTitleInput): boolean
 // Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
 // file-change rows can all represent the same gateway action. Normalize by tool
 // identity instead of provider item type so transport details never reach the UI.
-export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
-  const presentation = resolveSynaraMcpToolPresentation([
-    input.toolName,
-    input.title,
-    input.fallbackLabel,
-  ]);
+export function deriveSynaraMcpToolTitle(
+  input: SynaraMcpToolTitleInput,
+  translate: typeof t = t,
+): string | null {
+  const presentation = resolveSynaraMcpToolPresentation(
+    [input.toolName, input.title, input.fallbackLabel],
+    translate,
+  );
   if (!presentation) {
     return null;
   }
+  let title: string;
   switch (input.status ?? "completed") {
     case "running":
-      return presentation.running;
+      title = presentation.running;
+      break;
     case "completed":
-      return presentation.completed;
+      title = presentation.completed;
+      break;
     case "failed":
-      return presentation.failed;
+      title = presentation.failed;
+      break;
     case "cancelled":
-      return presentation.running.startsWith("Synara is ")
-        ? `Synara stopped ${presentation.running.slice("Synara is ".length)}`
-        : `Cancelled ${presentation.running}`;
+      title =
+        presentation.cancelled ??
+        (presentation.running.startsWith("Synara is ")
+          ? `Synara stopped ${presentation.running.slice("Synara is ".length)}`
+          : `Cancelled ${presentation.running}`);
+      break;
   }
+  return presentation.localized ? title : translate(title);
 }
 
 export function sanitizeSynaraMcpToolPreview(input: {
@@ -649,21 +671,24 @@ export function sanitizeSynaraMcpToolPreview(input: {
   return preview;
 }
 
-export function deriveReadableToolTitle(input: ReadableToolTitleInput): string | null {
+export function deriveReadableToolTitle(
+  input: ReadableToolTitleInput,
+  translate: typeof t = t,
+): string | null {
   const normalizedTitle = normalizeCompactToolLabel(input.title ?? "");
   const normalizedFallback = normalizeCompactToolLabel(input.fallbackLabel);
   const commandLabel = input.command
-    ? deriveReadableCommandDisplay(input.command, input.isRunning).verb
+    ? deriveReadableCommandDisplay(input.command, input.isRunning, translate).verb
     : null;
   const commandLike = input.itemType === "command_execution" || input.requestKind === "command";
 
   // Derive a verbal label from requestKind when the title is generic
-  const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
+  const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType, translate);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
     return (input.itemType === "mcp_tool_call" || input.itemType === "dynamic_tool_call") &&
       /[_-]/.test(normalizedTitle)
-      ? (normalizeToolDescriptor(normalizedTitle) ?? normalizedTitle)
+      ? (normalizeToolDescriptor(normalizedTitle, translate) ?? normalizedTitle)
       : normalizedTitle;
   }
 
@@ -671,7 +696,10 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
     return commandLabel;
   }
 
-  const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
+  const descriptor = normalizeToolDescriptor(
+    extractToolDescriptorFromPayload(input.payload),
+    translate,
+  );
   if (descriptor && !isGenericToolTitle(descriptor)) {
     return descriptor;
   }
@@ -707,15 +735,16 @@ export type CommandVisualKind = "read" | "search" | "git" | "github" | "terminal
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
   itemType: ReadableToolTitleInput["itemType"],
+  translate: typeof t,
 ): string | null {
-  if (requestKind === "file-read") return "Read";
-  if (requestKind === "file-change" || itemType === "file_change") return "Edited";
-  if (requestKind === "tool") return "Tool";
+  if (requestKind === "file-read") return translate("Read");
+  if (requestKind === "file-change" || itemType === "file_change") return translate("Edited");
+  if (requestKind === "tool") return translate("Tool");
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
-  if (itemType === "web_search") return "Searched the web";
-  if (itemType === "image_generation") return "Generated image";
-  if (itemType === "image_view") return "Viewed image";
-  if (itemType === "collab_agent_tool_call") return "Agent task";
+  if (itemType === "web_search") return translate("Searched the web");
+  if (itemType === "image_generation") return translate("Generated image");
+  if (itemType === "image_view") return translate("Viewed image");
+  if (itemType === "collab_agent_tool_call") return translate("Agent task");
   return null;
 }
 
@@ -743,13 +772,13 @@ export function isGenericToolTitle(value: string): boolean {
   );
 }
 
-function normalizeToolDescriptor(value: string | null): string | null {
+function normalizeToolDescriptor(value: string | null, translate: typeof t): string | null {
   if (!value) {
     return null;
   }
   const computerTool = computerToolName(value);
   if (computerTool) {
-    return COMPUTER_TOOL_TITLES[computerTool];
+    return translate(COMPUTER_TOOL_TITLES[computerTool], { context: "computerTool" });
   }
   const mcpIdentifier = humanizeMcpToolIdentifier(value);
   if (mcpIdentifier) {
@@ -929,6 +958,7 @@ const LIST_COMMAND_TOOLS = new Set(["ls"]);
 export function deriveReadableCommandDisplay(
   rawCommand: string,
   isRunning = false,
+  translate: typeof t = t,
 ): ReadableCommandDisplay {
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const primaryCommand = firstShellCommandSegment(command);
@@ -936,29 +966,29 @@ export function deriveReadableCommandDisplay(
 
   if (READ_FILE_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Reading" : "Read",
-      target: lastPathComponents(args, "file"),
+      verb: translate(isRunning ? "Reading" : "Read", { context: "command" }),
+      target: lastPathComponents(args, translate("file"), translate),
       fullCommand: rawCommand,
     };
   }
   if (SEARCH_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Searching" : "Searched",
-      target: searchSummary(args),
+      verb: translate(isRunning ? "Searching" : "Searched", { context: "command" }),
+      target: searchSummary(args, translate),
       fullCommand: rawCommand,
     };
   }
   if (LIST_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Listing" : "Listed",
-      target: lastPathComponents(args, "directory"),
+      verb: translate(isRunning ? "Listing" : "Listed", { context: "command" }),
+      target: lastPathComponents(args, translate("directory"), translate),
       fullCommand: rawCommand,
     };
   }
   if (FIND_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Finding" : "Found",
-      target: findTarget(args, "files"),
+      verb: translate(isRunning ? "Finding" : "Found", { context: "command" }),
+      target: findTarget(args, translate("files"), translate),
       fullCommand: rawCommand,
     };
   }
@@ -966,31 +996,28 @@ export function deriveReadableCommandDisplay(
   switch (tool) {
     case "mkdir":
       return {
-        verb: isRunning ? "Creating" : "Created",
-        target: lastPathComponents(args, "directory"),
+        verb: translate(isRunning ? "Creating" : "Created", { context: "command" }),
+        target: lastPathComponents(args, translate("directory"), translate),
         fullCommand: rawCommand,
       };
     case "rm":
       return {
-        verb: isRunning ? "Removing" : "Removed",
-        target: lastPathComponents(args, "file"),
+        verb: translate(isRunning ? "Removing" : "Removed", { context: "command" }),
+        target: lastPathComponents(args, translate("file"), translate),
         fullCommand: rawCommand,
       };
     case "cp":
     case "mv":
       return {
-        verb: isRunning
-          ? tool === "cp"
-            ? "Copying"
-            : "Moving"
-          : tool === "cp"
-            ? "Copied"
-            : "Moved",
-        target: lastPathComponents(args, "file"),
+        verb: translate(
+          isRunning ? (tool === "cp" ? "Copying" : "Moving") : tool === "cp" ? "Copied" : "Moved",
+          { context: "command" },
+        ),
+        target: lastPathComponents(args, translate("file"), translate),
         fullCommand: rawCommand,
       };
     case "git":
-      return humanizeGitCommand(args, rawCommand, isRunning);
+      return humanizeGitCommand(args, rawCommand, isRunning, translate);
     case "node":
     case "bun":
     case "deno":
@@ -999,19 +1026,19 @@ export function deriveReadableCommandDisplay(
     case "ruby":
     case "perl":
       return {
-        verb: isRunning ? "Running" : "Ran",
-        target: inlineScriptTarget(tool, command, args) ?? compactInlineCommand(command),
+        verb: translate(isRunning ? "Running" : "Ran", { context: "command" }),
+        target: inlineScriptTarget(tool, command, args, translate) ?? compactInlineCommand(command),
         fullCommand: rawCommand,
       };
     case "osascript":
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "Running" : "Ran", { context: "command" }),
         target: "AppleScript",
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "Running" : "Ran", { context: "command" }),
         target: compactInlineCommand(command),
         fullCommand: rawCommand,
       };
@@ -1039,7 +1066,7 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
     return "PowerShell";
   }
   if (executable === "cmd" || executable === "cmd.exe") {
-    return "Command Prompt";
+    return t("Command Prompt");
   }
 
   const target = deriveReadableCommandDisplay(rawCommand).target.trim();
@@ -1202,68 +1229,69 @@ function humanizeGitCommand(
   args: string,
   rawCommand: string,
   isRunning: boolean,
+  translate: typeof t,
 ): ReadableCommandDisplay {
   const normalizedArgs = stripGitGlobalOptions(args);
   const subcommand = normalizedArgs.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   switch (subcommand) {
     case "status":
       return {
-        verb: isRunning ? "Checking" : "Checked",
+        verb: translate(isRunning ? "Checking" : "Checked", { context: "command" }),
         target: "git status",
         fullCommand: rawCommand,
       };
     case "diff":
       return {
-        verb: isRunning ? "Comparing" : "Compared",
-        target: "changes",
+        verb: translate(isRunning ? "Comparing" : "Compared", { context: "command" }),
+        target: translate("changes"),
         fullCommand: rawCommand,
       };
     case "show":
       return {
-        verb: isRunning ? "Inspecting" : "Inspected",
+        verb: translate(isRunning ? "Inspecting" : "Inspected", { context: "command" }),
         target: "commit",
         fullCommand: rawCommand,
       };
     case "log":
       return {
-        verb: isRunning ? "Reviewing" : "Reviewed",
-        target: "git history",
+        verb: translate(isRunning ? "Reviewing" : "Reviewed", { context: "command" }),
+        target: translate("git history"),
         fullCommand: rawCommand,
       };
     case "add":
       return {
-        verb: isRunning ? "Staging" : "Staged",
-        target: "changes",
+        verb: translate(isRunning ? "Staging" : "Staged", { context: "command" }),
+        target: translate("changes"),
         fullCommand: rawCommand,
       };
     case "commit":
       return {
-        verb: isRunning ? "Committing" : "Committed",
-        target: "changes",
+        verb: translate(isRunning ? "Committing" : "Committed", { context: "command" }),
+        target: translate("changes"),
         fullCommand: rawCommand,
       };
     case "push":
       return {
-        verb: isRunning ? "Pushing" : "Pushed",
-        target: "to remote",
+        verb: translate(isRunning ? "Pushing" : "Pushed", { context: "command" }),
+        target: translate("to remote"),
         fullCommand: rawCommand,
       };
     case "pull":
       return {
-        verb: isRunning ? "Pulling" : "Pulled",
-        target: "from remote",
+        verb: translate(isRunning ? "Pulling" : "Pulled", { context: "command" }),
+        target: translate("from remote"),
         fullCommand: rawCommand,
       };
     case "checkout":
     case "switch":
       return {
-        verb: isRunning ? "Switching to" : "Switched to",
-        target: checkoutTarget(args),
+        verb: translate(isRunning ? "Switching to" : "Switched to", { context: "command" }),
+        target: checkoutTarget(args, translate),
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: translate(isRunning ? "Running" : "Ran", { context: "command" }),
         target: compactInlineCommand(`git ${normalizedArgs}`.trim()),
         fullCommand: rawCommand,
       };
@@ -1297,24 +1325,24 @@ function stripGitGlobalOptions(args: string): string {
   return tokens.slice(index).join(" ");
 }
 
-function checkoutTarget(args: string): string {
+function checkoutTarget(args: string, translate: typeof t): string {
   const branch = tokenizeCommandArgs(args).at(-1)?.trim();
-  return branch ? branch : "branch";
+  return branch ? branch : translate("branch");
 }
 
-function lastPathComponents(args: string, fallback: string): string {
+function lastPathComponents(args: string, fallback: string, translate: typeof t): string {
   const tokens = tokenizeCommandArgs(args);
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
     const token = tokens[index]!.replace(/^['"]|['"]$/g, "");
     if (!token || token.startsWith("-")) {
       continue;
     }
-    return compactPath(token);
+    return compactPath(token, true, translate);
   }
   return fallback;
 }
 
-function findTarget(args: string, fallback: string): string {
+function findTarget(args: string, fallback: string, translate: typeof t): string {
   const tokens = tokenizeCommandArgs(args);
   let skipNext = false;
   for (const token of tokens) {
@@ -1334,17 +1362,17 @@ function findTarget(args: string, fallback: string): string {
       }
       continue;
     }
-    return compactPath(token);
+    return compactPath(token, true, translate);
   }
   return fallback;
 }
 
-function compactPath(path: string): string {
+function compactPath(path: string, localized = false, translate: typeof t = t): string {
   if (path === ".") {
-    return "current directory";
+    return localized ? translate("current directory") : "current directory";
   }
   if (path === "..") {
-    return "parent directory";
+    return localized ? translate("parent directory") : "parent directory";
   }
   const parts = path.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 2) {
@@ -1366,10 +1394,15 @@ function firstShellCommandSegment(command: string): string {
   return chain ? command.slice(0, chain.operatorStart).trim() : command;
 }
 
-function inlineScriptTarget(tool: string, command: string, args: string): string | null {
+function inlineScriptTarget(
+  tool: string,
+  command: string,
+  args: string,
+  translate: typeof t,
+): string | null {
   const normalizedTool = tool === "python3" ? "python" : tool;
   if (containsHeredoc(command) || hasInlineScriptFlag(args)) {
-    return `${normalizedTool} script`;
+    return translate("{{tool}} script", { tool: normalizedTool });
   }
   return null;
 }
@@ -1383,27 +1416,30 @@ function hasInlineScriptFlag(args: string): boolean {
   return tokens.some((token) => token === "-e" || token === "-c" || token.startsWith("-e="));
 }
 
-function searchSummary(args: string): string {
-  const { pattern, path } = extractSearchPatternAndPath(args);
+function searchSummary(args: string, translate: typeof t): string {
+  const { pattern, path, directoryReference } = extractSearchPatternAndPath(args);
+  const displayPath = path && directoryReference ? translate(path) : path;
   if (pattern && path) {
-    return `for ${pattern} in ${path}`;
+    return translate("for {{pattern}} in {{path}}", { pattern, path: displayPath });
   }
   if (pattern) {
-    return `for ${pattern}`;
+    return translate("for {{pattern}}", { pattern });
   }
   if (path) {
-    return `in ${path}`;
+    return translate("in {{path}}", { path: displayPath });
   }
-  return "files";
+  return translate("files");
 }
 
 function extractSearchPatternAndPath(args: string): {
   pattern: string | null;
   path: string | null;
+  directoryReference: boolean;
 } {
   const tokens = tokenizeCommandArgs(args);
   let pattern: string | null = null;
   let path: string | null = null;
+  let directoryReference = false;
   let skipNext = false;
 
   for (const token of tokens) {
@@ -1429,6 +1465,7 @@ function extractSearchPatternAndPath(args: string): {
         const normalizedPath = normalizeSearchPathToken(token);
         if (normalizedPath && (!path || path === "current directory")) {
           path = normalizedPath;
+          directoryReference = token.trim() === "." || token.trim() === "..";
         }
         continue;
       }
@@ -1436,17 +1473,22 @@ function extractSearchPatternAndPath(args: string): {
       continue;
     }
     if (!path || path === "current directory") {
-      path = normalizeSearchPathToken(token) ?? path;
+      const normalizedPath = normalizeSearchPathToken(token);
+      if (normalizedPath) {
+        path = normalizedPath;
+        directoryReference = token.trim() === "." || token.trim() === "..";
+      }
       continue;
     }
   }
 
   if (pattern && path === "current directory" && looksLikeSearchPath(pattern)) {
     path = normalizeSearchPathToken(pattern);
+    directoryReference = false;
     pattern = null;
   }
 
-  return { pattern, path };
+  return { pattern, path, directoryReference };
 }
 
 function normalizeSearchPatternToken(token: string): string | null {

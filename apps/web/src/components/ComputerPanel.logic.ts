@@ -9,6 +9,7 @@ import {
   type ComputerWindow,
   type ThreadComputerState,
 } from "@synara/contracts";
+import { t } from "~/i18n";
 import { listComputerPermissions } from "@synara/shared/computerGrants";
 import { COMPUTER_TOOL_TITLES, computerToolName } from "../lib/computerToolPresentation";
 
@@ -255,10 +256,12 @@ export function computerActionLabel(
     .trim();
   if (!tool && fallback.length === 0) return null;
   const label = tool
-    ? COMPUTER_TOOL_TITLES[tool]
+    ? t(COMPUTER_TOOL_TITLES[tool], { context: "computerTool" })
     : `${fallback[0]!.toUpperCase()}${fallback.slice(1)}`;
   if (action.ok) return label;
-  return action.message ? `${label} failed: ${action.message}` : `${label} failed`;
+  return action.message
+    ? t("{{label}} failed: {{message}}", { label, message: action.message })
+    : t("{{label}} failed", { label });
 }
 
 export function shouldSubscribeToComputerStream(input: {

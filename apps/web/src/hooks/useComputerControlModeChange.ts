@@ -7,6 +7,7 @@ import {
   prepareComputerPermissionGuide,
   readLocalComputerPermissionBridge,
 } from "~/lib/computerProvisioning";
+import { useTranslation } from "~/i18n";
 
 /** Explicit activation also enters the same native permission guide as AppSnap. */
 export function useComputerControlModeChange({
@@ -22,6 +23,8 @@ export function useComputerControlModeChange({
   ) => void;
   focusComposer: () => void;
 }) {
+  const { t } = useTranslation();
+
   const sequence = useRef(0);
   useEffect(
     () => () => {
@@ -47,8 +50,8 @@ export function useComputerControlModeChange({
         // queued intent it would have armed is stale, so say so plainly.
         if (mode !== "off" && !result.enabled && current()) {
           toastManager.add({
-            title: "Computer control was reset",
-            description: "Control was reset — invoke /computer-use again for a new task.",
+            title: t("Computer control was reset"),
+            description: t("Control was reset — invoke /computer-use again for a new task."),
             type: "error",
           });
         }
@@ -67,14 +70,14 @@ export function useComputerControlModeChange({
         if (!current()) return;
         toastManager.add({
           title: settingUp
-            ? "Computer permission setup could not start"
-            : "Computer control could not be changed",
+            ? t("Computer permission setup could not start")
+            : t("Computer control could not be changed"),
           description: String(error),
           type: "error",
         });
       });
     },
-    [threadId, setMode, focusComposer],
+    [threadId, setMode, focusComposer, t],
   );
   return { change, sequence };
 }

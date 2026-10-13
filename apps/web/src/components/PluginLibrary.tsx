@@ -66,6 +66,7 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
+import { useTranslation, t } from "~/i18n";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ function pluginEntryKey(entry: Pick<PluginEntry, "marketplacePath" | "plugin">):
 
 function sectionTitle(value: string): string {
   const n = value.trim();
-  return n.length === 0 ? "Unknown" : n;
+  return n.length === 0 ? t("Unknown") : n;
 }
 
 function resolvePluginAccent(plugin: ProviderPluginDescriptor): string | undefined {
@@ -341,8 +342,10 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
 }
 
 function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
+  const { t } = useTranslation();
+
   const description =
-    skill.interface?.shortDescription ?? skill.description ?? "No description available.";
+    skill.interface?.shortDescription ?? skill.description ?? t("No description available.");
 
   return (
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
@@ -368,6 +371,8 @@ export function PluginLibrary(props?: {
   readonly cwd?: string | null;
   readonly embedded?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const embedded = props?.embedded ?? false;
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -563,12 +568,12 @@ export function PluginLibrary(props?: {
     <>
       <div className="flex items-end gap-3">
         <TabButton
-          label="Plugins"
+          label={t("Plugins")}
           active={selectedTab === "plugins"}
           onClick={() => setSelectedTab("plugins")}
         />
         <TabButton
-          label="Skills"
+          label={t("Skills")}
           active={selectedTab === "skills"}
           onClick={() => setSelectedTab("skills")}
         />
@@ -607,7 +612,9 @@ export function PluginLibrary(props?: {
       {!embedded ? (
         <div className="px-6 py-10 text-center">
           <h1 className="text-[28px] font-semibold text-foreground">
-            {providerLabel ? `Make ${providerLabel} work your way` : "Plugins and skills"}
+            {providerLabel
+              ? t("Make {{value0}} work your way", { value0: providerLabel })
+              : t("Plugins and skills")}
           </h1>
         </div>
       ) : null}
@@ -627,7 +634,7 @@ export function PluginLibrary(props?: {
               if (selectedTab === "plugins") setPluginSearch(e.target.value);
               else setSkillSearch(e.target.value);
             }}
-            placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+            placeholder={selectedTab === "plugins" ? t("Search plugins") : t("Search skills")}
             className="text-ui leading-snug"
           />
         </InputGroup>
@@ -641,7 +648,7 @@ export function PluginLibrary(props?: {
         <div className="mx-auto max-w-2xl space-y-1.5 px-6 pb-4">
           {!discoveryCwd && selectedTab === "skills" ? (
             <InlineWarning>
-              Skills need a workspace path. Open a project or thread first.
+              {t("Skills need a workspace path. Open a project or thread first.")}
             </InlineWarning>
           ) : null}
           {selectedTab === "plugins" && pluginsQuery.data?.remoteSyncError ? (
@@ -667,13 +674,13 @@ export function PluginLibrary(props?: {
                 <EmptyPanel
                   title={
                     providerLabel
-                      ? `Plugins unavailable for ${providerLabel}`
-                      : "No enabled providers"
+                      ? t("Plugins unavailable for {{value0}}", { value0: providerLabel })
+                      : t("No enabled providers")
                   }
                   description={
                     providerLabel
-                      ? "This provider does not expose plugin discovery."
-                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                      ? t("This provider does not expose plugin discovery.")
+                      : t("Enable a provider in Settings → Providers to browse plugins and skills.")
                   }
                 />
               </div>
@@ -685,8 +692,10 @@ export function PluginLibrary(props?: {
               </div>
             ) : filteredPluginEntries.length === 0 ? (
               <EmptyPanel
-                title="No installed plugins found"
-                description="This view only shows plugins already available in your Codex setup."
+                title={t("No installed plugins found")}
+                description={t(
+                  "This view only shows plugins already available in your Codex setup.",
+                )}
               />
             ) : (
               <div className="space-y-6">
@@ -710,13 +719,13 @@ export function PluginLibrary(props?: {
                 <EmptyPanel
                   title={
                     providerLabel
-                      ? `Skills unavailable for ${providerLabel}`
-                      : "No enabled providers"
+                      ? t("Skills unavailable for {{value0}}", { value0: providerLabel })
+                      : t("No enabled providers")
                   }
                   description={
                     providerLabel
-                      ? "This provider does not expose skill discovery."
-                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                      ? t("This provider does not expose skill discovery.")
+                      : t("Enable a provider in Settings → Providers to browse plugins and skills.")
                   }
                 />
               </div>
@@ -727,10 +736,13 @@ export function PluginLibrary(props?: {
                 ))}
               </div>
             ) : filteredSkills.length === 0 ? (
-              <EmptyPanel title="No skills found" description="No skills match this search." />
+              <EmptyPanel
+                title={t("No skills found")}
+                description={t("No skills match this search.")}
+              />
             ) : (
               <div>
-                <SectionHeader title="Skills" />
+                <SectionHeader title={t("Skills")} />
                 <div className="grid grid-cols-1 sm:grid-cols-2">
                   {filteredSkills.map((skill) => (
                     <SkillGridItem key={skill.path} skill={skill} />

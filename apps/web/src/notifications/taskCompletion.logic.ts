@@ -9,6 +9,7 @@ import {
   type TerminalVisualState,
 } from "@synara/shared/terminalThreads";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
+import { t } from "~/i18n";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
@@ -729,15 +730,15 @@ function approvalSummary(
 ): string {
   switch (requestKind) {
     case "command":
-      return "Command approval requested.";
+      return t("Command approval requested.");
     case "file-read":
-      return "File-read approval requested.";
+      return t("File-read approval requested.");
     case "file-change":
-      return "File-change approval requested.";
+      return t("File-change approval requested.");
     case "permissions":
-      return "Permission approval requested.";
+      return t("Permission approval requested.");
     case "tool":
-      return "Tool approval requested.";
+      return t("Tool approval requested.");
   }
 }
 
@@ -904,11 +905,11 @@ export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
   body: string;
 } {
   const normalizedTitle = candidate.title.trim();
-  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : "Untitled thread";
+  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : t("Untitled thread");
 
   return {
     title: threadLabel,
-    body: candidate.assistantSummary || "Finished working.",
+    body: candidate.assistantSummary || t("Finished working."),
   };
 }
 
@@ -917,15 +918,15 @@ export function buildThreadAttentionCopy(candidate: ThreadAttentionCandidate): {
   body: string;
 } {
   const normalizedTitle = candidate.title.trim();
-  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : "Untitled thread";
+  const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : t("Untitled thread");
   const summary =
     candidate.summary ??
     (candidate.kind === "approval"
       ? approvalSummary(candidate.requestKind ?? "command")
-      : "User input requested.");
+      : t("User input requested."));
 
   return {
-    title: "Input needed",
+    title: t("Input needed"),
     body: `${threadLabel}: ${summary}`,
   };
 }
@@ -934,10 +935,10 @@ export function buildTerminalCompletionCopy(candidate: CompletedTerminalCandidat
   title: string;
   body: string;
 } {
-  const terminalLabel = candidate.title.trim() || "Terminal";
+  const terminalLabel = candidate.title.trim() || t("Terminal");
   return {
-    title: "Terminal task completed",
-    body: `${terminalLabel} finished working.`,
+    title: t("Terminal task completed"),
+    body: t("{{terminal}} finished working.", { terminal: terminalLabel }),
   };
 }
 
@@ -945,10 +946,10 @@ export function buildTerminalAttentionCopy(candidate: TerminalAttentionCandidate
   title: string;
   body: string;
 } {
-  const terminalLabel = candidate.title.trim() || "Terminal";
+  const terminalLabel = candidate.title.trim() || t("Terminal");
   return {
-    title: "Terminal input needed",
-    body: `${terminalLabel} needs your attention.`,
+    title: t("Terminal input needed"),
+    body: t("{{terminal}} needs your attention.", { terminal: terminalLabel }),
   };
 }
 

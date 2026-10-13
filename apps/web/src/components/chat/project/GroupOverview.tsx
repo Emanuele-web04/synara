@@ -36,6 +36,7 @@ import {
   type GroupThreadSectionId,
 } from "./groupOverview.logic";
 import type { useProjectAgent } from "./useProjectAgent";
+import { useTranslation } from "~/i18n";
 
 type ProjectAgent = ReturnType<typeof useProjectAgent>;
 type Automations = ReturnType<typeof useAutomations>;
@@ -71,6 +72,8 @@ export function GroupThreadsSection({
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   const visibleSections = sectionIds
     ? GROUP_THREAD_SECTIONS.filter((section) => sectionIds.includes(section.id))
     : GROUP_THREAD_SECTIONS;
@@ -83,7 +86,7 @@ export function GroupThreadsSection({
       <PanelStateMessage density="compact" className={GROUP_PANEL_EMPTY_STATE_CLASS_NAME}>
         <p>
           {emptyMessage ??
-            "No threads yet. Ask the coordinator for work and it will start threads here."}
+            t("No threads yet. Ask the coordinator for work and it will start threads here.")}
         </p>
       </PanelStateMessage>
     );
@@ -140,6 +143,8 @@ export function GroupThreadRow({
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const section = GROUP_THREAD_SECTIONS.find((candidate) => candidate.id === row.state);
   const dotClassName = section?.dotClass ?? "bg-muted-foreground/40";
   const pulse = section?.pulse === true;
@@ -147,7 +152,7 @@ export function GroupThreadRow({
   const markResolved = () => {
     if (row.task) {
       void agent.updateTaskStatus(row.task, { status: "done" }).then((ok) => {
-        if (!ok) toastManager.add({ type: "error", title: "Could not mark the task resolved." });
+        if (!ok) toastManager.add({ type: "error", title: t("Could not mark the task resolved.") });
       });
       return;
     }
@@ -156,7 +161,7 @@ export function GroupThreadRow({
     void archiveThreadFromClient(api.orchestration, row.thread.id).catch((cause: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Could not archive the thread.",
+        title: t("Could not archive the thread."),
         description: cause instanceof Error ? cause.message : undefined,
       });
     });
@@ -165,7 +170,7 @@ export function GroupThreadRow({
   const reopen = () => {
     if (row.task) {
       void agent.updateTaskStatus(row.task, { status: "ready", archived: false }).then((ok) => {
-        if (!ok) toastManager.add({ type: "error", title: "Could not reopen the task." });
+        if (!ok) toastManager.add({ type: "error", title: t("Could not reopen the task.") });
       });
       return;
     }
@@ -174,7 +179,7 @@ export function GroupThreadRow({
     void unarchiveThreadFromClient(api.orchestration, row.thread.id).catch((cause: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Could not reopen the thread.",
+        title: t("Could not reopen the thread."),
         description: cause instanceof Error ? cause.message : undefined,
       });
     });
@@ -186,11 +191,11 @@ export function GroupThreadRow({
     const clicked = await api.contextMenu.show(
       [
         row.state === "resolved"
-          ? { id: "reopen" as const, label: "Reopen", icon: REOPEN_MENU_ICON }
-          : { id: "resolve" as const, label: "Mark resolved", icon: RESOLVE_MENU_ICON },
+          ? { id: "reopen" as const, label: t("Reopen"), icon: REOPEN_MENU_ICON }
+          : { id: "resolve" as const, label: t("Mark resolved"), icon: RESOLVE_MENU_ICON },
         {
           id: "split" as const,
-          label: "Open in split view",
+          label: t("Open in split view"),
           icon: SPLIT_VIEW_MENU_ICON,
           separatorBefore: true,
         },
@@ -207,8 +212,12 @@ export function GroupThreadRow({
     void showRowMenu({ x: event.clientX, y: event.clientY });
   };
 
-  const threadTitle = row.thread.title.trim() || "Untitled thread";
-  const updatedLabel = formatRelativeTime(row.thread.updatedAt ?? row.thread.createdAt);
+  const threadTitle = row.thread.title.trim() || t("Untitled thread");
+  const updatedLabel = formatRelativeTime(
+    row.thread.updatedAt ?? row.thread.createdAt,
+    undefined,
+    formatLocale,
+  );
   // One line per thread: state dot, title, and a quiet trailing meta that gives
   // way to the actions button on hover. The task line rides in the tooltip.
   const meta = row.projectName ? `${row.projectName} · ${updatedLabel}` : updatedLabel;
@@ -220,7 +229,11 @@ export function GroupThreadRow({
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        title={row.taskLine ? `${threadTitle} — ${row.taskLine}` : threadTitle}
+        title={
+          row.taskLine
+            ? t("{{value0}} — {{value1}}", { value0: threadTitle, value1: row.taskLine })
+            : threadTitle
+        }
         onClick={() => onOpenThread(row.thread.id)}
       >
         <span
@@ -239,8 +252,8 @@ export function GroupThreadRow({
       </span>
       <IconButton
         type="button"
-        label={`Thread actions for ${threadTitle}`}
-        tooltip="Thread actions"
+        label={t("Thread actions for {{value0}}", { value0: threadTitle })}
+        tooltip={t("Thread actions")}
         className="hidden group-focus-within/grouprow:inline-flex group-hover/grouprow:inline-flex"
         onClick={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
@@ -262,10 +275,12 @@ export function GroupPullRequestsSection({
   readonly rows: readonly GroupPullRequestRow[];
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   if (rows.length === 0) {
     return (
       <PanelStateMessage density="compact" className={GROUP_PANEL_EMPTY_STATE_CLASS_NAME}>
-        <p>No pull requests yet. PRs opened by hub threads land here.</p>
+        <p>{t("No pull requests yet. PRs opened by hub threads land here.")}</p>
       </PanelStateMessage>
     );
   }
@@ -288,15 +303,17 @@ export function GroupPullRequestsSection({
                 <span className={GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME}>{row.pullRequest.title}</span>
               </span>
               <span className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-                <span>{presentation.label}</span>
+                <span>{t(presentation.label)}</span>
                 {row.projectName ? <span className="truncate">{row.projectName}</span> : null}
-                <span className="truncate">in {row.thread.title}</span>
+                <span className="truncate">
+                  {t("in")} {row.thread.title}
+                </span>
               </span>
             </button>
             <IconButton
               type="button"
-              label={`Open #${row.pullRequest.number} on GitHub`}
-              tooltip="Open on GitHub"
+              label={t("Open #{{value0}} on GitHub", { value0: row.pullRequest.number })}
+              tooltip={t("Open on GitHub")}
               onClick={() => {
                 void readNativeApi()?.shell.openExternal(row.pullRequest.url);
               }}
@@ -321,17 +338,19 @@ export function GroupAutomationsSection({
   readonly automations: Automations;
   readonly onOpenAutomation: (automationId: string) => void;
 }) {
+  const { t } = useTranslation();
+
   if (automations.isLoading && definitions.length === 0) {
     return (
       <PanelStateMessage density="compact" className={GROUP_PANEL_EMPTY_STATE_CLASS_NAME}>
-        <p>Loading automations…</p>
+        <p>{t("Loading automations…")}</p>
       </PanelStateMessage>
     );
   }
   if (definitions.length === 0) {
     return (
       <PanelStateMessage density="compact" className={GROUP_PANEL_EMPTY_STATE_CLASS_NAME}>
-        <p>No automations yet. Ask the coordinator to check something on a schedule.</p>
+        <p>{t("No automations yet. Ask the coordinator to check something on a schedule.")}</p>
       </PanelStateMessage>
     );
   }
@@ -366,6 +385,8 @@ function GroupAutomationRow({
   readonly onToggleEnabled: (enabled: boolean) => void;
   readonly onOpen: () => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   return (
     <div className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 hover:bg-foreground/5">
       <button
@@ -375,16 +396,20 @@ function GroupAutomationRow({
       >
         <span className={GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME}>{definition.name}</span>
         <span className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-          <span className="truncate">{formatSchedule(definition.schedule)}</span>
+          <span className="truncate">{formatSchedule(definition.schedule, formatLocale)}</span>
           <span>
-            {lastRun ? `Last run ${formatRelativeTime(lastRun.scheduledFor)}` : "Never run"}
+            {lastRun
+              ? t("Last run {{value0}}", {
+                  value0: formatRelativeTime(lastRun.scheduledFor, undefined, formatLocale),
+                })
+              : t("Never run")}
           </span>
         </span>
       </button>
       <Switch
         checked={definition.enabled}
         disabled={pending}
-        aria-label={`Enable ${definition.name}`}
+        aria-label={t("Enable {{value0}}", { value0: definition.name })}
         onCheckedChange={onToggleEnabled}
       />
     </div>

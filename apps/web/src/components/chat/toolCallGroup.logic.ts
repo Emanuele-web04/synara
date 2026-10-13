@@ -8,7 +8,8 @@
 //          ToolCallGroupSummary, isSummarizableToolCallEntry,
 //          classifyToolCallSummaryCategory, summarizeToolCallGroup
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
+import { t } from "~/i18n";
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import { extractToolArgumentField } from "../../lib/toolArgumentSummary";
 import {
@@ -30,9 +31,11 @@ export function workEntryRowCount(entry: WorkLogEntry): number {
 }
 
 // One-line label for a call that would list several edited-file rows.
-export function multiFileEditLabel(entry: WorkLogEntry): string | null {
+export function multiFileEditLabel(entry: WorkLogEntry, translate: typeof t = t): string | null {
   const rowCount = workEntryRowCount(entry);
-  return rowCount > 1 ? capitalizeFirst(summaryPartPhrase("edit", rowCount, true)) : null;
+  return rowCount > 1
+    ? capitalizeFirst(summaryPartPhrase("edit", rowCount, true, translate))
+    : null;
 }
 
 export type ToolCallSummaryCategory =
@@ -187,10 +190,10 @@ function countPhrase(count: number, noun: string): string {
   return `${count} ${pluralize(count, noun)}`;
 }
 
-function searchPhrase(count: number): string {
-  if (count === 1) return "searched once";
-  if (count === 2) return "searched twice";
-  return `searched ${count} times`;
+function searchPhrase(count: number, translate: typeof t): string {
+  if (count === 1) return translate("searched once");
+  if (count === 2) return translate("searched twice");
+  return translate("searched {{value0}} times", { value0: count });
 }
 
 // Lowercase verb phrase; the label capitalizes only its first part.
@@ -198,26 +201,36 @@ function summaryPartPhrase(
   category: ToolCallSummaryCategory,
   count: number,
   isSolePart: boolean,
+  translate: typeof t,
 ): string {
   switch (category) {
     case "read":
-      return `read ${countPhrase(count, "file")}`;
+      return translate("read {{value0}}", { value0: countPhrase(count, "file") });
     case "edit":
-      return `edited ${countPhrase(count, "file")}`;
+      return translate("edited {{value0}}", { value0: countPhrase(count, "file") });
     case "search":
-      return searchPhrase(count);
+      return searchPhrase(count, translate);
     case "command":
-      return `ran ${countPhrase(count, "command")}`;
+      return translate("ran {{value0}}", { value0: countPhrase(count, "command") });
     case "fetch":
-      return `fetched ${countPhrase(count, "page")}`;
+      return translate("fetched {{value0}}", { value0: countPhrase(count, "page") });
     case "agent":
-      return `ran ${count} agent ${pluralize(count, "task")}`;
+      return translate("ran {{value0}} agent {{value1}}", {
+        value0: count,
+        value1: pluralize(count, "task"),
+      });
     case "tool":
-      return `used ${countPhrase(count, "tool")}`;
+      return translate("used {{value0}}", { value0: countPhrase(count, "tool") });
     case "other":
       return isSolePart
-        ? `ran ${count} tool ${pluralize(count, "call")}`
-        : `${count} other ${pluralize(count, "action")}`;
+        ? translate("ran {{value0}} tool {{value1}}", {
+            value0: count,
+            value1: pluralize(count, "call"),
+          })
+        : translate("{{value0}} other {{value1}}", {
+            value0: count,
+            value1: pluralize(count, "action"),
+          });
   }
 }
 
@@ -225,21 +238,30 @@ function capitalizeFirst(value: string): string {
   return value.length === 0 ? value : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
-function joinSummaryParts(parts: ReadonlyArray<ToolCallGroupSummaryPart>): string {
+function joinSummaryParts(
+  parts: ReadonlyArray<ToolCallGroupSummaryPart>,
+  translate: typeof t,
+): string {
   const named =
     parts.length > MAX_NAMED_SUMMARY_PARTS ? parts.slice(0, NAMED_PARTS_BEFORE_OVERFLOW) : parts;
   const overflowCount = parts.slice(named.length).reduce((total, part) => total + part.count, 0);
   const phrases = named.map((part) =>
-    summaryPartPhrase(part.category, part.count, parts.length === 1),
+    summaryPartPhrase(part.category, part.count, parts.length === 1, translate),
   );
   if (overflowCount > 0) {
-    phrases.push(`${overflowCount} other ${pluralize(overflowCount, "action")}`);
+    phrases.push(
+      translate("{{value0}} other {{value1}}", {
+        value0: overflowCount,
+        value1: pluralize(overflowCount, "action"),
+      }),
+    );
   }
   return capitalizeFirst(phrases.join(", "));
 }
 
 export function summarizeToolCallGroup(
   entries: ReadonlyArray<WorkLogEntry>,
+  translate: typeof t = t,
 ): ToolCallGroupSummary | null {
   const summarizable = entries.filter(isSummarizableToolCallEntry);
   const rowCount = summarizable.reduce((total, entry) => total + workEntryRowCount(entry), 0);
@@ -292,10 +314,13 @@ export function summarizeToolCallGroup(
     .map(([category, count]) => ({ category, count }));
 
   return {
-    label: joinSummaryParts(parts),
+    label: joinSummaryParts(parts, translate),
     parts,
     failedCount,
-    failedLabel: failedCount > 0 ? `${failedCount} failed` : null,
+    failedLabel:
+      failedCount > 0
+        ? translate("{{value0}} failed", { value0: failedCount, count: failedCount })
+        : null,
     entryCount: summarizable.length,
     hasRunningEntry,
     iconCategory: parts.length === 1 ? parts[0]!.category : "mixed",

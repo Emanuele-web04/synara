@@ -46,6 +46,7 @@ import {
   projectModelSelection,
   runStatusLabel,
 } from "./-automations.shared";
+import { getFormatLocale, useTranslation, t } from "~/i18n";
 
 // Sidebar summaries carry every field these surfaces read (id, projectId, title,
 // sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
@@ -85,6 +86,8 @@ export function AutomationListRow({
   /** The automation open in the content area (panel rows only). */
   readonly active?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const dimmed = dimmedProp ?? false;
   const isPanel = (densityProp ?? "page") === "panel";
   const active = activeProp ?? false;
@@ -144,8 +147,8 @@ export function AutomationListRow({
       {onDelete ? (
         <button
           type="button"
-          aria-label="Delete automation"
-          title="Delete"
+          aria-label={t("Delete automation")}
+          title={t("Delete")}
           onClick={(event) => {
             event.stopPropagation();
             onDelete();
@@ -170,16 +173,17 @@ export function automationRowSubtitle(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
   now: number,
+  formatLocale = getFormatLocale(),
 ): string {
-  const segments = [formatCadenceLong(definition.schedule)];
+  const segments = [formatCadenceLong(definition.schedule, formatLocale)];
   if (isLiveRun(latestRun)) {
     segments.push(runStatusLabel(latestRun.status));
     return segments.join(" · ");
   }
   const attention = latestRun === null ? null : automationAttentionLabel(latestRun);
   if (definition.enabled) {
-    const nextRun = formatNextRun(definition.nextRunAt, now);
-    if (nextRun) segments.push(`Next run ${nextRun}`);
+    const nextRun = formatNextRun(definition.nextRunAt, now, formatLocale);
+    if (nextRun) segments.push(t("Next run {{time}}", { time: nextRun }));
   } else {
     const stopped = stoppedReasonLabel(definition);
     if (stopped) {
@@ -187,7 +191,7 @@ export function automationRowSubtitle(
       return segments.join(" · ");
     }
     if (attention === null && automationLifecycleState(definition) === "done") {
-      segments.push("Done");
+      segments.push(t("Done"));
     }
   }
   if (attention) segments.push(attention);
@@ -200,12 +204,12 @@ function stoppedReasonLabel(definition: AutomationDefinition): string | null {
   switch (definition.disabledReason) {
     case "failures":
       return definition.consecutiveFailureCount === 1
-        ? "Stopped after a failed run"
-        : `Stopped after ${definition.consecutiveFailureCount} failed runs`;
+        ? t("Stopped after a failed run")
+        : t("Stopped after {{value0}} failed runs", { value0: definition.consecutiveFailureCount });
     case "max-iterations":
-      return "Stopped at run limit";
+      return t("Stopped at run limit");
     case "completion":
-      return "Stop condition met";
+      return t("Stop condition met");
     default:
       return null;
   }

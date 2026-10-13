@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguagePreference } from "~/i18n";
+
+afterEach(() => setLanguagePreference("system"));
 
 import {
   decodeInlineVisualSpec,
@@ -18,6 +21,20 @@ describe("decodeInlineVisualSpec", () => {
 });
 
 describe("formatVisualNumber", () => {
+  it("keys cached formatters by locale and preserves custom prefixes and units", () => {
+    for (const language of ["en", "es", "en"] as const) {
+      setLanguagePreference(language);
+      const amount = new Intl.NumberFormat(language, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(12345.67);
+      expect(formatVisualNumber(-12345.67, { prefix: "$", decimals: 2, unit: "KB" })).toBe(
+        `-$${amount} KB`,
+      );
+    }
+    expect(formatVisualNumber(1234567, {}, "en-IN")).toBe("12,34,567");
+  });
+
   it("groups digits, keeps whole numbers whole, and places units", () => {
     expect(formatVisualNumber(1840, { unit: "KB" })).toBe("1,840 KB");
     expect(formatVisualNumber(14.567, { unit: "%" })).toBe("14.57%");

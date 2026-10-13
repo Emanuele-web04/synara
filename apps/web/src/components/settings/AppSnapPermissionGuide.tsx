@@ -7,6 +7,7 @@ import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
 
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
+import { useTranslation } from "~/i18n";
 
 const GUIDE_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
   accessibility: "Accessibility",
@@ -21,6 +22,8 @@ export function AppSnapPermissionGuide(props: {
   onOpenSettings: () => void;
   onRestart: () => void;
 }) {
+  const { t } = useTranslation();
+
   const app = props.appDisplayName;
   const steps = [
     <Button
@@ -30,7 +33,7 @@ export function AppSnapPermissionGuide(props: {
       variant="outline"
       onClick={props.onOpenSettings}
     >
-      {`Open ${GUIDE_PANE_LABELS[props.pane]} settings`}
+      {t("Open {{value0}} settings", { value0: GUIDE_PANE_LABELS[props.pane] })}
     </Button>,
     `If this copy of ${app} is already listed, turn it on. Otherwise, drag the app from the floating guide into the list, or use + to choose this installed copy, then turn it on.`,
     "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again.",
@@ -59,19 +62,22 @@ export function AppSnapPermissionGuide(props: {
           <>
             <Spinner className="size-3.5" />
             <span className="text-ui-sm text-muted-foreground">
-              Watching for the change — this page updates automatically.
+              {t("Watching for the change — this page updates automatically.")}
             </span>
           </>
         ) : (
-          <span className="text-ui-sm font-medium text-emerald-600">Permission granted.</span>
+          <span className="text-ui-sm font-medium text-emerald-600">
+            {t("Permission granted.")}
+          </span>
         )}
       </div>
       <p className="text-ui-sm text-muted-foreground">
-        Still denied after an update or rebuild? Remove this app from the list and add this copy
-        again. Complete any macOS authentication, and restart if macOS asks you to quit and reopen.
+        {t(
+          "Still denied after an update or rebuild? Remove this app from the list and add this copy again. Complete any macOS authentication, and restart if macOS asks you to quit and reopen.",
+        )}
       </p>
       <Button type="button" size="xs" variant="outline" onClick={props.onRestart}>
-        {`Restart ${app}`}
+        {t("Restart {{value0}}", { value0: app })}
       </Button>
     </div>
   );

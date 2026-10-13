@@ -33,6 +33,7 @@ import {
 } from "./chatHeaderControls";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { findHiddenSurfaceTabIndexes } from "./surfaceContentTabs.logic";
+import { useTranslation } from "~/i18n";
 
 // Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
 // Settings: every tab starts at a comfortable basis and shrinks evenly with the rest down
@@ -132,6 +133,8 @@ export function SurfaceContentTabs<Key extends string>(props: {
   /** Drops the dragged tab onto another tab's slot. Omitted, the tabs are not draggable. */
   onMove?: ((key: Key, overKey: Key) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { tabs, activeKey, onMove } = props;
   // A press that travels becomes a drag; a still one stays a click on the tab or its X.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -274,8 +277,11 @@ export function SurfaceContentTabs<Key extends string>(props: {
               <Button
                 variant="chrome"
                 size="icon-xs"
-                aria-label={`${hiddenTabs.length} more ${hiddenTabs.length === 1 ? "tab" : "tabs"}`}
-                title="Show hidden tabs"
+                aria-label={t("{{value0}} more {{value1}}", {
+                  value0: hiddenTabs.length,
+                  value1: hiddenTabs.length === 1 ? t("tab") : t("tabs"),
+                })}
+                title={t("Show hidden tabs")}
                 className={cn(DOCK_HEADER_ICON_BUTTON_CLASS, "ms-0.5 self-center")}
               />
             }

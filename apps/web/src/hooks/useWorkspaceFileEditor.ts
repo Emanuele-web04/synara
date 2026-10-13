@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 import type { ProjectReadFileResult } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
@@ -73,6 +74,8 @@ export function useWorkspaceFileEditorBuffer(
 }
 
 export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
+  const { t } = useTranslation();
+
   const client = useQueryClient();
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
@@ -100,7 +103,7 @@ export function useWorkspaceFileEditor(input: UseWorkspaceFileEditorInput) {
       fileQuery.error instanceof Error
         ? fileQuery.error.message
         : fileQuery.error
-          ? "Could not read file."
+          ? t("Could not read file.")
           : null,
   };
 }

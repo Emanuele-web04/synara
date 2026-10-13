@@ -23,6 +23,7 @@ import { ProviderUsageLineList } from "./ProviderUsageLineList";
 import { ProviderUsageResetCredits } from "./ProviderUsageResetCredits";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { useTranslation } from "~/i18n";
 
 export { providerUsageLabel };
 
@@ -41,6 +42,8 @@ export function ProviderUsagePanelContent(props: {
   showLearnMore?: boolean | undefined;
   className?: string | undefined;
 }) {
+  const { t } = useTranslation();
+
   const { settings, updateSettings } = useAppSettings();
   const visibleRows = deriveProviderUsageDisplayRows(props.rateLimits);
   const learnMoreHref =
@@ -93,7 +96,7 @@ export function ProviderUsagePanelContent(props: {
               className="flex items-center gap-1 text-chat-meta text-muted-foreground transition-colors hover:text-foreground"
             >
               <DisclosureChevron open={detailsOpen} className="size-3" />
-              Details
+              {t("Details")}
             </button>
             <DisclosureRegion open={detailsOpen} contentClassName="space-y-2 pt-2">
               {resetCredits}
@@ -107,14 +110,14 @@ export function ProviderUsagePanelContent(props: {
           {usageLines ??
             (props.isLoading ? (
               <p className="text-chat-meta leading-relaxed text-muted-foreground">
-                Scanning local usage data for the selected provider.
+                {t("Scanning local usage data for the selected provider.")}
               </p>
             ) : (
               <p className="text-chat-meta leading-relaxed text-muted-foreground">
                 {props.emptyMessage ??
                   (props.provider
-                    ? "No local usage data was found yet for the selected provider."
-                    : "No local usage data was found yet.")}
+                    ? t("No local usage data was found yet for the selected provider.")
+                    : t("No local usage data was found yet."))}
               </p>
             ))}
         </>
@@ -126,7 +129,7 @@ export function ProviderUsagePanelContent(props: {
           rel="noopener noreferrer"
           className="flex items-center gap-1 pt-0.5 text-chat-meta text-muted-foreground transition-colors hover:text-foreground"
         >
-          Learn more
+          {t("Learn more")}
           <ExternalLinkIcon className="size-3" />
         </a>
       ) : null}

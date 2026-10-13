@@ -67,6 +67,7 @@ import {
   type GroupSettingsDraft,
   type GroupSettingsSection,
 } from "./groupSettingsDialog.logic";
+import { useTranslation } from "~/i18n";
 
 const GROUP_SETTINGS_SECTION_ICONS: Record<
   GroupSettingsSection,
@@ -93,6 +94,8 @@ export function GroupSettingsDialog(props: {
   readonly onOpenChange: (open: boolean) => void;
   readonly onSaved?: ((overview: ProjectAgentOverview) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const agent = useProjectAgent({ projectId: props.projectId, enabled: props.open });
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
@@ -186,7 +189,7 @@ export function GroupSettingsDialog(props: {
     if (!draft || !baseline || saving) return;
     const api = readNativeApi();
     if (!api?.projectAgent) {
-      setSaveError("Project coordinator is unavailable.");
+      setSaveError(t("Project coordinator is unavailable."));
       return;
     }
     setSaving(true);
@@ -327,14 +330,14 @@ export function GroupSettingsDialog(props: {
     });
     setDiscarding(false);
     if (result === null) {
-      setDiscardError("Could not delete this hub. Try again from the hub's settings.");
+      setDiscardError(t("Could not delete this hub. Try again from the hub's settings."));
       return;
     }
     setDiscardConfirmOpen(false);
     props.onOpenChange(false);
   };
 
-  const title = props.mode === "onboarding" ? "Set up your hub" : props.projectName;
+  const title = props.mode === "onboarding" ? t("Set up your hub") : props.projectName;
 
   return (
     <>
@@ -356,13 +359,13 @@ export function GroupSettingsDialog(props: {
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
               {props.mode === "onboarding"
-                ? "Choose how the coordinator works with this hub."
-                : "Coordinator settings for this hub."}
+                ? t("Choose how the coordinator works with this hub.")
+                : t("Coordinator settings for this hub.")}
             </DialogDescription>
           </DialogHeader>
           <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
             <nav
-              aria-label="Hub settings sections"
+              aria-label={t("Hub settings sections")}
               className="shrink-0 overflow-x-auto border-b border-[color:var(--color-border-light)] px-1.5 py-2 sm:w-[220px] sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r"
             >
               <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
@@ -391,7 +394,7 @@ export function GroupSettingsDialog(props: {
                         </span>
                         {dirtySections.has(id) ? (
                           <span
-                            aria-label="Unsaved changes"
+                            aria-label={t("Unsaved changes")}
                             className="ms-auto size-1.5 rounded-full bg-muted-foreground/60"
                           />
                         ) : null}
@@ -409,7 +412,7 @@ export function GroupSettingsDialog(props: {
                       {agent.error}
                     </p>
                   ) : (
-                    <Spinner aria-label="Loading hub settings" className="size-4" />
+                    <Spinner aria-label={t("Loading hub settings")} className="size-4" />
                   )}
                 </div>
               ) : section === "general" ? (
@@ -462,14 +465,14 @@ export function GroupSettingsDialog(props: {
               </p>
             ) : null}
             <Button type="button" variant="ghost" disabled={saving} onClick={() => requestClose()}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               type="button"
               disabled={saving || draft === null || (props.mode === "edit" && !dirty)}
               onClick={() => void handleSave()}
             >
-              {props.mode === "onboarding" ? "Create hub" : "Save"}
+              {props.mode === "onboarding" ? t("Create hub") : t("Save")}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -482,10 +485,12 @@ export function GroupSettingsDialog(props: {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Discard this hub?</AlertDialogTitle>
+            <AlertDialogTitle>{t("Discard this hub?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              "{props.projectName}" has no threads, files, or linked repositories yet. Deleting it
-              removes the hub entirely — or keep it and finish setup later.
+              "{props.projectName}
+              {t(
+                '" has no threads, files, or linked repositories yet. Deleting it removes the hub entirely — or keep it and finish setup later.',
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {discardError ? (
@@ -507,7 +512,7 @@ export function GroupSettingsDialog(props: {
                 />
               }
             >
-              Keep hub
+              {t("Keep hub")}
             </AlertDialogClose>
             <Button
               size="sm"
@@ -515,7 +520,7 @@ export function GroupSettingsDialog(props: {
               disabled={discarding}
               onClick={() => void confirmDiscard()}
             >
-              Discard hub
+              {t("Discard hub")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

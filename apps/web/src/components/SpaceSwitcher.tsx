@@ -44,6 +44,7 @@ import {
 } from "./sidebarContextMenuStyles";
 import { Menu, MenuGroup, MenuItem } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 export type SpaceActivityTone = "attention" | "running" | "completed";
 
@@ -335,6 +336,8 @@ function SpaceNameLabel(props: {
   takenNames: ReadonlyArray<string>;
   onRename: (name: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const [draft, setDraft] = useState<string | null>(null);
 
   if (draft === null) {
@@ -342,7 +345,7 @@ function SpaceNameLabel(props: {
       <span
         className="cursor-text truncate"
         onDoubleClick={() => setDraft(props.displayName)}
-        title="Double-click to rename"
+        title={t("Double-click to rename")}
       >
         {props.displayName}
       </span>
@@ -363,7 +366,7 @@ function SpaceNameLabel(props: {
       value={draft}
       autoFocus
       maxLength={SPACE_NAME_MAX_LENGTH}
-      aria-label="Space name"
+      aria-label={t("Space name")}
       aria-invalid={!isValid}
       onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setDraft(event.target.value)}
@@ -417,6 +420,8 @@ export function SpaceSwitcher(props: SpaceSwitcherProps) {
 }
 
 function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
+  const { t } = useTranslation();
+
   const { onSelect } = props;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [contextState, setContextState] = useState<{
@@ -535,7 +540,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
       <div className="flex items-center gap-1 px-1">
         <div
           role="tablist"
-          aria-label="Spaces"
+          aria-label={t("Spaces")}
           aria-orientation="horizontal"
           className="flex min-w-0 flex-1 items-center gap-1"
           onKeyDown={handleTabStripKeyDown}
@@ -624,7 +629,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
             render={
               <button
                 type="button"
-                aria-label="New space"
+                aria-label={t("New space")}
                 onClick={props.onCreate}
                 className={cn(SPACE_TAB_CLASS_NAME, "text-muted-foreground/55")}
               />
@@ -632,7 +637,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
           >
             <PlusIcon className="size-3.5" />
           </TooltipTrigger>
-          <TooltipPopup side="bottom">New space</TooltipPopup>
+          <TooltipPopup side="bottom">{t("New space")}</TooltipPopup>
         </Tooltip>
       </div>
 
@@ -656,7 +661,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                 }}
               >
                 <SidebarContextMenuIcon icon={PencilIcon} />
-                <span>{contextState.space ? "Edit space…" : "Edit name and icon…"}</span>
+                <span>{contextState.space ? t("Edit space…") : t("Edit name and icon…")}</span>
               </MenuItem>
               {contextState.space ? (
                 // Neutral, not red: deleting a space only files its projects back into
@@ -671,7 +676,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                   }}
                 >
                   <SidebarContextMenuIcon icon={Trash2} />
-                  <span>Delete space</span>
+                  <span>{t("Delete space")}</span>
                 </MenuItem>
               ) : voidIsCustomized ? (
                 // Void cannot be deleted — it is where projects live when they are nowhere —
@@ -684,7 +689,9 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                   }}
                 >
                   <SidebarContextMenuIcon icon={ResetIcon} />
-                  <span>Reset to {DEFAULT_VOID_SPACE.name}</span>
+                  <span>
+                    {t("Reset to")} {DEFAULT_VOID_SPACE.name}
+                  </span>
                 </MenuItem>
               ) : null}
             </MenuGroup>

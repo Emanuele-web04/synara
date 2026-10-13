@@ -18,6 +18,7 @@ import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import { CentralIcon } from "../lib/central-icons";
 import { cn } from "../lib/utils";
 import { AnnouncementSheet } from "./AnnouncementSheet";
+import { useTranslation } from "~/i18n";
 
 const BETA_WELCOME_STORAGE_KEY = "synara:beta-welcome:v1";
 
@@ -38,6 +39,8 @@ const WELCOME_POINTS = [
 ] as const;
 
 export function BetaWelcomeDialog() {
+  const { t } = useTranslation();
+
   const [storage, setStorage] = useLocalStorage(
     BETA_WELCOME_STORAGE_KEY,
     INITIAL_STORAGE,
@@ -128,8 +131,8 @@ export function BetaWelcomeDialog() {
       open={open && !storage.acknowledged}
       waitForOnboarding={false}
       hero={<img src="/app-icons/beta.png" alt="" className="size-16 rounded-2xl" />}
-      title="Welcome to Synara Beta"
-      description="New features land here first, before they reach Synara."
+      title={t("Welcome to Synara Beta")}
+      description={t("New features land here first, before they reach Synara.")}
       details={
         <div className="flex flex-col gap-4 pt-4">
           <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
@@ -156,7 +159,7 @@ export function BetaWelcomeDialog() {
         </div>
       }
       handOffOnConfirm={false}
-      confirmLabel="Get started"
+      confirmLabel={t("Get started")}
       onDismiss={acknowledge}
       onConfirm={acknowledge}
     />

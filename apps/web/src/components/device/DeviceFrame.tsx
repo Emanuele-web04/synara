@@ -21,6 +21,7 @@ import { memo, useId, useMemo, type CSSProperties, type ReactNode } from "react"
 
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 export type DeviceKind = "iPhone" | "androidPhone" | "iPad";
 
@@ -413,6 +414,8 @@ export const DeviceScreen = memo(function DeviceScreen({
   landscape?: boolean;
   onPressButton?: ((button: DeviceHardwareButton) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const geo = useMemo(
     () => screenGeometry(kind, pixelWidth, pixelHeight),
     [kind, pixelWidth, pixelHeight],
@@ -493,7 +496,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                   interactive ? (
                     <button
                       type="button"
-                      aria-label={action.label}
+                      aria-label={t(action.label)}
                       disabled={buttonsDisabled}
                       onClick={() => onPressButton?.(press)}
                       className={cn(
@@ -510,7 +513,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                     // tab stop and offers no press affordance — only the
                     // tooltip that says why.
                     <span
-                      aria-label={action.label}
+                      aria-label={t(action.label)}
                       className="absolute cursor-default rounded-full"
                       style={style}
                     />
@@ -518,7 +521,12 @@ export const DeviceScreen = memo(function DeviceScreen({
                 }
               />
               <TooltipPopup side={side === "top" ? "top" : side}>
-                {action.hint ? `${action.label} — ${action.hint}` : action.label}
+                {action.hint
+                  ? t("{{value0}} — {{value1}}", {
+                      value0: t(action.label),
+                      value1: t(action.hint),
+                    })
+                  : t(action.label)}
               </TooltipPopup>
             </Tooltip>
           );

@@ -41,6 +41,7 @@ import { getNextVisibleSidebarThreadId } from "../Sidebar.logic";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import { toastManager } from "../ui/toast";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
+import { useTranslation } from "~/i18n";
 
 const CLOSE_TABS_MENU_ID_PREFIX = "close-tabs:";
 const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: string }[] = [
@@ -54,6 +55,8 @@ export function OpenThreadTabStrip(props: {
   keybindings: ResolvedKeybindingsConfig;
   onRenameActiveThread: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { activeThreadId, keybindings } = props;
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
@@ -134,7 +137,7 @@ export function OpenThreadTabStrip(props: {
       if (!result.ok) {
         toastManager.add({
           type: "error",
-          title: "Unable to close the tab",
+          title: t("Unable to close the tab"),
           description: result.error,
         });
       }
@@ -169,7 +172,7 @@ export function OpenThreadTabStrip(props: {
       (row) => resolveOpenThreadTabsInCloseScope(tabs, tab.threadId, row.scope).length > 0,
     ).map((row, index) => ({
       id: `${CLOSE_TABS_MENU_ID_PREFIX}${row.scope}`,
-      label: row.label,
+      label: t(row.label),
       separatorBefore: index === 0,
     }));
     const onCloseAction = (itemId: string) => {
@@ -196,7 +199,7 @@ export function OpenThreadTabStrip(props: {
 
   return (
     <SurfaceContentTabs
-      ariaLabel="Open threads"
+      ariaLabel={t("Open threads")}
       activeKey={shownThreadId}
       selectionAria="current"
       onMove={moveThreadTab}
@@ -208,7 +211,7 @@ export function OpenThreadTabStrip(props: {
           icon:
             // A running thread spins in place of its glyph, like its sidebar row.
             tab.isRunning ? (
-              <span role="img" aria-label="Working" className="inline-flex">
+              <span role="img" aria-label={t("Working")} className="inline-flex">
                 <ThreadRunningSpinner className="size-3.5" />
               </span>
             ) : tab.isTerminal ? (

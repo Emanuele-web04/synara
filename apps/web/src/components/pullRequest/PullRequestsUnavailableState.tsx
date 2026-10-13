@@ -24,6 +24,7 @@ import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { formatShortTimestamp } from "~/timestampFormat";
 import { PR_FINE_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
+import { useTranslation } from "~/i18n";
 
 export function isPullRequestsUnavailableError(error: unknown): error is {
   _tag: "PullRequestsUnavailableError";
@@ -47,6 +48,8 @@ function githubCliInstallCommand(platform: string): string | null {
 
 /** A single copyable terminal command — the `brew install gh` / `gh auth login` affordances. */
 function CommandLine({ command }: { command: string }) {
+  const { t } = useTranslation();
+
   const [copied, setCopied] = useState(false);
   const mountedRef = useRef(true);
   const resetTimerRef = useRef<number | null>(null);
@@ -77,13 +80,13 @@ function CommandLine({ command }: { command: string }) {
             if (!mountedRef.current) return;
             toastManager.add({
               type: "error",
-              title: "Could not copy command",
-              description: error instanceof Error ? error.message : "Clipboard access failed.",
+              title: t("Could not copy command"),
+              description: error instanceof Error ? error.message : t("Clipboard access failed."),
             });
           },
         );
       }}
-      title="Copy to clipboard"
+      title={t("Copy to clipboard")}
       className="group flex w-full items-center gap-2 rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)] px-3 py-2 text-left transition-colors hover:border-border"
     >
       <code
@@ -100,11 +103,11 @@ function CommandLine({ command }: { command: string }) {
       >
         {copied ? (
           <>
-            <CheckIcon className="size-3" /> Copied
+            <CheckIcon className="size-3" /> {t("Copied")}
           </>
         ) : (
           <>
-            <CopyIcon className="size-3" /> Copy
+            <CopyIcon className="size-3" /> {t("Copy")}
           </>
         )}
       </span>
@@ -123,6 +126,8 @@ export function PullRequestsUnavailableState({
   /** What failed to load, as a plural noun for the title ("Pull requests are unavailable"). */
   subject?: string;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const subject = subjectProp ?? "Pull requests";
   const { settings } = useAppSettings();
   const unavailable = isPullRequestsUnavailableError(error) ? error : null;
@@ -131,7 +136,7 @@ export function PullRequestsUnavailableState({
   const rateLimited = unavailable?.reason === "rate-limited";
   const resetTime =
     rateLimited && unavailable?.retryAt
-      ? formatShortTimestamp(unavailable.retryAt, settings.timestampFormat)
+      ? formatShortTimestamp(unavailable.retryAt, settings.timestampFormat, formatLocale)
       : null;
   const installCommand =
     notInstalled && typeof navigator !== "undefined"
@@ -146,25 +151,29 @@ export function PullRequestsUnavailableState({
         </EmptyMedia>
         <EmptyTitle>
           {notInstalled
-            ? "GitHub CLI is required"
+            ? t("GitHub CLI is required")
             : notAuthenticated
-              ? "Sign in to GitHub CLI"
+              ? t("Sign in to GitHub CLI")
               : rateLimited
-                ? "GitHub rate limit reached"
-                : `${subject} are unavailable`}
+                ? t("GitHub rate limit reached")
+                : t("{{value0}} are unavailable", { value0: subject })}
         </EmptyTitle>
         <EmptyDescription>
           {notInstalled
-            ? "Synara reads GitHub data only through the gh CLI. Install it, then reopen this view."
+            ? t(
+                "Synara reads GitHub data only through the gh CLI. Install it, then reopen this view.",
+              )
             : notAuthenticated
-              ? "Authenticate the GitHub CLI in a terminal, then retry."
+              ? t("Authenticate the GitHub CLI in a terminal, then retry.")
               : rateLimited
                 ? resetTime
-                  ? `Synara pauses GitHub requests until the limit resets at ${resetTime}.`
-                  : "Synara pauses GitHub requests until the limit resets."
+                  ? t("Synara pauses GitHub requests until the limit resets at {{value0}}.", {
+                      value0: resetTime,
+                    })
+                  : t("Synara pauses GitHub requests until the limit resets.")
                 : error instanceof Error
                   ? error.message
-                  : "The request to GitHub failed."}
+                  : t("The request to GitHub failed.")}
         </EmptyDescription>
       </EmptyHeader>
       {notInstalled || notAuthenticated ? (
@@ -179,7 +188,7 @@ export function PullRequestsUnavailableState({
                 className="flex-1"
                 onClick={() => void ensureNativeApi().shell.openExternal("https://cli.github.com/")}
               >
-                Install instructions
+                {t("Install instructions")}
               </Button>
             ) : null}
             {onRetry ? (
@@ -189,7 +198,7 @@ export function PullRequestsUnavailableState({
                 className="flex-1"
                 onClick={onRetry}
               >
-                Retry
+                {t("Retry")}
               </Button>
             ) : null}
           </div>
@@ -205,13 +214,13 @@ export function PullRequestsUnavailableState({
             <TriangleAlertIcon className="size-3.5" />
             <span>
               {rateLimited
-                ? "The list refreshes on its own once the limit resets."
-                : "Check your connection and try again."}
+                ? t("The list refreshes on its own once the limit resets.")
+                : t("Check your connection and try again.")}
             </span>
           </div>
           {onRetry ? (
             <Button variant="outline" size="sm" onClick={onRetry}>
-              Retry
+              {t("Retry")}
             </Button>
           ) : null}
         </div>

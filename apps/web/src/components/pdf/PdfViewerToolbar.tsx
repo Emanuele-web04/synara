@@ -26,6 +26,7 @@ import {
 import { OpenInPicker } from "../chat/OpenInPicker";
 import { Badge } from "../ui/badge";
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { useTranslation } from "~/i18n";
 
 interface PdfViewerToolbarProps {
   fileName: string;
@@ -54,6 +55,8 @@ function zoomSelectionValue(mode: PdfZoomMode, scale: number): string {
 }
 
 export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolbarProps) {
+  const { t } = useTranslation();
+
   const selectionValue = zoomSelectionValue(props.zoomMode, props.scale);
 
   return (
@@ -70,13 +73,13 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
           {props.fileName}
         </span>
         <Badge variant="outline" size="sm" className="text-muted-foreground/80">
-          PDF
+          {t("PDF")}
         </Badge>
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
         <ChatHeaderIconButton
-          label="Previous page"
+          label={t("Previous page")}
           tone="plain"
           disabled={props.currentPage <= 1}
           onClick={() => props.onJumpToPage(props.currentPage - 1)}
@@ -90,7 +93,7 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
           onJumpToPage={props.onJumpToPage}
         />
         <ChatHeaderIconButton
-          label="Next page"
+          label={t("Next page")}
           tone="plain"
           disabled={props.currentPage >= props.numPages}
           onClick={() => props.onJumpToPage(props.currentPage + 1)}
@@ -101,7 +104,7 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
         <div className="flex items-center gap-0.5">
-          <ChatHeaderIconButton label="Zoom out" tone="plain" onClick={props.onZoomOut}>
+          <ChatHeaderIconButton label={t("Zoom out")} tone="plain" onClick={props.onZoomOut}>
             <MinusIcon aria-hidden="true" className="size-4" />
           </ChatHeaderIconButton>
           <Menu>
@@ -129,8 +132,8 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
                   }
                 }}
               >
-                <MenuRadioItem value="fit-width">Fit width</MenuRadioItem>
-                <MenuRadioItem value="fit-page">Fit page</MenuRadioItem>
+                <MenuRadioItem value="fit-width">{t("Fit width")}</MenuRadioItem>
+                <MenuRadioItem value="fit-page">{t("Fit page")}</MenuRadioItem>
                 <MenuSeparator className="mx-1" />
                 {PDF_ZOOM_PRESETS.map((preset) => {
                   const percent = String(Math.round(preset * 100));
@@ -143,13 +146,17 @@ export const PdfViewerToolbar = function PdfViewerToolbar(props: PdfViewerToolba
               </MenuRadioGroup>
             </ComposerPickerMenuPopup>
           </Menu>
-          <ChatHeaderIconButton label="Zoom in" tone="plain" onClick={props.onZoomIn}>
+          <ChatHeaderIconButton label={t("Zoom in")} tone="plain" onClick={props.onZoomIn}>
             <PlusIcon aria-hidden="true" className="size-4" />
           </ChatHeaderIconButton>
         </div>
 
         {props.onReload ? (
-          <ChatHeaderIconButton label="Reload file from disk" tone="plain" onClick={props.onReload}>
+          <ChatHeaderIconButton
+            label={t("Reload file from disk")}
+            tone="plain"
+            onClick={props.onReload}
+          >
             <RefreshCwIcon aria-hidden="true" className="size-3.5" />
           </ChatHeaderIconButton>
         ) : null}
@@ -172,6 +179,8 @@ function PdfPageIndicator({
   numPages: number;
   onJumpToPage: (pageNumber: number) => void;
 }) {
+  const { t } = useTranslation();
+
   // The caller keys this editor by currentPage, so every navigation gets a new
   // draft even when the page sequence returns A -> B -> A.
   const [draft, setDraft] = useState(String(currentPage));
@@ -194,7 +203,7 @@ function PdfPageIndicator({
       <input
         value={draft}
         inputMode="numeric"
-        aria-label="Current page"
+        aria-label={t("Current page")}
         className="h-6 w-8 rounded-sm border border-border/60 bg-transparent text-center text-ui-sm text-foreground tabular-nums outline-none focus-visible:border-[color:var(--color-border-focus)]"
         onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ""))}
         onBlur={commit}

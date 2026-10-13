@@ -48,6 +48,7 @@ import {
   type TickStyle,
   type TrailGeometry,
 } from "./messageTrail.logic";
+import { useTranslation } from "~/i18n";
 
 interface MessageTrailProps {
   items: readonly MessageTrailItem[];
@@ -103,6 +104,8 @@ export function MessageTrail({
   contentInsetRightPx = 0,
   subscribeAudioLevel,
 }: MessageTrailProps) {
+  const { t } = useTranslation();
+
   const rootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -707,7 +710,7 @@ export function MessageTrail({
   return (
     <nav
       ref={rootRef}
-      aria-label="Message navigation"
+      aria-label={t("Message navigation")}
       aria-hidden={!visible}
       onKeyDown={handleKeyDown}
       onBlur={handleRailBlur}
@@ -754,7 +757,10 @@ export function MessageTrail({
                 }}
                 type="button"
                 tabIndex={visible && index === tabStop ? 0 : -1}
-                aria-label={`Message ${item.ordinal}: ${item.preview.slice(0, 60)}`}
+                aria-label={t("Message {{value0}}: {{value1}}", {
+                  value0: item.ordinal,
+                  value1: item.preview.slice(0, 60),
+                })}
                 aria-describedby={tooltipId}
                 aria-current={index === anchorIndex ? "location" : undefined}
                 onFocus={() => handleTickFocus(index)}

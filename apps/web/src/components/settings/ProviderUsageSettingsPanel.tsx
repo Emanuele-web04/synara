@@ -44,6 +44,7 @@ import {
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { t, useTranslation } from "~/i18n";
 
 const RAIL_USAGE_WINDOW_OPTIONS = [
   { value: "both", label: "Both" },
@@ -62,13 +63,13 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   switch (status) {
     case "needs-auth":
       return {
-        label: "Not signed in",
+        label: t("Not signed in"),
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
-      return { label: "Unsupported", className: "bg-muted text-muted-foreground" };
+      return { label: t("Unsupported"), className: "bg-muted text-muted-foreground" };
     case "error":
-      return { label: "Unavailable", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
+      return { label: t("Unavailable"), className: "bg-red-500/12 text-red-600 dark:text-red-400" };
     default:
       return null;
   }
@@ -81,6 +82,8 @@ function ProviderUsageCard({
   snapshot: ServerProviderUsageSnapshot;
   accountLabel: string | null;
 }) {
+  const { t } = useTranslation();
+
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
@@ -151,7 +154,7 @@ function ProviderUsageCard({
         ) : (
           <p className="text-ui leading-relaxed text-muted-foreground">
             {status === "ok"
-              ? "No usage data reported yet."
+              ? t("No usage data reported yet.")
               : (snapshot.detail ?? providerUsageNeedsAuthDetail(provider))}
           </p>
         )}
@@ -161,6 +164,8 @@ function ProviderUsageCard({
 }
 
 export function ProviderUsageSettingsPanel() {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -249,7 +254,9 @@ export function ProviderUsageSettingsPanel() {
                       ),
                     })
                   }
-                  aria-label={`Show ${label} usage at the bottom of the sidebar`}
+                  aria-label={t("Show {{value0}} usage at the bottom of the sidebar", {
+                    value0: label,
+                  })}
                 />
               }
             />
@@ -262,8 +269,11 @@ export function ProviderUsageSettingsPanel() {
             <SettingsSegmentedControl
               value={settings.railUsageWindow}
               onValueChange={(value) => updateSettings({ railUsageWindow: value })}
-              ariaLabel="Sidebar usage ring"
-              options={RAIL_USAGE_WINDOW_OPTIONS}
+              ariaLabel={t("Sidebar usage ring")}
+              options={RAIL_USAGE_WINDOW_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
             />
           }
         />
@@ -276,7 +286,7 @@ export function ProviderUsageSettingsPanel() {
             <Switch
               checked={settings.usageDetailsDefaultOpen}
               onCheckedChange={(next) => updateSettings({ usageDetailsDefaultOpen: Boolean(next) })}
-              aria-label="Show usage details by default in usage popovers"
+              aria-label={t("Show usage details by default in usage popovers")}
             />
           }
         />
@@ -290,7 +300,7 @@ export function ProviderUsageSettingsPanel() {
                 onCheckedChange={(next) =>
                   updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
                 }
-                aria-label="Show banked resets in usage popovers"
+                aria-label={t("Show banked resets in usage popovers")}
               />
             }
           />
@@ -304,7 +314,7 @@ export function ProviderUsageSettingsPanel() {
               onCheckedChange={(next) =>
                 updateSettings({ usagePopoverShowUsageLines: Boolean(next) })
               }
-              aria-label="Show credits and token totals in usage popovers"
+              aria-label={t("Show credits and token totals in usage popovers")}
             />
           }
         />
@@ -320,14 +330,14 @@ export function ProviderUsageSettingsPanel() {
             onClick={() => refreshMutation.mutate()}
           >
             <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-            Refresh
+            {t("Refresh")}
           </Button>
         }
       >
         {showInitialLoading ? (
           <SettingsCard>
             <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
-              Loading provider usage…
+              {t("Loading provider usage…")}
             </div>
           </SettingsCard>
         ) : (
@@ -339,7 +349,7 @@ export function ProviderUsageSettingsPanel() {
                 instanceId !== snapshot.provider
                   ? (instance?.displayName ?? instanceId)
                   : instance?.raw.displayName?.trim() ||
-                    (snapshot.instanceId ? "Default account" : null);
+                    (snapshot.instanceId ? t("Default account") : null);
               return (
                 <ProviderUsageCard
                   key={instanceId}
@@ -352,10 +362,9 @@ export function ProviderUsageSettingsPanel() {
         )}
 
         <p className="px-2 text-ui-sm leading-relaxed text-muted-foreground">
-          Usage is read locally from each provider CLI&apos;s stored credentials and fetched
-          directly from the provider. The list follows whatever you are signed into; unsigned
-          providers stay visible until any account is connected, then drop away. Short-lived tokens
-          are refreshed through the provider&apos;s own CLI or official token endpoint.
+          {t(
+            "Usage is read locally from each provider CLI's stored credentials and fetched directly from the provider. The list follows whatever you are signed into; unsigned providers stay visible until any account is connected, then drop away. Short-lived tokens are refreshed through the provider's own CLI or official token endpoint.",
+          )}
         </p>
       </SettingsSectionShell>
     </>

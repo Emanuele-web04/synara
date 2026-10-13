@@ -37,6 +37,7 @@ import {
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarIconButton } from "./SidebarIconButton";
+import { useTranslation } from "~/i18n";
 
 type RailGlyph = ComponentType<{ className?: string }>;
 /** A rail button's glyph pair: outline at rest, filled while active (like Codex). */
@@ -162,7 +163,11 @@ export function appRailButtonClassName(active: boolean): string {
 }
 
 function AppRailButton({ item }: { item: AppRailItem }) {
-  const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
+  const { t } = useTranslation();
+
+  const label = item.badge
+    ? t("{{value0}} · {{value1}}", { value0: item.label, value1: item.badge.accessibleLabel })
+    : item.label;
   const glyphs = item.glyphs;
   const button = (
     <SidebarIconButton
@@ -201,9 +206,11 @@ export function AppRail({
   bottomSlot,
   onContextMenu,
 }: AppRailProps) {
+  const { t } = useTranslation();
+
   return (
     <nav
-      aria-label="Primary"
+      aria-label={t("Primary")}
       onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >

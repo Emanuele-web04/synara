@@ -9,6 +9,7 @@ import type { CSSProperties } from "react";
 
 import { cn } from "~/lib/utils";
 import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
+import { useTranslation } from "~/i18n";
 
 interface ReviewChangesButtonProps {
   onClick: () => void;
@@ -23,7 +24,9 @@ export const ReviewChangesButton = function ReviewChangesButton({
   style,
   label: labelProp,
 }: ReviewChangesButtonProps) {
-  const label = labelProp ?? "Review";
+  const { t } = useTranslation();
+
+  const label = labelProp ?? t("Review");
   return (
     <button
       type="button"

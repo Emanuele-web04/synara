@@ -20,6 +20,7 @@ import { useSpacesUiStore } from "~/spacesUiStore";
 import { useStore } from "~/store";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { SpaceIcon } from "./SpaceIcon";
+import { useTranslation } from "~/i18n";
 
 export interface ProjectMenuPickerOption {
   readonly id: ProjectId;
@@ -88,6 +89,8 @@ function ProjectMenuPickerList(props: {
   noneOption?: ProjectMenuPickerNoneOption | undefined;
   closeOnSelect: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [query, setQuery] = useState("");
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
@@ -131,7 +134,7 @@ function ProjectMenuPickerList(props: {
 
   return (
     <PickerPanelShell
-      searchPlaceholder="Search projects"
+      searchPlaceholder={t("Search projects")}
       query={query}
       onQueryChange={setQuery}
       // Lets Arrow/Enter fall through to the menu so the search field and the
@@ -185,7 +188,7 @@ function ProjectMenuPickerList(props: {
       {/* Shown under the "none" row too, so an empty search still says why. */}
       {groupedOptions.length === 0 ? (
         <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground/60">
-          {props.projectOptions.length === 0 ? "No projects yet" : "No matching projects"}
+          {props.projectOptions.length === 0 ? t("No projects yet") : t("No matching projects")}
         </p>
       ) : null}
     </PickerPanelShell>

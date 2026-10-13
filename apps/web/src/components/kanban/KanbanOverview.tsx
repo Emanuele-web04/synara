@@ -18,6 +18,7 @@ import {
   type KanbanCard,
   type KanbanProjectBoard,
 } from "./kanban.logic";
+import { useTranslation } from "~/i18n";
 
 const OverviewProjectColumn = function OverviewProjectColumn({
   projectBoard,
@@ -38,6 +39,8 @@ const OverviewProjectColumn = function OverviewProjectColumn({
   nowMs?: number;
   viewMode: KanbanViewMode;
 }) {
+  const { t } = useTranslation();
+
   const { visibleCards, hiddenCount } = overviewVisibleKanbanCards(projectBoard, viewMode === "v2");
 
   return (
@@ -63,8 +66,8 @@ const OverviewProjectColumn = function OverviewProjectColumn({
           size="icon-xs"
           variant="ghost"
           className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-          aria-label={`New task in ${projectBoard.projectName}`}
-          title={`New task in ${projectBoard.projectName}`}
+          aria-label={t("New task in {{value0}}", { value0: projectBoard.projectName })}
+          title={t("New task in {{value0}}", { value0: projectBoard.projectName })}
           onClick={() => onNewTask(projectBoard.projectId)}
         >
           <PlusIcon className="size-3.5" />
@@ -89,7 +92,7 @@ const OverviewProjectColumn = function OverviewProjectColumn({
               onClick={() => onOpenProject(projectBoard.projectId)}
               className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
             >
-              Show {hiddenCount} more
+              {t("Show")} {hiddenCount} {t("more")}
             </button>
           </li>
         ) : null}
@@ -117,6 +120,8 @@ export function KanbanOverview({
   nowMs?: number;
   viewMode: KanbanViewMode;
 }) {
+  const { t } = useTranslation();
+
   // Projects without any cards are pure noise on the overview; their boards stay
   // reachable through /kanban/$projectId if linked directly.
   const visibleProjects = board.projects.filter((projectBoard) => projectBoard.totalCount > 0);
@@ -125,9 +130,13 @@ export function KanbanOverview({
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="max-w-sm text-center">
-          <div className="text-ui-lg font-medium text-foreground/85">Nothing on the board yet</div>
+          <div className="text-ui-lg font-medium text-foreground/85">
+            {t("Nothing on the board yet")}
+          </div>
           <div className="mt-1 text-ui leading-snug text-muted-foreground">
-            Drafted prompts, running turns, and completed chats will show up here automatically.
+            {t(
+              "Drafted prompts, running turns, and completed chats will show up here automatically.",
+            )}
           </div>
         </div>
       </div>

@@ -5,6 +5,7 @@
 
 import { BotIcon, CircleCheckIcon, FolderIcon, type LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 import { ONBOARDING_TILE_CLASS_NAME } from "../layout";
 
 const WELCOME_POINTS: ReadonlyArray<{
@@ -30,6 +31,7 @@ const WELCOME_POINTS: ReadonlyArray<{
 ];
 
 export function WelcomeStep() {
+  const { t } = useTranslation();
   return (
     <ul className="grid grid-cols-3 gap-4">
       {WELCOME_POINTS.map((point) => {
@@ -40,9 +42,9 @@ export function WelcomeStep() {
             className={cn("flex flex-col gap-2.5 p-5", ONBOARDING_TILE_CLASS_NAME)}
           >
             <Icon className="size-[18px] text-foreground/80" aria-hidden />
-            <span className="text-ui-lg font-medium text-foreground">{point.title}</span>
+            <span className="text-ui-lg font-medium text-foreground">{t(point.title)}</span>
             <span className="text-ui leading-normal text-muted-foreground">
-              {point.description}
+              {t(point.description)}
             </span>
           </li>
         );

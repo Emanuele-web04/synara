@@ -32,6 +32,7 @@ import {
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 function EnvironmentUsageAccountRow({
   instance,
@@ -104,6 +105,8 @@ function EnvironmentUsageAccountRow({
 }
 
 export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+  const { t } = useTranslation();
+
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   const providerInstances = deriveProviderInstances(
@@ -140,7 +143,9 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
       {
         instance,
         snapshot,
-        label: showAccountName ? `${providerName} · ${accountName}` : providerName,
+        label: showAccountName
+          ? t("{{value0}} · {{value1}}", { value0: providerName, value1: accountName })
+          : providerName,
       },
     ];
   });
@@ -148,7 +153,7 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
   if (accounts.length === 0) return null;
 
   return (
-    <EnvironmentLabeledSection label="Usage">
+    <EnvironmentLabeledSection label={t("Usage")}>
       {accounts.map(({ instance, snapshot, label }) => (
         <EnvironmentUsageAccountRow
           key={instance.instanceId}

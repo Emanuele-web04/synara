@@ -29,6 +29,7 @@ import {
   shortcutModifiersFromKeyboardEvent,
 } from "~/lib/keybindingCapture";
 import { cn, isMacPlatform } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 export interface ShortcutRecorderTarget {
   /** The row as it was when the dialog opened; the live one is looked up by its id. */
@@ -151,6 +152,8 @@ function ShortcutRecorder({
   onClose: () => void;
   onApply: (edits: ServerKeybindingEdit[]) => Promise<boolean>;
 }) {
+  const { t } = useTranslation();
+
   const statusId = useId();
   // Judge against the live bindings, so a change made elsewhere while the dialog is open
   // (another window, keybindings.json) is never overwritten from an old copy. Once a
@@ -327,7 +330,9 @@ function ShortcutRecorder({
         <div className="min-w-0 space-y-0.5">
           <DialogTitle className="truncate text-[15px]">{row.label}</DialogTitle>
           <DialogDescription className="text-ui-sm">
-            {binding ? "Press new keys to change its shortcut." : "Choose the keys that run it."}
+            {binding
+              ? t("Press new keys to change its shortcut.")
+              : t("Choose the keys that run it.")}
           </DialogDescription>
         </div>
       </div>
@@ -337,7 +342,11 @@ function ShortcutRecorder({
         ref={keyWellRef}
         tabIndex={-1}
         role="group"
-        aria-label={recorded ? `Shortcut ${shortcutLabel(recorded)}` : "Type a shortcut"}
+        aria-label={
+          recorded
+            ? t("Shortcut {{value0}}", { value0: shortcutLabel(recorded) })
+            : t("Type a shortcut")
+        }
         aria-describedby={statusId}
         className="flex min-h-[88px] items-center justify-center gap-2 rounded-xl border border-[color:var(--color-border)] bg-muted px-3 shadow-[inset_0_1px_3px_rgba(0,0,0,0.12)] outline-none dark:shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]"
       >
@@ -357,7 +366,9 @@ function ShortcutRecorder({
             ))}
           </>
         ) : (
-          <span className="text-ui font-medium text-muted-foreground/70">Type a shortcut</span>
+          <span className="text-ui font-medium text-muted-foreground/70">
+            {t("Type a shortcut")}
+          </span>
         )}
       </div>
 
@@ -389,9 +400,10 @@ function ShortcutRecorder({
               <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
               <span>
                 {conflicts.length > 0
-                  ? `${shortcutLabel(recorded)} already runs ${joinLabels([
-                      ...new Set(conflicts.map((conflict) => conflict.label)),
-                    ])}. Saving moves it here.`
+                  ? t("{{value0}} already runs {{value1}}. Saving moves it here.", {
+                      value0: shortcutLabel(recorded),
+                      value1: joinLabels([...new Set(conflicts.map((conflict) => conflict.label))]),
+                    })
                   : null}
                 {conflicts.length > 0 && caution ? " " : null}
                 {caution}
@@ -400,13 +412,15 @@ function ShortcutRecorder({
           ) : (
             <>
               <CircleCheckIcon className="mt-px size-3.5 shrink-0 text-success" />
-              <span className="text-foreground/85">{shortcutLabel(recorded)} is available.</span>
+              <span className="text-foreground/85">
+                {shortcutLabel(recorded)} {t("is available.")}
+              </span>
             </>
           )
         ) : (
           <span>
             {row.numbered
-              ? "Hold the modifiers, then press any number key."
+              ? t("Hold the modifiers, then press any number key.")
               : shortcutModifierHint(platform)}
           </span>
         )}
@@ -424,15 +438,15 @@ function ShortcutRecorder({
               if (event.detail <= 1) reset();
             }}
           >
-            {confirmReset ? "Reset anyway" : "Reset to default"}
+            {confirmReset ? t("Reset anyway") : t("Reset to default")}
           </Button>
         ) : null}
         <div className="flex-1" />
         <Button size="sm" variant="outline" disabled={isSaving} onClick={onClose}>
-          Cancel
+          {t("Cancel")}
         </Button>
         <Button size="sm" disabled={!canSave} onClick={save}>
-          Save
+          {t("Save")}
         </Button>
       </div>
     </div>

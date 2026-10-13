@@ -5,6 +5,7 @@
 
 import type { ComputerWindow } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { i18n, setLanguagePreference, t } from "~/i18n";
 
 import {
   computerToolName,
@@ -36,6 +37,84 @@ describe("computerToolName", () => {
 });
 
 describe("describeComputerToolCall", () => {
+  it("keeps a requested English source description separate from Spanish UI presentation", () => {
+    i18n.addResources("es", "translation", {
+      Wait_computerTool: "Esperar",
+      "for {{duration}} {{unit}}": "durante {{duration}} {{unit}}",
+      seconds: "segundos",
+      "in {{target}}": "en {{target}}",
+      "Zoom into a window_computerTool": "Ampliar una ventana",
+      "at ({{x}}, {{y}})": "en ({{x}}, {{y}})",
+    });
+    const input = {
+      toolName: "computer_wait",
+      args: { duration_ms: 2_000, app: "Settings", text: "/repo/Settings" },
+    };
+    const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
+    try {
+      setLanguagePreference("es");
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Esperar durante 2 segundos en Settings",
+      );
+      const source = describeComputerToolCall(input, sourceTranslate);
+      expect(source?.summary).toBe("Wait for 2 seconds in Settings");
+      expect(source?.tool).toBe("computer_wait");
+      expect(source?.params).toContainEqual({ name: "Text", value: "/repo/Settings" });
+      const nested = {
+        toolName: "computer_inspect",
+        args: { tool: "computer_zoom", arguments: { x: 10, y: 20, window_id: "win-7" } },
+        windows: [{ ...SAFARI, title: "Settings" }],
+      };
+      expect(describeComputerToolCall(nested, sourceTranslate)?.summary).toBe(
+        "Zoom into a window at (10, 20) in Safari — Settings",
+      );
+      expect(describeComputerToolCall(nested)?.summary).toBe(
+        "Ampliar una ventana en (10, 20) en Safari — Settings",
+      );
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Esperar durante 2 segundos en Settings",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
+  it("localizes generated action labels without translating target names or payloads", () => {
+    i18n.addResources("es", "translation", {
+      Click: "Hacer clic",
+      "on “{{label}}”": "en “{{label}}”",
+      "in {{target}}": "en {{target}}",
+      Target: "Destino",
+      Window: "Ventana",
+      Text: "Texto",
+      "Attach {{count}} files in the browser": "Adjuntar {{count}} archivos en el navegador",
+    });
+    const input = {
+      toolName: "mcp__synara__computer_click",
+      args: { label: "Settings", window_id: "win-7", text: "Settings" },
+      windows: [{ ...SAFARI, title: "Settings" }],
+    };
+    try {
+      setLanguagePreference("es");
+      const spanish = describeComputerToolCall(input);
+      expect(spanish?.tool).toBe("computer_click");
+      expect(spanish?.summary).toBe("Hacer clic en “Settings” en Safari — Settings");
+      expect(spanish?.params).toContainEqual({ name: "Texto", value: "Settings" });
+      expect(
+        describeComputerToolCall({
+          toolName: "computer_browser_upload",
+          args: { files: ["Settings", "Archive"] },
+        })?.summary,
+      ).toBe("Adjuntar 2 archivos en el navegador");
+      setLanguagePreference("en");
+      expect(describeComputerToolCall(input)?.summary).toBe(
+        "Click on “Settings” in Safari — Settings",
+      );
+    } finally {
+      setLanguagePreference("en");
+    }
+  });
+
   it("says verb, coordinate and window instead of the raw call", () => {
     const described = describeComputerToolCall({
       toolName: "mcp__synara__computer_click",

@@ -3,11 +3,14 @@ import { useRef } from "react";
 import { useTimelineSynchronizedAnimations } from "~/lib/animationTimelineSync";
 import { Loader2Icon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 function Spinner({ className, ...props }: React.ComponentProps<typeof Loader2Icon>) {
+  const { t } = useTranslation();
+
   return (
     <Loader2Icon
-      aria-label="Loading"
+      aria-label={t("Loading")}
       className={cn("animate-spin", className)}
       role="status"
       {...props}

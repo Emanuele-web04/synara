@@ -8,6 +8,7 @@ import { ArrowRightIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
 import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 export function ComposerBranchMismatchBanner({
   threadBranch,
@@ -16,6 +17,8 @@ export function ComposerBranchMismatchBanner({
   threadBranch: string;
   currentBranch: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ComposerStackedPanel
       detached
@@ -29,7 +32,7 @@ export function ComposerBranchMismatchBanner({
       />
       <div className="min-w-0 flex-1">
         <p className="truncate text-ui-sm leading-5 font-medium text-foreground/95">
-          Sending a message will move this thread to the current branch
+          {t("Sending a message will move this thread to the current branch")}
         </p>
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-ui-sm leading-5">
           <code

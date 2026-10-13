@@ -18,6 +18,7 @@ import {
 } from "~/lib/codexResetAttempt";
 import { consumeCodexResetCredit, serverQueryKeys } from "~/lib/serverReactQuery";
 import { readNativeApi } from "~/nativeApi";
+import { useTranslation } from "~/i18n";
 
 function formatExpiry(expiresAt: string | undefined, now: number): string {
   if (!expiresAt) return "No expiry listed";
@@ -37,6 +38,8 @@ export function ProviderUsageResetCredits({
   resetCredits: ServerCodexResetCredits;
   surface?: "settings" | "popover";
 }) {
+  const { t } = useTranslation();
+
   const { accountId, availableCount, canUse, credits } = resetCredits;
   const queryClient = useQueryClient();
   const locked = useRef(false);
@@ -76,8 +79,9 @@ export function ProviderUsageResetCredits({
     setConfirming(true);
     try {
       const api = readNativeApi();
-      const message =
-        "Use one Codex reset?\nThis spends one banked reset and cannot be undone. Synara will check your current account and usage first.";
+      const message = t(
+        "Use one Codex reset?\nThis spends one banked reset and cannot be undone. Synara will check your current account and usage first.",
+      );
       const confirmed = api
         ? await api.dialogs.confirm(message)
         : await showConfirmDialogFallback(message);
@@ -86,9 +90,9 @@ export function ProviderUsageResetCredits({
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Reset result not confirmed",
+        title: t("Reset result not confirmed"),
         description:
-          error instanceof Error ? error.message : "Retry this reset to check the same attempt.",
+          error instanceof Error ? error.message : t("Retry this reset to check the same attempt."),
       });
     } finally {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
@@ -117,15 +121,15 @@ export function ProviderUsageResetCredits({
       className={`space-y-0.5 border-t border-[color:var(--color-border)] ${compact ? "pt-2" : "pt-3"}`}
     >
       <div className={rowClass}>
-        <span className="font-medium text-foreground">Banked resets</span>
+        <span className="font-medium text-foreground">{t("Banked resets")}</span>
         <span className="text-right tabular-nums text-muted-foreground">
-          {availableCount} available
+          {availableCount} {t("available")}
         </span>
       </div>
       <p className={subtitleClass}>
         {pendingAttempt
-          ? "A previous reset is unconfirmed. Retry checks the same attempt."
-          : "Use when your 5-hour or weekly limit has 10% or less remaining."}
+          ? t("A previous reset is unconfirmed. Retry checks the same attempt.")
+          : t("Use when your 5-hour or weekly limit has 10% or less remaining.")}
       </p>
       {rows.length > 0 ? (
         <div className="mt-1.5 space-y-1.5">
@@ -135,7 +139,9 @@ export function ProviderUsageResetCredits({
               <div key={credit?.id ?? "next-available"}>
                 <div className={rowClass}>
                   <span className="font-medium text-foreground">
-                    {credit ? `Reset ${index + 1}` : "Next available reset"}
+                    {credit
+                      ? t("Reset {{value0}}", { value0: index + 1 })
+                      : t("Next available reset")}
                   </span>
                   <Button
                     size="xs"
@@ -149,7 +155,7 @@ export function ProviderUsageResetCredits({
                     }
                     onClick={() => void confirmAndConsume(credit?.id)}
                   >
-                    {busy ? "Applying…" : isRetry ? "Retry reset" : "Use reset"}
+                    {busy ? t("Applying…") : isRetry ? t("Retry reset") : t("Use reset")}
                   </Button>
                 </div>
                 {credit ? (

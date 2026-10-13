@@ -10,8 +10,11 @@ import { ChevronDownIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "../../nativeApi";
 import { folderLabel } from "./tasks.logic";
 import type { TaskDelegateTargetState } from "./useTaskDelegateTarget";
+import { useTranslation } from "~/i18n";
 
 export function TaskDelegateTargetPicker({ runIn }: { runIn: TaskDelegateTargetState }) {
+  const { t } = useTranslation();
+
   const { target, setTarget, projectOptions, targetProject } = runIn;
 
   const handleChooseFolder = async () => {
@@ -40,7 +43,7 @@ export function TaskDelegateTargetPicker({ runIn }: { runIn: TaskDelegateTargetS
         <span className="min-w-0 truncate">
           {target?.kind === "folder"
             ? folderLabel(target.path)
-            : (targetProject?.name ?? "Choose a project")}
+            : (targetProject?.name ?? t("Choose a project"))}
         </span>
         <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-60" />
       </ProjectMenuPicker>
@@ -51,7 +54,7 @@ export function TaskDelegateTargetPicker({ runIn }: { runIn: TaskDelegateTargetS
         onClick={() => void handleChooseFolder()}
         title={target?.kind === "folder" ? target.path : undefined}
       >
-        Folder…
+        {t("Folder…")}
       </Button>
     </div>
   );

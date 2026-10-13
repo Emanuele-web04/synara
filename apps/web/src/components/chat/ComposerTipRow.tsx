@@ -16,6 +16,7 @@ import {
   ComposerStackedPanelRowLabel,
   ComposerStackedPanelRowMain,
 } from "./ComposerStackedPanelContent";
+import { useTranslation } from "~/i18n";
 
 interface ComposerTipRowBaseProps {
   icon: ReactNode;
@@ -41,6 +42,8 @@ export function ComposerTipRow({
   attachedToPrevious,
   testId,
 }: ComposerTipRowProps) {
+  const { t } = useTranslation();
+
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious ?? false} data-testid={testId}>
       <ComposerStackedPanelRow>
@@ -59,7 +62,7 @@ export function ComposerTipRow({
               {actionLabel}
             </button>
           ) : null}
-          <IconButton variant="ghost" size="icon-chip" label="Dismiss tip" onClick={onDismiss}>
+          <IconButton variant="ghost" size="icon-chip" label={t("Dismiss tip")} onClick={onDismiss}>
             <XIcon />
           </IconButton>
         </div>

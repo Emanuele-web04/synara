@@ -37,6 +37,7 @@ import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
 import { PullRequestMetaRow } from "./PullRequestMetaRow";
 import { PullRequestConflictIcon } from "./pullRequestStatePresentation";
 import { PR_META_TEXT_CLASS_NAME, PR_FINE_TEXT_CLASS_NAME } from "./pullRequestText";
+import { useTranslation } from "~/i18n";
 
 export interface GitHubItemInfoThread {
   id: ThreadId;
@@ -84,6 +85,8 @@ function InfoSection({
 }
 
 function RequestChip({ url }: { url: string }) {
+  const { t } = useTranslation();
+
   return (
     <Button
       variant="secondary"
@@ -91,7 +94,7 @@ function RequestChip({ url }: { url: string }) {
       className="h-6 gap-0.5 rounded-full pr-1.5 pl-2.5 font-normal"
       onClick={() => void ensureNativeApi().shell.openExternal(url)}
     >
-      Request
+      {t("Request")}
       <ChevronRightIcon aria-hidden />
     </Button>
   );
@@ -106,9 +109,11 @@ function ThreadsSection({
   threads: ReadonlyArray<GitHubItemInfoThread>;
   onOpenThread: ((id: ThreadId) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   if (threads.length === 0) return null;
   return (
-    <InfoSection variant={variant} label="Threads" icon={<BotIcon className="size-4" />}>
+    <InfoSection variant={variant} label={t("Threads")} icon={<BotIcon className="size-4" />}>
       {threads.map((thread) => (
         <button
           key={thread.id}
@@ -124,19 +129,32 @@ function ThreadsSection({
 }
 
 function CommentsSection({ variant, count }: { variant: InfoVariant; count: number }) {
+  const { t } = useTranslation();
+
   return (
-    <InfoSection variant={variant} label="Comments" icon={<ChatBubbleIcon className="size-4" />}>
+    <InfoSection
+      variant={variant}
+      label={t("Comments")}
+      icon={<ChatBubbleIcon className="size-4" />}
+    >
       <span className={count === 0 ? "text-muted-foreground" : undefined}>
-        {count === 0 ? "No comments" : `${count} ${count === 1 ? "comment" : "comments"}`}
+        {count === 0
+          ? t("No comments")
+          : t("{{value0}} {{value1}}", {
+              value0: count,
+              value1: count === 1 ? t("comment") : t("comments"),
+            })}
       </span>
     </InfoSection>
   );
 }
 
 function MergeStatusSection({ detail }: { detail: PullRequestDetail }) {
+  const { t } = useTranslation();
+
   const status = describePullRequestMergeStatus(detail);
   return (
-    <InfoSection variant="column" label="Merge status">
+    <InfoSection variant="column" label={t("Merge status")}>
       <span className="flex items-center gap-2">
         {status.tone === "success" ? (
           <CentralIcon name="circle-check" variant="fill" className="size-4 text-status-success" />
@@ -152,6 +170,8 @@ function MergeStatusSection({ detail }: { detail: PullRequestDetail }) {
 }
 
 function ReviewsSection({ variant, detail }: { variant: InfoVariant; detail: PullRequestDetail }) {
+  const { t } = useTranslation();
+
   const requestable = detail.state === "open";
   const reviewCount = detail.comments.filter((comment) => comment.kind === "review").length;
   const hasReviews = detail.reviewers.length > 0 || reviewCount > 0 || detail.reviewDecision;
@@ -166,7 +186,7 @@ function ReviewsSection({ variant, detail }: { variant: InfoVariant; detail: Pul
   return (
     <InfoSection
       variant={variant}
-      label="Reviews"
+      label={t("Reviews")}
       icon={<UsersIcon className="size-4" />}
       action={variant === "column" ? request : undefined}
     >
@@ -178,7 +198,7 @@ function ReviewsSection({ variant, detail }: { variant: InfoVariant; detail: Pul
           ))}
         </>
       ) : (
-        <span className="text-muted-foreground">No reviews</span>
+        <span className="text-muted-foreground">{t("No reviews")}</span>
       )}
       {variant === "rows" ? request : null}
     </InfoSection>
@@ -186,6 +206,8 @@ function ReviewsSection({ variant, detail }: { variant: InfoVariant; detail: Pul
 }
 
 function CheckRows({ checks }: { checks: PullRequestDetail["checks"] }) {
+  const { t } = useTranslation();
+
   const [showAll, setShowAll] = useState(false);
   const rows = withStableCheckKeys(checks);
   const visible = showAll ? rows : rows.slice(0, CHECKS_VISIBLE_LIMIT);
@@ -212,7 +234,7 @@ function CheckRows({ checks }: { checks: PullRequestDetail["checks"] }) {
             "w-fit rounded-md text-left text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           )}
         >
-          {showAll ? "Show fewer" : "View more"}
+          {showAll ? t("Show fewer") : t("View more")}
         </button>
       ) : null}
     </div>
@@ -220,13 +242,15 @@ function CheckRows({ checks }: { checks: PullRequestDetail["checks"] }) {
 }
 
 function ChecksSection({ variant, detail }: { variant: InfoVariant; detail: PullRequestDetail }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const brief = describePullRequestChecksBrief(detail.checks);
   if (variant === "column") {
     return (
-      <InfoSection variant="column" label="Checks">
+      <InfoSection variant="column" label={t("Checks")}>
         {detail.checks.length === 0 ? (
-          <span className="text-muted-foreground">No checks</span>
+          <span className="text-muted-foreground">{t("No checks")}</span>
         ) : (
           <CheckRows checks={detail.checks} />
         )}
@@ -236,11 +260,11 @@ function ChecksSection({ variant, detail }: { variant: InfoVariant; detail: Pull
   return (
     <InfoSection
       variant="rows"
-      label="Checks"
+      label={t("Checks")}
       icon={<PullRequestChecksRing checks={detail.checks} />}
     >
       {detail.checks.length === 0 ? (
-        <span className="text-muted-foreground">No checks</span>
+        <span className="text-muted-foreground">{t("No checks")}</span>
       ) : (
         <div className="flex w-full min-w-0 flex-col">
           <button
@@ -302,24 +326,26 @@ export function IssueInfo({
   threads: ReadonlyArray<GitHubItemInfoThread>;
   onOpenThread?: ((id: ThreadId) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn(variant === "column" ? "flex flex-col gap-7" : "flex flex-col")}
       data-info-variant={variant}
     >
       <ThreadsSection variant={variant} threads={threads} onOpenThread={onOpenThread} />
-      <InfoSection variant={variant} label="Assignees" icon={<UsersIcon className="size-4" />}>
+      <InfoSection variant={variant} label={t("Assignees")} icon={<UsersIcon className="size-4" />}>
         {detail.assignees.length === 0 ? (
-          <span className="text-muted-foreground">Unassigned</span>
+          <span className="text-muted-foreground">{t("Unassigned")}</span>
         ) : (
           detail.assignees.map((actor) => (
             <PullRequestActorLabel key={actor.login} actor={actor} className="max-w-full" />
           ))
         )}
       </InfoSection>
-      <InfoSection variant={variant} label="Labels" icon={<TagIcon className="size-4" />}>
+      <InfoSection variant={variant} label={t("Labels")} icon={<TagIcon className="size-4" />}>
         {detail.labels.length === 0 ? (
-          <span className="text-muted-foreground">None</span>
+          <span className="text-muted-foreground">{t("None")}</span>
         ) : (
           <GitHubLabelChips labels={detail.labels} className="flex-wrap" />
         )}

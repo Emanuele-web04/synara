@@ -27,6 +27,7 @@ import {
 } from "./tasks.logic";
 import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
+import { useTranslation } from "~/i18n";
 
 export function TaskListItem({
   row,
@@ -44,6 +45,8 @@ export function TaskListItem({
   onUpdate: (input: TodoUpdateInput) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
+
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
   const rename = useTaskRename(todo, onUpdate);
@@ -101,7 +104,11 @@ export function TaskListItem({
       <button
         type="button"
         onClick={toggleDone}
-        aria-label={`${isDone ? "Mark as not done" : "Mark as done"}: ${todo.title} (${status.label})`}
+        aria-label={t("{{value0}}: {{value1}} ({{value2}})", {
+          value0: isDone ? t("Mark as not done") : t("Mark as done"),
+          value1: todo.title,
+          value2: status.label,
+        })}
         className="flex shrink-0 rounded-full outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <TaskStatusGlyph kind={status.kind} className="size-4.5" />

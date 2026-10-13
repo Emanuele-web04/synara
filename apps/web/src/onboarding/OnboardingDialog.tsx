@@ -46,6 +46,7 @@ import { ProvidersStep } from "./steps/ProvidersStep";
 import { ThemeStep } from "./steps/ThemeStep";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { useProviderDetection } from "./useProviderDetection";
+import { useTranslation } from "~/i18n";
 
 const STEP_TITLES: Record<OnboardingStep, string> = {
   welcome: `Welcome to ${APP_BASE_NAME}`,
@@ -78,6 +79,8 @@ function OnboardingFlow(props: {
   projectBusy: boolean;
   onProjectBusyChange: (busy: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
@@ -123,18 +126,21 @@ function OnboardingFlow(props: {
   const primaryAction = (() => {
     switch (step) {
       case "welcome":
-        return { label: "Get started", onPrimary: goNext };
+        return { label: t("Get started"), onPrimary: goNext };
       case "tour":
-        return { label: "Set up", onPrimary: goNext };
+        return { label: t("Set up"), onPrimary: goNext };
       case "providers":
       case "theme":
-        return { label: "Continue", onPrimary: goNext };
+        return { label: t("Continue"), onPrimary: goNext };
       case "project":
         return projectResults.length > 0
-          ? { label: "Continue", onPrimary: goNext }
-          : { label: "Skip for now", onPrimary: goNext };
+          ? { label: t("Continue"), onPrimary: goNext }
+          : { label: t("Skip for now"), onPrimary: goNext };
       case "done":
-        return { label: `Start using ${APP_BASE_NAME}`, onPrimary: props.onComplete };
+        return {
+          label: t("Start using {{value0}}", { value0: APP_BASE_NAME }),
+          onPrimary: props.onComplete,
+        };
     }
   })();
 
@@ -158,7 +164,7 @@ function OnboardingFlow(props: {
         ) : null}
         {hero ? null : (
           <span className="text-ui-sm font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
-            Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
+            {t("Step")} {stepIndex + 1} {t("of")} {ONBOARDING_STEPS.length}
           </span>
         )}
         <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>

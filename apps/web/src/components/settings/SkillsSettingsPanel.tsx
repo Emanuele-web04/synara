@@ -24,14 +24,20 @@ import {
   providerDisplayName,
   settingsSkillNameKey,
 } from "./skillsSettingsModel";
+import { useTranslation } from "~/i18n";
 
 function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKind> }) {
+  const { t } = useTranslation();
+
   if (providers.length === 0) {
     return null;
   }
 
   const label = providers.map(providerDisplayName).join(", ");
-  const stackLabel = `Provider ${providers.length === 1 ? "copy" : "copies"}: ${label}`;
+  const stackLabel = t("Provider {{value0}}: {{value1}}", {
+    value0: providers.length === 1 ? t("copy") : t("copies"),
+    value1: label,
+  });
   return (
     <span
       className="inline-flex shrink-0 items-center -space-x-1"
@@ -51,6 +57,8 @@ function SkillProviderStack({ providers }: { providers: ReadonlyArray<ProviderKi
 }
 
 export function SkillsSettingsPanel() {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const catalogQuery = useQuery(skillsCatalogQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -116,8 +124,11 @@ export function SkillsSettingsPanel() {
           control={
             <span className="text-ui leading-snug font-medium text-muted-foreground">
               {catalogQuery.isLoading
-                ? "Scanning…"
-                : `${enabledSkills} of ${totalSkills} skill${totalSkills === 1 ? "" : "s"} enabled`}
+                ? t("Scanning…")
+                : t("Skills enabled: {{enabled}} of {{total}}", {
+                    enabled: enabledSkills,
+                    total: totalSkills,
+                  })}
             </span>
           }
         />
@@ -183,7 +194,7 @@ export function SkillsSettingsPanel() {
                       onCheckedChange={(checked) =>
                         setSkillEnabled(group.primarySkill.name, Boolean(checked))
                       }
-                      aria-label={`Enable the ${group.displayName} skill`}
+                      aria-label={t("Enable the {{value0}} skill", { value0: group.displayName })}
                     />
                   }
                 />

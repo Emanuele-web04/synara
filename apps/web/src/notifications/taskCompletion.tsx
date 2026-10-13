@@ -37,6 +37,7 @@ import {
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import { claimSnoozeReminder } from "./snoozeReminderReceipts";
+import { t } from "~/i18n";
 
 export type BrowserNotificationPermissionState =
   | NotificationPermission
@@ -148,8 +149,8 @@ function showThreadToast(
       dismissAfterVisibleMs: 8000,
     },
     actionProps: {
-      "aria-label": `Open ${title}`,
-      children: "Open",
+      "aria-label": t("Open {{title}}", { title }),
+      children: t("Open"),
       onClick: () => focusThread(threadId, navigate),
     },
   });
@@ -241,8 +242,8 @@ export function TaskCompletionNotifications() {
         notifiedSnoozeKeysRef.current.add(key);
         if (!claimSnoozeReminder(reminder.threadId, reminder.reminderAt, storage)) continue;
         const copy = {
-          title: reminder.title.trim() || "Untitled thread",
-          body: "Ready to pick this thread back up.",
+          title: reminder.title.trim() || t("Untitled thread"),
+          body: t("Ready to pick this thread back up."),
         };
         if (settings.enableTaskCompletionToasts) {
           showThreadToast(copy, reminder.threadId, "success", navigate);
@@ -389,6 +390,7 @@ export function TaskCompletionNotifications() {
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
     settings.notifyAfterSubagentsFinish,
+    runtimeStartedAtMs,
     terminalStateByThreadId,
     snoozedThreadIds,
     threads,
@@ -403,18 +405,22 @@ export function buildNotificationSettingsSupportText(
   permissionState: BrowserNotificationPermissionState,
 ): string {
   if (isElectron) {
-    return "Desktop app notifications use your operating system notification center.";
+    return t("Desktop app notifications use your operating system notification center.");
   }
   switch (permissionState) {
     case "granted":
-      return "Browser notifications are enabled for this app.";
+      return t("Browser notifications are enabled for this app.");
     case "denied":
-      return "Browser notifications are blocked. Re-enable them in your browser site settings.";
+      return t("Browser notifications are blocked. Re-enable them in your browser site settings.");
     case "insecure":
-      return "Browser notifications need a secure context. Localhost works; plain HTTP does not.";
+      return t(
+        "Browser notifications need a secure context. Localhost works; plain HTTP does not.",
+      );
     case "unsupported":
-      return "This browser does not support desktop notifications.";
+      return t("This browser does not support desktop notifications.");
     case "default":
-      return "Allow browser notifications to get alerts when chats or terminal agents finish or need input in the background.";
+      return t(
+        "Allow browser notifications to get alerts when chats or terminal agents finish or need input in the background.",
+      );
   }
 }

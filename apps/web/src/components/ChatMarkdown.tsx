@@ -109,6 +109,7 @@ import {
   FindAwareMarkdownText,
   FindAwareShikiHtml,
 } from "./ChatMarkdownFind";
+import { useTranslation } from "~/i18n";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -972,6 +973,8 @@ function MarkdownCodeBlock({
   children: ReactNode;
   direction?: "ltr" | undefined;
 }) {
+  const { t } = useTranslation();
+
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1009,8 +1012,8 @@ function MarkdownCodeBlock({
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={toggleWrap}
-            title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
-            label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            title={wrap ? t("Disable soft wrap") : t("Enable soft wrap")}
+            label={wrap ? t("Disable soft wrap") : t("Enable soft wrap")}
             aria-pressed={wrap}
             data-active={wrap ? "true" : "false"}
             size="icon-xs"
@@ -1021,8 +1024,8 @@ function MarkdownCodeBlock({
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={handleCopy}
-            title={copied ? "Copied" : "Copy code"}
-            label={copied ? "Copied" : "Copy code"}
+            title={copied ? t("Copied") : t("Copy code")}
+            label={copied ? t("Copied") : t("Copy code")}
             size="icon-xs"
             variant="ghost"
           >
@@ -1207,6 +1210,7 @@ function TechnicalBidiIsolate(props: { active: boolean; children: ReactNode }) {
 
 const MARKDOWN_COMPONENTS: Components = {
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
+    const { t } = useTranslation();
     const kind = (props as { "data-github-alert"?: GithubAlertKind })["data-github-alert"];
     const alert = kind ? GITHUB_ALERTS[kind] : undefined;
     if (!alert) return <blockquote {...props}>{children}</blockquote>;
@@ -1215,7 +1219,7 @@ const MARKDOWN_COMPONENTS: Components = {
       <blockquote {...props}>
         <p className="markdown-alert-title">
           <Icon aria-hidden className="size-[1.1em] shrink-0" />
-          {alert.title}
+          {t(alert.title)}
         </p>
         {children}
       </blockquote>

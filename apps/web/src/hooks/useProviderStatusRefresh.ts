@@ -10,6 +10,7 @@ import type { ServerProviderStatus } from "@synara/contracts";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
 import { reconcileServerProviderStatuses } from "../lib/serverReactQuery";
+import { useTranslation } from "~/i18n";
 
 export type RefreshProviderStatusesOptions = {
   readonly silent?: boolean;
@@ -31,6 +32,8 @@ function writeProviderStatusesToConfigCache(
  * and folds the result into the cached server config. Surfaces failures as a toast.
  */
 export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   return async (options?: RefreshProviderStatusesOptions) => {
     const api = readNativeApi();
@@ -43,9 +46,9 @@ export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
       if (!options?.silent) {
         toastManager.add({
           type: "error",
-          title: "Unable to refresh provider status",
+          title: t("Unable to refresh provider status"),
           description:
-            error instanceof Error ? error.message : "Unknown error refreshing provider status.",
+            error instanceof Error ? error.message : t("Unknown error refreshing provider status."),
         });
       }
       return null;

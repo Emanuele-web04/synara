@@ -8,6 +8,7 @@ import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
+import { useTranslation } from "~/i18n";
 
 export type RateLimitStatus = {
   status: "rejected" | "allowed_warning";
@@ -60,14 +61,19 @@ export const RateLimitBanner = function RateLimitBanner({
   onDismiss?: () => void;
   rateLimitStatus: RateLimitStatus | null;
 }) {
+  const { t } = useTranslation();
+
   if (!rateLimitStatus) return null;
 
   const { status, resetsAt, utilization } = rateLimitStatus;
   const isRejected = status === "rejected";
 
   const message = isRejected
-    ? `Rate limit reached.${resetsAt ? formatResetsAt(resetsAt) : ""}`
-    : `Approaching rate limit${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ""}.${resetsAt ? formatResetsAt(resetsAt) : ""}`;
+    ? t("Rate limit reached.{{value0}}", { value0: resetsAt ? formatResetsAt(resetsAt) : "" })
+    : t("Approaching rate limit{{value0}}.{{value1}}", {
+        value0: utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : "",
+        value1: resetsAt ? formatResetsAt(resetsAt) : "",
+      });
 
   return (
     <ChatColumnBannerFrame>
@@ -77,8 +83,8 @@ export const RateLimitBanner = function RateLimitBanner({
         {onDismiss ? (
           <AlertAction>
             <IconButton
-              label="Dismiss rate limit status"
-              title="Dismiss rate limit status"
+              label={t("Dismiss rate limit status")}
+              title={t("Dismiss rate limit status")}
               onClick={onDismiss}
             >
               <XIcon className="size-3.5" />

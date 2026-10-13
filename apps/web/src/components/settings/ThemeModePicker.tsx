@@ -5,6 +5,7 @@
 // Exports: ThemeModePicker
 
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 import type { ThemeMode, ThemeVariant } from "~/hooks/useTheme";
 import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 
@@ -174,6 +175,7 @@ export function ThemeModePicker({
   onValueChange: (value: ThemeMode) => void;
   ariaLabel: string;
 }) {
+  const { t } = useTranslation();
   const radioItemProps = useRadioGroupKeyboardNav({
     values: THEME_MODE_VALUES,
     value,
@@ -212,7 +214,7 @@ export function ThemeModePicker({
                 isActive ? "font-medium text-foreground" : "text-muted-foreground",
               )}
             >
-              {choice.label}
+              {t(choice.label)}
             </span>
           </button>
         );

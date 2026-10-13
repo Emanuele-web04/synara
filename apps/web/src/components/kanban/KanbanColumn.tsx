@@ -16,6 +16,7 @@ import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanStatusIcon } from "./KanbanStatusIcon";
 import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { resolveDraftDropAction, type KanbanCard, type KanbanColumnKey } from "./kanban.logic";
+import { useTranslation } from "~/i18n";
 
 const COLUMN_DROP_ID_PREFIX = "kanban-column";
 const DONE_RENDER_CAP = 30;
@@ -121,6 +122,8 @@ function KanbanColumnComponent({
   /** The review board owns its fold; other boards keep the local Done cap. */
   capDone?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const sortable = sortableProp ?? false;
   const droppable = droppableProp ?? false;
   const activeCard = activeCardProp ?? null;
@@ -176,7 +179,7 @@ function KanbanColumnComponent({
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {dispatchTarget ? (
             <span className="text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
-              Drop to send
+              {t("Drop to send")}
             </span>
           ) : null}
           {onNewCard ? (
@@ -184,8 +187,8 @@ function KanbanColumnComponent({
               size="icon-xs"
               variant="ghost"
               className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-              aria-label="New task"
-              title="New task"
+              aria-label={t("New task")}
+              title={t("New task")}
               onClick={onNewCard}
             >
               <PlusIcon className="size-3.5" />
@@ -211,7 +214,7 @@ function KanbanColumnComponent({
         )}
         {cards.length === 0 ? (
           <li className="list-none rounded-lg border border-dashed border-border/60 px-3 py-4 text-center text-ui leading-snug text-muted-foreground/60">
-            No cards
+            {t("No cards")}
           </li>
         ) : null}
         {hiddenCount > 0 ? (
@@ -221,7 +224,7 @@ function KanbanColumnComponent({
               onClick={() => setShowAll(true)}
               className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
             >
-              Show {hiddenCount} more
+              {t("Show")} {hiddenCount} {t("more")}
             </button>
           </li>
         ) : null}

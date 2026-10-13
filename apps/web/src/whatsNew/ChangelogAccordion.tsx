@@ -8,13 +8,14 @@
 
 import { useState } from "react";
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
 
 import { FeatureSection } from "./FeatureSection";
 import type { WhatsNewEntry } from "./logic";
+import { useTranslation } from "~/i18n";
 
 export interface ChangelogAccordionProps {
   readonly entries: readonly WhatsNewEntry[];
@@ -33,11 +34,13 @@ export function ChangelogAccordion({
   defaultExpandedVersion: defaultExpandedVersionProp,
   className,
 }: ChangelogAccordionProps) {
+  const { t } = useTranslation();
+
   const defaultExpandedVersion = defaultExpandedVersionProp ?? null;
   if (entries.length === 0) {
     return (
       <p className={cn("text-ui leading-snug text-muted-foreground", className)}>
-        No release notes yet — check back after the next update.
+        {t("No release notes yet — check back after the next update.")}
       </p>
     );
   }
@@ -65,10 +68,15 @@ function ChangelogAccordionRow({
   readonly defaultOpen: boolean;
   readonly isLast: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(defaultOpen);
 
   const featureCount = entry.features.length;
-  const featureLabel = `${featureCount} ${pluralize(featureCount, "update")}`;
+  const featureLabel = t("{{value0}} {{value1}}", {
+    value0: featureCount,
+    value1: pluralize(featureCount, "update"),
+  });
 
   return (
     <li className={cn(!isLast && "border-b border-border/40")}>
@@ -78,7 +86,7 @@ function ChangelogAccordionRow({
           <span className="flex flex-1 items-baseline gap-2">
             <span className="text-ui leading-snug text-muted-foreground">{entry.date}</span>
             <span className="text-ui-lg font-semibold text-foreground">
-              Version {entry.version}
+              {t("Version")} {entry.version}
             </span>
             <span className="text-ui leading-snug text-muted-foreground/70">({featureLabel})</span>
           </span>

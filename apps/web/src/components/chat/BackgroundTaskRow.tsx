@@ -18,19 +18,22 @@ import { LiveStatusSpinner } from "../ui/spinner";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
 import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 import { LiveElapsedTimer } from "./LiveElapsedTimer";
+import { useTranslation } from "~/i18n";
 
 // Stops a running background task; absent where the transcript cannot act on
 // the thread (read-only surfaces).
 export const BackgroundTaskStopContext = createContext<((taskId: string) => void) | null>(null);
 
 export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSizePx: number }) {
+  const { t } = useTranslation();
+
   const { task, fontSizePx } = props;
   const onStop = useContext(BackgroundTaskStopContext);
   // A running task's clock ticks in LiveElapsedTimer; settled ones use their end.
-  const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt);
+  const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt, t);
   const running = task.status === "running";
   const command = task.command ? deriveLiteralCommand(task.command) : null;
-  const subject = command ?? task.description ?? "Background task";
+  const subject = command ?? task.description ?? t("Background task");
 
   return (
     <div
@@ -38,7 +41,7 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
       style={{ fontSize: `${fontSizePx}px` }}
       data-background-task={task.taskId}
       data-background-task-status={task.status}
-      title={task.description && command ? task.description : "Background task"}
+      title={task.description && command ? task.description : t("Background task")}
     >
       <span
         className={cn(
@@ -84,10 +87,10 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
             size="xs"
             className="shrink-0 text-foreground/80"
             onClick={() => onStop(task.taskId)}
-            aria-label={`Stop background task ${subject}`}
+            aria-label={t("Stop background task {{value0}}", { value0: subject })}
           >
             <StopIcon className="size-2.5" />
-            Stop
+            {t("Stop")}
           </Button>
         ) : null}
       </span>
