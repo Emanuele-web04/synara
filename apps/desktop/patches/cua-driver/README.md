@@ -7,6 +7,14 @@ Rust version and native protocol revision. Preserve the upstream license in
 contributor attribution remain intact. This is a local macOS patch, not an
 upstream release or a claim of support on other platforms.
 
+Keep ordinary unified context in appended patch hunks. Revision 40's zero-context
+hunks passed the provisioner's `patch --batch --forward -p1` but failed CI's
+`git apply --check`. They were regenerated with context while preserving the
+earlier patch sections verbatim and every resulting source byte. Both applicators
+are verified against pristine upstream, including the subsequent
+`0002-synara-linux-browser.patch`. Repacking changes the patch checksum, so rebuild
+artifacts through the provisioner instead of editing their provenance receipts.
+
 The patch closes native input admission irreversibly for one driver process.
 Keyboard and mouse guards prepare their matching releases before sending a down
 event and release on normal return, failure, cancellation and Rust unwind. A
@@ -690,3 +698,75 @@ the SDK internally; Synara does not ship or load its separate `cdylib` on macOS
 or patched Linux. Removing that output avoids its code generation/link step
 without removing SDK functionality or changing native protocol revision 39.
 The patch checksum and trusted build-cache key cover this build-only change.
+
+### Revision 40: truthful text progress, preserved paste and scoped AX roots
+
+Text delivery no longer derives retry offsets from an AX value's length alone.
+The upstream control-character fix is backported: Return, Enter and Tab can
+submit, split a block or change focus, so a short read-back is unverifiable.
+Ordinary partial delivery requires an exact inserted prefix. Pre-existing text
+plus unrelated changes cannot confirm a new insertion, and web-editor read-back
+is downgraded before the incomplete-error branch. Interrupted semantic web writes
+also suppress AX-derived retry offsets while retaining accepted-request counts;
+successful semantic requests with unverifiable read-back never fabricate a zero
+count. Nothing is replayed automatically.
+
+Window-scoped AX reads now exclude unowned application-level document, web-area
+and container roots. The matched window's descendants, application menu bar,
+open menus and top-level sheets remain available. This closes an independently
+reproduced root-scoping gap; it does not prove that an inactive document nested
+inside the matched window is visible or safe to target.
+
+Web-document roots parked outside their own AXWindow are also excluded before
+their descendants are published or cached. This follows the observed Notion
+one-point corner overlap and Chromium's [documented clipped-bounds convention](https://chromium.googlesource.com/chromium/src.git/+/HEAD/docs/accessibility/browser/offscreen.md);
+ordinary offscreen controls remain available, and window-relative geometry
+preserves background and off-Space operation. Retained semantic targets are
+rechecked before mutation, including AX Return and pre-typing focus. Bounded
+ancestry inspection restores the actuator's normal timeout before dispatch.
+Missing geometry remains unknown; this does not manufacture a missing active
+document tree or claim every retained document is visually current.
+
+Window enumeration omits the driver's registered cursor-overlay window ID. The
+overlay shares layer-0 stacking but cannot receive input or become key, so it
+must not become an application or foreground-restoration target. Other windows
+from the same process remain visible; no title, PID or size heuristic is used.
+
+The existing Cua clipboard tools now support `clipboard_write` with
+`preserve:true` and an optional caller-generated UUID `preserve_token`. The
+returned `restore_token` consumes a native snapshot through
+`clipboard_write({restore_token})`; `clipboard_restored` reports whether the
+original was restored or a newer external copy was preserved. All items and
+representations stay inside the driver, bounded to 16 MiB, 32 items and 128
+formats, with zeroized byte buffers. Unreadable or oversized originals refuse
+before replacement. Native image decoding uses a no-follow regular-file handle,
+16 MiB input, 8192-pixel dimension and 64 MiB allocation limits, and a 16-megapixel
+output bound. Changed canonical paths refuse before file access.
+
+Snapshots exist before mutation and remain recoverable after failed restoration.
+The known caller token permits cleanup after a lost response; a 120-second native
+timer and backend teardown also attempt guarded restoration. Timer, teardown and
+ordinary clipboard operations share the same lock order. Only an authenticated
+host's UUID-only restoration bypasses stopped input admission; it retains normal
+clipboard authorization and cannot write new content. Unsupported platforms
+refuse preservation before changing the clipboard. Pre-dispatch preparation
+failures are distinct from outcomes after native replacement began.
+
+macOS provides no atomic cross-process pasteboard compare-and-swap. The driver
+checks `changeCount` immediately before its clear/write pair and never overwrites
+an observed external copy; hard process termination cannot promise restoration.
+The extension uses the upstream native image/file primitives rather than an
+AppleScript or shell clipboard path.
+
+Validation: the patched macOS library and driver build; 21 text tests, 12 window-scope tests, four
+clipboard tool tests, four macOS clipboard/path tests (including two real AppKit
+tests on isolated named pasteboards), and the authenticated native cleanup boundary pass. The text
+regressions fail on the prior parser and prior unscoped-root selection. The inherited assertion-free
+`terminal_flag_routes_past_ax_path` probe hangs against invalid PID -1 and is
+excluded; the CI test that changes the general clipboard is also excluded.
+These native qualification checks do not change Notion content or the user's clipboard.
+The captured parked-document geometry fails under the prior unconditional
+admission policy; 14 exact-target tests, 57 input tests and three tree tests pass
+with the clipping repair. The live serial/parallel tree comparison stays ignored.
+The overlay enumeration regression fails before filtering; all four window-list
+tests and the exact foreground-classification tests pass afterwards.

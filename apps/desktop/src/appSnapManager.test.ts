@@ -482,6 +482,38 @@ describe("AppSnap shortcut availability", () => {
 });
 
 describe("AppSnap helper protocol", () => {
+  it("keeps bounded input-origin diagnostics without forwarding keystrokes or coordinates", () => {
+    const message = {
+      type: "physical-input",
+      kind: "keyboard",
+      pid: 720,
+      eventType: 12,
+      sourcePid: 0,
+      sourceStateId: 1,
+      sourceTagged: false,
+      modifierKey: false,
+      capturedAt: "2026-10-13T17:18:46.788Z",
+    };
+    expect(
+      parseAppSnapHelperMessage(
+        JSON.stringify({ ...message, keyCode: 0, text: "private", x: 100, y: 200 }),
+      ),
+    ).toEqual(message);
+    expect(
+      parseAppSnapHelperMessage(
+        JSON.stringify({
+          type: "physical-input",
+          kind: "pointer",
+          eventType: 999,
+          sourcePid: -1,
+          sourceStateId: 3,
+          sourceTagged: "private",
+          modifierKey: true,
+        }),
+      ),
+    ).toEqual({ type: "physical-input", kind: "pointer" });
+  });
+
   it("accepts typed permission and capture messages", () => {
     expect(
       parseAppSnapHelperMessage(

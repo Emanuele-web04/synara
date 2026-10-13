@@ -1647,6 +1647,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...(computerService?.supported === true
       ? makeAgentGatewayComputerTools({
           manager: computerService.manager,
+          resolveWorkspaceRoot,
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
