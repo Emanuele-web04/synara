@@ -1337,8 +1337,14 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming, findQuery, isUserVariant, usesAutomaticBlockDirection } =
-      useContext(MarkdownRenderContext)!;
+    const {
+      sourceText,
+      diffThemeName,
+      isStreaming,
+      findQuery,
+      isUserVariant,
+      usesAutomaticBlockDirection,
+    } = useContext(MarkdownRenderContext)!;
     const renderInlineVisual = useContext(InlineVisualEmbedContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
