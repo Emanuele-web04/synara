@@ -138,9 +138,26 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    // Budget raised for the one-line usage-budgets affordance
-    // above (84 chars); it still guards against accidental bloat.
+    // Usage tool guidance consumes one additional scoped line; preserve the inline-visual budget below.
     assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_120);
+    // Inline visuals add one line where the server offers them (Beta).
+    assert.isAtMost(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }).length,
+      6_250,
+    );
+  });
+
+  it("points to synara_show_visual only when the session can call it", () => {
+    const visualLine = "call synara_show_visual and place its block in your reply";
+    assert.include(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }),
+      visualLine,
+    );
+    assert.notInclude(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }), visualLine);
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false, inlineVisuals: true }),
+      visualLine,
+    );
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {

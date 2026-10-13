@@ -81,7 +81,9 @@ function HubsIndexRouteView() {
   // The most recent hub chat (if any), used to restore the surface instead of always opening
   // a brand-new draft.
   const latestGroupThreadId =
-    sortThreadsForSidebar(groupThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
+    sortThreadsForSidebar(groupThreadSummaries, appSettings.sidebarThreadSortOrder, {
+      attentionFirst: appSettings.sidebarThreadAttentionFirst,
+    })[0]?.id ?? null;
 
   // Same landing policy as the Hubs segment switch and settings back: remembered route first
   // (scoped to hub threads plus the stored draft), then the stored draft, then the latest

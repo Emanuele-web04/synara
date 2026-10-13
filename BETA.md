@@ -308,8 +308,19 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list is currently empty. Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi,
-the rail sidebar layout, and message trail sound are available in both apps.
+HTML visuals execute only in the Beta desktop app, where native subframe navigation is blocked.
+HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
+bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
+cannot be enforced. HTML messages cannot open external URLs through the host.
+
+The list currently holds `inline-visuals`: the `synara_show_visual` agent tool,
+its transcript rows, and the `orchestration.getInlineVisual` read. A Stable server
+leaves the tool out of the gateway catalog and the harness policy, refuses the
+read, and the Stable web ignores `visual.shown` activities. Nothing is migrated;
+visual pages and component specs live under the attachments folder of the Beta data home.
+
+Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail sidebar layout, and message
+trail sound are available in both apps.
 
 Hubs became available in Stable 1.0.2. The same shared policy enables the Hub
 APIs, Library, coordinator wakes, monitoring, check-ins, completion evaluations,
