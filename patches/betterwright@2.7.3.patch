@@ -1,5 +1,6 @@
 diff --git a/dist/src/chromium-cookie-source.js b/dist/src/chromium-cookie-source.js
 new file mode 100644
+index 0000000..f82ae88
 --- /dev/null
 +++ b/dist/src/chromium-cookie-source.js
 @@ -0,0 +1,343 @@
@@ -347,9 +348,10 @@ new file mode 100644
 +
 +}
 diff --git a/dist/src/client.js b/dist/src/client.js
+index 55deabe..8cd1b6f 100644
 --- a/dist/src/client.js
 +++ b/dist/src/client.js
-@@ -333,6 +333,8 @@
+@@ -333,6 +333,8 @@ export class BetterWright {
       */
      constructor(options = {}) {
          this.hostTarget = options.hostTarget;
@@ -358,7 +360,7 @@ diff --git a/dist/src/client.js b/dist/src/client.js
          this.hostUploadFiles = options.hostUploadFiles ?? [];
          if (this.hostTarget && (!isCallable(this.hostTarget.connect) || options.provider != null)) {
              throw new TypeError("hostTarget requires connect() and cannot be combined with provider.");
-@@ -1024,7 +1025,7 @@
+@@ -1024,7 +1026,7 @@ export class BetterWright {
          let consentTarget;
          try {
              normalized = normalizeCookieSyncOptions(options);
@@ -367,7 +369,7 @@ diff --git a/dist/src/client.js b/dist/src/client.js
              if (consentTarget && normalized.cloudConsent !== consentTarget) {
                  return {
                      ok: false,
-@@ -1043,21 +1044,25 @@
+@@ -1043,21 +1045,25 @@ export class BetterWright {
              return {
                  ok: false,
                  error: "Cookie Sync could not read the selected local browser profile.",
@@ -396,7 +398,7 @@ diff --git a/dist/src/client.js b/dist/src/client.js
          }
          const config = await this._prepare();
          const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
-@@ -1073,7 +1078,10 @@
+@@ -1073,7 +1079,10 @@ export class BetterWright {
          }, timeoutSeconds);
      }
      _extractCookieSync(options) {
@@ -409,18 +411,27 @@ diff --git a/dist/src/client.js b/dist/src/client.js
      /**
       * Fill a stored credential into the current page from trusted host code.
 diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
+index ae6a917..e4ff13e 100644
 --- a/dist/src/cookie-sync.js
 +++ b/dist/src/cookie-sync.js
-@@ -1,1 +1,2 @@
+@@ -1,3 +1,4 @@
 +import { isChromiumCookieSource, listChromiumCookieSources, listChromiumProfiles, readChromiumCookieSnapshot } from "./chromium-cookie-source.js";
  import { isIP } from "node:net";
-@@ -431,3 +432,4 @@
+ import { domainToASCII } from "node:url";
+ import { cookieReaderError } from "./cookie-reader-error.js";
+@@ -429,7 +430,8 @@ export function normalizeCookieSnapshot(snapshot, options, { now = Date.now() }
+         source: { ...options.source },
+     };
  }
 -export async function extractCookieSync(options, load = loadCookieReader) {
 +export async function extractCookieSync(options, load = loadCookieReader, chromiumDeps = undefined) {
 +    if (isChromiumCookieSource(options.source.browser)) return normalizeCookieSnapshot(await readChromiumCookieSnapshot(options, chromiumDeps), options);
      let reader;
-@@ -454,5 +456,6 @@
+     let snapshot;
+     reader = await load();
+@@ -452,17 +454,19 @@ export async function extractCookieSync(options, load = loadCookieReader) {
+     return normalizeCookieSnapshot(snapshot, options);
+ }
  export async function listCookieSourceBrowsers(load = loadCookieReader) {
 -    const reader = await load();
 +    const custom = listChromiumCookieSources();
@@ -428,129 +439,36 @@ diff --git a/dist/src/cookie-sync.js b/dist/src/cookie-sync.js
      try {
 +        const reader = await load();
          value = await reader.supportedBrowsers();
-@@ -460,2 +463,3 @@
+     }
      catch {
 +        if (custom.length) return custom;
          throw new Error("Cookie Sync could not list browsers on this host.");
-@@ -464,3 +468,3 @@
+     }
+     if (!Array.isArray(value))
          throw new Error("Cookie Sync returned an invalid browser list.");
 -    return value.flatMap((entry) => {
 +    const native = value.flatMap((entry) => {
          const id = cleanPublicText(untrustedField(entry, "id"), 128).toLowerCase();
-@@ -472,2 +476,3 @@
+         const name = cleanPublicText(untrustedField(entry, "displayName"), 256);
+         const engine = cleanPublicText(untrustedField(entry, "engine"), 64);
+@@ -470,10 +474,12 @@ export async function listCookieSourceBrowsers(load = loadCookieReader) {
+             return [];
+         return id && name ? [{ id, name, engine }] : [];
      });
 +    return [...native, ...custom.filter(source => !native.some(entry => entry.id === source.id))];
  }
-@@ -476,2 +481,3 @@
+ export async function listCookieSourceProfiles(browser, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}, load = loadCookieReader) {
+     const normalized = normalizeCookieSyncOptions({ source: { browser }, timeoutMs });
      const source = normalized.source;
 +    if (isChromiumCookieSource(source.browser)) return listChromiumProfiles(source.browser);
      const reader = await load();
-diff --git a/dist/src/worker.js b/dist/src/worker.js
---- a/dist/src/worker.js
-+++ b/dist/src/worker.js
-@@ -6808,8 +6808,9 @@
-     cookieSyncActive = true;
+     let value;
      try {
-         let target;
-+        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
-         try {
--            target = cookieSyncConsentTarget(message.config?.provider);
-+            target = hostOwnedTarget ? null : cookieSyncConsentTarget(message.config?.provider);
-         }
-         catch {
-             sendResult({
-@@ -6874,6 +6875,13 @@
-                 type: "result",
-                 id: message.id,
-                 ok: false,
-+                cookieSyncFailureCode: capacity
-+                    ? "redaction_capacity"
-+                    : targetCapacity
-+                        ? "target_capacity"
-+                        : targetEviction
-+                            ? "target_eviction"
-+                            : "target_failed",
-                 error: capacity
-                     ? "Cookie Sync redaction capacity was reached; the browser worker was restarted."
-                     : targetCapacity
-@@ -6898,7 +6906,7 @@
-                 source.profile = "selected";
-             }
-         }
--        sendResult({
-+        const result = {
-             type: "result",
-             id: message.id,
-             ok: true,
-@@ -6906,13 +6914,17 @@
-             selected,
-             skipped,
-             source,
--            target: target || "local",
-+            target: target || (hostOwnedTarget ? "host" : "local"),
-             warnings: [
-                 ...sanitizedCookieSyncWarnings(message.warnings),
-                 ...(missingCookies ? [{ code: "target_not_stored", count: missingCookies }] : []),
-             ],
-             profileMode,
--        });
-+        };
-+        if (hostOwnedTarget) {
-+            result.cookieImportDomains = [...new Set(storedCookies.map((cookie) => String(cookie.domain)))];
-+        }
-+        sendResult(result);
-     }
-     finally {
-         cookieSyncActive = false;
-diff --git a/types/public.d.ts b/types/public.d.ts
---- a/types/public.d.ts
-+++ b/types/public.d.ts
-@@ -104,10 +104,23 @@
-       skipped: number;
-       source: { browser: string; profile?: string };
-       target: string;
-+      /**
-+       * Host-owned targets (`hostTarget`) only: deduplicated cookie domains
-+       * verified present in the leased tab after the sync. Lets the host scope
-+       * what session access it just granted. Absent for other targets.
-+       */
-+      cookieImportDomains?: string[];
-       warnings?: CookieSyncWarning[];
-       profileMode?: "persistent" | "ephemeral";
-     }
--  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
-+  | {
-+      ok: false;
-+      error: string;
-+      cookieReaderCode?: string;
-+      cookiePermissionDenied?: boolean;
-+      cookieReaderStage?: string;
-+      cookieSyncFailureCode?: "redaction_capacity" | "target_capacity" | "target_eviction" | "target_failed";
-+    };
--
-+
- export interface CookieSourceBrowser {
-   id: string;
-@@ -122,6 +135,14 @@
- }
--
-+
- export interface BetterWrightOptions {
-+  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
-+  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
-+  /** Runs bounded local Chromium SQLite work away from the host event loop. */
-+  chromiumCookieSnapshot?: (
-+    source: { browser: string; profile?: string },
-+    timeoutMs: number,
-+    keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
-+  ) => Promise<unknown>;
-   /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
-   hostTarget?: import("./host.js").HostTarget;
-   /** Exact staged files a trusted host authorizes for upload. Requires hostTarget. */
 diff --git a/dist/src/vault.js b/dist/src/vault.js
+index 8361c46..e80146e 100644
 --- a/dist/src/vault.js
 +++ b/dist/src/vault.js
-@@ -1339,7 +1339,7 @@
+@@ -1339,7 +1339,7 @@ export class LocalCredentialVault {
          this.#trackSecret(pending.secret);
          return pending;
      }
@@ -559,7 +477,7 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
          const username = optionalString(payload?.username, "Credential username", 1024, "");
          const label = optionalString(payload?.label, "Credential label", 1024);
          const matchMode = normalizeMatchMode(payload?.matchMode ?? payload?.match_mode);
-@@ -1361,7 +1361,8 @@
+@@ -1361,7 +1361,8 @@ export class LocalCredentialVault {
              createdAt: now,
              updatedAt: now,
          };
@@ -569,7 +487,7 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
          return record;
      }
      #updatedRecord(record, payload, now, { requirePassword = false } = {}) {
-@@ -2086,6 +2087,88 @@
+@@ -2086,6 +2087,88 @@ export class LocalCredentialVault {
              }
          });
      }
@@ -658,10 +576,113 @@ diff --git a/dist/src/vault.js b/dist/src/vault.js
      #rememberKey(key, identity) {
          this.dispose();
          this.#masterKey = Buffer.from(key);
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+index 654e06e..70bd310 100755
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -6808,8 +6808,9 @@ async function cookieSync(message) {
+     cookieSyncActive = true;
+     try {
+         let target;
++        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
+         try {
+-            target = cookieSyncConsentTarget(message.config?.provider);
++            target = hostOwnedTarget ? null : cookieSyncConsentTarget(message.config?.provider);
+         }
+         catch {
+             sendResult({
+@@ -6874,6 +6875,13 @@ async function cookieSync(message) {
+                 type: "result",
+                 id: message.id,
+                 ok: false,
++                cookieSyncFailureCode: capacity
++                    ? "redaction_capacity"
++                    : targetCapacity
++                        ? "target_capacity"
++                        : targetEviction
++                            ? "target_eviction"
++                            : "target_failed",
+                 error: capacity
+                     ? "Cookie Sync redaction capacity was reached; the browser worker was restarted."
+                     : targetCapacity
+@@ -6898,7 +6906,7 @@ async function cookieSync(message) {
+                 source.profile = "selected";
+             }
+         }
+-        sendResult({
++        const result = {
+             type: "result",
+             id: message.id,
+             ok: true,
+@@ -6906,13 +6914,17 @@ async function cookieSync(message) {
+             selected,
+             skipped,
+             source,
+-            target: target || "local",
++            target: target || (hostOwnedTarget ? "host" : "local"),
+             warnings: [
+                 ...sanitizedCookieSyncWarnings(message.warnings),
+                 ...(missingCookies ? [{ code: "target_not_stored", count: missingCookies }] : []),
+             ],
+             profileMode,
+-        });
++        };
++        if (hostOwnedTarget) {
++            result.cookieImportDomains = [...new Set(storedCookies.map((cookie) => String(cookie.domain)))];
++        }
++        sendResult(result);
+     }
+     finally {
+         cookieSyncActive = false;
+diff --git a/types/public.d.ts b/types/public.d.ts
+index 429dc05..d061cc8 100644
+--- a/types/public.d.ts
++++ b/types/public.d.ts
+@@ -104,10 +104,23 @@ export type CookieSyncResult =
+       skipped: number;
+       source: { browser: string; profile?: string };
+       target: string;
++      /**
++       * Host-owned targets (`hostTarget`) only: deduplicated cookie domains
++       * verified present in the leased tab after the sync. Lets the host scope
++       * what session access it just granted. Absent for other targets.
++       */
++      cookieImportDomains?: string[];
+       warnings?: CookieSyncWarning[];
+       profileMode?: "persistent" | "ephemeral";
+     }
+-  | { ok: false; error: string; cookieReaderCode?: string; cookiePermissionDenied?: boolean; cookieReaderStage?: string };
++  | {
++      ok: false;
++      error: string;
++      cookieReaderCode?: string;
++      cookiePermissionDenied?: boolean;
++      cookieReaderStage?: string;
++      cookieSyncFailureCode?: "redaction_capacity" | "target_capacity" | "target_eviction" | "target_failed";
++    };
+ 
+ export interface CookieSourceBrowser {
+   id: string;
+@@ -122,6 +135,14 @@ export interface CookieSourceProfile {
+ }
+ 
+ export interface BetterWrightOptions {
++  /** Trusted owner-only Chromium source Keychain acquisition; absent readers fail closed. Never exposed to snippets. */
++  chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
++  /** Runs bounded local Chromium SQLite work away from the host event loop. */
++  chromiumCookieSnapshot?: (
++    source: { browser: string; profile?: string },
++    timeoutMs: number,
++    keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
++  ) => Promise<unknown>;
+   /** Trusted single-tab adapter. Network guard setup is mandatory; model credential writes are disabled. */
+   hostTarget?: import("./host.js").HostTarget;
+   /** Exact staged files a trusted host authorizes for upload. Requires hostTarget. */
 diff --git a/types/vault.d.ts b/types/vault.d.ts
+index 46fbc5b..1c9bb7b 100644
 --- a/types/vault.d.ts
 +++ b/types/vault.d.ts
-@@ -153,6 +153,10 @@
+@@ -153,6 +153,10 @@ export class LocalCredentialVault {
    ownerConfigure(settings: VaultSettings): Promise<VaultSettings>;
    /** Trusted capture sensor only; never expose this method to a model. */
    ownerCapture(payload: Record<string, UntrustedValue>, origin: string): Promise<UntrustedValue>;
@@ -669,7 +690,6 @@ diff --git a/types/vault.d.ts b/types/vault.d.ts
 +  ownerImportMany(
 +    entries: Array<{ origin: string; username: string; password: string }>,
 +  ): Promise<{ imported: number; skipped: number; ids: string[]; auditWarning?: VaultAuditWarning }>;
--
-+
+ 
    handleRequest(
      action:
