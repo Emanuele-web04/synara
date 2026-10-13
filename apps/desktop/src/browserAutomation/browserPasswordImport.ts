@@ -2,10 +2,17 @@ import type { BrowserPasswordImportInput, BrowserPasswordImportResult } from "@s
 import { execProcessFile } from "@synara/shared/processRuntime";
 import { homedir } from "node:os";
 import { BrowserVault } from "./browserVault";
-import { inventoryChromiumPasswordProfile } from "./chromiumProfileInventory";
-import { BrowserPasswordReadError, readChromiumProfilePasswords } from "./chromiumPasswordReader";
+import type { ChromiumInventorySourceId } from "./chromiumProfileInventory";
+import type { BrowserPasswordLogin } from "./chromiumPasswordReader";
+import {
+  inventoryChromiumPasswordProfileProcess,
+  readChromiumProfilePasswordsProcess,
+} from "./chromiumPasswordReadProcess";
 
 const MAX_PROFILE_LOGINS = 50_000;
+type PasswordProfilePreflight =
+  | Awaited<ReturnType<typeof inventoryChromiumPasswordProfileProcess>>
+  | undefined;
 
 const KEYCHAIN_SOURCES: Record<string, { account: string; service: string }> = {
   chrome: { account: "Chrome", service: "Chrome Safe Storage" },
@@ -84,7 +91,22 @@ export class BrowserPasswordImport {
       signal?: AbortSignal,
     ) => Promise<string> = readMacKeychainSecret,
     private readonly home = homedir(),
-    private readonly getProfile = inventoryChromiumPasswordProfile,
+    private readonly getProfile: (
+      home: string,
+      browser: ChromiumInventorySourceId,
+      profile: string,
+      signal: AbortSignal,
+    ) => Promise<PasswordProfilePreflight> = inventoryChromiumPasswordProfileProcess,
+    private readonly readPasswords: (
+      home: string,
+      browser: ChromiumInventorySourceId,
+      profile: string,
+      passphrase: string,
+      signal: AbortSignal,
+    ) => Promise<{
+      logins: BrowserPasswordLogin[];
+      skipped: number;
+    }> = readChromiumProfilePasswordsProcess,
   ) {}
 
   async import(input: BrowserPasswordImportInput): Promise<BrowserPasswordImportResult> {
@@ -113,9 +135,9 @@ export class BrowserPasswordImport {
     if (currentPlatform !== "macos")
       return { ok: false, code: "unsupported_platform", platform: currentPlatform };
 
-    let profile: Awaited<ReturnType<typeof inventoryChromiumPasswordProfile>>;
+    let profile: PasswordProfilePreflight;
     try {
-      profile = await this.getProfile(this.home, input.browser, input.profile);
+      profile = await this.getProfile(this.home, input.browser, input.profile, signal);
     } catch (error) {
       if (signal.aborted) return cancelled();
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -157,18 +179,15 @@ export class BrowserPasswordImport {
       return { ok: false, code, platform: currentPlatform };
     }
 
-    let read: Awaited<ReturnType<typeof readChromiumProfilePasswords>>;
+    let read: { logins: BrowserPasswordLogin[]; skipped: number };
     try {
-      read = await readChromiumProfilePasswords(
-        this.home,
-        input.browser,
-        input.profile,
-        passphrase,
-        signal,
-      );
+      read = await this.readPasswords(this.home, input.browser, input.profile, passphrase, signal);
     } catch (error) {
       if (signal.aborted) return cancelled();
-      const code = error instanceof BrowserPasswordReadError ? error.code : "reader_failed";
+      const code =
+        error && typeof error === "object" && "code" in error && typeof error.code === "string"
+          ? error.code
+          : "reader_failed";
       return {
         ok: false,
         code:

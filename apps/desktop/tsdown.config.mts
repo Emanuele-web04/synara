@@ -45,6 +45,12 @@ export default defineConfig([
   },
   {
     ...shared,
+    // Password SQLite reads run in Electron's Node child so the main event loop
+    // remains available for cancellation and desktop IPC while profiles scan.
+    entry: ["src/browserAutomation/chromiumPasswordWorker.ts"],
+  },
+  {
+    ...shared,
     entry: ["src/preload.ts"],
   },
   {

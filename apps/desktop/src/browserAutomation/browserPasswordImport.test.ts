@@ -6,6 +6,22 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserVault } from "./browserVault";
 import { BrowserPasswordImport } from "./browserPasswordImport";
+import { inventoryChromiumPasswordProfile } from "./chromiumProfileInventory";
+import { readChromiumProfilePasswords } from "./chromiumPasswordReader";
+
+function makeImporter(
+  vault: BrowserVault,
+  keychain: (browser: string, signal?: AbortSignal) => Promise<string>,
+  selectedHome = home,
+) {
+  return new BrowserPasswordImport(
+    vault,
+    keychain,
+    selectedHome,
+    inventoryChromiumPasswordProfile,
+    readChromiumProfilePasswords,
+  );
+}
 
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let home: string;
@@ -53,7 +69,7 @@ describe("browser password import", () => {
         snapshot: vi.fn(async () => ({ protection: { locked: false } })),
         importPasswords: vi.fn(),
       } as unknown as BrowserVault;
-      const result = await new BrowserPasswordImport(
+      const result = await makeImporter(
         vault,
         async () => {
           throw failure;
@@ -80,7 +96,7 @@ describe("browser password import", () => {
       importPasswords,
     } as unknown as BrowserVault;
 
-    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+    const result = await makeImporter(vault, keychain, home).import({
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -105,7 +121,7 @@ describe("browser password import", () => {
       importPasswords: vi.fn(),
     } as unknown as BrowserVault;
 
-    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+    const result = await makeImporter(vault, keychain, home).import({
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -120,7 +136,7 @@ describe("browser password import", () => {
     const keychain = vi.fn(async () => "test-safe-storage");
     const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
 
-    const result = await new BrowserPasswordImport(vault, keychain, home).import({
+    const result = await makeImporter(vault, keychain, home).import({
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -147,7 +163,7 @@ it("reads only the requested profile and never scans a broken unrelated browser"
     importPasswords: vi.fn(async () => ({ imported: 1, skipped: 0, provenanceSaved: true })),
   } as unknown as BrowserVault;
   expect(
-    await new BrowserPasswordImport(vault, async () => "test-safe-storage", home).import({
+    await makeImporter(vault, async () => "test-safe-storage", home).import({
       browser: "chrome",
       profile: "Default",
       confirmed: true,
@@ -169,7 +185,7 @@ it("cancels only the matching password operation before vault writes", async () 
         signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       }),
   );
-  const importer = new BrowserPasswordImport(vault, keychain, home);
+  const importer = makeImporter(vault, keychain, home);
   const pending = importer.import({
     browser: "chrome",
     profile: "Default",
@@ -198,9 +214,15 @@ it.each(["EACCES", "EPERM", "ENOENT", "EIO"])(
   async (code) => {
     const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
     const keychain = vi.fn();
-    const importer = new BrowserPasswordImport(vault, keychain, home, async () => {
-      throw Object.assign(new Error("private path"), { code });
-    });
+    const importer = new BrowserPasswordImport(
+      vault,
+      keychain,
+      home,
+      async () => {
+        throw Object.assign(new Error("private path"), { code });
+      },
+      readChromiumProfilePasswords,
+    );
     expect(
       await importer.import({ browser: "chrome", profile: "Default", confirmed: true }),
     ).toEqual({
@@ -217,6 +239,67 @@ it.each(["EACCES", "EPERM", "ENOENT", "EIO"])(
     expect(vault.importPasswords).not.toHaveBeenCalled();
   },
 );
+
+it("cancels a pending profile preflight without requesting Keychain access", async () => {
+  const vault = { snapshot: vi.fn(), importPasswords: vi.fn() } as unknown as BrowserVault;
+  const keychain = vi.fn(async () => "test-safe-storage");
+  const getProfile = vi.fn(
+    (_home: string, _browser: string, _profile: string, signal: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+      }),
+  );
+  const importer = new BrowserPasswordImport(
+    vault,
+    keychain,
+    home,
+    getProfile,
+    readChromiumProfilePasswords,
+  );
+  const pending = importer.import({
+    browser: "chrome",
+    profile: "Default",
+    confirmed: true,
+    operationId: "preflight",
+  });
+  await vi.waitFor(() => expect(getProfile).toHaveBeenCalledOnce());
+  importer.cancel("preflight");
+
+  await expect(pending).resolves.toEqual({ ok: false, code: "cancelled", platform: "macos" });
+  expect(keychain).not.toHaveBeenCalled();
+  expect(vault.snapshot).not.toHaveBeenCalled();
+});
+
+it("cancels the password reader process before vault writes", async () => {
+  const vault = {
+    snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+    importPasswords: vi.fn(),
+  } as unknown as BrowserVault;
+  const readPasswords = vi.fn(
+    (_home: string, _browser: string, _profile: string, _passphrase: string, signal: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+      }),
+  );
+  const importer = new BrowserPasswordImport(
+    vault,
+    async () => "test-safe-storage",
+    home,
+    async () => ({ count: 1, status: "available" }),
+    readPasswords,
+  );
+  const pending = importer.import({
+    browser: "chrome",
+    profile: "Default",
+    confirmed: true,
+    operationId: "read",
+  });
+  await vi.waitFor(() => expect(readPasswords).toHaveBeenCalledOnce());
+  importer.cancel("read");
+
+  await expect(pending).resolves.toEqual({ ok: false, code: "cancelled", platform: "macos" });
+  expect(vault.importPasswords).not.toHaveBeenCalled();
+});
 
 it("reads Login Data without touching an inaccessible Network cookie directory", async () => {
   await makeProfile();
@@ -236,11 +319,11 @@ it("reads Login Data without touching an inaccessible Network cookie directory",
       snapshot: async () => ({ protection: { locked: false } }),
       importPasswords: vi.fn(async () => ({ imported: 1, skipped: 0, provenanceSaved: true })),
     } as unknown as BrowserVault;
-    const result = await new BrowserPasswordImport(
-      vault,
-      async () => "test-safe-storage",
-      home,
-    ).import({ browser: "chrome", profile: "Default", confirmed: true });
+    const result = await makeImporter(vault, async () => "test-safe-storage", home).import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
     expect(result).toMatchObject({ ok: true, imported: 1 });
     expect(vault.importPasswords).toHaveBeenCalledOnce();
   } finally {

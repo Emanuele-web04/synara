@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -23,12 +22,7 @@ export type BrowserPasswordLogin = {
 
 export class BrowserPasswordReadError extends Error {
   constructor(
-    readonly code:
-      | "cancelled"
-      | "source_missing"
-      | "reader_failed"
-      | "too_many_logins"
-      | "source_too_large",
+    readonly code: "source_missing" | "reader_failed" | "too_many_logins" | "source_too_large",
   ) {
     super(code);
     this.name = "BrowserPasswordReadError";
@@ -77,7 +71,6 @@ export async function readChromiumProfilePasswords(
   browser: ChromiumInventorySourceId,
   profile: string,
   passphrase: string,
-  signal?: AbortSignal,
 ): Promise<{ logins: BrowserPasswordLogin[]; skipped: number }> {
   if (process.platform !== "darwin") throw new BrowserPasswordReadError("reader_failed");
   const folder = await resolveChromiumProfileFolder(home, browser, profile);
@@ -155,10 +148,6 @@ export async function readChromiumProfilePasswords(
         username_value: string | null;
         password_value: Uint8Array | null;
       }>) {
-        if (rowsRead % 256 === 0) {
-          await setImmediate();
-          if (signal?.aborted) throw new BrowserPasswordReadError("cancelled");
-        }
         rowsRead++;
         const encrypted = row.password_value ? Buffer.from(row.password_value) : Buffer.alloc(0);
         const origin = normalizeOrigin(row.origin_url ?? "");

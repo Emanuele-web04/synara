@@ -1,8 +1,8 @@
-import { spawnProcess } from "@synara/shared/processRuntime";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { BoundedNodeProcessError, runBoundedNodeProcess } from "./boundedNodeProcess";
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024;
@@ -41,7 +41,7 @@ export async function readChromiumCookieSnapshotProcess(
   const startedAt = Date.now();
   const totalBudgetMs = Math.max(1, Math.min(timeoutMs, MAX_TIMEOUT_MS));
   const remainingBudgetMs = () => totalBudgetMs - (Date.now() - startedAt);
-  const password = await keychainPassword(
+  let password = await keychainPassword(
     source.browser,
     Math.max(1, Math.min(remainingBudgetMs(), MAX_KEYCHAIN_TIMEOUT_MS)),
   );
@@ -75,80 +75,20 @@ try {
   }));
 }
 `;
-  const controller = new AbortController();
-  const abortFromCaller = () => controller.abort(signal.reason);
-  if (signal.aborted) abortFromCaller();
-  else signal.addEventListener("abort", abortFromCaller, { once: true });
-  if (controller.signal.aborted) {
-    signal.removeEventListener("abort", abortFromCaller);
-    throw signal.reason ?? new Error("Cookie import cancelled.");
-  }
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, readBudgetMs);
-
+  const payload = Buffer.from(
+    JSON.stringify({ options: { source, timeoutMs: readBudgetMs }, home, password }),
+    "utf8",
+  );
+  password = "";
   try {
-    const payload = Buffer.from(
-      JSON.stringify({ options: { source, timeoutMs: readBudgetMs }, home, password }),
-      "utf8",
-    );
-    if (payload.byteLength > MAX_INPUT_BYTES) throw readerError("source_too_large", "acquisition");
-    const child = spawnProcess(process.execPath, ["--input-type=module", "-e", script], {
-      env: {
-        ELECTRON_RUN_AS_NODE: "1",
-        HOME: home,
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
-      },
-      signal: controller.signal,
-      stdio: ["pipe", "pipe", "pipe"],
+    const output = await runBoundedNodeProcess(script, payload, {
+      home,
+      signal,
+      timeoutMs: readBudgetMs,
+      maxInputBytes: MAX_INPUT_BYTES,
+      maxOutputBytes: MAX_OUTPUT_BYTES,
+      maxStderrBytes: MAX_STDERR_BYTES,
     });
-    const output: Buffer[] = [];
-    let outputBytes = 0;
-    let stderrBytes = 0;
-    let outputTooLarge = false;
-    let stderrTooLarge = false;
-    let stdinError: Error | undefined;
-    let spawnError: Error | undefined;
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      outputBytes += bytes.byteLength;
-      if (outputBytes > MAX_OUTPUT_BYTES) {
-        outputTooLarge = true;
-        controller.abort();
-        return;
-      }
-      output.push(bytes);
-    });
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      stderrBytes += Buffer.byteLength(chunk);
-      if (stderrBytes > MAX_STDERR_BYTES) {
-        stderrTooLarge = true;
-        controller.abort();
-      }
-    });
-    child.stdin.on("error", (error: Error) => {
-      stdinError = error;
-      controller.abort();
-    });
-    child.once("error", (error: Error) => {
-      spawnError = error;
-      controller.abort();
-    });
-    const closed = new Promise<number | null>((resolve) => {
-      child.once("close", (code: number | null) => resolve(code));
-    });
-    child.stdin.end(payload, () => payload.fill(0));
-
-    const exitCode = await closed;
-    if (signal.aborted) throw signal.reason ?? new Error("Cookie import cancelled.");
-    if (timedOut) throw readerError("timed_out", "acquisition");
-    if (outputTooLarge) throw readerError("source_too_large", "acquisition");
-    if (stderrTooLarge || stdinError || spawnError)
-      throw readerError("source_extraction_failed", "acquisition");
-    if (exitCode !== 0) throw readerError("source_extraction_failed", "acquisition");
     let response: {
       ok?: boolean;
       result?: unknown;
@@ -157,7 +97,7 @@ try {
       permissionDenied?: boolean;
     };
     try {
-      response = JSON.parse(Buffer.concat(output).toString("utf8"));
+      response = JSON.parse(output);
     } catch {
       throw readerError("source_extraction_failed", "acquisition");
     }
@@ -169,7 +109,11 @@ try {
     );
   } catch (error) {
     if (signal.aborted) throw signal.reason ?? error;
-    if (timedOut) throw readerError("timed_out", "acquisition");
+    if (error instanceof BoundedNodeProcessError) {
+      if (error.code === "timed_out") throw readerError("timed_out", "acquisition");
+      if (error.code === "input_too_large" || error.code === "output_too_large")
+        throw readerError("source_too_large", "acquisition");
+    }
     if (
       typeof error === "object" &&
       error !== null &&
@@ -178,7 +122,6 @@ try {
       throw error;
     throw readerError("source_extraction_failed", "acquisition");
   } finally {
-    clearTimeout(timeout);
-    signal.removeEventListener("abort", abortFromCaller);
+    password = "";
   }
 }
