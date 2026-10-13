@@ -62,6 +62,14 @@ import type { McpToolCallResult } from "./protocol.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
 import { makeAgentGatewayComputerBrowserTools } from "./computerBrowserTools.ts";
 
+import {
+  COMPUTER_APP_PLAYBOOK_POLICY,
+  COMPUTER_APP_PLAYBOOK_SECTIONS,
+  COMPUTER_APP_PLAYBOOK_TOPICS,
+  computerAppPlaybookEvidence,
+} from "./computerAppPlaybooks.ts";
+import { filterToolsByCapability } from "./toolRuntime.ts";
+
 const THREAD = "thread-computer";
 
 function resultJson(result: McpToolCallResult): unknown {
@@ -4788,6 +4796,50 @@ describe("computer action element diffs", () => {
 });
 
 describe("computer_get_state app hint", () => {
+  it("offers only an on-demand Notion pointer for the exact app, once per thread", async () => {
+    const template = {
+      bounds: { x: 10, y: 10, width: 900, height: 700 },
+      focused: true,
+      minimized: false,
+      visible: true,
+    };
+    const backend = new FakeComputerBackend({
+      windows: [
+        { ...template, id: "notion-window", title: "Workspace", appName: "Notion" },
+        { ...template, id: "other-window", title: "Notion", appName: "Chrome" },
+      ],
+    });
+    const { call, manager } = await setup(backend);
+    try {
+      expect(resultJson(await call("computer_get_state", {}))).not.toHaveProperty("appHint");
+      expect(
+        resultJson(await call("computer_get_state", { window_id: "other-window" })),
+      ).not.toHaveProperty("appHint");
+      const first = resultJson(
+        await call("computer_get_state", { window_id: "notion-window" }),
+      ) as { appHint: string };
+      expect(first.appHint).toContain('computer_help({topic:"notion"})');
+      expect(first.appHint).toContain("not interaction-tested");
+      expect(first.appHint.length).toBeLessThan(160);
+      expect(first.appHint).not.toContain(COMPUTER_APP_PLAYBOOK_SECTIONS.notion);
+      expect(
+        resultJson(await call("computer_get_state", { window_id: "notion-window" })),
+      ).not.toHaveProperty("appHint");
+      expect(
+        resultJson(
+          await call(
+            "computer_get_state",
+            { window_id: "notion-window" },
+            undefined,
+            "another-thread",
+          ),
+        ),
+      ).toHaveProperty("appHint", first.appHint);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("attaches a verified note once per thread for a scoped app read", async () => {
     const backend = new FakeComputerBackend({
       windows: [
@@ -5571,6 +5623,123 @@ describe("computer_run flow control", () => {
 });
 
 describe("computer_help", () => {
+  it.each(COMPUTER_APP_PLAYBOOK_TOPICS)(
+    "serves only requested %s guidance without input or approval",
+    async (topic) => {
+      const authorize = vi.fn(async () => false);
+      const { call, manager, backend, byName } = await setup(new FakeComputerBackend(), authorize);
+      try {
+        const before = [...byName.keys()];
+        const result = await call("computer_help", { topic });
+        expect(result.isError).not.toBe(true);
+        expect(resultJson(result)).toEqual({
+          topic,
+          text: COMPUTER_APP_PLAYBOOK_SECTIONS[topic],
+          playbook: computerAppPlaybookEvidence(topic),
+          policy: COMPUTER_APP_PLAYBOOK_POLICY,
+          toolGuidance: expect.stringContaining("never replay uncertain delivery"),
+        });
+        expect(authorize).not.toHaveBeenCalled();
+        expect(backend.callsFor("getUiTree")).toHaveLength(0);
+        expect(backend.callsFor("click")).toHaveLength(0);
+        expect([...byName.keys()]).toEqual(before);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("keeps app bodies and source metadata out of the default help schema/index", async () => {
+    const { call, manager, byName, tools } = await setup();
+    try {
+      const index = resultJson(await call("computer_help", {})) as { topics: string };
+      expect(Object.keys(index)).toEqual(["topics", "toolGuidance"]);
+      for (const topic of COMPUTER_APP_PLAYBOOK_TOPICS) {
+        expect(index.topics).toContain(`${topic} — `);
+        expect(index.topics).not.toContain(COMPUTER_APP_PLAYBOOK_SECTIONS[topic]);
+      }
+      expect(index.topics).not.toContain("https://");
+      const help = byName.get("computer_help")!;
+      expect(JSON.stringify(help.definition.inputSchema)).not.toContain('"enum"');
+      expect(help).toMatchObject({
+        requiredCapability: "computer:control",
+        requiresActiveTurn: true,
+      });
+      expect(help.definition.annotations).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+      });
+      expect(filterToolsByCapability(tools, new Set<string>())).toHaveLength(0);
+      expect(computerToolRequiresApproval("computer_help")).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("adds all app evidence only when all chapters are explicitly requested", async () => {
+    const { call, manager } = await setup();
+    try {
+      const all = resultJson(await call("computer_help", { topic: "all" })) as {
+        chapters: string;
+        policy: string;
+        playbooks: Record<string, unknown>;
+      };
+      expect(all.policy).toBe(COMPUTER_APP_PLAYBOOK_POLICY);
+      expect(Object.keys(all.playbooks)).toEqual(COMPUTER_APP_PLAYBOOK_TOPICS);
+      for (const topic of COMPUTER_APP_PLAYBOOK_TOPICS) {
+        expect(all.chapters).toContain(COMPUTER_APP_PLAYBOOK_SECTIONS[topic]);
+        expect(all.playbooks[topic]).toEqual(computerAppPlaybookEvidence(topic));
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    ["VS Code", "vscode"],
+    ["YouTube Music", "youtube_music"],
+    ["roblox-studio", "roblox_studio"],
+    ["Apple Music", "apple_music"],
+    ["general social media", "social_media"],
+  ])("routes display name %s to %s without a new tool", async (input, topic) => {
+    const { call, manager } = await setup();
+    try {
+      expect(resultJson(await call("computer_help", { topic: input }))).toMatchObject({
+        topic,
+        playbook: { support: "documentation-backed", interactionTesting: "not-performed" },
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["constructor", "__proto__", "toString", "notion.evil", "hasOwnProperty"])(
+    "refuses non-chapter %s instead of inherited properties",
+    async (topic) => {
+      const { call, manager } = await setup();
+      try {
+        expect((await call("computer_help", { topic })).isError).toBe(true);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("reading guidance cannot approve a subsequent consequential action", async () => {
+    const authorize = vi.fn(async () => false);
+    const { call, manager, backend } = await setup(new FakeComputerBackend(), authorize);
+    try {
+      await call("computer_help", { topic: "github" });
+      expect(authorize).not.toHaveBeenCalled();
+      const result = await call("computer_kill_app", { window_id: "fake-calculator" });
+      expect(result.isError).toBe(true);
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(backend.callsFor("killApp")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("looks up the registered browser catalog and the returned prepare tool is callable", async () => {
     const backend = new FakeComputerBackend({ browser: true });
     const { call, byName, manager } = await setup(backend, async () => true);

@@ -21,6 +21,10 @@ The [Notion reliability audit](notion-reliability-audit-2026-10-13.md) maps the
 seven reported workflow problems to owner-level repairs, existing Cua features
 and application/runtime limits.
 
+The [on-demand application playbooks](app-playbooks.md) cover documented workflows,
+existing-tool reuse, approval boundaries and explicit interaction-testing limits.
+They are operating guidance, not application compatibility certification.
+
 ## Release support
 
 Synara 0.9.0 introduces Computer Use in beta on macOS only. Linux is coming soon.
