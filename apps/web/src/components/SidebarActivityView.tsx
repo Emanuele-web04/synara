@@ -69,6 +69,7 @@ import {
   resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
+  splitWorkingActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
   type ActivityScopeOption,
@@ -626,6 +627,8 @@ export function SidebarActivityView({
   const [pinnedOpen, setPinnedOpen] = useState(true);
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
+  // Folded by default so the feed shows only chats that are waiting on the user.
+  const [workingOpen, setWorkingOpen] = useState(false);
   const [settledOpen, setSettledOpen] = useState(false);
   const [settledExtraPages, setSettledExtraPages] = useState(0);
   const [snoozedVisibleThreadIds, setSnoozedVisibleThreadIds] = useState<readonly ThreadId[]>([]);
@@ -680,12 +683,16 @@ export function SidebarActivityView({
   );
   const scopedPinnedThreads = model.pinned;
   const draftThreads = model.drafts;
+  const { working: workingThreads, rest: idleActiveThreads } = useMemo(
+    () => splitWorkingActivityThreads(model.active, resolveThreadStatus),
+    [model.active, resolveThreadStatus],
+  );
   // Coarse clock so the date bucketing memo stays effective across renders that
   // happen within the same minute; buckets are day-granular anyway.
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
   const { recent: recentThreads, rest: remainingActiveThreads } = useMemo(
-    () => splitRecentActivityThreads(model.active, { nowMs }),
-    [model.active, nowMs],
+    () => splitRecentActivityThreads(idleActiveThreads, { nowMs }),
+    [idleActiveThreads, nowMs],
   );
   const dateBuckets = useMemo(
     () => splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs),
@@ -695,9 +702,9 @@ export function SidebarActivityView({
     () =>
       groupMode === "project"
         ? // Drafts go in first so they lead their project's block.
-          groupActivityThreadsByProject([...model.drafts, ...model.active], isRealProject)
+          groupActivityThreadsByProject([...model.drafts, ...idleActiveThreads], isRealProject)
         : EMPTY_PROJECT_GROUPS,
-    [groupMode, isRealProject, model.active, model.drafts],
+    [groupMode, idleActiveThreads, isRealProject, model.drafts],
   );
 
   const earlierPaging = resolveSidebarThreadListPaging({
@@ -747,6 +754,15 @@ export function SidebarActivityView({
       }),
     [activeThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
   );
+  const workingRows = useMemo(
+    () =>
+      resolveActivitySectionRows(workingThreads, {
+        open: workingOpen,
+        previewLimit: workingThreads.length,
+        activeThreadId,
+      }),
+    [activeThreadId, workingOpen, workingThreads],
+  );
   const settledRows = useMemo(
     () =>
       resolveActivitySectionRows(model.settled, {
@@ -761,9 +777,16 @@ export function SidebarActivityView({
     () => ({
       pinned: pinnedRows.revealed,
       earlier: groupMode === "time" ? earlierRows.revealed : [],
+      working: workingRows.revealed,
       settled: settledRows.revealed,
     }),
-    [earlierRows.revealed, groupMode, pinnedRows.revealed, settledRows.revealed],
+    [
+      earlierRows.revealed,
+      groupMode,
+      pinnedRows.revealed,
+      settledRows.revealed,
+      workingRows.revealed,
+    ],
   );
   const visibleThreadIds = useMemo(
     () => [
@@ -778,6 +801,8 @@ export function SidebarActivityView({
         earlierOpen,
         earlier: earlierRows.visible,
         projectGroups: pagedProjectGroups.map((group) => group.threads),
+        workingOpen,
+        working: workingRows.visible,
         settledOpen,
         settled: settledRows.visible,
         revealed: revealedThreads,
@@ -799,6 +824,8 @@ export function SidebarActivityView({
       settledOpen,
       settledRows.visible,
       snoozedVisibleThreadIds,
+      workingOpen,
+      workingRows.visible,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -1060,6 +1087,16 @@ export function SidebarActivityView({
         </>
       )}
 
+      {workingThreads.length > 0 ? (
+        <SidebarCollapsibleSection
+          label="Working"
+          open={workingOpen}
+          onToggle={() => setWorkingOpen((open) => !open)}
+          revealedChildren={workingRows.revealed.map(renderActiveRow)}
+        >
+          {workingRows.visible.map(renderActiveRow)}
+        </SidebarCollapsibleSection>
+      ) : null}
       {model.settled.length > 0 ? (
         <SidebarCollapsibleSection
           label="Done"
