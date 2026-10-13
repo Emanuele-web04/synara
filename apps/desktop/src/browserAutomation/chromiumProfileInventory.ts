@@ -249,14 +249,35 @@ export async function isBoundedChromiumDatabase(
   return true;
 }
 
+async function isOversizedChromiumDatabase(path: string): Promise<boolean> {
+  for (const file of [path, `${path}-wal`, `${path}-journal`]) {
+    try {
+      const stat = await lstat(file);
+      if (stat.isFile() && stat.size > MAX_CHROMIUM_DATABASE_BYTES) return true;
+    } catch {
+      // Other source failures are reported as unavailable without being mislabeled as a size limit.
+    }
+  }
+  return false;
+}
+
 async function countRows(
   path: string,
   table: "cookies" | "logins",
   query: string,
-): Promise<{ count: number | null; status: "available" | "unavailable" | "locked" }> {
+): Promise<{
+  count: number | null;
+  status: "available" | "unavailable" | "locked";
+  code?: "source_too_large";
+}> {
   let database: DatabaseSync | undefined;
   try {
-    if (!(await isBoundedChromiumDatabase(path))) return { count: null, status: "unavailable" };
+    if (!(await isBoundedChromiumDatabase(path)))
+      return {
+        count: null,
+        status: "unavailable",
+        ...((await isOversizedChromiumDatabase(path)) ? { code: "source_too_large" as const } : {}),
+      };
     database = new DatabaseSync(path, { readOnly: true, timeout: 100 });
     database.exec("BEGIN");
     if (
@@ -266,7 +287,7 @@ async function countRows(
     const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
     const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
     if (pages.page_count * size.page_size > MAX_CHROMIUM_DATABASE_BYTES)
-      return { count: null, status: "unavailable" };
+      return { count: null, status: "unavailable", code: "source_too_large" };
     const row = database.prepare(query).get() as { count?: number | bigint } | undefined;
     if (row?.count === undefined) return { count: null, status: "unavailable" };
     const value = Number(row.count);

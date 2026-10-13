@@ -1,12 +1,15 @@
 import { createCipheriv, pbkdf2Sync } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserVault } from "./browserVault";
 import { BrowserPasswordImport } from "./browserPasswordImport";
-import { inventoryChromiumPasswordProfile } from "./chromiumProfileInventory";
+import {
+  inventoryChromiumPasswordProfile,
+  MAX_CHROMIUM_DATABASE_BYTES,
+} from "./chromiumProfileInventory";
 import { readChromiumProfilePasswords } from "./chromiumPasswordReader";
 
 function makeImporter(
@@ -170,6 +173,40 @@ it("reads only the requested profile and never scans a broken unrelated browser"
     }),
   ).toMatchObject({ ok: true, imported: 1 });
 });
+
+it.each(["Login Data", "Login Data-wal"])(
+  "reports an oversized selected %s store during preflight",
+  async (store) => {
+    await makeProfile();
+    const loginPath = join(
+      home,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+      "Default",
+      "Login Data",
+    );
+    const oversizedPath = store === "Login Data" ? loginPath : `${loginPath}-wal`;
+    if (store !== "Login Data") await writeFile(oversizedPath, "");
+    await truncate(oversizedPath, MAX_CHROMIUM_DATABASE_BYTES + 1);
+    const keychain = vi.fn(async () => "test-safe-storage");
+    const vault = {
+      snapshot: vi.fn(),
+      importPasswords: vi.fn(),
+    } as unknown as BrowserVault;
+
+    await expect(
+      makeImporter(vault, keychain, home).import({
+        browser: "chrome",
+        profile: "Default",
+        confirmed: true,
+      }),
+    ).resolves.toEqual({ ok: false, code: "source_too_large", platform: "macos" });
+    expect(keychain).not.toHaveBeenCalled();
+    expect(vault.importPasswords).not.toHaveBeenCalled();
+  },
+);
 
 it("cancels only the matching password operation before vault writes", async () => {
   await makeProfile();

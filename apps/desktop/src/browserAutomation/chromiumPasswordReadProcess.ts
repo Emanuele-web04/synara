@@ -12,6 +12,7 @@ const MAX_TIMEOUT_MS = 60_000;
 type ProfilePreflight = {
   count: number | null;
   status: "available" | "unavailable" | "locked";
+  code?: "source_too_large";
 } | null;
 type PasswordRead = { logins: BrowserPasswordLogin[]; skipped: number };
 

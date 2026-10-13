@@ -167,6 +167,8 @@ export class BrowserPasswordImport {
     }
     if (signal.aborted) return cancelled();
     if (!profile) return { ok: false, code: "source_missing", platform: currentPlatform };
+    if (profile.code === "source_too_large")
+      return { ok: false, code: "source_too_large", platform: currentPlatform };
     if (profile.count === 0) return { ok: true, imported: 0, skipped: 0, warnings: [] };
     if (profile.count === null || profile.status !== "available")
       return { ok: false, code: "reader_failed", platform: currentPlatform };
