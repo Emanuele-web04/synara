@@ -249,7 +249,7 @@ export async function isBoundedChromiumDatabase(
   return true;
 }
 
-async function isOversizedChromiumDatabase(path: string): Promise<boolean> {
+export async function isOversizedChromiumDatabase(path: string): Promise<boolean> {
   for (const file of [path, `${path}-wal`, `${path}-journal`]) {
     try {
       const stat = await lstat(file);

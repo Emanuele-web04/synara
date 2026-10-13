@@ -340,6 +340,106 @@ it("applies one total deadline to a pending password preflight", async () => {
   }
 });
 
+it("times out while waiting for a read-only vault snapshot before Keychain", async () => {
+  vi.useFakeTimers();
+  try {
+    let resolveSnapshot!: (snapshot: Awaited<ReturnType<BrowserVault["snapshot"]>>) => void;
+    const snapshot = new Promise<Awaited<ReturnType<BrowserVault["snapshot"]>>>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const vault = {
+      snapshot: vi.fn(() => snapshot),
+      importPasswords: vi.fn(),
+    } as unknown as BrowserVault;
+    const keychain = vi.fn(async () => "test-safe-storage");
+    const importer = new BrowserPasswordImport(
+      vault,
+      keychain,
+      home,
+      async () => ({ count: 1, status: "available" }),
+      async () => ({ logins: [], skipped: 0 }),
+    );
+    const pending = importer.import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+      operationId: "snapshot-deadline",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vault.snapshot).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await expect(pending).resolves.toEqual({ ok: false, code: "timed_out", platform: "macos" });
+    resolveSnapshot({
+      protection: { configured: false, locked: true, osProtected: false },
+      settings: { agentUse: false, offerSave: false, autosave: false },
+      logins: [],
+      pending: [],
+      error: null,
+    });
+    expect(keychain).not.toHaveBeenCalled();
+    expect(vault.importPasswords).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("awaits the durable vault result if the pre-write deadline expires during commit", async () => {
+  vi.useFakeTimers();
+  try {
+    let finishWrite!: (result: {
+      imported: number;
+      skipped: number;
+      provenanceSaved: boolean;
+    }) => void;
+    const write = new Promise<{ imported: number; skipped: number; provenanceSaved: boolean }>(
+      (resolve) => {
+        finishWrite = resolve;
+      },
+    );
+    const vault = {
+      snapshot: vi.fn(async () => ({ protection: { locked: false } })),
+      importPasswords: vi.fn(() => write),
+    } as unknown as BrowserVault;
+    const importer = new BrowserPasswordImport(
+      vault,
+      async () => "test-safe-storage",
+      home,
+      async () => ({ count: 1, status: "available" }),
+      async () => ({
+        logins: [
+          { origin: "https://accounts.example.test", username: "alice", password: "secret" },
+        ],
+        skipped: 0,
+      }),
+    );
+    const pending = importer.import({
+      browser: "chrome",
+      profile: "Default",
+      confirmed: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vault.importPasswords).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(120_000);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishWrite({ imported: 1, skipped: 0, provenanceSaved: true });
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      imported: 1,
+      skipped: 0,
+      warnings: [],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("cancels the password reader process before vault writes", async () => {
   const vault = {
     snapshot: vi.fn(async () => ({ protection: { locked: false } })),

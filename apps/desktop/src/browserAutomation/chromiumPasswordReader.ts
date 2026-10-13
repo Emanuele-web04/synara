@@ -6,6 +6,7 @@ import {
   resolveChromiumProfileFolder,
   MAX_CHROMIUM_DATABASE_BYTES,
   isBoundedChromiumDatabase,
+  isOversizedChromiumDatabase,
   type ChromiumInventorySourceId,
 } from "./chromiumProfileInventory";
 
@@ -58,7 +59,7 @@ function decodePassword(encrypted: Buffer, key: Buffer): string | null {
 async function isFile(path: string): Promise<boolean> {
   try {
     const stat = await lstat(path);
-    return stat.isFile() && stat.size <= MAX_CHROMIUM_DATABASE_BYTES;
+    return stat.isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new BrowserPasswordReadError("reader_failed");
@@ -76,8 +77,11 @@ export async function readChromiumProfilePasswords(
   const folder = await resolveChromiumProfileFolder(home, browser, profile);
   if (!folder) throw new BrowserPasswordReadError("source_missing");
   const path = join(folder, "Login Data");
-  if (!(await isFile(path)) || !(await isBoundedChromiumDatabase(path)))
-    throw new BrowserPasswordReadError("source_missing");
+  if (!(await isFile(path))) throw new BrowserPasswordReadError("source_missing");
+  if (!(await isBoundedChromiumDatabase(path)))
+    throw new BrowserPasswordReadError(
+      (await isOversizedChromiumDatabase(path)) ? "source_too_large" : "source_missing",
+    );
   const key = pbkdf2Sync(passphrase, "saltysalt", 1003, 16, "sha1");
 
   let database: DatabaseSync;
@@ -97,8 +101,9 @@ export async function readChromiumProfilePasswords(
       const pages = database.prepare("PRAGMA page_count").get() as { page_count: number };
       const size = database.prepare("PRAGMA page_size").get() as { page_size: number };
       if (pages.page_count * size.page_size > MAX_CHROMIUM_DATABASE_BYTES)
-        throw new BrowserPasswordReadError("reader_failed");
-    } catch {
+        throw new BrowserPasswordReadError("source_too_large");
+    } catch (error) {
+      if (error instanceof BrowserPasswordReadError) throw error;
       throw new BrowserPasswordReadError("reader_failed");
     }
     if (
