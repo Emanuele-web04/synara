@@ -193,3 +193,76 @@ describe("undelivered input recovery", () => {
     await expect(backend.tap(DEVICE, 1, 1)).rejects.toThrow("not delivered");
   });
 });
+
+describe("concurrent helper starts", () => {
+  /**
+   * A backend whose helper compile is held open, so two callers can both be
+   * inside `requireHelper` at once: the pane bringing its stream up while an
+   * agent's tap arrives is the everyday shape of this.
+   */
+  function makeRacingBackend() {
+    const created: FakeHelper[] = [];
+    const disposed = new Set<FakeHelper>();
+    const backend = new IosSimulatorBackend({
+      platform: "darwin",
+      helperCacheRoot: "/tmp/synara-device-test-cache",
+      makeHelperClient: () => {
+        const helper = new FakeHelper();
+        helper.dispose = async () => {
+          disposed.add(helper);
+        };
+        created.push(helper);
+        return helper as unknown as HelperClient;
+      },
+      run: async (command, args) => {
+        if (command === "xcrun" && args[1] === "list") return simctlResult(DEVICE_LIST_JSON);
+        if (command === "xcodebuild") return simctlResult("Xcode 26.2\nBuild version 17C52");
+        return simctlResult("");
+      },
+    });
+    const compile = { calls: 0, release: () => {} };
+    const compiled = new Promise<void>((resolve) => {
+      compile.release = resolve;
+    });
+    Object.defineProperty(backend, "compileHelperIfNeeded", {
+      value: async () => {
+        compile.calls += 1;
+        await compiled;
+        return "/tmp/synara-device-test-cache/synara-device-helper";
+      },
+    });
+
+    /** Start the pane's stream and an agent's tap together, then let the compile finish. */
+    const runConcurrently = async () => {
+      const stream = backend.attachStream(DEVICE, () => {});
+      const tap = backend.tap(DEVICE, 10, 10);
+      // Give the second caller time to reach the helper too; a backend that
+      // shares the in-flight start never calls compile a second time.
+      for (let attempt = 0; attempt < 200 && compile.calls < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      compile.release();
+      await Promise.all([stream, tap]);
+    };
+    return { backend, created, disposed, runConcurrently };
+  }
+
+  it("starts exactly one helper for two concurrent operations", async () => {
+    const { created, runConcurrently } = makeRacingBackend();
+
+    await runConcurrently();
+
+    expect(created).toHaveLength(1);
+  });
+
+  it("disposes every helper it started", async () => {
+    const { backend, created, disposed, runConcurrently } = makeRacingBackend();
+    await runConcurrently();
+
+    await backend.dispose();
+
+    // A helper the backend no longer references is a live process nothing
+    // will ever stop.
+    expect(created.filter((helper) => !disposed.has(helper))).toHaveLength(0);
+  });
+});

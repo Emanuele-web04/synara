@@ -311,6 +311,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
+  /** The helper being started right now, shared by every caller that needs it. */
+  private helperStart: Promise<HelperClient> | null = null;
   /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
   private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
   private readonly recordings = new Map<string, ActiveRecording>();
@@ -1235,11 +1237,23 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   private async requireHelper(): Promise<HelperClient> {
     if (this.helper?.running) return this.helper;
+    // Starting a helper takes several awaits. Without sharing the start, two
+    // callers arriving together (the pane's stream and an agent's tap) would
+    // each spawn a helper, and the first one would never be disposed.
+    this.helperStart ??= this.startHelper().finally(() => {
+      this.helperStart = null;
+    });
+    return await this.helperStart;
+  }
+
+  private async startHelper(): Promise<HelperClient> {
     const binaryPath = await this.compileHelperIfNeeded();
     // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
     // has to inherit the same toolchain the binary was built against.
     const env = await this.toolchainEnv();
-    const helper = this.makeHelperClient(binaryPath, env, await this.sandboxFor([binaryPath], env));
+    const sandbox = await this.sandboxFor([binaryPath], env);
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    const helper = this.makeHelperClient(binaryPath, env, sandbox);
     helper.start();
     this.helper = helper;
     return helper;
