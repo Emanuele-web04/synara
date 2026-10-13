@@ -1,3 +1,4 @@
+import * as NodePath from "node:path";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -475,6 +476,18 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
 }
 
 /** Keeps the two worktree RPCs behind the same project eligibility check. */
+export function resolveNormalizedWorkItemCwd(
+  rawCwd: string,
+  paths: Pick<typeof NodePath, "parse" | "resolve" | "isAbsolute" | "normalize"> = NodePath,
+): string | null {
+  const root = paths.parse(rawCwd).root;
+  const separators = paths.normalize("/") === "\\" ? /[\\/]+$/ : /\/+$/;
+  const stripped = rawCwd.replace(separators, "");
+  const candidate = root && stripped === root.replace(separators, "") ? root : stripped || rawCwd;
+  const resolved = paths.resolve(candidate);
+  return paths.isAbsolute(candidate) && resolved === paths.normalize(candidate) ? resolved : null;
+}
+
 export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
   readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
   readonly getActiveProjectByWorkspaceRoot: (
@@ -1302,6 +1315,28 @@ const makeWsRpcHandlersLayer = () =>
         }
       });
 
+      // Shared trust boundary for the work item RPCs: the client sends a cwd,
+      // but it must be an absolute, normalized, real directory before git/gh
+      // run inside it. Trailing separators are tolerated: path.resolve drops
+      // them while path.normalize keeps them, so compare on the stripped form.
+      // Any absolute directory is accepted deliberately: these RPCs are strictly
+      // read-only (the GitHub repository is resolved from the directory's own
+      // git remote and only `gh search`/`gh api` reads run there), and the rest
+      // of this RPC surface (git status, branches, PR lists, ...) already
+      // accepts a client-supplied cwd, so restricting work items to registered
+      // project roots would not shrink real access. Returns the resolved cwd,
+      // or null when the path fails validation.
+      const resolveValidatedWorkItemCwd = (rawCwd: string) =>
+        Effect.gen(function* () {
+          const resolvedCwd = resolveNormalizedWorkItemCwd(rawCwd, path);
+          if (resolvedCwd === null) return null;
+          const cwdExistsAndIsDirectory = yield* fileSystem.stat(resolvedCwd).pipe(
+            Effect.map((info) => info.type === "Directory"),
+            Effect.orElseSucceed(() => false),
+          );
+          return cwdExistsAndIsDirectory ? resolvedCwd : null;
+        });
+
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: ({ command }) =>
           rpcEffect(
@@ -2020,6 +2055,61 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequestAutoFix.get(input), "Failed to read Auto-fix CI"),
         [WS_METHODS.pullRequestsSetAutoFix]: (input) =>
           rpcEffect(pullRequestAutoFix.set(input), "Failed to update Auto-fix CI"),
+        [WS_METHODS.workItemsSearch]: (input) =>
+          Effect.gen(function* () {
+            const validatedCwd = yield* resolveValidatedWorkItemCwd(input.cwd);
+            if (validatedCwd === null) {
+              return {
+                available: false,
+                errorHint: "Invalid workspace path.",
+                items: [],
+              };
+            }
+            const resolved = yield* resolveGitHubRepository(git, validatedCwd);
+            if (!resolved.repository) {
+              return {
+                available: false,
+                errorHint: "No GitHub repository configured for this project.",
+                items: [],
+              };
+            }
+            return yield* pullRequests.searchWorkItems({
+              ...input,
+              cwd: validatedCwd,
+              repository: resolved.repository.nameWithOwner,
+            });
+          }).pipe(
+            Effect.catch((error) => {
+              const errorHint =
+                error instanceof GitHubCliError
+                  ? error.detail
+                  : error instanceof Error
+                    ? error.message
+                    : "Could not search GitHub work items.";
+              return Effect.succeed({
+                available: false,
+                errorHint,
+                items: [],
+              });
+            }),
+          ),
+        [WS_METHODS.workItemsAvailability]: (input) =>
+          Effect.gen(function* () {
+            const validatedCwd = yield* resolveValidatedWorkItemCwd(input.cwd);
+            if (validatedCwd === null) {
+              return { status: "no-repository" as const, hint: "Invalid workspace path." };
+            }
+            const resolved = yield* resolveGitHubRepository(git, validatedCwd);
+            if (!resolved.repository) {
+              return { status: "no-repository" as const, hint: null };
+            }
+            return yield* pullRequests.workItemsAuthStatus({ cwd: validatedCwd });
+          }).pipe(
+            // Repository resolution fails outside a git work tree (and on
+            // transient git errors). Either way the attach affordance cannot
+            // search a repository, so hide the item; the next probe retries.
+            Effect.catch(() => Effect.succeed({ status: "no-repository" as const, hint: null })),
+          ),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitListRecentCommits]: (input) =>

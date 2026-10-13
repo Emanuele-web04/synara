@@ -757,6 +757,27 @@ const makeDraftSource = (
 });
 
 describe("buildKanbanComposerDraftSnapshot", () => {
+  it("counts attached work items when the draft has no prompt", () => {
+    const snapshot = buildKanbanComposerDraftSnapshot(
+      makeDraftSource({
+        workItems: [
+          {
+            id: "work-item-7",
+            kind: "issue",
+            number: 7,
+            title: "Preserve attached issues",
+            state: "open",
+            url: "https://github.com/owner/repo/issues/7",
+            bodyExcerpt: "Reproduce the bug",
+            createdAt: "2026-10-10T00:00:00Z",
+            updatedAt: "2026-10-10T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    expect(snapshot?.hasAttachments).toBe(true);
+  });
+
   it("ignores terminal contexts whose text is not available anymore", () => {
     const snapshot = buildKanbanComposerDraftSnapshot(
       makeDraftSource({

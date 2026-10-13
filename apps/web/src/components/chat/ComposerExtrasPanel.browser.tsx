@@ -480,3 +480,25 @@ describe("ComposerExtrasPanel", () => {
     await expect.element(page.getByText("Could not list windows.")).toBeVisible();
   });
 });
+
+it("shows the unavailable GitHub action disabled with its server-provided hint", async () => {
+  await render(
+    <ComposerExtrasPanel
+      panelId="work-item-availability"
+      interactionMode="default"
+      supportsFastMode={false}
+      fastModeEnabled={false}
+      onAddAttachments={() => {}}
+      onToggleFastMode={() => {}}
+      onInteractionModeChange={() => {}}
+      onInsertGoal={() => {}}
+      onClose={() => {}}
+      workItemsDisabledHint="Run gh auth login to attach GitHub work items."
+    />,
+  );
+  const row = page.getByRole("option", { name: "Issue or pull request" });
+  await expect.element(row).toHaveAttribute("aria-disabled", "true");
+  await expect
+    .element(page.getByText("Run gh auth login to attach GitHub work items.", { exact: true }))
+    .toBeVisible();
+});

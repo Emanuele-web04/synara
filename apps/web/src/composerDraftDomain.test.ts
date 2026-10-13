@@ -34,6 +34,31 @@ describe("composerDraftHasUnsentContent", () => {
 });
 
 describe("composerThreadDraftIsPending", () => {
+  it("counts work-item-only drafts and saved prompt-history drafts as pending", () => {
+    const draft = createEmptyThreadDraft();
+    draft.workItems = [
+      {
+        id: "work-item-7",
+        kind: "issue",
+        number: 7,
+        title: "Preserve attached issues",
+        state: "open",
+        url: "https://github.com/owner/repo/issues/7",
+        bodyExcerpt: "Reproduce the bug",
+        createdAt: "2026-10-10T00:00:00Z",
+        updatedAt: "2026-10-10T00:00:00Z",
+      },
+    ];
+    expect(composerDraftHasUnsentContent(draft)).toBe(true);
+    expect(composerThreadDraftIsPending(draft)).toBe(true);
+    expect(
+      composerThreadDraftIsPending({
+        ...createEmptyThreadDraft(),
+        promptHistorySavedDraft: draft,
+      }),
+    ).toBe(true);
+  });
+
   it("ignores model-only drafts and reads the saved draft while browsing prompt history", () => {
     const empty = createEmptyThreadDraft();
     expect(composerThreadDraftIsPending({ ...empty, runtimeMode: "full-access" })).toBe(false);

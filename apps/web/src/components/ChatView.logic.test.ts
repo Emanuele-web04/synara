@@ -1539,6 +1539,23 @@ describe("shouldConsumePendingCustomBinaryConfirmation", () => {
 });
 
 describe("deriveComposerSendState", () => {
+  it("treats a work-item-only draft as sendable", () => {
+    const input = {
+      prompt: "",
+      imageCount: 0,
+      fileCount: 0,
+      assistantSelectionCount: 0,
+      browserAnnotationCount: 0,
+      fileCommentCount: 0,
+      terminalContexts: [],
+      pastedTexts: [],
+      pullRequestContexts: [],
+      workItemCount: 1,
+    };
+    expect(deriveComposerSendState(input).hasSendableContent).toBe(true);
+    expect(deriveComposerSendState({ ...input, workItemCount: 0 }).hasSendableContent).toBe(false);
+  });
+
   it("treats expired terminal pills as non-sendable content", () => {
     const state = deriveComposerSendState({
       prompt: "\uFFFC",
@@ -1561,6 +1578,7 @@ describe("deriveComposerSendState", () => {
       ],
       pastedTexts: [],
       pullRequestContexts: [],
+      workItemCount: 0,
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -1591,6 +1609,7 @@ describe("deriveComposerSendState", () => {
       ],
       pastedTexts: [],
       pullRequestContexts: [],
+      workItemCount: 0,
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -1609,6 +1628,7 @@ describe("deriveComposerSendState", () => {
       terminalContexts: [],
       pastedTexts: [],
       pullRequestContexts: [],
+      workItemCount: 0,
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -2909,6 +2929,7 @@ describe("turn dispatch settings", () => {
     browserAnnotations: [],
     terminalContexts: [],
     pullRequestContexts: [],
+    workItems: [],
     fileComments: [],
     pastedTexts: [],
     skills: [],

@@ -21,6 +21,7 @@ import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import type { ComposerFileAttachment } from "../composerDraftDomain";
 import { revokeObjectPreviewUrl } from "../composerDraftAttachments";
 import { hasActiveComposerSend } from "./composerSendOwnership";
+import { appendWorkItemsToPrompt } from "./composerWorkItems";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
 import {
   appendPastedTextsToPrompt,
@@ -307,6 +308,7 @@ async function dispatchDraftThreadOnce(
   const composerAssistantSelections = draftComposerState?.assistantSelections ?? [];
   const composerBrowserAnnotations = draftComposerState?.browserAnnotations ?? [];
   const composerFileComments = draftComposerState?.fileComments ?? [];
+  const composerWorkItems = draftComposerState?.workItems ?? [];
   const sendablePastedTexts = filterPastedTextsWithText(draftComposerState?.pastedTexts ?? []);
   const sendableTerminalContexts = filterTerminalContextsWithText(
     draftComposerState?.terminalContexts ?? [],
@@ -321,6 +323,7 @@ async function dispatchDraftThreadOnce(
       ? formatBrowserAnnotationLabel(composerBrowserAnnotations[0])
       : "") ||
     (sendableTerminalContexts.length > 0 ? "Attached terminal context" : "") ||
+    (composerWorkItems[0] ? `#${composerWorkItems[0].number} ${composerWorkItems[0].title}` : "") ||
     (composerFileComments.length > 0
       ? formatFileCommentTitleSeed(composerFileComments.length)
       : "") ||
@@ -330,15 +333,18 @@ async function dispatchDraftThreadOnce(
   // Browser annotations serialize outermost so display extraction can validate
   // their message-bound transport before unwrapping the remaining context blocks.
   const messageText = appendBrowserAnnotationsToPrompt(
-    appendPastedTextsToPrompt(
-      appendFileCommentsToPrompt(
-        appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(draftPrompt, composerAssistantSelections),
-          sendableTerminalContexts,
+    appendWorkItemsToPrompt(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt(draftPrompt, composerAssistantSelections),
+            sendableTerminalContexts,
+          ),
+          composerFileComments,
         ),
-        composerFileComments,
+        sendablePastedTexts,
       ),
-      sendablePastedTexts,
+      composerWorkItems,
     ),
     composerBrowserAnnotations,
     messageId,

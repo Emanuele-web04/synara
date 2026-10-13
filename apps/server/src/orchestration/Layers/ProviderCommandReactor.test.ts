@@ -3316,10 +3316,11 @@ describe("ProviderCommandReactor", () => {
     });
 
     it("keeps an operator retried slow cache response alive beyond the command deadline", async () => {
+      const commandDeadline = Duration.seconds(1);
       const { harness, startClaudeCompaction } = await createCompactionHarness(
         undefined,
         false,
-        Duration.millis(100),
+        commandDeadline,
       );
       const review = await sendHeldMessage(harness);
       startClaudeCompaction.mockImplementationOnce(() =>
@@ -3351,7 +3352,7 @@ describe("ProviderCommandReactor", () => {
       );
       try {
         await waitFor(() => startClaudeCompaction.mock.calls.length === 2);
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, Duration.toMillis(commandDeadline) * 2));
         expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
         const threadId = ThreadId.makeUnsafe("thread-during-retried-compaction");
         await Effect.runPromise(
@@ -7703,6 +7704,14 @@ describe("ProviderCommandReactor", () => {
         expect(
           harness.sendTurn.mock.calls.filter(([request]) => request.threadId === threadId),
         ).toHaveLength(0);
+        // The activity and session error are separate projected commands.
+        await waitFor(async () =>
+          Boolean(
+            (await readHarnessThread(harness))?.session?.lastError?.includes(
+              PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            ),
+          ),
+        );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
         );
@@ -18687,7 +18696,8 @@ describe("ProviderCommandReactor", () => {
     it("settles a timed-out target start and keeps the thread usable", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
-        commandEventTimeout: Duration.millis(300),
+        // Handoff consumes 90% of this budget; leave time for durable recovery writes.
+        commandEventTimeout: Duration.seconds(2),
       });
       await runFirstGrokTurn(harness);
       harness.startSession.mockImplementationOnce(() => Effect.never);

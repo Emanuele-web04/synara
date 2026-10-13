@@ -1,3 +1,4 @@
+import { escapeJsonForTaggedBlock } from "./taggedPromptJson";
 // FILE: browserAnnotations.ts
 // Purpose: Normalize browser DOM annotations and serialize them as hidden,
 // provider-agnostic prompt context.
@@ -176,10 +177,6 @@ export function formatBrowserAnnotationLabel(
     annotation.selector.trim() ||
     "Page element"
   );
-}
-
-function escapeJsonForTaggedBlock(json: string): string {
-  return json.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 }
 
 export function buildBrowserAnnotationsPromptBlock(

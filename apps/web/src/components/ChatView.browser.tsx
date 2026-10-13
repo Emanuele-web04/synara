@@ -2219,6 +2219,9 @@ async function mountChatView(options: {
     }),
   );
 
+  // Load the code-split route before measuring fixture RPC/hydration.
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
@@ -9262,6 +9265,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -9289,6 +9293,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -9393,6 +9398,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -9491,6 +9497,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex" as const,
@@ -9771,6 +9778,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -9853,6 +9861,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex",
@@ -14503,6 +14512,7 @@ describe("ChatView transcript geometry (full app)", () => {
           fileComments: [],
           pastedTexts: [],
           pullRequestContexts: [],
+          workItems: [],
           skills: [],
           mentions: [],
           queuedTurns: [],

@@ -1,6 +1,7 @@
 import {
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
+  WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
   type NativeApi,
 } from "@synara/contracts";
 
@@ -38,6 +39,11 @@ export function readNativeApiServerCapability(capability: string): boolean {
     if (capability === WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY) {
       return typeof window.nativeApi.projects?.provisionFromGitHub === "function";
     }
+    if (capability === WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY)
+      return (
+        typeof window.nativeApi.workItems?.search === "function" &&
+        typeof window.nativeApi.workItems?.availability === "function"
+      );
     if (capability === WS_PROJECT_FILE_WATCH_CAPABILITY) {
       return typeof window.nativeApi.projects?.onFileChange === "function";
     }

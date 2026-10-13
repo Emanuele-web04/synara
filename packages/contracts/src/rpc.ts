@@ -242,6 +242,12 @@ import {
   GitHubIssueDetailInput,
 } from "./githubInbox";
 import {
+  WorkItemAvailabilityInput,
+  WorkItemSearchInput,
+  WorkItemSearchResult,
+  WorkItemAvailabilityResult,
+} from "./workItems";
+import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   OrchestrationEvent,
@@ -1185,6 +1191,18 @@ export const WsPullRequestsSetAutoFixRpc = Rpc.make(WS_METHODS.pullRequestsSetAu
   error: WsRpcError,
 });
 
+export const WsWorkItemsSearchRpc = Rpc.make(WS_METHODS.workItemsSearch, {
+  payload: WorkItemSearchInput,
+  success: WorkItemSearchResult,
+  error: WsRpcError,
+});
+
+export const WsWorkItemsAvailabilityRpc = Rpc.make(WS_METHODS.workItemsAvailability, {
+  payload: WorkItemAvailabilityInput,
+  success: WorkItemAvailabilityResult,
+  error: WsRpcError,
+});
+
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
   payload: GitListBranchesInput,
   success: GitListBranchesResult,
@@ -1976,6 +1994,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsSetPinnedRpc,
   WsPullRequestsGetAutoFixRpc,
   WsPullRequestsSetAutoFixRpc,
+  WsWorkItemsSearchRpc,
+  WsWorkItemsAvailabilityRpc,
   WsGitListBranchesRpc,
   WsGitListRecentCommitsRpc,
   WsGitCreateWorktreeRpc,

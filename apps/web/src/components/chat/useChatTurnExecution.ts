@@ -107,6 +107,7 @@ interface PreparedChatTurn {
   composerTerminalContextsSnapshot: ChatTurnSubmissionInput["composerTerminalContexts"];
   composerPastedTextsSnapshot: ChatTurnSubmissionInput["composerPastedTexts"];
   composerPullRequestContextsSnapshot: ChatTurnSubmissionInput["composerPullRequestContexts"];
+  composerWorkItemsSnapshot: ChatTurnSubmissionInput["composerWorkItems"];
   composerSkillsSnapshot: ProviderSkillReference[];
   composerMentionsSnapshot: ProviderMentionReference[];
 }
@@ -250,6 +251,7 @@ export function useChatTurnExecution({
         composerTerminalContextsSnapshot,
         composerPastedTextsSnapshot,
         composerPullRequestContextsSnapshot,
+        composerWorkItemsSnapshot,
         composerSkillsSnapshot,
         composerMentionsSnapshot,
       } = preparedTurn;
@@ -864,7 +866,8 @@ export function useChatTurnExecution({
               retryDraft.fileComments.length === 0 &&
               retryDraft.terminalContexts.length === 0 &&
               retryDraft.pastedTexts.length === 0 &&
-              retryDraft.pullRequestContexts.length === 0))
+              retryDraft.pullRequestContexts.length === 0 &&
+              retryDraft.workItems.length === 0))
         ) {
           if (isFocusedSend)
             setOptimisticUserMessages((existing) => {
@@ -933,6 +936,8 @@ export function useChatTurnExecution({
                 value.forEach((context) =>
                   useComposerDraftStore.getState().addPullRequestContext(threadIdForSend, context),
                 ))(composerPullRequestContextsSnapshot);
+          for (const item of composerWorkItemsSnapshot)
+            useComposerDraftStore.getState().addWorkItem(threadIdForSend, item);
           if (isFocusedSend) {
             updateSelectedComposerSkills(composerSkillsSnapshot);
             updateSelectedComposerMentions(composerMentionsSnapshot);

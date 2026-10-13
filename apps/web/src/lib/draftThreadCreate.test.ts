@@ -5,6 +5,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { makeFile, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchDraftThread } from "./draftThreadDispatch";
+import { extractTrailingWorkItems, type WorkItemDraft } from "./composerWorkItems";
 import { createAndDispatchDraftThread, createDraftThread } from "./draftThreadCreate";
 
 const nativeApiMocks = vi.hoisted(() => ({
@@ -24,6 +25,54 @@ describe("draft thread creation", () => {
     resetComposerDraftStore();
     nativeApiMocks.dispatchCommand.mockClear();
   });
+
+  it.each(["", "Fix the linked issue"])(
+    "preserves work items when sending a draft with prompt %j from a control surface",
+    async (prompt) => {
+      const projectId = ProjectId.makeUnsafe("project-work-item");
+      const threadId = createDraftThread({
+        projectId,
+        prompt,
+        modelSelection: { provider: "codex", model: "gpt-5.4" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: "local",
+      });
+      const item: WorkItemDraft = {
+        id: "work-item-7",
+        kind: "issue",
+        number: 7,
+        title: "Preserve attached issues",
+        state: "open",
+        url: "https://github.com/owner/repo/issues/7",
+        bodyExcerpt: "Reproduce the bug",
+        createdAt: "2026-10-10T00:00:00Z",
+        updatedAt: "2026-10-10T00:00:00Z",
+      };
+      useComposerDraftStore.getState().addWorkItem(threadId, item);
+
+      const result = await dispatchDraftThread({
+        threadId,
+        projectId,
+        thread: null,
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+      });
+
+      expect(result).toEqual({ kind: "dispatched" });
+      const turnStart = nativeApiMocks.dispatchCommand.mock.calls
+        .map(([command]) => command as { type: string; message?: { text: string } })
+        .find((command) => command.type === "thread.turn.start");
+      const extracted = extractTrailingWorkItems(turnStart?.message?.text ?? "");
+      expect(extracted.promptText).toBe(prompt);
+      expect(extracted.workItems).toEqual([
+        expect.objectContaining({ url: item.url, bodyExcerpt: item.bodyExcerpt }),
+      ]);
+      expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.workItems ?? []).toEqual(
+        [],
+      );
+    },
+  );
 
   it("preserves Debug in the draft and dispatched turn", async () => {
     const projectId = ProjectId.makeUnsafe("project-draft-debug");

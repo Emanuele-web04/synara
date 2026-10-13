@@ -111,6 +111,7 @@ export async function startSelectionChat(
     fileComments: [],
     pastedTexts: [],
     pullRequestContexts: [],
+    workItems: [],
     skills: [],
     mentions: [],
     selectedProvider: input.modelSelection.provider,

@@ -1,3 +1,4 @@
+import type { WorkItemDraft } from "../../lib/composerWorkItems";
 import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -45,6 +46,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerPastedTexts = composerDraft.pastedTexts;
   const composerPullRequestContexts = composerDraft.pullRequestContexts;
+  const composerWorkItems = composerDraft.workItems;
   const composerSkills = composerDraft.skills;
   const composerMentions = composerDraft.mentions;
   const queuedComposerTurns = composerDraft.queuedTurns;
@@ -61,6 +63,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
         terminalContexts: composerTerminalContexts,
         pastedTexts: composerPastedTexts,
         pullRequestContexts: composerPullRequestContexts,
+        workItemCount: composerWorkItems.length,
       }),
     [
       composerAssistantSelections.length,
@@ -71,6 +74,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
       composerTerminalContexts,
       composerPastedTexts,
       composerPullRequestContexts,
+      composerWorkItems,
       prompt,
     ],
   );
@@ -357,6 +361,20 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
       threadId,
     ],
   );
+  const removeComposerWorkItemFromDraft = useCallback(
+    (key: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      useComposerDraftStore.getState().removeWorkItem(threadId, key);
+    },
+    [threadId, discardPromptHistoryNavigationForComposerMutation],
+  );
+  const addComposerWorkItemToDraft = useCallback(
+    (item: WorkItemDraft) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      return useComposerDraftStore.getState().addWorkItem(threadId, item);
+    },
+    [threadId, discardPromptHistoryNavigationForComposerMutation],
+  );
   const removeComposerPullRequestContextFromDraft = useCallback(
     (contextId: string) => {
       discardPromptHistoryNavigationForComposerMutation();
@@ -474,6 +492,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     composerTerminalContexts,
     composerPastedTexts,
     composerPullRequestContexts,
+    composerWorkItems,
     composerSkills,
     composerMentions,
     queuedComposerTurns,
@@ -510,6 +529,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     composerFileCommentsRef,
     composerPastedTextsRef,
     composerPullRequestContextsRef,
+
     composerCursor,
     setComposerCursor,
     composerTrigger,
@@ -538,6 +558,8 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     removeComposerPastedTextFromDraft,
     addComposerPullRequestContextsToDraft,
     removeComposerPullRequestContextFromDraft,
+    removeComposerWorkItemFromDraft,
+    addComposerWorkItemToDraft,
     removeComposerBrowserAnnotationFromDraft,
     showComposerPastedTextInField,
   };

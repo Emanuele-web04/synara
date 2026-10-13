@@ -212,6 +212,7 @@ import {
   GitHubIssueCommentInput,
   GitHubIssueDetailInput,
 } from "./githubInbox";
+import { WorkItemAvailabilityInput, WorkItemSearchInput } from "./workItems";
 import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpRefreshPairingInput,
@@ -293,6 +294,10 @@ export const WS_METHODS = {
   pullRequestsSetPinned: "pullRequests.setPinned",
   pullRequestsGetAutoFix: "pullRequests.getAutoFix",
   pullRequestsSetAutoFix: "pullRequests.setAutoFix",
+
+  // Work item methods
+  workItemsSearch: "workItems.search",
+  workItemsAvailability: "workItems.availability",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -576,6 +581,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.githubInboxList, GitHubInboxListInput),
   tagRequestBody(WS_METHODS.githubInboxIssueDetail, GitHubIssueDetailInput),
   tagRequestBody(WS_METHODS.githubInboxIssueComment, GitHubIssueCommentInput),
+
+  // Work items
+  tagRequestBody(WS_METHODS.workItemsSearch, WorkItemSearchInput),
+  tagRequestBody(WS_METHODS.workItemsAvailability, WorkItemAvailabilityInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

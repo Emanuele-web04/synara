@@ -1,3 +1,4 @@
+import { appendWorkItemsToPrompt } from "./composerWorkItems";
 // FILE: queuedComposerDispatch.ts
 // Purpose: Dispatch a snapshotted QueuedComposerTurn against a thread without ChatView.
 // Layer: Web orchestration helper
@@ -136,18 +137,21 @@ async function dispatchQueuedComposerTurnOnce(
   const sendableTerminalContexts = filterTerminalContextsWithText(queuedTurn.terminalContexts);
   const sendablePastedTexts = filterPastedTextsWithText(queuedTurn.pastedTexts);
   const messageText = appendBrowserAnnotationsToPrompt(
-    appendPullRequestContextsToPrompt(
-      appendPastedTextsToPrompt(
-        appendFileCommentsToPrompt(
-          appendTerminalContextsToPrompt(
-            appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
-            sendableTerminalContexts,
+    appendWorkItemsToPrompt(
+      appendPullRequestContextsToPrompt(
+        appendPastedTextsToPrompt(
+          appendFileCommentsToPrompt(
+            appendTerminalContextsToPrompt(
+              appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
+              sendableTerminalContexts,
+            ),
+            queuedTurn.fileComments,
           ),
-          queuedTurn.fileComments,
+          sendablePastedTexts,
         ),
-        sendablePastedTexts,
+        queuedTurn.pullRequestContexts,
       ),
-      queuedTurn.pullRequestContexts,
+      queuedTurn.workItems,
     ),
     queuedTurn.browserAnnotations,
     messageId,
