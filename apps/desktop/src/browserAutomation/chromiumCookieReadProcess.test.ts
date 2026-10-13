@@ -187,17 +187,19 @@ describe("Chromium cookie read process", () => {
     ).rejects.toMatchObject({ cookieReaderCode: "source_extraction_failed" });
   });
 
-  it("snapshots and queries a selected profile outside the caller event loop", async () => {
-    const { spawnProcess } = await vi.importActual<typeof import("@synara/shared/processRuntime")>(
-      "@synara/shared/processRuntime",
-    );
-    mocks.spawnProcess.mockImplementation(spawnProcess as never);
-    const home = await mkdtemp(join(tmpdir(), "synara-cookie-process-test-"));
-    try {
-      const profile = join(home, "Library", "Application Support", "net.imput.helium", "Default");
-      await mkdir(profile, { recursive: true });
-      const database = new DatabaseSync(join(profile, "Cookies"));
-      database.exec(`
+  it.skipIf(process.platform !== "darwin")(
+    "snapshots and queries a selected profile outside the caller event loop",
+    async () => {
+      const { spawnProcess } = await vi.importActual<
+        typeof import("@synara/shared/processRuntime")
+      >("@synara/shared/processRuntime");
+      mocks.spawnProcess.mockImplementation(spawnProcess as never);
+      const home = await mkdtemp(join(tmpdir(), "synara-cookie-process-test-"));
+      try {
+        const profile = join(home, "Library", "Application Support", "net.imput.helium", "Default");
+        await mkdir(profile, { recursive: true });
+        const database = new DatabaseSync(join(profile, "Cookies"));
+        database.exec(`
         CREATE TABLE meta (key TEXT PRIMARY KEY, value INTEGER);
         INSERT INTO meta VALUES ('version', 24);
         CREATE TABLE cookies (
@@ -206,18 +208,19 @@ describe("Chromium cookie read process", () => {
           has_expires INTEGER
         );
       `);
-      database.close();
-      const pending = readChromiumCookieSnapshotProcess(
-        { browser: "helium", profile: "Default" },
-        30_000,
-        async () => "synthetic-keychain-secret",
-        new AbortController().signal,
-        home,
-      );
-      await setImmediate();
-      await expect(pending).resolves.toEqual({ detailedCookies: [], warnings: [] });
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
+        database.close();
+        const pending = readChromiumCookieSnapshotProcess(
+          { browser: "helium", profile: "Default" },
+          30_000,
+          async () => "synthetic-keychain-secret",
+          new AbortController().signal,
+          home,
+        );
+        await setImmediate();
+        await expect(pending).resolves.toEqual({ detailedCookies: [], warnings: [] });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 });
