@@ -1,3 +1,4 @@
+import { inlineVisualFilePath } from "../../inlineVisualStore.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import {
@@ -4435,6 +4436,21 @@ it.layer(
       yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");
       assert.isTrue(yield* exists(threadAttachmentPath));
       assert.isTrue(yield* exists(otherThreadAttachmentPath));
+      // Inline visuals sit in a per-thread folder the root scan never visits.
+      const threadVisualPath = inlineVisualFilePath({
+        attachmentsDir,
+        threadId,
+        visualId: `vis_${"a".repeat(32)}`,
+      })!;
+      const otherThreadVisualPath = inlineVisualFilePath({
+        attachmentsDir,
+        threadId: "thread-delete-files-extra",
+        visualId: `vis_${"b".repeat(32)}`,
+      })!;
+      for (const visualPath of [threadVisualPath, otherThreadVisualPath]) {
+        yield* fileSystem.makeDirectory(path.dirname(visualPath), { recursive: true });
+        yield* fileSystem.writeFileString(visualPath, "<svg></svg>");
+      }
 
       yield* appendAndProject({
         type: "thread.deleted",
@@ -4454,6 +4470,8 @@ it.layer(
 
       assert.isFalse(yield* exists(threadAttachmentPath));
       assert.isTrue(yield* exists(otherThreadAttachmentPath));
+      assert.isFalse(yield* exists(path.dirname(threadVisualPath)));
+      assert.isTrue(yield* exists(otherThreadVisualPath));
     }),
   );
 });

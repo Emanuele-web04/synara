@@ -53,7 +53,7 @@ export const SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME =
 
 /** Keeps a leading-slot action hidden until its `group/project-header` row is hovered or focused. */
 export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
-  "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
+  "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:project-header-focus:pointer-events-auto md:project-header-focus:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
 
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 /** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
@@ -111,7 +111,7 @@ const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, stri
   "activity-row":
     "transition-opacity group-hover/activity-row:pointer-events-none group-hover/activity-row:opacity-0 group-focus-within/activity-row:pointer-events-none group-focus-within/activity-row:opacity-0",
   "project-header":
-    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 group-has-[:focus-visible]/project-header:pointer-events-none group-has-[:focus-visible]/project-header:opacity-0",
+    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 project-header-focus:pointer-events-none project-header-focus:opacity-0",
   "thread-row":
     "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
 };

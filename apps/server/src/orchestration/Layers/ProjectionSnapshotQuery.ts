@@ -1187,22 +1187,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   SELECT MAX(messages.updated_at)
                   FROM projection_thread_messages AS messages
                   WHERE messages.thread_id = threads.thread_id
-                    AND (
-                      (
-                        sessions.active_turn_id IS NOT NULL
-                        AND messages.turn_id = sessions.active_turn_id
-                      )
-                      OR (
-                        json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
-                        AND messages.turn_id = json_extract(
-                          runtime.runtime_payload_json,
-                          '$.activeTurnId'
-                        )
-                      )
-                      OR (
-                        latest_turn.state = 'running'
-                        AND messages.turn_id = latest_turn.turn_id
-                      )
+                    AND messages.turn_id IN (
+                      sessions.active_turn_id,
+                      json_extract(runtime.runtime_payload_json, '$.activeTurnId'),
+                      CASE WHEN latest_turn.state = 'running' THEN latest_turn.turn_id END
                     )
                 ),
                 threads.updated_at
@@ -2302,9 +2290,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           messages.thread_id AS "threadId",
           MAX(messages.updated_at) AS "updatedAt"
-        FROM projection_thread_messages AS messages
-        INNER JOIN projection_threads AS threads
-          ON threads.thread_id = messages.thread_id
+        FROM projection_threads AS threads
         LEFT JOIN projection_thread_sessions AS sessions
           ON sessions.thread_id = threads.thread_id
         LEFT JOIN provider_session_runtime AS runtime
@@ -2312,23 +2298,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         LEFT JOIN projection_turns AS latest_turn
           ON latest_turn.thread_id = threads.thread_id
          AND latest_turn.turn_id = threads.latest_turn_id
-        WHERE messages.thread_id IN ${sql.in(threadIds)}
+        -- Keep message lookup after the small owner set so SQLite can bind
+        -- both thread_id and the in-flight turn IDs before reading the index.
+        CROSS JOIN projection_thread_messages AS messages
+        WHERE threads.thread_id IN ${sql.in(threadIds)}
+          AND messages.thread_id = threads.thread_id
           AND threads.deleted_at IS NULL
-          AND (
-            (
-              sessions.active_turn_id IS NOT NULL
-              AND messages.turn_id = sessions.active_turn_id
-            )
-            OR (
-              json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
-              AND messages.turn_id = json_extract(runtime.runtime_payload_json, '$.activeTurnId')
-            )
-            OR (
-              latest_turn.state = 'running'
-              AND messages.turn_id = latest_turn.turn_id
-            )
+          AND messages.turn_id IN (
+            sessions.active_turn_id,
+            json_extract(runtime.runtime_payload_json, '$.activeTurnId'),
+            CASE WHEN latest_turn.state = 'running' THEN latest_turn.turn_id END
           )
-        GROUP BY messages.thread_id
+        GROUP BY threads.thread_id
       `,
   });
 

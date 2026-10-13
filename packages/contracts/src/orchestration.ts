@@ -26,6 +26,10 @@ import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from 
 import { ProjectKind } from "./project";
 import { ClaudeCacheObservation } from "./claudeCache";
 import {
+  OrchestrationGetInlineVisualInput,
+  OrchestrationGetInlineVisualResult,
+} from "./inlineVisual";
+import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -58,6 +62,7 @@ export const ORCHESTRATION_WS_METHODS = {
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
+  getInlineVisual: "orchestration.getInlineVisual",
   replayEvents: "orchestration.replayEvents",
   listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
   reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
@@ -3232,6 +3237,10 @@ export const OrchestrationRpcSchemas = {
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
     output: OrchestrationGetFullThreadDiffResult,
+  },
+  getInlineVisual: {
+    input: OrchestrationGetInlineVisualInput,
+    output: OrchestrationGetInlineVisualResult,
   },
   replayEvents: {
     input: OrchestrationReplayEventsInput,

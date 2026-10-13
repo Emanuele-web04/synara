@@ -948,7 +948,11 @@ function getSessionFile(session: PiAgentSession): string | undefined {
   return session.sessionFile ?? session.sessionManager.getSessionFile();
 }
 
-function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
+// Snapshot reads are not provider activity; transitions pass their actual timestamp.
+function makeSessionSnapshot(
+  context: PiSessionContext,
+  updatedAt = context.session.updatedAt,
+): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
@@ -959,7 +963,7 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
     createdAt: context.session.createdAt,
-    updatedAt: new Date().toISOString(),
+    updatedAt,
     ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
     ...(context.session.model ? { model: context.session.model } : {}),
     ...(resumeCursor ? { resumeCursor } : {}),
@@ -2571,7 +2575,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
-      context.session = makeSessionSnapshot(context);
+      context.session = makeSessionSnapshot(context, new Date().toISOString());
       offerRuntimeEvent({
         ...completionBase,
         type: "turn.completed",
@@ -2774,7 +2778,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               });
               yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
               context.activeTurnId = undefined;
-              context.session = makeSessionSnapshot(context);
+              context.session = makeSessionSnapshot(context, new Date().toISOString());
               return yield* Effect.fail(error);
             }),
           ),
@@ -2787,7 +2791,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         } satisfies ProviderRuntimeEvent);
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
         context.activeTurnId = undefined;
-        context.session = makeSessionSnapshot(context);
+        context.session = makeSessionSnapshot(context, new Date().toISOString());
       });
 
     const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
@@ -3696,7 +3700,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const turnId = TurnId.makeUnsafe(crypto.randomUUID());
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-          context.session = makeSessionSnapshot(context);
+          context.session = makeSessionSnapshot(context, new Date().toISOString());
           if (isPiReloadPayload(payload)) {
             yield* runPiReload(context, payload.text);
             return dispatchResult(context, turnId);
@@ -3857,7 +3861,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
-      Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));
+      Effect.sync(() =>
+        Array.from(sessions.values()).map((context) => makeSessionSnapshot(context)),
+      );
 
     const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => sessions.has(threadId));

@@ -390,6 +390,11 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara moved a board card",
     failed: "Synara couldn't move a board card",
   },
+  synara_show_visual: {
+    running: "Synara is showing a visual",
+    completed: "Synara showed a visual",
+    failed: "Synara couldn't show a visual",
+  },
   synara_create_todo: {
     running: "Synara is adding a to-do",
     completed: "Synara added a to-do",

@@ -20,6 +20,8 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  INLINE_VISUAL_ACTIVITY_KIND,
+  INLINE_VISUAL_TOOL_NAME,
   EventId,
   MessageId,
   ModelSelection,
@@ -1948,6 +1950,57 @@ describe("AgentGateway", () => {
         "capability_denied",
       );
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("shows an inline visual as an activity on the caller's running turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const list = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      const names = (list.body as { result: { tools: Array<{ name: string }> } }).result.tools.map(
+        (tool) => tool.name,
+      );
+      assert.include(names, INLINE_VISUAL_TOOL_NAME);
+
+      const args = { title: "Latency", html: "<svg width='10' height='10'></svg>", height: 240 };
+      const first = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+      const { visualId } = toolResultJson(first.result) as { visualId: string };
+      const visualAppends = () =>
+        harness.dispatched.flatMap((command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === INLINE_VISUAL_ACTIVITY_KIND
+            ? [command]
+            : [],
+        );
+      const [append] = visualAppends();
+      assert.equal(append?.threadId, "thread-parent");
+      assert.equal(append?.activity.turnId, "turn-parent-active");
+      assert.equal(append?.activity.summary, "Visual: Latency");
+      assert.deepInclude(append?.activity.payload as object, {
+        visualId,
+        title: "Latency",
+        height: 240,
+      });
+
+      // A retried call is the same visual and the same command, so the engine
+      // treats it as a replay instead of adding a second row.
+      const retry = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.equal(toolResultJson(retry.result).visualId, visualId);
+      const commandIds = visualAppends().map((command) => command.commandId);
+      assert.deepEqual(commandIds, [append!.commandId, append!.commandId]);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

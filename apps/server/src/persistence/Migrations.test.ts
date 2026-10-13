@@ -681,7 +681,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "ThreadTitleRefresh"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "ThreadTitleRefresh"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -768,7 +769,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
           { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
           { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
-          { migration_id: 135, name: "ThreadTitleRefresh" },
+          { migration_id: 135, name: "ProjectionMessageTurnActivityIndex" },
+          { migration_id: 136, name: "ThreadTitleRefresh" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -935,7 +937,8 @@ agentGatewayRetentionLegacyLayer(
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "ThreadTitleRefresh"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "ThreadTitleRefresh"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1065,7 +1068,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "ThreadTitleRefresh"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "ThreadTitleRefresh"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1136,7 +1140,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "ThreadTitleRefresh"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "ThreadTitleRefresh"],
         ],
       );
 
@@ -1261,7 +1266,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
-        [135, "ThreadTitleRefresh"],
+        [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "ThreadTitleRefresh"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1328,7 +1334,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
-          [135, "ThreadTitleRefresh"],
+          [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "ThreadTitleRefresh"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

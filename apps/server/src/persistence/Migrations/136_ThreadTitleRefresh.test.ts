@@ -3,12 +3,12 @@ import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe } from "vitest";
 
-import threadTitleRefreshSchema from "./135_ThreadTitleRefresh.ts";
+import threadTitleRefreshSchema from "./136_ThreadTitleRefresh.ts";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("135_ThreadTitleRefresh", () => {
+describe("136_ThreadTitleRefresh", () => {
   it.effect("adds title-refresh columns with safe defaults and stays idempotent", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -19,7 +19,7 @@ describe("135_ThreadTitleRefresh", () => {
       `;
       assert.isFalse(before.some((column) => column.name === "manual_title_pinned"));
 
-      yield* runMigrations({ toMigrationInclusive: 135 });
+      yield* runMigrations({ toMigrationInclusive: 136 });
 
       const afterThreads = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('projection_threads')
