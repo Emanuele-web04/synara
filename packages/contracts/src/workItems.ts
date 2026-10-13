@@ -2,6 +2,8 @@ import { Schema } from "effect";
 
 import { IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
 
+export const WORK_ITEM_QUERY_MAX_CHARS = 256;
+
 export const WorkItemKind = Schema.Literals(["issue", "pull-request"]);
 export type WorkItemKind = typeof WorkItemKind.Type;
 
@@ -43,7 +45,7 @@ export type WorkItemAttachment = typeof WorkItemAttachment.Type;
 
 export const WorkItemSearchInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  query: Schema.optional(Schema.String.check(Schema.isMaxLength(256))).pipe(
+  query: Schema.optional(Schema.String.check(Schema.isMaxLength(WORK_ITEM_QUERY_MAX_CHARS))).pipe(
     Schema.withDecodingDefault(() => ""),
   ),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(20))).pipe(

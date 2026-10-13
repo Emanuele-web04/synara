@@ -710,7 +710,10 @@ export function createWsNativeApi(): NativeApi {
         options?.signal
           ? transport.request(WS_METHODS.workItemsSearch, input, { signal: options.signal })
           : transport.request(WS_METHODS.workItemsSearch, input),
-      availability: (input) => transport.request(WS_METHODS.workItemsAvailability, input),
+      availability: (input, options) =>
+        options?.signal
+          ? transport.request(WS_METHODS.workItemsAvailability, input, { signal: options.signal })
+          : transport.request(WS_METHODS.workItemsAvailability, input),
     },
     contextMenu: {
       show: async <T extends string>(

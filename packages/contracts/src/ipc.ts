@@ -1279,7 +1279,10 @@ export interface NativeApi {
       input: WorkItemSearchInput,
       options?: { readonly signal?: AbortSignal },
     ) => Promise<WorkItemSearchResult>;
-    availability: (input: WorkItemAvailabilityInput) => Promise<WorkItemAvailabilityResult>;
+    availability: (
+      input: WorkItemAvailabilityInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<WorkItemAvailabilityResult>;
   };
   contextMenu: {
     show: <T extends string>(

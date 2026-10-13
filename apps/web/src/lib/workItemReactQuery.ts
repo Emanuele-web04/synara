@@ -7,6 +7,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 
 import {
   WS_WORK_ITEMS_COMPOSER_ATTACH_CAPABILITY,
+  WORK_ITEM_QUERY_MAX_CHARS,
   type WorkItemSearchInput,
 } from "@synara/contracts";
 import {
@@ -46,11 +47,11 @@ export function useWorkItemsSearch(input: WorkItemSearchInput | null, enabled = 
 export function workItemsAvailabilityQueryOptions(cwd: string | null) {
   return queryOptions({
     queryKey: workItemQueryKeys.availability(cwd),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!cwd) {
         return { status: "no-repository" as const, hint: null };
       }
-      return ensureNativeApi().workItems.availability({ cwd });
+      return ensureNativeApi().workItems.availability({ cwd }, { signal });
     },
     enabled: cwd !== null,
     staleTime: WORK_ITEMS_AVAILABILITY_STALE_TIME_MS,
@@ -65,7 +66,9 @@ export function useWorkItemsAvailability(cwd: string | null) {
 }
 
 export function useDebouncedWorkItemsSearch(cwd: string | null, query: string, enabled: boolean) {
-  const [debouncedQuery] = useDebouncedValue(query, { wait: WORK_ITEMS_SEARCH_DEBOUNCE_MS });
+  const [debouncedQuery] = useDebouncedValue(query.slice(0, WORK_ITEM_QUERY_MAX_CHARS), {
+    wait: WORK_ITEMS_SEARCH_DEBOUNCE_MS,
+  });
   const input: WorkItemSearchInput | null = cwd ? { cwd, query: debouncedQuery, limit: 20 } : null;
 
   return useWorkItemsSearch(input, enabled);

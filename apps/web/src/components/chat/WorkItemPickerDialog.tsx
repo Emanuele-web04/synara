@@ -1,7 +1,7 @@
 // FILE: WorkItemPickerDialog.tsx
 // Purpose: Search and attach GitHub issues / PRs to the composer.
 
-import type { WorkItemAttachment } from "@synara/contracts";
+import { WORK_ITEM_QUERY_MAX_CHARS, type WorkItemAttachment } from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { workItemKey, WORK_ITEM_ATTACHMENT_LIMIT } from "~/lib/composerWorkItems";
@@ -71,7 +71,8 @@ export function WorkItemPickerDialog({
           <Input
             ref={inputRef}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            maxLength={WORK_ITEM_QUERY_MAX_CHARS}
+            onChange={(event) => setQuery(event.target.value.slice(0, WORK_ITEM_QUERY_MAX_CHARS))}
             placeholder={cwd ? "Search issues and PRs" : "No project directory"}
             disabled={!cwd}
           />

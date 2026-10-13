@@ -7,11 +7,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "vitest-browser-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WORK_ITEMS_SEARCH_DEBOUNCE_MS, useDebouncedWorkItemsSearch } from "./workItemReactQuery";
+import {
+  WORK_ITEMS_SEARCH_DEBOUNCE_MS,
+  useDebouncedWorkItemsSearch,
+  useWorkItemsAvailability,
+} from "./workItemReactQuery";
 
 const searchCalls = vi.hoisted(
   () => [] as Array<{ at: number; query: string; signal?: AbortSignal }>,
 );
+const availabilityCalls = vi.hoisted(() => [] as AbortSignal[]);
 const pending = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("~/nativeApi", () => ({
@@ -19,6 +24,14 @@ vi.mock("~/nativeApi", () => ({
   readNativeApiServerCapability: () => true,
   ensureNativeApi: () => ({
     workItems: {
+      availability: async (_input: { cwd: string }, options?: { signal?: AbortSignal }) => {
+        availabilityCalls.push(options!.signal!);
+        return new Promise((_resolve, reject) =>
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
+            once: true,
+          }),
+        );
+      },
       search: async (
         input: { cwd: string; query: string; limit: number },
         options?: { signal?: AbortSignal },
@@ -53,6 +66,7 @@ describe("useDebouncedWorkItemsSearch", () => {
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
     searchCalls.length = 0;
+    availabilityCalls.length = 0;
     pending.enabled = false;
   });
 
@@ -122,5 +136,36 @@ describe("useDebouncedWorkItemsSearch", () => {
     } finally {
       queryClient.clear();
     }
+  });
+  it("aborts availability probes after workspace changes and unmount", async () => {
+    function Probe({ cwd }: { cwd: string }) {
+      useWorkItemsAvailability(cwd);
+      return null;
+    }
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <Probe cwd="/first" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(availabilityCalls).toHaveLength(1));
+    await screen.rerender(
+      <QueryClientProvider client={queryClient}>
+        <Probe cwd="/second" />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(availabilityCalls).toHaveLength(2));
+    expect(availabilityCalls[0]!.aborted).toBe(true);
+    await screen.unmount();
+    expect(availabilityCalls[1]!.aborted).toBe(true);
+  });
+  it("bounds pasted searches before the RPC", async () => {
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <SearchProbe cwd="/repo" query={"x".repeat(300)} />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(searchCalls).toHaveLength(1));
+    expect(searchCalls[0]!.query).toHaveLength(256);
+    await screen.unmount();
   });
 });

@@ -617,6 +617,15 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.workItemsSearch, input, { signal });
   });
 
+  it("forwards cancellation of work item availability probes", async () => {
+    requestMock.mockResolvedValue({ status: "ready", hint: null });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const signal = new AbortController().signal;
+    const input = { cwd: "/tmp/repo" };
+    await createWsNativeApi().workItems.availability(input, { signal });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.workItemsAvailability, input, { signal });
+  });
+
   it("uses websocket RPC for external MCP management in packaged and browser builds", async () => {
     requestMock
       .mockResolvedValueOnce([])
