@@ -207,6 +207,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Appearance ───────────────────────────────────────────────────────────────
   {
+    id: "appearance:ascii-background",
+    section: "appearance",
+    title: "ASCII background",
+    keywords: "animated empty chat landing background field waves ripples reduced motion disable",
+  },
+  {
     id: "appearance:theme",
     section: "appearance",
     title: "Theme",

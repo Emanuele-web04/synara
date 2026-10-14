@@ -12283,6 +12283,43 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("disables the ASCII landing decoration from Appearance and releases it on the terminal tab", async () => {
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
+    });
+    const background = () => document.querySelector("canvas.font-mono");
+    try {
+      await expect.poll(background).not.toBeNull();
+      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+      const toggle = page.getByRole("switch", { name: "ASCII background", exact: true });
+      await expect.element(toggle).toBeChecked();
+      await toggle.click();
+      await expect
+        .poll(
+          () =>
+            JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").showAsciiBackground,
+        )
+        .toBe(false);
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
+      expect(background()).toBeNull();
+      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+      await expect.element(toggle).not.toBeChecked();
+      await page.getByRole("button", { name: "Reset ASCII background to default" }).click();
+      await expect.element(toggle).toBeChecked();
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect.poll(background).not.toBeNull();
+      useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
+      await expect.poll(background).toBeNull();
+      useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");
+      await expect.poll(background).not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the transcript open while the first turn starts before its message arrives", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const emptyThread = { ...snapshot.threads[0]!, session: null };

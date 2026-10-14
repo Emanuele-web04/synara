@@ -26,6 +26,10 @@ is cancelled, the task and its prompt remain available for retry. Pressing Send 
 message for the same task is still being sent shows a notice and keeps the new text in the
 composer; it is not sent twice.
 
+Empty chats show an animated ASCII background by default. Turn it off in **Settings →
+Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
+clicks can still trigger a ripple. The decoration pauses while its chat is hidden.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
