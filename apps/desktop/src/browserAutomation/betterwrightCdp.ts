@@ -284,6 +284,34 @@ export class BetterwrightCdpTarget {
     const dispatch = async () => {
       if (this.disposed || this.contents.isDestroyed())
         throw new Error("Browser target lease ended.");
+      if (
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseMoved" &&
+        (params.buttons === undefined || params.buttons === 0) &&
+        (params.button === undefined || params.button === "none") &&
+        (params.pointerType === undefined || params.pointerType === "mouse") &&
+        !this.childSessions.has(sessionId!) &&
+        this.contents.getType() !== "webview" &&
+        typeof params.x === "number" &&
+        Number.isFinite(params.x) &&
+        typeof params.y === "number" &&
+        Number.isFinite(params.y)
+      ) {
+        // Chromium can leave a hidden view's CDP hover acknowledgement pending.
+        // Dispatch directly without borrowing keyboard focus for every pointer
+        // step. Clicks, drags, keys and renderer guests retain their focus lease.
+        const zoom = this.contents.getZoomFactor();
+        const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;
+        this.contents.sendInputEvent({
+          type: "mouseMove",
+          x: Math.round(params.x * zoom),
+          y: Math.round(params.y * zoom),
+          modifiers: (["alt", "control", "meta", "shift"] as const).filter(
+            (_name, bit) => modifiers & (1 << bit),
+          ),
+        });
+        return {};
+      }
       const releases = betterwrightExpectedInputs(method, params).map((input) =>
         this.expectAgentInput?.(input),
       );
@@ -293,34 +321,6 @@ export class BetterwrightCdpTarget {
         // to an offscreen preview. Keep focus and dispatch in the same lease.
         if (nativeInput && previousFocus !== this.contents) this.contents.focus();
         const send = async () => {
-          if (
-            method === "Input.dispatchMouseEvent" &&
-            params.type === "mouseMoved" &&
-            (params.buttons === undefined || params.buttons === 0) &&
-            (params.button === undefined || params.button === "none") &&
-            (params.pointerType === undefined || params.pointerType === "mouse") &&
-            !this.childSessions.has(sessionId!) &&
-            this.contents.getType() !== "webview" &&
-            typeof params.x === "number" &&
-            Number.isFinite(params.x) &&
-            typeof params.y === "number" &&
-            Number.isFinite(params.y)
-          ) {
-            // Chromium can leave a move's CDP acknowledgement pending in a
-            // hidden native view. Electron dispatches the same trusted hover
-            // input without waiting for that visual acknowledgement.
-            const zoom = this.contents.getZoomFactor();
-            const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;
-            this.contents.sendInputEvent({
-              type: "mouseMove",
-              x: Math.round(params.x * zoom),
-              y: Math.round(params.y * zoom),
-              modifiers: (["alt", "control", "meta", "shift"] as const).filter(
-                (_name, bit) => modifiers & (1 << bit),
-              ),
-            });
-            return {};
-          }
           return this.send(
             method,
             params,

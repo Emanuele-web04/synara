@@ -754,4 +754,61 @@ describe("Betterwright target boundary", () => {
     });
     expect(f.debuggerApi.detach).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "queues native hover behind pending input and respects revocation (%s)",
+    async (cancelQueued) => {
+      const first = fixture([], "first-backend");
+      const second = fixture([], "second-backend");
+      for (const f of [first, second])
+        await f.target.receive({
+          id: 1,
+          method: "Target.attachToTarget",
+          params: { targetId: f.target.targetId },
+        });
+      const firstSession = (first.messages[0]!.result as { sessionId: string }).sessionId;
+      const secondSession = (second.messages[0]!.result as { sessionId: string }).sessionId;
+      const host = {
+        isDestroyed: () => false,
+        focus: vi.fn(() => {
+          focusState.current = host as unknown as WebContents;
+        }),
+      };
+      focusState.current = host as unknown as WebContents;
+      let finish!: (value: {}) => void;
+      first.debuggerApi.sendCommand.mockImplementation((method) =>
+        method === "Input.insertText"
+          ? new Promise((resolve) => {
+              finish = resolve;
+            })
+          : Promise.resolve({}),
+      );
+      const pendingInput = first.target.receive({
+        id: 2,
+        sessionId: firstSession,
+        method: "Input.insertText",
+        params: { text: "first" },
+      });
+      await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+      const hover = second.target.receive({
+        id: 2,
+        sessionId: secondSession,
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mouseMoved", x: 20, y: 30 },
+      });
+      await Promise.resolve();
+      expect(second.contents.sendInputEvent).not.toHaveBeenCalled();
+      if (cancelQueued) await second.target.dispose(false);
+      finish({});
+      await Promise.all([pendingInput, hover]);
+      expect(second.contents.sendInputEvent).toHaveBeenCalledTimes(cancelQueued ? 0 : 1);
+      expect(second.contents.focus).not.toHaveBeenCalled();
+      expect(focusState.current).toBe(host);
+      const reply = second.messages.find((message) => message.id === 2);
+      if (cancelQueued) expect(reply).toHaveProperty("error");
+      else expect(reply).toHaveProperty("result");
+      await first.target.dispose(false);
+      await second.target.dispose(false);
+    },
+  );
 });
