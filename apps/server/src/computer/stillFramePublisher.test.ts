@@ -149,6 +149,8 @@ describe("StillFramePublisher", () => {
     // Both the attached pane and the event observers see the same still.
     expect(harness.observed).toEqual(harness.frames);
 
+    // A new buffer carrying the same bytes is still the same picture.
+    bytes = new Uint8Array([1, 2, 3]);
     await harness.publisher.publish();
     expect(harness.frames).toHaveLength(1);
 
@@ -156,9 +158,15 @@ describe("StillFramePublisher", () => {
     await harness.publisher.requestKeyframe();
     expect(harness.frames).toHaveLength(2);
 
-    bytes = FRAME_B;
+    // Equal encoded lengths do not mean the picture stayed the same.
+    bytes = new Uint8Array([1, 2, 4]);
     await harness.publisher.publish();
     expect(harness.frames).toHaveLength(3);
+    expect(harness.frames.at(-1)?.data).toEqual(new Uint8Array([1, 2, 4]));
+
+    bytes = FRAME_B;
+    await harness.publisher.publish();
+    expect(harness.frames).toHaveLength(4);
     await harness.publisher.detach();
   });
 

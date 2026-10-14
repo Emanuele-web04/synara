@@ -2,6 +2,7 @@ import type { ProjectImportProject } from "@synara/contracts";
 import { useState } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
@@ -150,6 +151,11 @@ export function ProjectImportProjectCard(props: {
                 <span className="min-w-0 flex-1 truncate" title={thread.title}>
                   {thread.title || "Untitled conversation"}
                 </span>
+                {thread.accountLabel ? (
+                  <Badge variant="secondary" className="max-w-32 truncate px-1.5 py-0 text-ui-xs">
+                    {thread.accountLabel}
+                  </Badge>
+                ) : null}
                 <span className={cn("shrink-0 text-muted-foreground", "text-ui-sm")}>
                   {imported
                     ? "Already present"

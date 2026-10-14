@@ -32,6 +32,7 @@ import {
 
 export interface DevinAcpRuntimeSettings {
   readonly binaryPath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly model?: string;
 }
 
@@ -421,9 +422,13 @@ export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
-    const storedCredentials = yield* Effect.tryPromise(() => readDevinStoredCredentials()).pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
+    const providerEnvironment = {
+      ...process.env,
+      ...(input.devinSettings?.environment ?? {}),
+    };
+    const storedCredentials = yield* Effect.tryPromise(() =>
+      readDevinStoredCredentials(providerEnvironment),
+    ).pipe(Effect.orElseSucceed(() => undefined));
     const authenticateMeta = yield* buildDevinAcpAuthenticateMeta(
       storedCredentials ? { credentials: storedCredentials } : {},
     );
@@ -435,7 +440,7 @@ export const makeDevinAcpRuntime = (
           input.devinSettings,
           input.cwd,
           input.runtimeMode,
-          input.sessionConfig?.childEnvironment,
+          input.sessionConfig?.childEnvironment ?? providerEnvironment,
         ),
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>

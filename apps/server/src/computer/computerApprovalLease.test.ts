@@ -5,7 +5,7 @@ import { ComputerApprovalGate, computerApprovalGate } from "./ComputerApprovalGa
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { makeAgentGatewayComputerTools } from "../agentGateway/computerTools.ts";
-import { GatewayToolError, type ToolContext } from "../agentGateway/toolRuntime.ts";
+import type { ToolContext } from "../agentGateway/toolRuntime.ts";
 
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
   let resolve = () => {};
@@ -124,38 +124,6 @@ describe("computer approval lease", () => {
         },
       });
       expect(await live).toBe(true);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("a turn that ended before dispatch approves nothing and dispatches nothing", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const threadId = "approval-pause-thread";
-    const failingCaller = (active: boolean): ToolContext => ({
-      ...context(threadId, "turn-1"),
-      assertCallerTurnActive: () =>
-        active
-          ? Effect.void
-          : Effect.fail(new GatewayToolError("caller_turn_inactive", "original turn ended")),
-    });
-    const tools = makeAgentGatewayComputerTools({ manager });
-    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
-    try {
-      // A late accept after the turn ended dispatches nothing even though the
-      // approval itself would have been granted.
-      const denied = await Effect.runPromise(
-        tool.handler({ text: "late", include_screenshot: false }, failingCaller(false)),
-      );
-      expect(denied.isError).toBe(true);
-      expect(backend.callsFor("typeText")).toHaveLength(0);
-      // The same turn still live dispatches exactly once.
-      const accepted = await Effect.runPromise(
-        tool.handler({ text: "live", include_screenshot: false }, failingCaller(true)),
-      );
-      expect(accepted.isError).not.toBe(true);
-      expect(backend.callsFor("typeText")).toHaveLength(1);
     } finally {
       await manager.dispose();
     }

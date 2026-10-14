@@ -249,7 +249,7 @@ export function automationApprovalGaps(input: {
 }
 
 // Approval of an enabled legacy fast loop must also satisfy the server's hard iteration cap.
-export function maxIterationsForFastIntervalApproval(input: {
+function maxIterationsForFastIntervalApproval(input: {
   readonly schedule: AutomationSchedule;
   readonly enabled: boolean;
   readonly maxIterations: number | null;

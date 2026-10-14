@@ -16,12 +16,6 @@ describe("getClaudeArtifactCommandNotice", () => {
     expect(notice?.detail).toContain("/design needs Claude Artifacts");
   });
 
-  it("explains account requirements when Claude refused artifacts", () => {
-    expect(getClaudeArtifactCommandNotice({ ...base, artifacts: "unavailable" })?.detail).toContain(
-      "claude.ai login",
-    );
-  });
-
   it("ignores other commands and providers", () => {
     expect(
       getClaudeArtifactCommandNotice({ ...base, artifacts: "disabled", command: "compact" }),

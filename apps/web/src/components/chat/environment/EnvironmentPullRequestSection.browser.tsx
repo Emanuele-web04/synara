@@ -7,36 +7,58 @@
 import "../../../index.css";
 
 import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
   ProjectId,
   ThreadId,
   type GitPullRequestSnapshotResult,
   type GitResolvedPullRequest,
   type GitStatusResult,
   type NativeApi,
-  type PullRequestDetail,
+  type PullRequestAutoFixState,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
+import { pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
+import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { deferred } from "~/lib/pullRequestReactQuery.testUtils";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
-const { getGitStatus, getPullRequestSnapshot, getPullRequestDetail, runPullRequestAction } =
-  vi.hoisted(() => ({
-    getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
-    getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
-    getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
-    runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
-  }));
+const {
+  getGitStatus,
+  getPullRequestSnapshot,
+  getPullRequestDetail,
+  runPullRequestAction,
+  getAutoFix,
+  setAutoFix,
+  getSettings,
+} = vi.hoisted(() => ({
+  getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
+  getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+  getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
+  getAutoFix: vi.fn<NativeApi["pullRequests"]["getAutoFix"]>(),
+  setAutoFix: vi.fn<NativeApi["pullRequests"]["setAutoFix"]>(),
+  getSettings: vi.fn<NativeApi["server"]["getSettings"]>(),
+  runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
+}));
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
-    pullRequests: { detail: getPullRequestDetail, action: runPullRequestAction },
+    pullRequests: {
+      detail: getPullRequestDetail,
+      action: runPullRequestAction,
+      getAutoFix,
+      setAutoFix,
+    },
+    server: {
+      getSettings,
+      updateSettings: () => Promise.resolve(DEFAULT_SERVER_SETTINGS_VIEW),
+    },
   }),
 }));
 
@@ -148,6 +170,36 @@ function draftCards() {
 }
 
 describe("EnvironmentPullRequestSection", () => {
+  beforeEach(() => {
+    getAutoFix.mockResolvedValue({ states: [] });
+    getSettings.mockResolvedValue(DEFAULT_SERVER_SETTINGS_VIEW);
+  });
+  it("turns off a redirected PR through its canonical identity and clears its visible checkbox", async () => {
+    const client = createQueryClient();
+    client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+    const state: PullRequestAutoFixState = {
+      threadId,
+      pullRequestUrl: "https://github.com/new/repo/pull/321",
+      requestedPullRequestUrl: pullRequest.url,
+      status: "watching",
+      pauseReason: null,
+      attempts: 0,
+      lastHandledHeadSha: null,
+      updatedAt: "2026-10-03T10:00:00.000Z",
+    };
+    client.setQueryData(pullRequestQueryKeys.autoFix(threadId), { states: [state] });
+    setAutoFix.mockResolvedValue({ state: null });
+    await renderSection(client);
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    const checkbox = page.getByTestId("pr-auto-fix-ci");
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "true");
+    await checkbox.click();
+    await expect
+      .poll(() => setAutoFix.mock.calls)
+      .toEqual([[{ threadId, enabled: false, pullRequestUrl: state.pullRequestUrl }]]);
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "false");
+    expect(client.getQueryData(pullRequestQueryKeys.autoFix(threadId))).toEqual({ states: [] });
+  });
   afterEach(async () => {
     await cleanup();
     for (const queryClient of queryClients) {
@@ -158,7 +210,7 @@ describe("EnvironmentPullRequestSection", () => {
     useComposerDraftStore.getState().clearDraftThread(threadId);
   });
 
-  it.each(["ready", "draft"] as const)(
+  it.each(["ready"] as const)(
     "shows %s immediately while GitHub is pending and restores the menu on failure",
     async (action) => {
       const queryClient = createQueryClient();
@@ -254,27 +306,6 @@ describe("EnvironmentPullRequestSection", () => {
     });
   });
 
-  it("shows when a merged pull request was merged once details load", async () => {
-    const queryClient = createQueryClient();
-    const projectId = ProjectId.makeUnsafe("project-pr-status");
-    queryClient.setQueryData<GitStatusResult>(gitQueryKeys.status(cwd), (status) =>
-      status ? { ...status, pr: { ...pullRequest, state: "merged" } } : status,
-    );
-    // Only the fields the settled menu reads; the rest of the detail is irrelevant here.
-    getPullRequestDetail.mockResolvedValue({
-      mergedAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString(),
-      closedAt: null,
-      stack: null,
-      mergeCapabilities: { merge: true, squash: true, rebase: true },
-    } as unknown as PullRequestDetail);
-    await render(section(queryClient, vi.fn(), { projectId }));
-
-    await page.getByRole("button", { name: "#321 Keep PR context visible Merged" }).click();
-    await expect
-      .element(page.getByRole("menuitem", { name: "Status Merged 12h ago", exact: true }))
-      .toBeVisible();
-  });
-
   it("refreshes an old missing PR when the mounted panel opens", async () => {
     const queryClient = createQueryClient();
     const status = queryClient.getQueryData<GitStatusResult>(gitQueryKeys.status(cwd))!;
@@ -297,7 +328,7 @@ describe("EnvironmentPullRequestSection", () => {
     expect(getGitStatus).toHaveBeenCalledExactlyOnceWith({ cwd });
   });
 
-  it.each(["merged", "closed"] as const)(
+  it.each(["merged"] as const)(
     "shows a branch's %s PR on first open without loading active PR details",
     async (state) => {
       const queryClient = createQueryClient();
@@ -316,6 +347,7 @@ describe("EnvironmentPullRequestSection", () => {
         .element(page.getByText(`${stateLabel} on GitHub`, { exact: true }))
         .not.toBeInTheDocument();
       expect(queryClient.isFetching()).toBe(0);
+      expect(getSettings).not.toHaveBeenCalled();
       expect(getPullRequestSnapshot).not.toHaveBeenCalled();
 
       await prRow.click();

@@ -6,21 +6,35 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanCardContextMenu
 
-import type { ThreadId } from "@synara/contracts";
+import { THREAD_GOAL_MAX_CHARS, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
+import { KANBAN_COLUMN_V2_LABELS } from "@synara/shared/kanban";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  useAppSettings,
+  getProviderStartOptions,
+  getProviderInstanceOptions,
+  resolveAssistantDeliveryMode,
+} from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
+import {
+  dispatchKanbanDraftCardAsGoal,
+  kanbanDispatchFailureToast,
+  resolveKanbanDraftDispatchTarget,
+} from "~/lib/kanbanDispatch";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { contextMenuGroup } from "~/lib/contextMenuGroup";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { pinActionLabel } from "~/lib/pin";
+import { releaseOrphanedWorktreeAfterArchive } from "~/lib/archiveThreadWorktreeCleanup";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
+import { dispatchThreadGoal } from "~/threadGoal";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
@@ -28,7 +42,12 @@ import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { getThreadFromState } from "../../threadDerivation";
 import { toastManager } from "../ui/toast";
-import { isKanbanDraftOnlyCard, type KanbanCard } from "./kanban.logic";
+import {
+  isKanbanDraftOnlyCard,
+  resolveDraftDropAction,
+  type KanbanCard,
+  type KanbanColumnKey,
+} from "./kanban.logic";
 
 interface RenameTarget {
   threadId: ThreadId;
@@ -37,7 +56,12 @@ interface RenameTarget {
 
 export interface KanbanCardContextMenuController {
   /** Attach to each card's `onContextMenu`. */
-  onCardContextMenu: (card: KanbanCard, event: MouseEvent) => void;
+  onCardContextMenu: (
+    card: KanbanCard,
+    event: MouseEvent,
+    /** Valid destinations and their actions, owned by the project board's drop path. */
+    moves?: readonly { column: KanbanColumnKey; onMove: () => void }[],
+  ) => void;
   /** Render once near the board root. */
   renameDialog: React.ReactNode;
 }
@@ -52,7 +76,13 @@ function resolveCardWorkspacePath(card: KanbanCard): string | null {
   });
 }
 
-async function archiveCardThread(threadId: ThreadId) {
+async function archiveCardThread(
+  threadId: ThreadId,
+  worktreeRelease: Omit<
+    Parameters<typeof releaseOrphanedWorktreeAfterArchive>[0],
+    "threadId" | "archiveSequence"
+  >,
+) {
   const api = readNativeApi();
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
@@ -60,7 +90,19 @@ async function archiveCardThread(threadId: ThreadId) {
   // Archived threads leave the board's thread feed, so a live optimistic
   // dispatch entry could never reconcile — drop it with the card.
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
-  await archiveThreadFromClient(api.orchestration, threadId);
+  const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
+  if (!worktreeRelease.enabled) return;
+  // Kanban has no Undo toast. Give the asynchronous archive cleanup time to
+  // stop the provider before asking the server to validate and remove anything.
+  globalThis.setTimeout(() => {
+    void releaseOrphanedWorktreeAfterArchive({
+      threadId,
+      archiveSequence,
+      ...worktreeRelease,
+    }).catch((error: unknown) => {
+      console.error("Failed to release worktree after archiving thread", { threadId, error });
+    });
+  }, 8_000);
 }
 
 async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
@@ -115,7 +157,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     });
   };
 
-  const onCardContextMenu = (card: KanbanCard, event: MouseEvent) => {
+  const onCardContextMenu: KanbanCardContextMenuController["onCardContextMenu"] = (
+    card,
+    event,
+    moves = [],
+  ) => {
     event.preventDefault();
     event.stopPropagation();
     const api = readNativeApi();
@@ -125,6 +171,11 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     const isThreadBacked = card.thread !== null;
     const deletesOnlyDraft = !isThreadBacked || isDraftOnlyCard;
     const isThreadActionCard = isThreadBacked && !isDraftOnlyCard;
+    const isDispatchableDraft = resolveDraftDropAction(card) === "dispatch";
+    // Live/done cards already have a thread: the goal can be written onto it
+    // directly (no new turn). Draft-column cards keep the dispatch-path
+    // "Send as goal" item instead, which starts the turn with the goal.
+    const isSettableGoalCard = card.thread !== null && card.column !== "draft";
     const workspacePath = resolveCardWorkspacePath(card);
 
     void (async () => {
@@ -140,25 +191,44 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 },
               ]
             : []),
-          ...(workspacePath
-            ? [
-                {
-                  id: "copy-path",
-                  label: "Copy Path",
-                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
-                  separatorBefore: true,
-                },
-              ]
-            : []),
-          ...(isThreadBacked
-            ? [
-                {
-                  id: "copy-thread-id",
-                  label: "Copy Thread ID",
-                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
-                },
-              ]
-            : []),
+          ...contextMenuGroup(
+            { id: "move-to", label: "Move to…" },
+            moves.map(({ column }) => ({
+              id: `move-to-${column}`,
+              label: KANBAN_COLUMN_V2_LABELS[column],
+              standaloneLabel: `Move to ${KANBAN_COLUMN_V2_LABELS[column]}`,
+            })),
+          ),
+          ...contextMenuGroup(
+            {
+              id: "copy",
+              label: "Copy",
+              icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              separatorBefore: true,
+            },
+            [
+              ...(workspacePath
+                ? [
+                    {
+                      id: "copy-path",
+                      label: "Path",
+                      standaloneLabel: "Copy Path",
+                      icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                    },
+                  ]
+                : []),
+              ...(isThreadBacked
+                ? [
+                    {
+                      id: "copy-thread-id",
+                      label: "Thread ID",
+                      standaloneLabel: "Copy Thread ID",
+                      icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                    },
+                  ]
+                : []),
+            ],
+          ),
           ...(isThreadActionCard
             ? [
                 {
@@ -169,17 +239,26 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 },
               ]
             : []),
+          ...(isDispatchableDraft
+            ? [{ id: "send-as-goal", label: "Send as goal", separatorBefore: true }]
+            : []),
+          ...(isSettableGoalCard ? [{ id: "set-as-goal", label: "Set as goal" }] : []),
           {
             id: "delete",
             label: deletesOnlyDraft ? "Delete draft" : "Delete",
             icon: THREAD_CONTEXT_MENU_ICONS.delete,
             destructive: true,
-            separatorBefore: !isThreadActionCard,
+            separatorBefore: !isThreadActionCard && !isDispatchableDraft,
           },
         ],
         position,
       );
 
+      const move = moves.find(({ column }) => clicked === `move-to-${column}`);
+      if (move) {
+        move.onMove();
+        return;
+      }
       if (clicked === "rename" && isThreadActionCard && card.thread) {
         setRenameTarget({ threadId: card.threadId, title: card.thread.title });
         return;
@@ -214,7 +293,103 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           );
           if (!confirmed) return;
         }
-        await archiveCardThread(card.threadId);
+        await archiveCardThread(card.threadId, {
+          enabled: settings.archiveDeletesOrphanedWorktree,
+          removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+        });
+        return;
+      }
+      if (clicked === "send-as-goal") {
+        if (!isDispatchableDraft) return;
+        const providerInstances = getProviderInstanceOptions(settings);
+        const target = resolveKanbanDraftDispatchTarget({
+          threadId: card.threadId,
+          projectId: card.projectId,
+          thread: card.thread,
+          defaultProvider: settings.defaultProvider,
+          providerInstances,
+        });
+        const result = await dispatchKanbanDraftCardAsGoal({
+          card,
+          defaultProvider: settings.defaultProvider,
+          assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
+          providerOptions: getProviderStartOptions(settings, target.instanceId),
+          providerInstances,
+        });
+        if (result.kind === "dispatched") {
+          if (result.deferred) {
+            toastManager.add({
+              type: "info",
+              title: "Chat send in progress",
+              description: "The board stood down; the running chat send owns this turn.",
+            });
+          } else if (result.warning) {
+            toastManager.add({
+              type: "warning",
+              title: "Task started",
+              description: result.warning,
+            });
+          } else {
+            toastManager.add({
+              type: "success",
+              title: "Goal set",
+              description: card.title,
+            });
+          }
+          return;
+        }
+        if (result.kind === "open-thread") {
+          toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
+          return;
+        }
+        toastManager.add(kanbanDispatchFailureToast(result, "Could not send as goal"));
+        return;
+      }
+      if (clicked === "set-as-goal") {
+        if (!isSettableGoalCard) return;
+        // Prefer the live composer prompt (what Send-as-goal would send) over
+        // the card title, which can be a fallback like "New thread".
+        const livePrompt =
+          useComposerDraftStore.getState().draftsByThreadId[card.threadId]?.prompt.trim() ?? "";
+        const goal = (livePrompt.length > 0 ? livePrompt : card.title).trim();
+        if (goal.length === 0) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: "The thread has no prompt or title to save as its goal.",
+          });
+          return;
+        }
+        // Same bound the other goal paths enforce — beyond the wire cap the
+        // goal is rejected, never silently sliced.
+        if (goal.length > THREAD_GOAL_MAX_CHARS) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: `The goal is ${goal.length.toLocaleString()} characters; keep it within ${THREAD_GOAL_MAX_CHARS.toLocaleString()}.`,
+          });
+          return;
+        }
+        try {
+          // Mirrors the AsGoal dispatch's metadata write (goal + defer), but
+          // starts no turn — the existing thread picks the goal up next run.
+          // Oversized goals materialize server-side into a file reference.
+          await dispatchThreadGoal(card.threadId, goal, {
+            startBehavior: "defer",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not set goal",
+            description: error instanceof Error ? error.message : "Unknown error.",
+          });
+          return;
+        }
+        toastManager.add({
+          type: "success",
+          title: "Goal set",
+          description: card.title,
+        });
         return;
       }
       if (clicked !== "delete") return;

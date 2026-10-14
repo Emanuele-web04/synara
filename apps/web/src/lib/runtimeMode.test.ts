@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  RUNTIME_MODE_PRESENTATION,
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsAutoRuntimeMode,
@@ -18,13 +17,6 @@ describe("runtime mode provider support", () => {
     expect(normalizeRuntimeModeForProvider("full-access", "opencode")).toBe("full-access");
   });
 
-  it("describes Auto as approval review rather than unrestricted access", () => {
-    expect(RUNTIME_MODE_PRESENTATION.auto).toEqual({
-      label: "Approve for me",
-      description: "Only ask for actions detected as potentially unsafe",
-    });
-  });
-
   it("uses Claude's explicit model and CLI capability signals", () => {
     expect(
       providerModelSupportsAutoRuntimeMode(
@@ -39,6 +31,8 @@ describe("runtime mode provider support", () => {
         { slug: "claude-test", name: "Claude Test", supportsAutoMode: true },
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "ready",
           available: true,
           authStatus: "authenticated",
@@ -53,6 +47,8 @@ describe("runtime mode provider support", () => {
     expect(
       providerModelSupportsAutoRuntimeMode("codex", undefined, {
         provider: "codex",
+        driver: "codex",
+        instanceId: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -70,6 +66,8 @@ describe("runtime mode provider support", () => {
         { slug: "claude-test", name: "Claude Test" },
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "ready",
           available: true,
           authStatus: "authenticated",

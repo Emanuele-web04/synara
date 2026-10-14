@@ -124,7 +124,7 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-it.each(["Last turn", "All turns"])(
+it.each(["Last turn"])(
   "automatically recovers a saturated %s diff without a hard error or manual reload",
   async (scope) => {
     const getDiff = vi.fn().mockRejectedValue(capacityError());

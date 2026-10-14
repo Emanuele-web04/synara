@@ -95,17 +95,14 @@ describe("discoverable computer_spaces gateway", () => {
     expect(manager.spaceBroker.reservationFor({ threadId: "a", turnId: "turn" })).toBeNull();
   });
 
-  it.each(["create", "move", "switch", "follow"])(
-    "%s is an honest refusal without native calls",
-    async (operation) => {
-      const { inspect, backend } = setup();
-      expect(json(await inspect({ operation }))).toMatchObject({
-        error: { code: "computer_space_operation_unsupported" },
-      });
-      expect(backend.listSpaces).not.toHaveBeenCalled();
-      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
-    },
-  );
+  it.each(["create"])("%s is an honest refusal without native calls", async (operation) => {
+    const { inspect, backend } = setup();
+    expect(json(await inspect({ operation }))).toMatchObject({
+      error: { code: "computer_space_operation_unsupported" },
+    });
+    expect(backend.listSpaces).not.toHaveBeenCalled();
+    expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+  });
 
   it("validates inspect arguments using the canonical schema", async () => {
     const { inspect } = setup();

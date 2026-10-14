@@ -33,6 +33,7 @@ export interface ProfileTopProviderSelection {
 
 export interface ProfileModelUsageEntry {
   readonly provider: ProviderKind | "unknown";
+  readonly instanceId: string;
   readonly model: string;
   readonly percent: number;
 }

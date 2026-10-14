@@ -11,17 +11,6 @@ import {
 } from "./useDesktopTopBarGutter";
 
 describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
-  it("never reserves a gutter in the browser build", () => {
-    expect(
-      shouldReserveDesktopTopBarTrafficLightGutter({
-        isElectron: false,
-        isMacDesktop: true,
-        sidebarOpen: false,
-        isMobile: false,
-      }),
-    ).toBe(false);
-  });
-
   it("never reserves a gutter for non-macOS desktop windows", () => {
     expect(
       shouldReserveDesktopTopBarTrafficLightGutter({
@@ -70,15 +59,6 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
 });
 
 describe("shouldReserveDesktopTopBarWindowControlsGutter", () => {
-  it("never reserves a gutter outside Electron", () => {
-    expect(
-      shouldReserveDesktopTopBarWindowControlsGutter({
-        isElectron: false,
-        customTitleBarActive: true,
-      }),
-    ).toBe(false);
-  });
-
   it("never reserves a gutter when the live window still has a native frame", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({

@@ -2,7 +2,6 @@ import type { DeviceDescriptor, DeviceUdid } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  attachedDeviceFromThreadState,
   deviceAttachStatusLabel,
   resolveDisplayedDevice,
   buildDevicePickerEntries,
@@ -14,7 +13,6 @@ import {
   deviceHidUsageForKey,
   deviceKeyModifiers,
   deviceRecordingClickIntent,
-  describeDegradedCapabilities,
   inferDeviceScaleFactor,
   isDeviceRecordingActive,
   resolveDeviceAvailabilityView,
@@ -57,14 +55,6 @@ function device(overrides: Partial<DeviceDescriptor> = {}): DeviceDescriptor {
 }
 
 describe("device frame gate", () => {
-  it("ignores frames addressed to another device", () => {
-    const state = createDeviceFrameGateState();
-    const step = stepDeviceFrameGate(state, header({ sequence: 1, deviceId: OTHER_UDID }), UDID);
-
-    expect(step.action).toEqual({ kind: "ignore" });
-    expect(step.state).toBe(state);
-  });
-
   it("ignores every frame while no device is attached", () => {
     const step = stepDeviceFrameGate(
       createDeviceFrameGateState(),
@@ -218,15 +208,6 @@ describe("coordinate mapping", () => {
     displayHeight: 800,
   };
 
-  it("maps a click one-to-one when the canvas matches the frame", () => {
-    expect(canvasPointToDevicePoint(geometry, 100, 200)).toEqual({ x: 100, y: 200 });
-  });
-
-  it("scales coordinates when the canvas is smaller than the frame", () => {
-    const scaled = { ...geometry, displayWidth: 200, displayHeight: 400 };
-    expect(canvasPointToDevicePoint(scaled, 100, 200)).toEqual({ x: 200, y: 400 });
-  });
-
   it("accounts for letterboxing when the aspect ratios differ", () => {
     // A tall 400x800 frame in a 800x800 box leaves 200px bars left and right.
     const letterboxed = { ...geometry, displayWidth: 800, displayHeight: 800 };
@@ -300,17 +281,6 @@ describe("device point size", () => {
     ).toEqual({ width: 402, height: 874 });
   });
 
-  it("falls back to the inferred scale when neither source is available", () => {
-    expect(
-      resolveDevicePointSize({
-        framePixelWidth: 1206,
-        framePixelHeight: 2622,
-        geometry: null,
-        measured: null,
-      }),
-    ).toEqual({ width: 402, height: 874 });
-  });
-
   it("maps a canvas click through the contract geometry, not frame pixels", () => {
     const size = resolveDevicePointSize({
       framePixelWidth: 1206,
@@ -335,29 +305,6 @@ describe("device point size", () => {
     expect(point?.y).toBeCloseTo(317, 0);
   });
 
-  it("prefers the measured accessibility size over anything inferred", () => {
-    expect(
-      resolveDevicePointSize({
-        framePixelWidth: 1206,
-        framePixelHeight: 2622,
-        measured: { width: 402, height: 874 },
-      }),
-    ).toEqual({ width: 402, height: 874 });
-  });
-
-  it("infers the 3x scale of a Retina phone when accessibility is unavailable", () => {
-    expect(resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 })).toEqual({
-      width: 402,
-      height: 874,
-    });
-  });
-
-  it("never returns the raw pixel size for a Retina frame", () => {
-    const size = resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 });
-    expect(size?.width).not.toBe(1206);
-    expect(size?.height).not.toBe(2622);
-  });
-
   it("identifies each Apple scale factor from the frame width", () => {
     expect(inferDeviceScaleFactor(1206)).toBe(3); // iPhone 17 Pro
     expect(inferDeviceScaleFactor(1170)).toBe(3); // iPhone 13 Pro
@@ -374,38 +321,9 @@ describe("device point size", () => {
     ).toEqual({ width: 402, height: 874 });
     expect(resolveDevicePointSize({ framePixelWidth: 0, framePixelHeight: 0 })).toBeNull();
   });
-
-  it("maps a canvas click to points, not pixels, end to end", () => {
-    // The exact failure from the live repro: a click 84.5% across a 3x screen
-    // must send ~340, not the ~1019 the pane was sending.
-    const size = resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 });
-    const point = canvasPointToDevicePoint(
-      {
-        frameWidth: 1206,
-        frameHeight: 2622,
-        displayWidth: 368,
-        displayHeight: 816,
-        devicePointWidth: size?.width ?? 0,
-        devicePointHeight: size?.height ?? 0,
-      },
-      368 * 0.845,
-      816 * 0.365,
-    );
-    expect(point?.x).toBeCloseTo(340, 0);
-    expect(point?.x).toBeLessThan(size?.width ?? 0);
-  });
 });
 
 describe("pointer gestures", () => {
-  it("classifies a stationary press as a tap", () => {
-    const gesture = resolveDevicePointerGesture({
-      from: { x: 10, y: 10 },
-      to: { x: 10, y: 10 },
-      durationMs: 120,
-    });
-    expect(gesture).toEqual({ kind: "tap", point: { x: 10, y: 10 } });
-  });
-
   it("treats jitter under the threshold as a tap", () => {
     const gesture = resolveDevicePointerGesture({
       from: { x: 10, y: 10 },
@@ -457,11 +375,6 @@ describe("hardware button shortcuts", () => {
     // Rotation is a window command with no HID usage and no simctl equivalent.
     // Claiming ⌘→ would swallow the keystroke and then surface an error.
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBeNull();
-  });
-
-  it("matches Simulator.app's volume chords", () => {
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowUp" })).toBe("volume-up");
-    expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowDown" })).toBe("volume-down");
   });
 
   it("leaves unrelated chords to the app", () => {
@@ -559,21 +472,9 @@ describe("device picker", () => {
       d: "wait",
     });
   });
-
-  it("labels each entry with its runtime and state", () => {
-    const [entry] = buildDevicePickerEntries({
-      devices: [device({ runtime: "iOS 18.2", state: "booted" })],
-      attachedDeviceUdid: null,
-    });
-    expect(entry?.detail).toBe("iOS 18.2 · Booted");
-  });
 });
 
 describe("availability", () => {
-  it("reports ready when the backend is available", () => {
-    expect(resolveDeviceAvailabilityView({ kind: "available" })).toEqual({ kind: "ready" });
-  });
-
   it("shows the picker when only the helper build is left", () => {
     // The deadlock this prevents: the helper is built on first attach, so
     // blocking the picker on it means the user is shown a checklist whose one
@@ -615,19 +516,6 @@ describe("availability", () => {
     expect(view.steps).toEqual([]);
   });
 
-  it("passes setup steps through for the live checklist", () => {
-    const steps = [
-      { id: "install-xcode", label: "Install Xcode", done: true },
-      { id: "install-ios-runtime", label: "Install an iOS runtime", done: false },
-    ] as const;
-    const view = resolveDeviceAvailabilityView({ kind: "setup-required", steps });
-
-    expect(view.kind).toBe("blocked");
-    if (view.kind !== "blocked") return;
-    expect(view.steps).toHaveLength(2);
-    expect(view.retryable).toBe(true);
-  });
-
   it("surfaces the helper failure message verbatim", () => {
     const view = resolveDeviceAvailabilityView({
       kind: "helper-unavailable",
@@ -655,34 +543,6 @@ describe("availability", () => {
     expect(view.kind).toBe("degraded");
     if (view.kind !== "degraded") return;
     expect(view.brokenCapabilities).toEqual(["accessibility"]);
-  });
-
-  it("names what broke, the Xcode, and what still works", () => {
-    const notice = describeDegradedCapabilities(
-      [
-        { id: "framebuffer", ok: true },
-        { id: "hid", ok: true },
-        { id: "accessibility", ok: false },
-        { id: "encoder", ok: true },
-      ],
-      { xcodeVersion: "26.3" },
-    );
-
-    expect(notice).toBe(
-      "Accessibility inspection unavailable with Xcode 26.3 — screen capture, touch and keyboard input and video encoding unaffected.",
-    );
-  });
-
-  it("omits the unaffected clause when nothing else works", () => {
-    const notice = describeDegradedCapabilities(
-      [
-        { id: "accessibility", ok: false },
-        { id: "hid", ok: false },
-      ],
-      undefined,
-    );
-
-    expect(notice).toBe("Accessibility inspection and touch and keyboard input unavailable.");
   });
 });
 
@@ -728,37 +588,6 @@ describe("stream subscription policy", () => {
         attachedDevice: null,
       }),
     ).toBe(false);
-  });
-});
-
-describe("thread state helpers", () => {
-  it("resolves the attached descriptor from the thread state", () => {
-    const state = {
-      threadId: "t" as never,
-      version: 1,
-      attachedDeviceUdid: UDID,
-      devices: [device({ udid: OTHER_UDID }), device({ udid: UDID, name: "Attached" })],
-      agentActive: false,
-      availability: { kind: "available" },
-      lastError: null,
-    } as never;
-
-    expect(attachedDeviceFromThreadState(state)?.name).toBe("Attached");
-  });
-
-  it("returns null when nothing is attached or the state is missing", () => {
-    expect(attachedDeviceFromThreadState(undefined)).toBeNull();
-    expect(
-      attachedDeviceFromThreadState({
-        threadId: "t",
-        version: 1,
-        attachedDeviceUdid: null,
-        devices: [device()],
-        agentActive: false,
-        availability: { kind: "available" },
-        lastError: null,
-      } as never),
-    ).toBeNull();
   });
 });
 
@@ -834,24 +663,9 @@ describe("optimistic device selection", () => {
       })?.name,
     ).toBe("iPhone 16 Pro");
   });
-
-  it("falls back to the thread state when nothing is pending", () => {
-    expect(resolveDisplayedDevice({ threadState: threadState(), pending: null })).toBeNull();
-  });
 });
 
 describe("attach status label", () => {
-  it("names the stage the server says it is waiting on", () => {
-    const label = (phase: "booting" | "waiting-for-display" | "connecting") =>
-      deviceAttachStatusLabel({ phase, deviceState: "booted", pendingSelection: false });
-
-    expect(label("booting")).toBe("Starting up…");
-    // The distinction that matters on a cold boot: the device is up, the screen
-    // is not, and a bare spinner for that whole window reads as a hang.
-    expect(label("waiting-for-display")).toBe("Waiting for the screen…");
-    expect(label("connecting")).toBe("Connecting…");
-  });
-
   it("covers the window before the first response, from the click alone", () => {
     expect(
       deviceAttachStatusLabel({

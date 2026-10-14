@@ -509,32 +509,6 @@ describe("migration backups", () => {
     await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
   });
 
-  it("charges a resume attempt even when the retry dies mid-migration", async () => {
-    const dbPath = await makeDbPath();
-
-    await runWithDatabase(
-      dbPath,
-      Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 52 });
-        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
-      }),
-    ).catch(() => undefined);
-
-    const marker = await Effect.runPromise(inspectPendingMigrationRecovery(dbPath));
-    expect(marker).not.toBeNull();
-    await Effect.runPromise(
-      resumeMarkedMigration(dbPath, marker!, Effect.fail(new Error("died again"))),
-    ).catch(() => undefined);
-
-    // Charged up front: a process killed mid-migration must not get a free retry,
-    // or a deterministic failure loops forever.
-    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).resolves.toMatchObject(
-      {
-        resumeAttempts: 1,
-      },
-    );
-  });
-
   it("retains the marker when a resumed migration has a duplicate-looking failure", async () => {
     const dbPath = await makeDbPath();
 

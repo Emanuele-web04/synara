@@ -91,7 +91,7 @@ export function visibleLabels(root: DeviceUiNode): string[] {
 }
 
 /** Where a tap on this node lands: its own control point, else the frame centre. */
-export function tapPointForNode(node: DeviceUiNode): DeviceUiPoint {
+function tapPointForNode(node: DeviceUiNode): DeviceUiPoint {
   return uiTreeActivationPoint(node);
 }
 

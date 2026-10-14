@@ -15,9 +15,11 @@ interface WorkspacePathsStoreState {
   homeDir: string | null;
   chatWorkspaceRoot: string | null;
   studioWorkspaceRoot: string | null;
+  groupsWorkspaceRoot: string | null;
   setHomeDir: (homeDir: string | null | undefined) => void;
   setChatWorkspaceRoot: (chatWorkspaceRoot: string | null | undefined) => void;
   setStudioWorkspaceRoot: (studioWorkspaceRoot: string | null | undefined) => void;
+  setGroupsWorkspaceRoot: (groupsWorkspaceRoot: string | null | undefined) => void;
   setServerWorkspacePaths: (paths: ServerWorkspacePaths) => void;
 }
 
@@ -45,6 +47,7 @@ export const useWorkspacePathsStore = create<WorkspacePathsStoreState>()(
       homeDir: null,
       chatWorkspaceRoot: null,
       studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
       setHomeDir: (homeDir) =>
         set((state) => {
           // `undefined` means server config has not arrived yet; keep the last known value.
@@ -76,6 +79,17 @@ export const useWorkspacePathsStore = create<WorkspacePathsStoreState>()(
             ? state
             : { studioWorkspaceRoot: normalizedStudioWorkspaceRoot };
         }),
+      setGroupsWorkspaceRoot: (groupsWorkspaceRoot) =>
+        set((state) => {
+          // `undefined` means server config has not arrived yet; keep the last known value.
+          if (groupsWorkspaceRoot === undefined) {
+            return state;
+          }
+          const normalizedGroupsWorkspaceRoot = groupsWorkspaceRoot?.trim() ?? null;
+          return state.groupsWorkspaceRoot === normalizedGroupsWorkspaceRoot
+            ? state
+            : { groupsWorkspaceRoot: normalizedGroupsWorkspaceRoot };
+        }),
       setServerWorkspacePaths: (paths) =>
         set((state) => {
           const normalizedPaths = normalizeServerWorkspacePaths(paths);
@@ -94,6 +108,12 @@ export const useWorkspacePathsStore = create<WorkspacePathsStoreState>()(
             state.studioWorkspaceRoot !== normalizedPaths.studioWorkspaceRoot
           ) {
             next.studioWorkspaceRoot = normalizedPaths.studioWorkspaceRoot;
+          }
+          if (
+            paths.groupsWorkspaceRoot !== undefined &&
+            state.groupsWorkspaceRoot !== normalizedPaths.groupsWorkspaceRoot
+          ) {
+            next.groupsWorkspaceRoot = normalizedPaths.groupsWorkspaceRoot;
           }
           return Object.keys(next).length > 0 ? next : state;
         }),

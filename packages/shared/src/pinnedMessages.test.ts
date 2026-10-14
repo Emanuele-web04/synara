@@ -10,7 +10,6 @@ import {
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-  togglePinnedMessage,
   togglePinnedMessageDone,
 } from "./pinnedMessages";
 
@@ -31,13 +30,12 @@ describe("pinnedMessages", () => {
     expect(isMessagePinned(undefined, m("a"))).toBe(false);
   });
 
-  it("adds, removes, and toggles pins without duplicating entries", () => {
+  it("adds and removes pins without duplicating entries", () => {
     const pins = [pin("a")];
     const added = addPinnedMessage(pins, pin("b"));
     expect(added.map((entry) => entry.messageId)).toEqual([m("a"), m("b")]);
     expect(addPinnedMessage(added, pin("b"))).toBe(added);
     expect(removePinnedMessage(added, m("a")).map((entry) => entry.messageId)).toEqual([m("b")]);
-    expect(togglePinnedMessage(added, pin("b")).map((entry) => entry.messageId)).toEqual([m("a")]);
   });
 
   it("updates done state with copy-on-write behavior", () => {

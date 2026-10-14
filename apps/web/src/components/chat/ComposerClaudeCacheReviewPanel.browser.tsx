@@ -35,10 +35,72 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     );
     try {
       await expect
-        .element(page.getByRole("button", { name: /^Compact, then send/ }))
+        .element(page.getByRole("button", { name: /^Resume from summary/ }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: /^Don't ask me again/ }))
         .not.toBeInTheDocument();
       await page.getByRole("button", { name: /^Compact this conversation/ }).click();
       expect(onRespond).toHaveBeenCalledExactlyOnceWith(review, "continue");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("asks with Claude Code's resume wording and choices", async () => {
+    const review = makeReview({
+      assessment: {
+        observedAt: "2026-09-16T10:00:00.000Z",
+        lastResponseAt: "2026-09-16T08:00:00.000Z",
+        state: "likely-expired",
+        source: "request-usage",
+        contextTokens: 161_000,
+      },
+    });
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={review}
+        compactDisabledReason={null}
+        onRespond={vi.fn(async () => undefined)}
+      />,
+    );
+    try {
+      await expect
+        .element(page.getByText("This session is 2 hours old and 161k tokens.", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByText(/^Resuming the full session will consume a substantial portion/))
+        .toBeVisible();
+      const labels = page
+        .getByRole("button")
+        .elements()
+        .map((element) => element.textContent ?? "");
+      const expected = [
+        "Resume from summary (recommended)",
+        "Resume full session as-is",
+        "Don't ask me again",
+        "Cancel this send",
+      ];
+      expect(labels).toHaveLength(expected.length);
+      expected.forEach((label, index) => expect(labels[index]?.startsWith(label)).toBe(true));
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("offers Claude Code's Don't ask me again choice", async () => {
+    const review = makeReview();
+    const onRespond = vi.fn(async () => undefined);
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={review}
+        compactDisabledReason={null}
+        onRespond={onRespond}
+      />,
+    );
+    try {
+      await page.getByRole("button", { name: /^Don't ask me again/ }).click();
+      expect(onRespond).toHaveBeenCalledExactlyOnceWith(review, "never");
     } finally {
       await screen.unmount();
     }
@@ -55,13 +117,13 @@ describe("ComposerClaudeCacheReviewPanel", () => {
       />,
     );
     try {
-      await page.getByRole("button", { name: /^Continue with full context/ }).click();
+      await page.getByRole("button", { name: /^Resume full session as-is/ }).click();
       expect(onRespond).toHaveBeenCalledExactlyOnceWith(review, "continue");
       await expect
-        .element(page.getByRole("button", { name: /^Continue with full context/ }))
+        .element(page.getByRole("button", { name: /^Resume full session as-is/ }))
         .toBeDisabled();
       await expect
-        .element(page.getByRole("button", { name: /^Compact, then send/ }))
+        .element(page.getByRole("button", { name: /^Resume from summary/ }))
         .toBeDisabled();
       await expect.element(page.getByRole("button", { name: /^Cancel this send/ })).toBeDisabled();
     } finally {
@@ -83,10 +145,12 @@ describe("ComposerClaudeCacheReviewPanel", () => {
       />,
     );
     try {
-      await page.getByRole("button", { name: /^Compact, then send/ }).click();
+      await page.getByRole("button", { name: /^Resume from summary/ }).click();
       await expect.element(page.getByRole("alert")).toHaveTextContent("Connection unavailable");
-      await expect.element(page.getByRole("button", { name: /^Compact, then send/ })).toBeEnabled();
-      await page.getByRole("button", { name: /^Compact, then send/ }).click();
+      await expect
+        .element(page.getByRole("button", { name: /^Resume from summary/ }))
+        .toBeEnabled();
+      await page.getByRole("button", { name: /^Resume from summary/ }).click();
       expect(onRespond).toHaveBeenNthCalledWith(1, review, "compact");
       expect(onRespond).toHaveBeenNthCalledWith(2, review, "compact");
     } finally {
@@ -94,7 +158,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     }
   });
 
-  it.each(["responding", "compacting"] as const)(
+  it.each(["responding"] as const)(
     "leaves progress to the transcript during %s",
     async (status) => {
       const screen = await render(
@@ -116,6 +180,17 @@ describe("ComposerClaudeCacheReviewPanel", () => {
 
   it("disables every response while the request status is uncertain", async () => {
     const onRespond = vi.fn();
+    const previousBridge = window.desktopBridge;
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const reportIssue = vi.fn(async () => "12345678-1234-4234-8234-123456789012");
+    Object.defineProperty(window, "desktopBridge", {
+      configurable: true,
+      value: {
+        betaDiagnostics: { reportIssue, getReportStatus: async () => "queued" },
+      },
+    });
     const screen = await render(
       <ComposerClaudeCacheReviewPanel
         review={makeReview({ status: "uncertain" })}
@@ -125,15 +200,69 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     );
     try {
       for (const label of [
-        /^Continue with full context/,
-        /^Compact, then send/,
+        /^Resume full session as-is/,
+        /^Resume from summary/,
         /^Cancel this send/,
       ]) {
         await expect.element(page.getByRole("button", { name: label })).toBeDisabled();
       }
+      await expect.element(page.getByText("Report queued locally", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Copy diagnostic ID", exact: true }).click();
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("12345678-1234-4234-8234-123456789012");
+      expect(reportIssue).toHaveBeenCalledExactlyOnceWith({
+        code: "claude.cache.uncertain",
+        reason: "unknown",
+      });
       expect(onRespond).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
+      Object.defineProperty(window, "desktopBridge", { configurable: true, value: previousBridge });
+      if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("keeps a rejected choice diagnostic when the earlier review report arrives late", async () => {
+    const previousBridge = window.desktopBridge;
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    let resolveEarlier!: (id: string) => void;
+    const earlier = new Promise<string>((resolve) => {
+      resolveEarlier = resolve;
+    });
+    const reportIssue = vi.fn().mockReturnValueOnce(earlier).mockResolvedValue("newer-choice-id");
+    Object.defineProperty(window, "desktopBridge", {
+      configurable: true,
+      value: { betaDiagnostics: { reportIssue, getReportStatus: async () => "queued" } },
+    });
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={makeReview({ status: "failed", error: "Compaction failed" })}
+        compactDisabledReason={null}
+        onRespond={vi.fn().mockRejectedValue(new Error("Choice request failed"))}
+      />,
+    );
+    try {
+      await expect.poll(() => reportIssue.mock.calls.length).toBe(1);
+      await page.getByRole("button", { name: /^Resume full session as-is/ }).click();
+      await expect.element(page.getByRole("alert")).toHaveTextContent("Choice request failed");
+      await expect
+        .element(page.getByRole("button", { name: "Copy diagnostic ID", exact: true }))
+        .toBeVisible();
+      resolveEarlier("older-review-id");
+      await earlier;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      await page.getByRole("button", { name: "Copy diagnostic ID", exact: true }).click();
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("newer-choice-id");
+    } finally {
+      resolveEarlier("older-review-id");
+      await screen.unmount();
+      Object.defineProperty(window, "desktopBridge", { configurable: true, value: previousBridge });
+      if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
     }
   });
 
@@ -149,7 +278,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     );
     try {
       await expect
-        .element(page.getByRole("button", { name: /^Compact, then send/ }))
+        .element(page.getByRole("button", { name: /^Resume from summary/ }))
         .toBeDisabled();
       await expect
         .element(page.getByRole("alert"))

@@ -1,6 +1,8 @@
-import type { OrchestrationThread, ProviderMentionReference } from "@synara/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 import { Effect, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
+
+import type { OrchestrationThreadMentionContext } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 import {
   appendThreadMentionContextBlocks,
@@ -12,8 +14,12 @@ import {
   threadMentionContextSuffix,
 } from "./threadMentionContext.ts";
 
-function thread(messages: ReadonlyArray<{ role: "user" | "assistant"; text: string }>) {
+function thread(
+  messages: ReadonlyArray<{ role: "user" | "assistant"; text: string }>,
+  totalMessageCount = messages.length,
+) {
   return {
+    totalMessageCount,
     id: "mentioned-thread",
     projectId: "project-1",
     title: "Release planning",
@@ -27,7 +33,7 @@ function thread(messages: ReadonlyArray<{ role: "user" | "assistant"; text: stri
       createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
       updatedAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
     })),
-  } as unknown as OrchestrationThread;
+  } as unknown as OrchestrationThreadMentionContext;
 }
 
 const reference = {
@@ -46,7 +52,7 @@ describe("thread mention prompt context", () => {
       resolveThreadMentionPromptProjection({
         mentions: [reference, fileMention],
         snapshotQuery: {
-          getThreadDetailById: () => Effect.succeed(Option.some(mentionedThread)),
+          getThreadMentionContextById: () => Effect.succeed(Option.some(mentionedThread)),
         },
       }),
     );
@@ -75,7 +81,7 @@ describe("thread mention prompt context", () => {
       resolveThreadMentionPromptProjection({
         mentions: [reference],
         snapshotQuery: {
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadMentionContextById: () => Effect.succeed(Option.none()),
         },
       }),
     );
@@ -103,33 +109,33 @@ describe("thread mention prompt context", () => {
       name: `Thread ${index}`,
       path: `thread://thread-${index}`,
     }));
-    const getThreadDetailById = vi.fn(() => Effect.succeed(Option.some(longThread)));
+    const getThreadMentionContextById = vi.fn(() => Effect.succeed(Option.some(longThread)));
     const result = await Effect.runPromise(
       resolveThreadMentionPromptProjection({
         mentions: manyReferences,
         snapshotQuery: {
-          getThreadDetailById,
+          getThreadMentionContextById,
         },
       }),
     );
     expect(result.contextBlocks.join("\n\n").length).toBeLessThanOrEqual(
       THREAD_MENTION_MAX_TOTAL_CONTEXT_CHARS,
     );
-    expect(getThreadDetailById.mock.calls.length).toBeLessThan(manyReferences.length);
+    expect(getThreadMentionContextById.mock.calls.length).toBeLessThan(manyReferences.length);
   });
 
   it("skips context resolution when the provider input has no remaining budget", async () => {
-    const getThreadDetailById = vi.fn(() => Effect.succeed(Option.some(thread([]))));
+    const getThreadMentionContextById = vi.fn(() => Effect.succeed(Option.some(thread([]))));
     const result = await Effect.runPromise(
       resolveThreadMentionPromptProjection({
         mentions: [reference],
-        snapshotQuery: { getThreadDetailById },
+        snapshotQuery: { getThreadMentionContextById },
         maxTotalContextChars: 0,
       }),
     );
 
     expect(result).toEqual({ contextBlocks: [], providerMentions: undefined });
-    expect(getThreadDetailById).not.toHaveBeenCalled();
+    expect(getThreadMentionContextById).not.toHaveBeenCalled();
   });
 
   it("clamps oversized titles so the block header stays bounded", () => {
@@ -137,7 +143,7 @@ describe("thread mention prompt context", () => {
     const namedThread = {
       ...thread([{ role: "user", text: "hello" }]),
       title: longTitle,
-    } as OrchestrationThread;
+    } as OrchestrationThreadMentionContext;
     const block = formatThreadMentionContextBlock({ reference, thread: namedThread });
     const titleLine = block.split("\n")[1] ?? "";
     expect(titleLine.length).toBeLessThanOrEqual(
@@ -170,5 +176,23 @@ describe("thread mention prompt context", () => {
     expect(appendThreadMentionContextBlocks({ text: "hi", contextBlocks: ["<block>"] })).toBe(
       "hi\n\n<block>",
     );
+  });
+
+  it("reports omitted older messages from the total when only the newest page is loaded", () => {
+    const newestPage = thread(
+      Array.from({ length: 20 }, (_, index) => ({
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text: `message ${index + 5}`,
+      })),
+      25,
+    );
+    const block = formatThreadMentionContextBlock({ reference, thread: newestPage });
+    expect(block).toContain("[... 5 older messages omitted]");
+    expect(
+      formatThreadMentionContextBlock({
+        reference,
+        thread: thread([{ role: "user", text: "hi" }]),
+      }),
+    ).not.toContain("older messages omitted");
   });
 });

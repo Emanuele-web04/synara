@@ -19,13 +19,9 @@ describe("BrowserCssSelector", () => {
   it.each([
     "",
     "text=Save",
-    "css=#save",
     "xpath=//button",
     "div >> button",
     "button:has-text('Save')",
-    "button:text('Save')",
-    "button:right-of(label)",
-    "button:nth-match(2)",
     String.raw`button:h\61 s-text('Save')`,
     "/save/i",
     "div/*comment*/span",

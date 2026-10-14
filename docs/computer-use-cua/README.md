@@ -5,7 +5,7 @@ not a release certification. Results belong to the exact application, driver
 revision, platform and provider named in each report; an older passing fixture
 does not qualify the current branch.
 
-The current driver is Cua 0.28.2 with Synara native revision 39. The
+The current driver is Cua 0.28.2 with Synara native revision 40. The
 [release manifest](../../packages/shared/src/cuaDriverRelease.json) is the source
 of truth for source, patch checksum and Rust version. Packaging must verify the
 staged artifact against that manifest. The checked-in
@@ -17,6 +17,9 @@ guarantees. Its runtime admission requirements are listed below.
 
 The [remote-feedback follow-up](remote-feedback-fixes-2026-09-21.md) describes
 the current input, provider and concurrency corrections and their runtime limits.
+The [Notion reliability audit](notion-reliability-audit-2026-10-13.md) maps the
+seven reported workflow problems to owner-level repairs, existing Cua features
+and application/runtime limits.
 
 ## Release support
 
@@ -84,7 +87,10 @@ separate approval rule. Provider reviews and consequential-action policies
 still apply: task consent is not a detector for every Delete, Send or Purchase
 button. Full access does not authorize foreground use. To watch an app in front,
 request it explicitly, for example “Show me the browser.” Naming an app alone
-does not grant that authorization.
+does not grant that authorization. Declining or cancelling a foreground card
+keeps the task in the background for that turn. A card left unanswered for five
+minutes expires with `approval_expired`; no input is sent, and a later request
+can show a new card instead of treating silence as a refusal.
 
 The transcript uses the Computer cursor icon and human action labels for native
 and browser calls, including compact inspection calls. Summaries omit typed
@@ -117,6 +123,15 @@ the chat ends the task.
   are validated before dispatch and retain targeting, consent and refusal
   checks. It stops on failure by default. It accepts no browser steps or
   per-step screenshots; a final screenshot can cover the affected window.
+- `computer_paste` accepts exactly one `text`, `image_path` or `file_path`.
+  Native image/file paths must be regular files inside the task workspace;
+  every batch payload is checked before its first action. On macOS revision
+  40, paste saves bounded native clipboard representations and reports
+  `clipboardRestored`, yielding to a newer human copy. A driver that cannot
+  preserve the clipboard refuses before writing. Pasting still requires a
+  proven keyboard target or approved foreground route, and attachment upload
+  or saving must be verified separately. Browser file inputs use the existing
+  `computer_browser_upload` route.
 - `computer_inspect` reaches the clipboard-read, zoom, desktop-inventory,
   cursor-position and managed-Space handlers. It retains their permission and cancellation
   behavior. `computer_help({tool: "computer_zoom"})`, for example, returns the
@@ -132,6 +147,11 @@ the chat ends the task.
   text-field readback disables screenshot capture. Unknown dispatch
   remains unknown until there is action-specific evidence. Successful dispatch
   or a changed tree alone is not proof that the requested task succeeded.
+- Stable, satisfied `computer_verify_state` predicates clear the repetition
+  guard for their exact window. Nonzero measured scroll travel also counts as
+  progress; an unknown delivery verdict remains unknown. Observation-only
+  batches do not accumulate mutation history. None of these paths permits
+  blind replay of uncertain text, clicks or submissions.
 - Browser navigation proof covers the destination, not the requested page
   task. DOM value readback covers a field, not submission. Download completion
   needs the driver's completed receipt and file proof. Pointer/key dispatch
@@ -186,11 +206,11 @@ they do not certify every provider/model or application combination.
 Computer and AppSnap reuse the same desktop permission service and native setup
 guide. Computer requests three macOS grants:
 
-| Grant            | Purpose                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| Accessibility    | Read controls and deliver native input.                        |
-| Input Monitoring | Detect physical Escape and human takeover during Computer use. |
-| Screen Recording | Capture screenshots and preview frames.                        |
+| Grant            | Purpose                                     |
+| ---------------- | ------------------------------------------- |
+| Accessibility    | Read controls and deliver native input.     |
+| Input Monitoring | Detect physical Escape during Computer use. |
+| Screen Recording | Capture screenshots and preview frames.     |
 
 Choose **Set up** in Computer settings. The guide checks the running app and
 opens only its next missing pane, in Accessibility → Input Monitoring → Screen
@@ -217,7 +237,10 @@ blocks native control. The Input Monitoring grant and listener health are
 checked separately: a granted switch cannot stand in for a working listener.
 The listener starts lazily for Computer and reports readiness/failure; while
 unavailable, native input is refused. It stops its tap and recovery work when
-disarmed.
+disarmed. An armed helper that never acknowledges startup or rearming is
+replaced after ten seconds using the existing restart backoff. Native event-tap
+failures keep their permission-aware retry path; input stays refused until a
+listener reports ready and any required fresh observation completes.
 
 If Settings shows a switch on but the fresh check reports denied, verify the
 exact running app and signing identity. Local ad-hoc rebuilds can leave a stale
@@ -228,13 +251,13 @@ the granted/denied result; it does not reset grants automatically or treat a
 rebuild as permission. Signed-build grant
 persistence still needs real validation.
 
-| Event                                   | Implemented recovery boundary                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chat Stop or task cancellation          | Ends the current task and fences its queued work. A subsequent user request can start a new task; old actions are not replayed.                                                                                                                                                                                                    |
-| Physical Escape                         | Interrupts native and browser input. Each route requires a fresh model observation before continuing. No manual re-arm or repeated routine-task approval is added.                                                                                                                                                                 |
-| Human input in the controlled target    | Invalidates the model's view of the exact task/window or browser target/tab and interrupts input. Repeated typing keeps observations stale. Input in another app does not interrupt a background target; during foreground input, physical input does. Input resumes after quiet and fresh state, retaining the same task consent. |
-| Lock, sleep or inactive desktop session | Pauses input. Returning requires fresh state and renews routine-task consent in approval-required mode. Full access retains its standing approval mode.                                                                                                                                                                            |
-| Permission or listener loss             | Refuses new native input; recovery must restore the relevant grant/listener and obtain fresh state.                                                                                                                                                                                                                                |
+| Event                                   | Implemented recovery boundary                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chat Stop or task cancellation          | Ends the current task and fences its queued work. A subsequent user request can start a new task; old actions are not replayed.                                                                                                                                                                                                                               |
+| Physical Escape                         | Interrupts native and browser input. Each route requires a fresh model observation before continuing. No manual re-arm or repeated routine-task approval is added.                                                                                                                                                                                            |
+| Human input while the agent works       | Background work keeps running: typing, clicks and app switches, including in the app the agent is using, neither pause nor interrupt it. A foreground action in flight is interrupted by physical input. During recovery, continued input invalidates observations and renews the cooldown; fresh state after quiet reopens input with the same task consent. |
+| Lock, sleep or inactive desktop session | Pauses input. Returning requires fresh state before acting on screen, though opening an app by name is allowed, and renews routine-task consent in approval-required mode. Full access retains its standing approval mode.                                                                                                                                    |
+| Permission or listener loss             | Refuses new native input; recovery must restore the relevant grant/listener and obtain fresh state.                                                                                                                                                                                                                                                           |
 
 The patched macOS driver acknowledges an input epoch, drained operations and
 matching releases before input can reopen. Transport cancellation alone is

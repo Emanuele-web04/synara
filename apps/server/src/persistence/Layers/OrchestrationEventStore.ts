@@ -10,6 +10,7 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
+  type ServerSettings,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
@@ -21,6 +22,11 @@ import {
   toPersistenceSqlOrDecodeError,
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  restoreTransientOrchestrationEventProviderOptions,
+  sanitizeOrchestrationEventProviderOptions,
+} from "../../orchestration/providerOptionsSecurity.ts";
 import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
@@ -120,7 +126,10 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedEventRow {
+function normalizeLegacyEventRow(
+  row: ParsedPersistedEventRow,
+  settings?: ServerSettings,
+): ParsedPersistedEventRow {
   if (!isRecord(row.payload)) {
     return row;
   }
@@ -139,6 +148,7 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   ) {
     payloadWithNormalizedModelSelection().defaultModelSelection = normalizePersistedModelSelection(
       originalPayload.defaultModelSelection,
+      settings,
     );
   }
 
@@ -148,6 +158,7 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   ) {
     payloadWithNormalizedModelSelection().modelSelection = normalizePersistedModelSelection(
       originalPayload.modelSelection,
+      settings,
     );
   }
 
@@ -194,7 +205,10 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   return normalizedPayload === undefined ? row : { ...row, payload: normalizedPayload };
 }
 
-type PersistedEventUpcaster = (row: ParsedPersistedEventRow) => ParsedPersistedEventRow;
+type PersistedEventUpcaster = (
+  row: ParsedPersistedEventRow,
+  settings?: ServerSettings,
+) => ParsedPersistedEventRow;
 
 // Every unversioned event passes through the same v0 -> v1 boundary. Most event types are a
 // no-op; the model-selection families need the historical shape normalization above.
@@ -244,6 +258,7 @@ function parsePersistedJson(
 function decodePersistedEventRow(
   operation: string,
   row: RawPersistedEventRow,
+  settings?: ServerSettings,
 ): Effect.Effect<OrchestrationEvent, PersistenceDecodeError> {
   return Effect.gen(function* () {
     const payload = yield* parsePersistedJson(operation, row, "payloadJson");
@@ -303,10 +318,11 @@ function decodePersistedEventRow(
           `No persisted event upcaster is registered for schema version ${version}.`,
         );
       }
-      candidate = upcaster(candidate);
+      candidate = upcaster(candidate, settings);
     }
 
     return yield* decodeEvent(candidate).pipe(
+      Effect.map(sanitizeOrchestrationEventProviderOptions),
       Effect.mapError(
         toPersistenceDecodeError(persistedEventDecodeOperation(operation, row, schemaVersion)),
       ),
@@ -398,6 +414,16 @@ export const buildReadEventRowsFromSequenceQuery = (
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const maybeServerSettings = yield* Effect.serviceOption(ServerSettingsService);
+  const readSettingsForModelSelectionDecode = Option.match(maybeServerSettings, {
+    onNone: () => Effect.succeed(undefined as ServerSettings | undefined),
+    onSome: (serverSettings) =>
+      serverSettings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
+  });
+  const decodeRowWithSettings = (operation: string, row: RawPersistedEventRow) =>
+    readSettingsForModelSelectionDecode.pipe(
+      Effect.flatMap((settings) => decodePersistedEventRow(operation, row, settings)),
+    );
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
@@ -569,20 +595,21 @@ const makeEventStore = Effect.gen(function* () {
     },
   });
 
-  const append: OrchestrationEventStoreShape["append"] = (event) =>
-    appendEventRow({
-      eventId: event.eventId,
-      aggregateKind: event.aggregateKind,
-      streamId: event.aggregateId,
-      type: event.type,
-      causationEventId: event.causationEventId,
-      correlationId: event.correlationId,
-      actorKind: inferActorKind(event),
-      occurredAt: event.occurredAt,
-      commandId: event.commandId,
-      payloadJson: event.payload,
+  const append: OrchestrationEventStoreShape["append"] = (event) => {
+    const sanitizedEvent = sanitizeOrchestrationEventProviderOptions(event);
+    return appendEventRow({
+      eventId: sanitizedEvent.eventId,
+      aggregateKind: sanitizedEvent.aggregateKind,
+      streamId: sanitizedEvent.aggregateId,
+      type: sanitizedEvent.type,
+      causationEventId: sanitizedEvent.causationEventId,
+      correlationId: sanitizedEvent.correlationId,
+      actorKind: inferActorKind(sanitizedEvent),
+      occurredAt: sanitizedEvent.occurredAt,
+      commandId: sanitizedEvent.commandId,
+      payloadJson: sanitizedEvent.payload,
       metadataJson: {
-        ...event.metadata,
+        ...sanitizedEvent.metadata,
         [PERSISTED_EVENT_SCHEMA_VERSION_KEY]: CURRENT_PERSISTED_EVENT_SCHEMA_VERSION,
       },
     }).pipe(
@@ -593,9 +620,16 @@ const makeEventStore = Effect.gen(function* () {
         ),
       ),
       Effect.flatMap((row) =>
-        decodePersistedEventRow("OrchestrationEventStore.append:rowToEvent", row),
+        decodeRowWithSettings("OrchestrationEventStore.append:rowToEvent", row).pipe(
+          // Durable JSON is sanitized above, while the just-committed in-memory
+          // event keeps transient launch credentials for internal runtime consumers.
+          Effect.map((savedEvent) =>
+            restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          ),
+        ),
       ),
     );
+  };
 
   interface EventPageState {
     readonly cursor: number;
@@ -661,7 +695,7 @@ const makeEventStore = Effect.gen(function* () {
           ),
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) =>
-              decodePersistedEventRow("OrchestrationEventStore.readFromSequence:rowToEvent", row),
+              decodeRowWithSettings("OrchestrationEventStore.readFromSequence:rowToEvent", row),
             ),
           ),
         ),
@@ -700,7 +734,7 @@ const makeEventStore = Effect.gen(function* () {
             ),
             Effect.flatMap((rows) =>
               Effect.forEach(rows, (row) =>
-                decodePersistedEventRow(
+                decodeRowWithSettings(
                   "OrchestrationEventStore.readThreadEventsFromSequence:rowToEvent",
                   row,
                 ),
@@ -767,7 +801,7 @@ const makeEventStore = Effect.gen(function* () {
       ),
       Effect.flatMap((rows) =>
         Effect.forEach(rows, (row) =>
-          decodePersistedEventRow("OrchestrationEventStore.readThreadEvents:rowToEvent", row),
+          decodeRowWithSettings("OrchestrationEventStore.readThreadEvents:rowToEvent", row),
         ),
       ),
     );

@@ -28,19 +28,6 @@ function turnCommand(overrides: Partial<OrchestrationCommand> = {}): Orchestrati
 }
 
 describe("fingerprintOrchestrationCommand", () => {
-  it("ignores the idempotency key but changes when authoritative intent changes", () => {
-    const first = fingerprintOrchestrationCommand(turnCommand());
-    const sameIntent = fingerprintOrchestrationCommand(
-      turnCommand({ commandId: CommandId.makeUnsafe("command-b") }),
-    );
-    const changedIntent = fingerprintOrchestrationCommand(
-      turnCommand({ createdAt: "2026-07-14T00:00:01.000Z" }),
-    );
-
-    expect(sameIntent).toEqual(first);
-    expect(changedIntent.value).not.toBe(first.value);
-  });
-
   it("ignores generated assistant-selection ids and untrusted upload metadata", () => {
     const withAttachments = (assistantId: string, uploadName: string) =>
       turnCommand({

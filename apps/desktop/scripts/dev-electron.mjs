@@ -4,6 +4,7 @@ import { join } from "node:path";
 import waitOn from "wait-on";
 
 import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildWindowMaterialAddon } from "./build-window-material-addon.mjs";
 import { configureMacLauncher, desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
@@ -29,6 +30,7 @@ const staleComputerUseGracePeriodMs = 300;
 
 if (process.platform === "darwin") {
   buildAppSnapHelper({ arch: process.arch });
+  buildWindowMaterialAddon({ arch: process.arch });
 }
 
 await waitOn({

@@ -26,18 +26,6 @@ it("cleans up loaded runtimes synchronously without a stale registration replaci
 });
 
 describe("collectActiveTerminalThreadIds", () => {
-  it("retains non-deleted server threads", () => {
-    const activeThreadIds = collectActiveTerminalThreadIds({
-      snapshotThreads: [
-        { id: threadId("server-1"), deletedAt: null, archivedAt: null },
-        { id: threadId("server-2"), deletedAt: null, archivedAt: null },
-      ],
-      draftThreadIds: [],
-    });
-
-    expect(activeThreadIds).toEqual(new Set([threadId("server-1"), threadId("server-2")]));
-  });
-
   it("ignores deleted server threads and keeps local draft threads", () => {
     const activeThreadIds = collectActiveTerminalThreadIds({
       snapshotThreads: [

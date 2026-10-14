@@ -55,7 +55,15 @@ interface TokenActivityRow {
   // the activity has no attributable turn, in which case the thread's own
   // selection applies as the fallback.
   readonly provider: string | null;
+  readonly instanceId?: string | null;
   readonly model: string | null;
+  // Provider whose runtime emitted the counter (payload stamp first). Deltas
+  // are taken per counter provider; NULL falls back to the resolved provider.
+  readonly counterProvider?: string | null;
+  // Native/provider session that owns the cumulative counter. Provider
+  // processes can restart or switch native conversations while staying on the
+  // same Synara thread, so each session needs an independent baseline.
+  readonly usageSessionId?: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
 }
@@ -83,6 +91,7 @@ interface ThreadCheckpointCleanup {
 
 export interface ThreadTurnSnapshotRow {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
   readonly turnCount: number;
@@ -91,6 +100,7 @@ export interface ThreadTurnSnapshotRow {
 export interface ThreadTokenSnapshotRow {
   readonly createdAt: string;
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
 }
@@ -99,6 +109,7 @@ export interface ThreadTokenSnapshotRow {
 
 interface ModelSelectionLike {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
 }
@@ -107,19 +118,43 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function readReasoningOption(options: unknown): string | null {
+  if (Array.isArray(options)) {
+    for (const id of ["reasoningEffort", "effort"] as const) {
+      const match = options.find(
+        (entry) =>
+          entry !== null &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as { readonly id?: unknown }).id === id,
+      );
+      const value = readString((match as { readonly value?: unknown } | undefined)?.value);
+      if (value !== null) return value;
+    }
+    return null;
+  }
+  if (options === null || typeof options !== "object") {
+    return null;
+  }
+  const legacy = options as { readonly reasoningEffort?: unknown; readonly effort?: unknown };
+  return readString(legacy.reasoningEffort) ?? readString(legacy.effort);
+}
+
 function parseModelSelection(value: unknown): ModelSelectionLike | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  const record = value as { provider?: unknown; model?: unknown; options?: unknown };
-  const options =
-    record.options !== null && typeof record.options === "object"
-      ? (record.options as { reasoningEffort?: unknown; effort?: unknown })
-      : null;
+  const record = value as {
+    provider?: unknown;
+    instanceId?: unknown;
+    model?: unknown;
+    options?: unknown;
+  };
   return {
     provider: readString(record.provider),
+    instanceId: readString(record.instanceId) ?? readString(record.provider),
     model: readString(record.model),
-    reasoning: readString(options?.reasoningEffort) ?? readString(options?.effort),
+    reasoning: readReasoningOption(record.options),
   };
 }
 
@@ -209,7 +244,13 @@ export function aggregateThreadTurnSnapshotRows(
   const threadSelection = parseModelSelectionJson(threadModelSelectionJson);
   const counts = new Map<
     string,
-    { provider: string | null; model: string | null; reasoning: string | null; turnCount: number }
+    {
+      provider: string | null;
+      instanceId: string | null;
+      model: string | null;
+      reasoning: string | null;
+      turnCount: number;
+    }
   >();
 
   for (const event of events) {
@@ -228,14 +269,15 @@ export function aggregateThreadTurnSnapshotRows(
     }
     const selection = eventSelection ?? threadSelection;
     const provider = selection?.provider ?? null;
+    const instanceId = selection?.instanceId ?? provider;
     const model = selection?.model ?? null;
     const reasoning = selection?.reasoning ?? null;
-    const key = `${provider ?? ""}\u0000${model ?? ""}\u0000${reasoning ?? ""}`;
+    const key = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}\u0000${reasoning ?? ""}`;
     const existing = counts.get(key);
     if (existing) {
       existing.turnCount += 1;
     } else {
-      counts.set(key, { provider, model, reasoning, turnCount: 1 });
+      counts.set(key, { provider, instanceId, model, reasoning, turnCount: 1 });
     }
   }
 
@@ -247,29 +289,55 @@ function tokenCounterValue(value: number | bigint | null): number | null {
   return total !== null && Number.isFinite(total) ? total : null;
 }
 
-function tokenProviderModelKey(provider: string | null, model: string | null): string {
-  return `${provider ?? ""}\u0000${model ?? ""}`;
+function tokenProviderModelKey(
+  provider: string | null,
+  instanceId: string | null,
+  model: string | null,
+): string {
+  return `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
+}
+
+function tokenCounterKey(counterProvider: string | null, usageSessionId: string | null): string {
+  return `${counterProvider ?? ""}\u0000${usageSessionId ?? ""}`;
+}
+
+function tokenProviderModelSessionKey(
+  provider: string | null,
+  instanceId: string | null,
+  model: string | null,
+  usageSessionId: string | null,
+): string {
+  return `${tokenProviderModelKey(provider, instanceId, model)}\u0000${usageSessionId ?? ""}`;
 }
 
 function resolveTokenProviderModel(
   row: TokenActivityRow,
-  fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
-): { readonly provider: string | null; readonly model: string | null } {
+  fallbackSelection?: {
+    readonly provider: string | null;
+    readonly instanceId?: string | null;
+    readonly model: string | null;
+  },
+): {
+  readonly provider: string | null;
+  readonly instanceId: string | null;
+  readonly model: string | null;
+} {
   const stampedProvider = readString(row.provider);
   const provider = stampedProvider ?? fallbackSelection?.provider ?? null;
+  const instanceId = readString(row.instanceId) ?? fallbackSelection?.instanceId ?? provider;
   const model =
     readString(row.model) ??
     (stampedProvider === null || stampedProvider === fallbackSelection?.provider
       ? (fallbackSelection?.model ?? null)
       : null);
-  return { provider, model };
+  return { provider, instanceId, model };
 }
 
 function addTokenSnapshotRow(
   rows: Map<string, ThreadTokenSnapshotRow>,
   row: ThreadTokenSnapshotRow,
 ): void {
-  const key = `${row.createdAt}\u0000${tokenProviderModelKey(row.provider, row.model)}`;
+  const key = `${row.createdAt}\u0000${tokenProviderModelKey(row.provider, row.instanceId, row.model)}`;
   const existing = rows.get(key);
   if (existing) {
     rows.set(key, { ...existing, tokens: existing.tokens + row.tokens });
@@ -278,17 +346,22 @@ function addTokenSnapshotRow(
   }
 }
 
-// Mirrors the LAG-based delta in profileStats.queryTokenActivity: rows must be
-// ordered the same way that query orders them, and the first total counts fully.
-// Cumulative rows stay thread-wide; usedTokens rows are counted only for
-// provider/model groups that never emit cumulative totals.
+// Mirrors the LAG-based delta in profileStats.tokenDeltaCtes: rows must be
+// ordered the same way that query orders them, and the first total of each
+// counter provider counts fully. Deltas are taken per counter provider, and
+// usedTokens rows are counted only for provider/model groups that never emit
+// cumulative totals.
 // Deltas keep the original activity timestamp (raw, unparsed) so read-time
 // DATETIME(created_at, tz) bucketing stays identical to the live query for any
 // client UTC offset, and are keyed by the row's per-turn provider/model (the
 // thread's own selection fills in rows without turn attribution).
 export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
-  fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
+  fallbackSelection?: {
+    readonly provider: string | null;
+    readonly instanceId?: string | null;
+    readonly model: string | null;
+  },
 ): ThreadTokenSnapshotRow[] {
   // Claude's verified turn results are snapshotted separately. Remove its old
   // context rows before maintaining any delta state, otherwise a large Claude
@@ -296,27 +369,34 @@ export function aggregateThreadTokenRows(
   const nonClaudeRows = rows.filter(
     (row) => resolveTokenProviderModel(row, fallbackSelection).provider !== "claudeAgent",
   );
+  const counterProviderOf = (row: TokenActivityRow) =>
+    readString(row.counterProvider) ?? resolveTokenProviderModel(row, fallbackSelection).provider;
   const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
   const cumulativeProviderModels = new Set<string>();
   for (const row of nonClaudeRows) {
     if (tokenCounterValue(row.totalProcessedTokens) === null) {
       continue;
     }
-    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
-    cumulativeProviderModels.add(tokenProviderModelKey(provider, model));
+    const { provider, instanceId, model } = resolveTokenProviderModel(row, fallbackSelection);
+    cumulativeProviderModels.add(
+      tokenProviderModelSessionKey(provider, instanceId, model, row.usageSessionId ?? null),
+    );
   }
 
-  let previousCumulativeTotal: number | null = null;
+  const previousCumulativeTotals = new Map<string, number>();
   for (const row of nonClaudeRows) {
     const total = tokenCounterValue(row.totalProcessedTokens);
     if (total === null) {
       continue;
     }
+    const counterProvider = counterProviderOf(row);
+    const counterKey = tokenCounterKey(counterProvider, row.usageSessionId ?? null);
+    const previousCumulativeTotal = previousCumulativeTotals.get(counterKey);
     const delta =
-      previousCumulativeTotal === null || total < previousCumulativeTotal
+      previousCumulativeTotal === undefined || total < previousCumulativeTotal
         ? total
         : Math.max(0, total - previousCumulativeTotal);
-    previousCumulativeTotal = total;
+    previousCumulativeTotals.set(counterKey, total);
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -324,34 +404,43 @@ export function aggregateThreadTokenRows(
     ) {
       continue;
     }
-    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
+    const { provider, instanceId, model } = resolveTokenProviderModel(row, fallbackSelection);
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
+      instanceId,
       model,
       tokens: delta,
     });
   }
 
-  let previousUsedTotal: number | null = null;
-  let previousUsedProviderModelKey: string | null = null;
+  const previousUsedByCounterProvider = new Map<
+    string,
+    { readonly total: number; readonly providerModelKey: string }
+  >();
   for (const row of nonClaudeRows) {
-    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
-    const providerModelKey = tokenProviderModelKey(provider, model);
-    if (cumulativeProviderModels.has(providerModelKey)) {
+    const { provider, instanceId, model } = resolveTokenProviderModel(row, fallbackSelection);
+    const providerModelKey = tokenProviderModelKey(provider, instanceId, model);
+    if (
+      cumulativeProviderModels.has(
+        tokenProviderModelSessionKey(provider, instanceId, model, row.usageSessionId ?? null),
+      )
+    ) {
       continue;
     }
     const total = tokenCounterValue(row.usedTokens);
     if (total === null) {
       continue;
     }
+    const counterProvider = counterProviderOf(row);
+    const counterKey = tokenCounterKey(counterProvider, row.usageSessionId ?? null);
+    const previousUsed = previousUsedByCounterProvider.get(counterKey);
     const delta =
-      previousUsedTotal === null ||
-      (total < previousUsedTotal && providerModelKey !== previousUsedProviderModelKey)
+      previousUsed === undefined ||
+      (total < previousUsed.total && providerModelKey !== previousUsed.providerModelKey)
         ? total
-        : Math.max(0, total - previousUsedTotal);
-    previousUsedTotal = total;
-    previousUsedProviderModelKey = providerModelKey;
+        : Math.max(0, total - previousUsed.total);
+    previousUsedByCounterProvider.set(counterKey, { total, providerModelKey });
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -362,6 +451,7 @@ export function aggregateThreadTokenRows(
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
+      instanceId,
       model,
       tokens: delta,
     });
@@ -624,7 +714,28 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
             AS totalProcessedTokens,
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
-          COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
+          COALESCE(
+            tm.provider,
+            CASE
+              WHEN tm.instanceId = s.provider_instance_id THEN s.provider_name
+              ELSE tm.instanceId
+            END,
+            json_extract(a.payload_json, '$.provider')
+          ) AS provider,
+          COALESCE(
+            tm.instanceId,
+            s.provider_instance_id,
+            tm.provider,
+            json_extract(a.payload_json, '$.provider')
+          ) AS instanceId,
+          COALESCE(json_extract(a.payload_json, '$.provider'), tm.provider) AS counterProvider,
+          CASE
+            WHEN json_extract(a.payload_json, '$.provider') = 'codex'
+              AND INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') > 0
+            THEN SUBSTR(json_extract(a.payload_json, '$.usageSessionId'), 1,
+              INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
+            ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
+          END AS usageSessionId,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt
@@ -632,6 +743,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         LEFT JOIN turn_model tm
           ON tm.thread_id = a.thread_id
          AND tm.turn_id = a.turn_id
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = a.thread_id
         LEFT JOIN projection_turns pt
           ON pt.thread_id = a.thread_id
          AND pt.turn_id = a.turn_id
@@ -668,6 +780,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       const threadSelection = parseModelSelectionJson(thread.modelSelectionJson);
       const tokenRows = aggregateThreadTokenRows(tokenActivityRows, {
         provider: threadSelection?.provider ?? null,
+        instanceId: threadSelection?.instanceId ?? threadSelection?.provider ?? null,
         model: threadSelection?.model ?? null,
       });
       // Preserve the same verified Claude rows as the live profile before the
@@ -675,8 +788,18 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       const claudeTokenRows = yield* sql<ThreadTokenSnapshotRow>`
         WITH turn_model AS (${turnModelSelectionCte(sql, { threadId })}),
           ${claudeTokenActivityCtes(sql, { threadId })}
-        SELECT created_at AS createdAt, 'claudeAgent' AS provider, model, tokens
-        FROM claude_token_rows
+        SELECT
+          c.created_at AS createdAt,
+          'claudeAgent' AS provider,
+          COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent') AS instanceId,
+          c.model AS model,
+          c.tokens AS tokens
+        FROM claude_token_rows c
+        LEFT JOIN turn_model tm
+          ON tm.thread_id = c.thread_id
+         AND tm.turn_id = c.turn_id
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = c.thread_id
+        WHERE c.dispatch_origin IS NULL OR c.dispatch_origin = 'user'
       `;
       tokenRows.push(...claudeTokenRows);
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
@@ -712,8 +835,16 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           turnRows,
           (row) => sql`
-            INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
-            VALUES (${threadId}, ${row.provider}, ${row.model}, ${row.reasoning}, ${row.turnCount})
+            INSERT INTO profile_stats_deleted_turns
+              (thread_id, provider, provider_instance_id, model, reasoning, turn_count)
+            VALUES (
+              ${threadId},
+              ${row.provider},
+              ${row.instanceId},
+              ${row.model},
+              ${row.reasoning},
+              ${row.turnCount}
+            )
           `,
           { concurrency: 1, discard: true },
         );
@@ -729,8 +860,10 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           tokenRows,
           (row) => sql`
             INSERT INTO profile_stats_deleted_tokens
-              (thread_id, created_at, provider, model, tokens, token_accounting_version)
-            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.model}, ${row.tokens},
+              (thread_id, created_at, provider, provider_instance_id, model, tokens,
+                token_accounting_version)
+            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.instanceId}, ${row.model},
+              ${row.tokens},
               ${row.provider === "claudeAgent" ? 1 : null})
           `,
           { concurrency: 1, discard: true },
@@ -818,6 +951,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       `;
       yield* sql`DELETE FROM checkpoint_diff_blobs WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM project_import_history WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_pending_interactions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_activities WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_claude_legacy_usage WHERE thread_id = ${threadId}`;

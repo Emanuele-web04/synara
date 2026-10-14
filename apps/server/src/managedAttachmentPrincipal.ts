@@ -10,7 +10,8 @@ export const LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL: ManagedAttachmentPrincipal = {
 };
 
 /**
- * Request-scoped identity used only for managed binary staging and claim.
+ * Request-scoped identity used for managed binary staging and claim, and for
+ * reconnectable Git action ownership.
  * It is inherited by RPC handler fibers and never enters public commands or
  * persisted orchestration events.
  */

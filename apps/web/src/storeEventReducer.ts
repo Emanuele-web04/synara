@@ -8,6 +8,8 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   clearRemovedAsyncUserInputResponses,
   mergeAsyncUserInput,
@@ -19,8 +21,12 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { deriveThreadSummaryMetadata, resolveHumanMessageAt } from "@synara/shared/threadSummary";
-import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 
+import { advanceMessageTextSegments } from "./messageTextSegments";
 import { isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
@@ -37,6 +43,7 @@ import {
   normalizeTurnDiffFiles,
   providerReferenceArraysEqual,
   resolveCreateBranchFlowCompletedMerge,
+  textSegmentArraysEqual,
   withOrchestrationEventSequence,
 } from "./storeNormalization";
 import {
@@ -179,22 +186,27 @@ function reconcilePendingInteractionsFromActivity(
     activity.kind === "provider.user-input.respond.failed"
   ) {
     const responseCommandId = payload?.responseCommandId;
-    if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
-      return pendingInteractions;
-    }
+    const hasResponseCommand =
+      typeof responseCommandId === "string" && responseCommandId.length > 0;
+    const isStale = createStalePendingInteractionMatcher([activity]);
     const settlementStatus: OrchestrationPendingInteraction["status"] =
       payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
     let changed = false;
     const next = existing.map((interaction) => {
       if (
         !matchesIdentity(interaction) ||
-        interaction.status !== "responding" ||
-        interaction.responseCommandId !== responseCommandId
+        interaction.status === "confirmed" ||
+        (hasResponseCommand
+          ? interaction.status !== "responding" ||
+            interaction.responseCommandId !== responseCommandId
+          : !isStale(interaction))
       ) {
         return interaction;
       }
       changed = true;
-      return { ...interaction, status: settlementStatus, resolvedAt: null };
+      return isStale(interaction)
+        ? { ...interaction, status: "confirmed" as const, resolvedAt: activity.createdAt }
+        : { ...interaction, status: settlementStatus, resolvedAt: null };
     });
     return changed ? next : pendingInteractions;
   }
@@ -243,6 +255,7 @@ function normalizeSingleTurnDiffSummary(
   if (
     previous &&
     previous.turnId === incoming.turnId &&
+    previous.startedAt === (incoming.startedAt ?? previous.startedAt) &&
     previous.completedAt === incoming.completedAt &&
     previous.status === incoming.status &&
     previous.assistantMessageId === incoming.assistantMessageId &&
@@ -252,8 +265,10 @@ function normalizeSingleTurnDiffSummary(
   ) {
     return previous;
   }
+  const startedAt = incoming.startedAt ?? previous?.startedAt;
   return {
     ...incoming,
+    ...(startedAt ? { startedAt } : {}),
     files,
   };
 }
@@ -309,6 +324,54 @@ function buildLatestTurn(params: {
     assistantMessageId: params.assistantMessageId,
     ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
   };
+}
+
+// Mirror of the server turn projection: the latest turn start request names the
+// user message that a newly started turn answers. A queued message is written
+// when it is sent, long before its turn starts, so the transcript can only
+// group that turn under it once the message carries the turn id.
+function bindPendingTurnStartMessage(
+  thread: Thread,
+  session: NonNullable<ReadModelThread["session"]>,
+): Thread | null {
+  if (!isSessionRunningTurn(session)) {
+    return null;
+  }
+  const pendingMessageId = thread.pendingTurnStartMessageId;
+  if (
+    pendingMessageId === null ||
+    pendingMessageId === undefined ||
+    thread.claudeCacheReview?.status === "compacting" ||
+    thread.claudeCacheReview?.compactionTurnId === session.activeTurnId
+  ) {
+    return null;
+  }
+  // A cancelled prompt can remain unanswered after a cold reload. Only an
+  // observed request owns a new turn; late-attached clients get accepted links
+  // from the authoritative detail snapshot's projection_turns mapping.
+  const messageIndex = thread.messages.findLastIndex((message) => message.id === pendingMessageId);
+  const rest = { ...thread, pendingTurnStartMessageId: null };
+  const message = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
+  const turnId = session.activeTurnId;
+  if (
+    !message ||
+    !isUnboundTurnRequest(message) ||
+    // Only a turn that has produced nothing yet is the one just started for the
+    // request; the shell stream may already have advanced latestTurn to it.
+    thread.messages.some((candidate) => candidate.turnId === turnId) ||
+    thread.activities.some((activity) => activity.turnId === turnId)
+  ) {
+    return rest;
+  }
+  return { ...rest, messages: thread.messages.with(messageIndex, { ...message, turnId }) };
+}
+
+function isUnboundTurnRequest(message: Thread["messages"][number]): boolean {
+  return (
+    message.role === "user" &&
+    message.startsNewTurn !== false &&
+    (message.turnId === undefined || message.turnId === null)
+  );
 }
 
 function reconcileLatestTurnFromSession(
@@ -543,7 +606,13 @@ function applyTurnDiffSummaryToThread(
         : buildLatestTurn({
             previous: thread.latestTurn,
             turnId: nextSummary.turnId,
-            state: checkpointStatusToLatestTurnState(nextSummary.status),
+            // Mirror of the server projection: the session already settled an
+            // interrupted or failed turn; its checkpoint does not complete it.
+            state:
+              thread.latestTurn?.turnId === nextSummary.turnId &&
+              (thread.latestTurn.state === "interrupted" || thread.latestTurn.state === "error")
+                ? thread.latestTurn.state
+                : checkpointStatusToLatestTurnState(nextSummary.status),
             requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
             startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
             completedAt: nextSummary.completedAt,
@@ -602,6 +671,10 @@ function describeStreamText(text: string): {
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
+  segmentBoundary: {
+    readonly segmentStartedAt: string | undefined;
+    readonly segmentSequence: number;
+  },
 ): ChatMessage | null {
   let nextText: string;
   if (
@@ -662,9 +735,26 @@ function mergeStreamingMessage(
       ? incomingMessage.startsNewTurn
       : existingMessage.startsNewTurn;
   const nextSource = incomingMessage.source ?? existingMessage.source;
+  // Segments from a mid-stream snapshot must follow the deltas that land after
+  // it, or a settled reply renders only the text the snapshot had.
+  const advancedTextSegments = advanceMessageTextSegments(existingMessage.textSegments, {
+    streaming: incomingMessage.streaming,
+    deltaText: incomingMessage.text,
+    nextText,
+    segmentStartedAt: segmentBoundary.segmentStartedAt,
+    segmentSequence: segmentBoundary.segmentSequence,
+    updatedAt: nextUpdatedAt,
+  });
+  const nextTextSegments = textSegmentArraysEqual(
+    existingMessage.textSegments,
+    advancedTextSegments,
+  )
+    ? existingMessage.textSegments
+    : advancedTextSegments;
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.textSegments === nextTextSegments &&
     existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
@@ -681,9 +771,12 @@ function mergeStreamingMessage(
     return null;
   }
 
+  const { textSegments: _previousTextSegments, ...existingMessageWithoutSegments } =
+    existingMessage;
   return {
-    ...existingMessage,
+    ...existingMessageWithoutSegments,
     text: nextText,
+    ...(nextTextSegments !== undefined ? { textSegments: nextTextSegments } : {}),
     updatedAt: nextUpdatedAt,
     ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
@@ -735,7 +828,10 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
   let messages = thread.messages;
 
   if (existingMessage) {
-    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage);
+    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage, {
+      segmentStartedAt: payload.segmentStartedAt,
+      segmentSequence: payload.segmentSequence ?? event.sequence,
+    });
     if (mergedMessage !== null) {
       // Only the affected slot is replaced; every other message stays reference-identical.
       messages = thread.messages.with(existingIndex, mergedMessage);
@@ -760,10 +856,15 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     (thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId)
   ) {
     const previousTurn = thread.latestTurn;
+    // A settled message is not the end of its turn while the session still runs
+    // it: more tools and messages can follow, and the session settles the turn.
+    const turnStillRunning =
+      payload.streaming ||
+      (isSessionRunningTurn(thread.session) && thread.session.activeTurnId === payload.turnId);
     latestTurn = buildLatestTurn({
       previous: previousTurn,
       turnId: payload.turnId,
-      state: payload.streaming
+      state: turnStillRunning
         ? "running"
         : previousTurn?.state === "interrupted"
           ? "interrupted"
@@ -772,7 +873,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
             : "completed",
       requestedAt: previousTurn?.requestedAt ?? payload.createdAt,
       startedAt: previousTurn?.startedAt ?? payload.createdAt,
-      completedAt: payload.streaming ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
+      completedAt: turnStillRunning ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
       assistantMessageId: payload.messageId,
       sourceProposedPlan: thread.pendingSourceProposedPlan,
     });
@@ -851,6 +952,7 @@ function applyOrchestrationEvent(
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
           spaceId: event.payload.spaceId ?? null,
+          additionalFolders: event.payload.additionalFolders ?? [],
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -881,6 +983,7 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
+          additionalFolders: existingProject.additionalFolders,
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -969,6 +1072,13 @@ function applyOrchestrationEvent(
               event.payload.isPinned === (thread.isPinned ?? false)) &&
             (event.payload.settledAt === undefined ||
               (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
+            (event.payload.snoozedUntil === undefined ||
+              (event.payload.snoozedUntil ?? null) === (thread.snoozedUntil ?? null)) &&
+            (event.payload.snoozeReminderAt === undefined ||
+              (event.payload.snoozeReminderAt ?? null) === (thread.snoozeReminderAt ?? null)) &&
+            ((event.payload.snoozedUntil === undefined &&
+              event.payload.snoozeReminderAt === undefined) ||
+              thread.snoozeSequence === event.sequence) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -1011,6 +1121,16 @@ function applyOrchestrationEvent(
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.settledAt !== undefined
               ? { settledAt: event.payload.settledAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined
+              ? { snoozedUntil: event.payload.snoozedUntil }
+              : {}),
+            ...(event.payload.snoozeReminderAt !== undefined
+              ? { snoozeReminderAt: event.payload.snoozeReminderAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined ||
+            event.payload.snoozeReminderAt !== undefined
+              ? { snoozeSequence: event.sequence }
               : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
@@ -1201,8 +1321,26 @@ function applyOrchestrationEvent(
               ? (thread.claudeCacheReview ?? null)
               : event.payload.review,
             claudeCacheReviewSequence: event.sequence,
+            ...(event.payload.review?.status === "compacting"
+              ? { pendingTurnStartMessageId: null }
+              : {}),
             updatedAt,
           };
+        },
+        options,
+      );
+
+    case "thread.claude-cache-response-requested":
+      if (event.payload.decision === "compact") return state;
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pendingTurnStartMessageId =
+            event.payload.decision === "continue" ? event.payload.review.messageId : null;
+          return thread.pendingTurnStartMessageId === pendingTurnStartMessageId
+            ? thread
+            : { ...thread, pendingTurnStartMessageId };
         },
         options,
       );
@@ -1215,22 +1353,24 @@ function applyOrchestrationEvent(
           const session = normalizeThreadSession(event.payload.session, thread.session);
           const error = normalizeThreadErrorMessage(event.payload.session.lastError);
           const latestTurn = reconcileLatestTurnFromSession(thread, event.payload.session, error);
+          const boundThread = bindPendingTurnStartMessage(thread, event.payload.session);
           if (
+            boundThread === null &&
             session === thread.session &&
             error === thread.error &&
             latestTurn === thread.latestTurn &&
-            (!thread.sidechatSourceThreadId ||
+            (!isSidechatThread(thread) ||
               thread.sidechatExpiredAt ||
               thread.sidechatLastActivityAt === event.payload.session.updatedAt)
           ) {
             return thread;
           }
           return {
-            ...thread,
+            ...(boundThread ?? thread),
             session,
             error,
             latestTurn,
-            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
               ? { sidechatLastActivityAt: event.payload.session.updatedAt }
               : {}),
             updatedAt:
@@ -1288,9 +1428,21 @@ function applyOrchestrationEvent(
       );
 
     case "thread.turn-interrupt-requested": {
-      // Interrupt requests are best-effort and can fail or time out. Keep the
-      // latest-turn clock/state live until the provider confirms a terminal event.
-      return state;
+      // Record intent for attribution, keeping the turn live until confirmed.
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+          if (!activity) return thread;
+          const activities = normalizeActivities(
+            [...thread.activities, activity],
+            thread.activities,
+          );
+          return activities === thread.activities ? thread : { ...thread, activities };
+        },
+        options,
+      );
     }
 
     case "thread.session-stop-requested":
@@ -1299,7 +1451,9 @@ function applyOrchestrationEvent(
         event.payload.threadId,
         (thread) => {
           if (thread.session === null) {
-            return thread;
+            return thread.pendingTurnStartMessageId === null
+              ? thread
+              : { ...thread, pendingTurnStartMessageId: null };
           }
           const latestTurn =
             thread.latestTurn !== null &&
@@ -1317,6 +1471,7 @@ function applyOrchestrationEvent(
               : thread.latestTurn;
           return {
             ...thread,
+            pendingTurnStartMessageId: null,
             session: {
               ...thread.session,
               status: "closed",
@@ -1359,7 +1514,8 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
-            (!thread.sidechatSourceThreadId ||
+            thread.pendingTurnStartMessageId === event.payload.messageId &&
+            (!isSidechatThread(thread) ||
               thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
@@ -1371,7 +1527,8 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
-            ...(thread.sidechatSourceThreadId
+            pendingTurnStartMessageId: event.payload.messageId,
+            ...(isSidechatThread(thread)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt:
@@ -1516,6 +1673,11 @@ function applyOrchestrationEvent(
         (thread) =>
           applyTurnDiffSummaryToThread(thread, {
             turnId: event.payload.turnId,
+            // The live event carries no start; the turn it completes is the
+            // latest one, whose start the session already reported.
+            ...(thread.latestTurn?.turnId === event.payload.turnId && thread.latestTurn.startedAt
+              ? { startedAt: thread.latestTurn.startedAt }
+              : {}),
             completedAt: event.payload.completedAt,
             status: event.payload.status,
             files: event.payload.files.map((file) => ({
@@ -1680,6 +1842,10 @@ function applyOrchestrationEvent(
         (thread) => ({
           ...thread,
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
+          pendingTurnStartMessageId: null,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
+          snoozeSequence: event.sequence,
           updatedAt: event.payload.updatedAt ?? event.occurredAt,
         }),
         {
@@ -1806,6 +1972,22 @@ export function applyOrchestrationEventsHotPath(
       continue;
     }
     nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
+    if (
+      (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") &&
+      nextState.threadDetailRevisionSequenceById?.[event.payload.threadId] !== undefined
+    ) {
+      const threadId = event.payload.threadId;
+      nextState = {
+        ...nextState,
+        threadDetailRevisionSequenceById: {
+          ...nextState.threadDetailRevisionSequenceById,
+          [threadId]: Math.max(
+            nextState.threadDetailRevisionSequenceById[threadId]!,
+            event.sequence,
+          ),
+        },
+      };
+    }
   }
   return nextState;
 }

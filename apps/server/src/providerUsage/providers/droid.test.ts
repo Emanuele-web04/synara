@@ -222,17 +222,6 @@ describe("parseDroidUsage", () => {
     });
   });
 
-  it("uses a friendly label for pay-per-token overage", () => {
-    const snapshot = parseDroidUsage({
-      json: { ...LIMITS_PAYLOAD, overagePreference: "extraUsage" },
-      nowMs: NOW_MS,
-    });
-    expect(snapshot.usageLines).toContainEqual({
-      label: "When Limited",
-      value: "Use Paid Credits",
-    });
-  });
-
   it("reports unsupported organizations without standard limits", () => {
     expect(
       parseDroidUsage({

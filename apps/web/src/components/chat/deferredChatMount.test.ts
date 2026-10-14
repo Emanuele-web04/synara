@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFERRED_CHAT_MOUNT_FALLBACK_MS,
   type DeferredChatMountScheduler,
+  scheduleAfterNextPaint,
   scheduleDeferredChatMount,
 } from "./deferredChatMount";
 
@@ -78,6 +79,59 @@ describe("scheduleDeferredChatMount", () => {
 
     cleanup();
     pendingTimeout?.();
+    pendingFrame?.(0);
+
+    expect(onReady).not.toHaveBeenCalled();
+    expect(state.timeoutCallbacks.size).toBe(0);
+    expect(state.frameCallbacks.size).toBe(0);
+  });
+});
+
+describe("scheduleAfterNextPaint", () => {
+  it("runs from a timer queued by the next frame, not from a second frame", () => {
+    const state = createScheduler();
+    const onReady = vi.fn();
+
+    scheduleAfterNextPaint(state.scheduler, onReady);
+
+    const frame = [...state.frameCallbacks.entries()][0];
+    expect(frame).toBeDefined();
+    state.frameCallbacks.delete(frame![0]);
+    frame![1](0);
+    // Still pending inside the frame: it must paint before the work starts.
+    expect(onReady).not.toHaveBeenCalled();
+    expect(state.frameCallbacks.size).toBe(0);
+
+    const afterPaint = [...state.timeoutCallbacks.entries()].find(
+      ([handle]) => state.timeoutDelays.get(handle) === 0,
+    );
+    expect(afterPaint).toBeDefined();
+    afterPaint![1]();
+
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  it("falls back after the bounded delay when animation frames do not run", () => {
+    const state = createScheduler();
+    const onReady = vi.fn();
+
+    scheduleAfterNextPaint(state.scheduler, onReady);
+
+    expect([...state.timeoutDelays.values()]).toEqual([DEFERRED_CHAT_MOUNT_FALLBACK_MS]);
+    [...state.timeoutCallbacks.values()][0]?.();
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  it("runs nothing after cleanup", () => {
+    const state = createScheduler();
+    const onReady = vi.fn();
+
+    const cleanup = scheduleAfterNextPaint(state.scheduler, onReady);
+    const pendingFallback = [...state.timeoutCallbacks.values()][0];
+    const pendingFrame = [...state.frameCallbacks.values()][0];
+
+    cleanup();
+    pendingFallback?.();
     pendingFrame?.(0);
 
     expect(onReady).not.toHaveBeenCalled();

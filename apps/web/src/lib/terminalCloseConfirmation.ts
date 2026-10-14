@@ -23,7 +23,7 @@ export function resolveTerminalCloseTitle(options: {
   );
 }
 
-export function buildTerminalCloseConfirmationMessage(options: {
+function buildTerminalCloseConfirmationMessage(options: {
   terminalTitle: string | null | undefined;
   willDeleteThread: boolean;
 }): string {

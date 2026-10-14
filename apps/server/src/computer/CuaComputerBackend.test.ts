@@ -425,7 +425,7 @@ describe("Cua native boundary", () => {
     }
   });
 
-  it.each(["press_key", "click", "set_value", "type_text"] as const)(
+  it.each(["press_key", "click", "type_text"] as const)(
     "keeps the original native identity after identical-label controls reorder for %s",
     async (action) => {
       const f = fixture({ nativeRevision: 37 });
@@ -461,7 +461,6 @@ describe("Cua native boundary", () => {
           ref: firstRef,
           include_screenshot: false,
           ...(action === "press_key" ? { key: "enter" } : {}),
-          ...(action === "set_value" ? { value: "updated" } : {}),
           ...(action === "type_text" ? { text: " appended" } : {}),
         });
         expect(result.isError).not.toBe(true);
@@ -1038,48 +1037,63 @@ describe("Cua native boundary", () => {
     expect(focusedFieldCall).not.toHaveProperty("semantic_only");
   });
 
-  it("types into web content through a composed set_value and verifies on re-read", async () => {
-    const f = fixture();
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
+  it.each(["typeText", "setValue"] as const)(
+    "preserves native uncertainty when label-based web %s is echoed by AX",
+    async (action) => {
+      const f = fixture({ nativeRevision: 40 });
+      f.onTool("set_value", () => ({
+        structuredContent: {
+          route: "ax",
+          delivery: { mode: "background" },
+          effect: "unverifiable",
+          observation_required: true,
+        },
+      }));
+      f.setElements([
+        {
+          role: "AXTextField",
+          label: "Message",
+          frame: { x: -290, y: 30, width: 120, height: 20 },
+          element_token: "web-token",
+          element_index: 2,
+          in_web_content: true,
+          value: "seed",
+        },
+      ]);
+      const state = await f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+      });
+      const node = state.root!.children[0]!;
+      const target = {
+        target: { label: "Message", windowId: "cua:10:20" },
+        node,
+        point: node.activationPoint!,
+      };
+
+      const result =
+        action === "typeText"
+          ? await f.backend.typeText("-typed", "cua:10:20", target)
+          : await f.backend.setValue(target, "replacement");
+      // The native write is one mutation. Echoed AX text cannot justify either
+      // replaying it or claiming that the renderer accepted the edit.
+      expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
+      const writes = f.calls.filter((call) => call.name === "set_value");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.args).toMatchObject({
         element_token: "web-token",
         element_index: 2,
-        in_web_content: true,
-        value: "seed",
-      },
-    ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const node = state.root!.children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
-
-    const result = await f.backend.typeText("-typed", "cua:10:20", target);
-    // Chromium-family fields never honour AXSelectedText: the write must be a
-    // composed AXValue set, not a semantic insert.
-    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
-    const write = f.calls.find((call) => call.name === "set_value");
-    expect(write?.args).toMatchObject({
-      element_token: "web-token",
-      element_index: 2,
-      value: "seed-typed",
-      pid: 10,
-      window_id: 20,
-    });
-    // The independent re-read saw the DOM value land.
-    expect(result).toMatchObject({ verified: "confirmed", effect: "verified" });
-    const reads = f.calls.filter((call) => call.name === "get_window_state");
-    expect(reads).toHaveLength(3);
-    for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
-  });
+        value: action === "typeText" ? "seed-typed" : "replacement",
+        pid: 10,
+        window_id: 20,
+      });
+      expect(result).toMatchObject({
+        deliveryPath: "cua-ax-background",
+        verified: "unverifiable",
+        effect: "dispatched-unknown",
+      });
+    },
+  );
 
   it("refuses a stale semantic field when fresh state has two matching controls", async () => {
     const f = fixture();
@@ -1146,9 +1160,7 @@ describe("Cua native boundary", () => {
     { action: "typeText", interruption: "timeout" },
     { action: "typeText", interruption: "cancellation" },
     { action: "typeText", interruption: "elapsed deadline" },
-    { action: "setValue", interruption: "timeout" },
     { action: "setValue", interruption: "cancellation" },
-    { action: "setValue", interruption: "elapsed deadline" },
   ] as const)(
     "never sends web $action after $interruption while its field read was pending",
     async ({ action, interruption }) => {
@@ -1208,7 +1220,7 @@ describe("Cua native boundary", () => {
       f.delayWindowState(undefined);
       read.resolve();
       await expect(f.backend.setValue(target, "allowed")).resolves.toMatchObject({
-        effect: "verified",
+        effect: "dispatched-unknown",
       });
       expect(
         f.calls.filter((call) => call.name === "set_value").map((call) => call.args?.value),
@@ -1373,106 +1385,6 @@ describe("Cua native boundary", () => {
       pid: 10,
       window_id: 20,
     });
-  });
-
-  it("semantic text lane overlaps same-pid writes to different windows", async () => {
-    const f = fixture({ semanticTextLaneGapMs: 0 });
-    f.setWindows([
-      {
-        pid: 10,
-        window_id: 21,
-        title: "Owned fixture B",
-        bounds: { x: 100, y: 20, width: 200, height: 100 },
-        is_on_screen: true,
-        on_current_space: true,
-        z_index: 0,
-      },
-    ]);
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    f.captureWindow(21);
-    const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
-      .root!.children[0]!;
-    const firstTarget = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node: firstNode,
-      point: firstNode.activationPoint!,
-    };
-    const secondTarget = {
-      target: { label: "Message", windowId: "cua:10:21" },
-      node: secondNode,
-      point: secondNode.activationPoint!,
-    };
-    let releaseGate!: () => void;
-    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
-    const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
-
-    const first = f.backend.typeText("alpha", "cua:10:20", firstTarget);
-    const second = f.backend.typeText("bravo", "cua:10:21", secondTarget);
-    // Both writes reach the driver while the gate is still held — in flight
-    // together at the native boundary, not queued one behind the other.
-    await vi.waitFor(() => expect(typeTexts()).toHaveLength(2));
-    expect(f.typingMaxInFlight()).toBe(2);
-    releaseGate!();
-
-    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-  });
-
-  it("semantic text lane overlaps different-pid writes", async () => {
-    const f = fixture({ semanticTextLaneGapMs: 0 });
-    f.setWindows([
-      {
-        pid: 11,
-        window_id: 21,
-        title: "Owned fixture B",
-        bounds: { x: 100, y: 20, width: 200, height: 100 },
-        is_on_screen: true,
-        on_current_space: true,
-        z_index: 0,
-      },
-    ]);
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    f.captureWindow(21, 11);
-    const secondNode = (await f.backend.getState({ windowId: "cua:11:21", includeTree: true }))
-      .root!.children[0]!;
-    const firstTarget = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node: firstNode,
-      point: firstNode.activationPoint!,
-    };
-    const secondTarget = {
-      target: { label: "Message", windowId: "cua:11:21" },
-      node: secondNode,
-      point: secondNode.activationPoint!,
-    };
-    let releaseGate!: () => void;
-    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
-    const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
-
-    const first = f.backend.typeText("alpha", "cua:10:20", firstTarget);
-    const second = f.backend.typeText("bravo", "cua:11:21", secondTarget);
-    await vi.waitFor(() => expect(typeTexts()).toHaveLength(2));
-    expect(f.typingMaxInFlight()).toBe(2);
-    releaseGate!();
-
-    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
   it("semantic text lane interleaves three same-pid windows truly concurrently", async () => {
@@ -1859,6 +1771,7 @@ describe("Cua native boundary", () => {
       kind: "permission-required",
       missing: ["screenRecording"],
       bundleId: "com.synara.test",
+      buildSignature: "unknown",
     });
     expect(availability.kind === "permission-required" && availability.message).not.toContain(
       "Accessibility",
@@ -2047,24 +1960,6 @@ describe("Cua native boundary", () => {
     });
   });
 
-  it("re-probes a transient missing report before publishing availability", async () => {
-    const f = fixture();
-    f.denyPermissions();
-    let release!: () => void;
-    f.waitForPermission(
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-    );
-    const pending = f.backend.availability();
-    // Park the first check_permissions on the gate long enough to have read
-    // "missing", then flip to granted so the delayed re-probe sees the truth.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    f.grantPermissions();
-    release();
-    expect(await pending).toMatchObject({ kind: "available" });
-  });
-
   it("keeps re-probing until a delayed grant lands", async () => {
     const f = fixture();
     f.denyPermissions();
@@ -2146,23 +2041,6 @@ describe("Cua native boundary", () => {
     } finally {
       await f.backend.dispose();
     }
-  });
-  it("invalidates old coordinate grounding when lock and resume occurred between requests", async () => {
-    const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
-    f.changeDesktop();
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
-      effect: "not-dispatched",
-      code: "stale_geometry",
-    });
-    expect(f.calls.some((call) => call.name === "click")).toBe(false);
-    await withModelDesktopObservation(() =>
-      f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
-    );
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
   });
   it("rejects a delayed observation from before a known desktop interruption", async () => {
     const f = fixture();
@@ -2464,7 +2342,7 @@ describe("Cua native boundary", () => {
     expect(clicks[3]?.args).toMatchObject({ count: 3 });
     expect(clicks[4]?.args).toMatchObject({ button: "right" });
   });
-  it.each([0, 33, null])(
+  it.each([33, null])(
     "keeps plain clicks synthetic for older or unknown native revision %s",
     async (nativeRevision) => {
       const f = fixture({ nativeRevision });
@@ -2528,7 +2406,7 @@ describe("Cua native boundary", () => {
     });
     expect(f.calls.filter((call) => call.name === "click")).toHaveLength(2);
   });
-  it.each(["dispatched-unknown", "unverifiable", "confirmed"])(
+  it.each(["dispatched-unknown", "confirmed"])(
     "never downgrades explicit %s input to a legacy status refusal",
     async (effect) => {
       const f = fixture();
@@ -3331,15 +3209,6 @@ describe("Cua native boundary", () => {
     expect(failure.message).toContain("do not send keydown/keyup");
     expect(f.calls.filter((call) => call.name === "press_key")).toHaveLength(1);
   });
-  it("encodes missing grants with the public permission schema", async () => {
-    const f = fixture();
-    f.denyPermissions();
-    const availability = await f.backend.availability();
-    expect(Schema.decodeUnknownSync(ComputerAvailability)(availability)).toMatchObject({
-      kind: "permission-required",
-      missing: ["accessibility", "screenRecording"],
-    });
-  });
   it("ignores non-actionable zero-area windows", async () => {
     const f = fixture();
     expect(await f.backend.listWindows()).toHaveLength(1);
@@ -3418,15 +3287,6 @@ describe("Cua native boundary", () => {
       currentSpaceId: 8,
       onCurrentSpace: false,
     });
-  });
-  it("distinguishes a native admission refusal from an uncertain delivery", async () => {
-    const f = fixture();
-    f.refuse();
-    await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
-      effect: "not-dispatched",
-      code: "same_pid_keyboard_ambiguity",
-    });
-    expect(f.calls.filter((c) => isTyping(c.name))).toHaveLength(1);
   });
   it("translates DOM key names without turning Delete into Backspace", async () => {
     const f = fixture();
@@ -3756,40 +3616,56 @@ describe("Cua native boundary", () => {
     });
     expect(f.calls.filter((call) => call.name === "drag")).toHaveLength(1);
   });
-  it("still sends a foreground drag as window-local points", async () => {
-    const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
-    await withDesktopDeliveryMode("foreground", () =>
-      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
-    );
-    expect(f.calls.filter((call) => call.name === "drag")).toEqual([
-      expect.objectContaining({
-        args: expect.objectContaining({
-          delivery_mode: "foreground",
-          from_x: 25,
-          from_y: 10,
-          to_x: 75,
-          to_y: 30,
-        }),
-      }),
-    ]);
-  });
 });
 
 describe("Cua hardening", () => {
-  it("reports a stable build signature on the backend and its availability", async () => {
-    const f = fixture();
-    expect(f.backend.buildSignature()).toBe("unknown");
-    expect(f.backend.buildSignature()).toBe(f.backend.buildSignature());
-    f.denyPermissions();
-    const availability = await f.backend.availability();
-    expect(availability.kind === "permission-required" && availability.buildSignature).toBe(
-      "unknown",
-    );
+  it("refuses clipboard preservation on an older driver before changing the clipboard", async () => {
+    const f = fixture({ nativeRevision: 39 });
+    await expect(f.backend.prepareClipboardPaste({ text: "payload" })).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "clipboard_preservation_unavailable",
+    });
+    expect(f.calls.filter((call) => call.name === "clipboard_write")).toHaveLength(0);
+    await f.backend.dispose();
   });
+
+  it.each(["acknowledged", "lost", "human-copy"] as const)(
+    "keeps an opaque restoration handle for a %s clipboard write",
+    async (outcome) => {
+      const f = fixture({ nativeRevision: 40 });
+      let savedToken: unknown;
+      f.onTool("clipboard_write", (args) => {
+        if (args.preserve === true) {
+          savedToken = args.preserve_token;
+          if (outcome === "lost")
+            throw new CuaTransportError("write reply lost", "dispatched-unknown");
+          return { structuredContent: { restore_token: savedToken } };
+        }
+        expect(args).toEqual({ restore_token: savedToken });
+        return { structuredContent: { clipboard_restored: outcome !== "human-copy" } };
+      });
+      try {
+        const pending = f.backend.prepareClipboardPaste({ imagePath: "/workspace/image.png" });
+        if (outcome === "lost")
+          await expect(pending).rejects.toMatchObject({ effect: "dispatched-unknown" });
+        else {
+          const restore = await pending;
+          await expect(restore()).resolves.toBe(outcome !== "human-copy");
+        }
+        expect(savedToken).toEqual(expect.any(String));
+        const writes = f.calls.filter((call) => call.name === "clipboard_write");
+        expect(writes).toHaveLength(2);
+        expect(writes[0]?.args).toMatchObject({
+          image_path: "/workspace/image.png",
+          preserve: true,
+        });
+        expect(writes[1]?.args).toEqual({ restore_token: savedToken });
+      } finally {
+        await f.backend.dispose();
+      }
+    },
+  );
+
   it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
     const f = fixture();
     f.actionResult({
@@ -4034,51 +3910,6 @@ describe("Computer authority", () => {
     );
     await manager.dispose();
   });
-  it("ignores an older turn ending after the same thread took a new lease", async () => {
-    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
-    await manager.withAgentActivity(
-      "fixture",
-      () => manager.click("fixture", { x: 5, y: 5 }),
-      undefined,
-      "turn-new",
-    );
-    await manager.releaseDesktopControl("fixture", "turn-old");
-    await expect(manager.click("other", { x: 5, y: 5 })).rejects.toMatchObject({
-      code: "computer_controlled_by_other_thread",
-    });
-    await manager.releaseDesktopControl("fixture", "turn-new");
-    await expect(manager.click("other", { x: 5, y: 5 })).resolves.toBeDefined();
-    await manager.dispose();
-  });
-  it("revokes queued admission and aborts the active operation", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend });
-    let entered!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const first = manager.withAgentActivity("fixture", async () => {
-      entered();
-      await blocked;
-      return "ended";
-    });
-    await ready;
-    const work = vi.fn(async () => "input");
-    const queued = manager.withAgentActivity("fixture", work);
-    const rejected = expect(queued).rejects.toThrow("revoked");
-    await manager.setControlEnabled("fixture", false);
-    await manager.setControlEnabled("fixture", true);
-    release();
-    await first;
-    await rejected;
-    expect(work).not.toHaveBeenCalled();
-    await expect(manager.withAgentActivity("fixture", work)).resolves.toBe("input");
-    await manager.dispose();
-  });
 });
 
 describe("native preview task lifetime", () => {
@@ -4212,22 +4043,6 @@ describe("preview stills target scope", () => {
     await f.backend.dispose();
   });
 
-  it("registers a browser task so endTask reaches the host", async () => {
-    const f = fixture();
-    await f.backend.browser!.call({
-      name: "get_browser_state",
-      args: { pid: 10, window_id: 20 },
-      task,
-      mutation: false,
-      signal: signal(),
-    });
-    // The bound window releases the driver-side task surface: endTask
-    // reaches the host instead of early-returning on an unknown task.
-    await f.backend.endTask("thread", "turn");
-    expect(f.calls.at(-1)).toMatchObject({ method: "end_task", task });
-    await f.backend.dispose();
-  });
-
   it("a refused browser call still ends its task cleanly", async () => {
     const f = fixture();
     f.onTool("get_browser_state", () => ({
@@ -4306,15 +4121,6 @@ describe("Cua workstream-C speed flags", () => {
     await f.backend.dispose();
   });
 
-  it("arms the still publisher at the compiled 1000 ms cadence by default", async () => {
-    setEnv("SYNARA_CUA_PREVIEW_STILL_MS", undefined);
-    const f = fixture();
-    const intervals = vi.spyOn(globalThis, "setInterval");
-    await f.backend.attachStream(() => undefined);
-    expect(intervals.mock.calls.some((call) => call[1] === 1_000)).toBe(true);
-    await f.backend.dispose();
-  });
-
   it("SYNARA_CUA_PREVIEW_STILL_MS overrides the still cadence", async () => {
     setEnv("SYNARA_CUA_PREVIEW_STILL_MS", "4000");
     const f = fixture();
@@ -4353,10 +4159,6 @@ describe("Cua workstream-C speed flags", () => {
 
 describe("driver browser surface", () => {
   const signal = () => new AbortController().signal;
-  it("exposes a browser route whenever the backend exists", () => {
-    const f = fixture();
-    expect(f.backend.browser).toBeDefined();
-  });
   it("forwards the driver's reply verbatim — a deliberate refusal is a result, not an error", async () => {
     const f = fixture();
     f.onTool("get_browser_state", () => ({

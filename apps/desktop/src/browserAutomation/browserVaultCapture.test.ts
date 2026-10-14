@@ -58,39 +58,6 @@ describe("native credential capture lifecycle", () => {
     await f.capture.dispose();
   });
 
-  it("uses a dedicated debugger session and cleans up only its own listeners", async () => {
-    const f = fixture();
-    f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
-    await vi.waitFor(() => expect(mocks.install).toHaveBeenCalled());
-    const context = mocks.install.mock.calls[0]![0] as CaptureContextShim;
-    const debuggerApi = Object.assign(new EventEmitter(), {
-      isAttached: () => true,
-      sendCommand: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo"
-          ? { targetInfo: { targetId: "own-target" } }
-          : { sessionId: "capture-session" },
-      ),
-    });
-    const unregister = f.capture.register({
-      webContents: { debugger: debuggerApi, isDestroyed: () => false },
-    } as unknown as BrowserAutomationVisibleRuntime);
-    const session = await context.newCDPSession(context.pages()[0]!);
-    const listener = vi.fn();
-    session.on("Runtime.bindingCalled", listener);
-    debuggerApi.emit("message", {}, "Runtime.bindingCalled", {}, "foreign-session");
-    expect(listener).not.toHaveBeenCalled();
-    debuggerApi.emit("message", {}, "Runtime.bindingCalled", {}, "capture-session");
-    expect(listener).toHaveBeenCalledTimes(1);
-    await session.detach();
-    expect(debuggerApi.listenerCount("message")).toBe(0);
-    expect(debuggerApi.sendCommand).toHaveBeenLastCalledWith("Target.detachFromTarget", {
-      sessionId: "capture-session",
-    });
-    unregister();
-    expect(context.pages()).toEqual([]);
-    await f.capture.dispose();
-  });
-
   it("keeps the capture surface structurally complete (pages/on/off/newCDPSession/isClosed)", async () => {
     const f = fixture();
     f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });

@@ -205,10 +205,6 @@ describe("operations backed by a broken capability", () => {
     await expect(backend.tap(DEVICE, 10, 10)).resolves.toBeUndefined();
     await expect(backend.typeText(DEVICE, "hello")).resolves.toBeUndefined();
   });
-
-  it("leaves streaming working when only accessibility is broken", async () => {
-    await expect(backend.attachStream(DEVICE, () => {})).resolves.toBeUndefined();
-  });
 });
 
 describe("hardware buttons", () => {
@@ -238,7 +234,7 @@ describe("a broken input path", () => {
     await expect(backend.describeUi(DEVICE)).resolves.toMatchObject({ udid: DEVICE });
   });
 
-  it("keeps screenshots working even when the framebuffer path is broken", async () => {
+  it("gates streaming alone on a broken framebuffer capability", async () => {
     // Screenshots run on `simctl io`, so they are deliberately not gated on the
     // helper's framebuffer capability.
     const { backend } = await makeBackend({

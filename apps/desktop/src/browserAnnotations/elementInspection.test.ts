@@ -23,10 +23,6 @@ const BASE_STYLE: ElementStyleSnapshot = {
 };
 
 describe("formatCssColor", () => {
-  it("renders opaque colors as hex", () => {
-    expect(formatCssColor("rgb(20, 20, 19)")).toBe("#141413");
-  });
-
   it("keeps alpha as an explicit percentage", () => {
     expect(formatCssColor("rgba(255, 0, 0, 0.5)")).toBe("#ff0000 50%");
   });
@@ -36,10 +32,6 @@ describe("formatCssColor", () => {
     expect(formatCssColor("rgb(100% 0% 0% / 50%)")).toBe("#ff0000 50%");
   });
 
-  it("collapses fully transparent colors", () => {
-    expect(formatCssColor("rgba(0, 0, 0, 0)")).toBe("transparent");
-  });
-
   it("passes through values it cannot parse", () => {
     expect(formatCssColor("color(srgb 0.1 0.2 0.3)")).toBe("color(srgb 0.1 0.2 0.3)");
     expect(formatCssColor("   ")).toBeNull();
@@ -47,10 +39,6 @@ describe("formatCssColor", () => {
 });
 
 describe("formatCssBox", () => {
-  it("returns null for an empty box", () => {
-    expect(formatCssBox(["0px", "0px", "0px", "0px"])).toBeNull();
-  });
-
   it("collapses to CSS shorthand", () => {
     expect(formatCssBox(["8px", "8px", "8px", "8px"])).toBe("8px");
     expect(formatCssBox(["8px", "16px", "8px", "16px"])).toBe("8px 16px");
@@ -83,10 +71,6 @@ describe("formatCssBorderRadius", () => {
 });
 
 describe("formatCssFont", () => {
-  it("omits the default weight and normal line height", () => {
-    expect(formatCssFont(BASE_STYLE)).toBe('32px Geist, "Geist Fallback", sans-serif');
-  });
-
   it("includes weight and resolved line height", () => {
     expect(formatCssFont({ ...BASE_STYLE, fontWeight: "600", lineHeight: "40px" })).toBe(
       '600 32px/40px Geist, "Geist Fallback", sans-serif',

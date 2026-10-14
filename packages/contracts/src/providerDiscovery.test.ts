@@ -3,29 +3,32 @@ import { describe, expect, it } from "vitest";
 
 import { ProviderListModelsResult } from "./providerDiscovery";
 
-const decodeProviderListModelsResult = Schema.decodeUnknownSync(ProviderListModelsResult);
+const decodeModels = Schema.decodeUnknownSync(ProviderListModelsResult);
 
 describe("ProviderListModelsResult", () => {
-  it("preserves optional runtime model descriptions", () => {
-    const result = decodeProviderListModelsResult({
+  it.each([
+    { roles: [{ name: "smol", model: "upstream/model", thinkingLevel: "high" }] },
+    { roles: [{ name: "", model: null, thinkingLevel: "retired-level" }] },
+    { roles: "invalid legacy roles" },
+    { roles: null },
+  ])("strips legacy roles without discarding model metadata: %j", ({ roles }) => {
+    const catalog = {
       models: [
         {
-          slug: "gpt-5.6-luna",
-          resolvedModel: "gpt-5.6-luna-2026-07-01",
-          name: "GPT-5.6 Luna",
-          description: "0.4x Factory token rate",
-        },
-        {
-          slug: "custom:GPT-5.6-Luna-0",
-          name: "GPT-5.6 Luna",
+          slug: "upstream/model",
+          name: "Model",
+          upstreamProviderId: "upstream",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
         },
       ],
-      source: "droid-acp",
-    });
+      source: "omp-cli",
+      cached: true,
+    };
 
-    expect(result.models[0]?.description).toBe("0.4x Factory token rate");
-    expect(result.models[0]?.resolvedModel).toBe("gpt-5.6-luna-2026-07-01");
-    expect(result.models[1]?.description).toBeUndefined();
-    expect(result.models[1]?.resolvedModel).toBeUndefined();
+    expect(decodeModels({ ...catalog, roles })).toEqual(catalog);
+  });
+
+  it("still rejects an invalid model catalog when legacy roles are present", () => {
+    expect(() => decodeModels({ models: "invalid", roles: [] })).toThrow();
   });
 });

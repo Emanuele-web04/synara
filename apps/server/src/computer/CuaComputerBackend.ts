@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cuaSpaceInventory } from "./cuaSpaceInventory.ts";
 import {
   parseCuaActionDiagnostics,
@@ -54,6 +55,7 @@ import {
   type ComputerBrowserCall,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
+  type ComputerClipboardPayload,
   type ComputerFrameListener,
   type ComputerMenuBackendTarget,
   type ComputerShieldTarget,
@@ -65,6 +67,7 @@ import {
   desktopOperationSignal,
   assertDesktopOperationActive,
   desktopDeliveryMode,
+  withoutDesktopCancellation,
 } from "./DesktopOperationQueue.ts";
 import { StillFramePublisher, resolveStillIntervalMs } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
@@ -811,8 +814,8 @@ export class CuaComputerBackend implements ComputerBackend {
         permission.input_monitoring === true &&
         permission.input_monitor_ready === false;
       const monitorMessage =
-        "Computer control is paused because the Escape and human-input listener could not start. " +
-        "Reopen Synara, then check Computer settings again.";
+        "Computer control is paused until the Escape and human-input listener is ready. " +
+        "Synara reconnects it automatically; check Computer settings if it remains unavailable.";
       this.setHealth({
         ...this.currentHealth,
         status: this.captureFailed || monitorUnavailable ? "unavailable" : "connected",
@@ -1985,12 +1988,10 @@ export class CuaComputerBackend implements ComputerBackend {
     );
   }
   /**
-   * Type into a Chromium-family web element. `AXSelectedText` writes dispatch
-   * successfully yet never reach the DOM (verified: Electron 43, inactive and
-   * frontmost alike), so the write composes `existing + text` through an
-   * `AXValue` set — which lands, fires `input`, and leaves the operator's front
-   * process untouched — then confirms the DOM value on a fresh read instead of
-   * trusting the dispatch reply.
+   * Type into a Chromium-family web element by composing `existing + text`
+   * through an AXValue write, without changing foreground focus. Web editors
+   * can echo AX writes without accepting them in renderer state, so matching
+   * accessibility text alone cannot establish that the edit landed.
    */
   private async webContentTypeText(
     node: ComputerUiNode,
@@ -2012,10 +2013,9 @@ export class CuaComputerBackend implements ComputerBackend {
     });
   }
   /**
-   * Write an `AXValue` into a web element and confirm it on a fresh read. The
-   * driver's own read-back runs before Chromium publishes the new value and so
-   * reports `unverifiable` on writes that landed; verification here re-resolves
-   * the element and compares its DOM-visible value.
+   * Write AXValue and inspect fresh accessibility state for a mismatch. An AX
+   * echo does not prove renderer acceptance or persistence: preserve the
+   * driver's verdict when values match, including its web-surface uncertainty.
    */
   private async webSetValue(
     node: ComputerUiNode,
@@ -2036,7 +2036,7 @@ export class CuaComputerBackend implements ComputerBackend {
     );
     assertDesktopOperationActive();
     const after = await this.resolveWebField(windowId, node);
-    if (after?.value === value) return { ...result, verified: "confirmed", effect: "verified" };
+    if (after?.value === value) return result;
     return { ...result, verified: "unconfirmed", effect: "dispatched-unknown" };
   }
   /**
@@ -2222,6 +2222,52 @@ export class CuaComputerBackend implements ComputerBackend {
   async writeClipboard(value: string) {
     assertComputerClipboardWriteFits(value);
     await this.call("clipboard_write", { text: value }, true);
+  }
+  async prepareClipboardPaste(payload: ComputerClipboardPayload): Promise<() => Promise<boolean>> {
+    // A host probe can be answered before the driver has started. This read
+    // requires its validated handshake, without touching clipboard contents.
+    if (this.driverNativeRevision === undefined)
+      await this.call("get_screen_size", {}, false, false);
+    if (
+      (this.hostPlatform ?? process.platform) !== "darwin" ||
+      (this.driverNativeRevision ?? 0) < 40
+    )
+      throw new CuaActionError(
+        "This native driver cannot preserve the clipboard for paste; no clipboard content was changed.",
+        "not-dispatched",
+        "clipboard_preservation_unavailable",
+      );
+    if ("text" in payload) assertComputerClipboardWriteFits(payload.text);
+    const content =
+      "text" in payload
+        ? { text: payload.text }
+        : "imagePath" in payload
+          ? { image_path: payload.imagePath }
+          : { file_path: payload.filePath };
+    // Known before dispatch so a lost write acknowledgement cannot lose the
+    // only handle to the saved clipboard. The token never reaches the model.
+    const token = randomUUID();
+    const restore = async () => {
+      const restored = await this.call("clipboard_write", { restore_token: token }, true);
+      return restored.structuredContent?.clipboard_restored === true;
+    };
+    try {
+      const result = await this.call(
+        "clipboard_write",
+        { ...content, preserve: true, preserve_token: token },
+        true,
+      );
+      if (result.structuredContent?.restore_token !== token)
+        throw new CuaActionError(
+          "The native clipboard write returned no matching restoration receipt. Do not repeat the paste.",
+          "dispatched-unknown",
+          "clipboard_restore_receipt_missing",
+        );
+    } catch (error) {
+      await withoutDesktopCancellation(() => restore().catch(() => false));
+      throw error;
+    }
+    return restore;
   }
   async launchApp(
     app: string,

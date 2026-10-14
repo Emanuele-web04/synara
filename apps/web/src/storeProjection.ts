@@ -87,6 +87,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     envMode: thread.envMode,
@@ -105,11 +107,14 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    ...(thread.isProjectImport ? { isProjectImport: true } : {}),
     claudeCacheReview: thread.claudeCacheReview ?? null,
+    ...(thread.snoozeSequence !== undefined ? { snoozeSequence: thread.snoozeSequence } : {}),
     ...(thread.claudeCacheReviewSequence !== undefined
       ? { claudeCacheReviewSequence: thread.claudeCacheReviewSequence }
       : {}),
@@ -145,6 +150,9 @@ function toThreadTurnState(thread: Thread): ThreadTurnState {
     latestTurn: thread.latestTurn,
     ...(thread.pendingSourceProposedPlan
       ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
+      : {}),
+    ...(thread.pendingTurnStartMessageId !== undefined
+      ? { pendingTurnStartMessageId: thread.pendingTurnStartMessageId }
       : {}),
   };
 }
@@ -346,12 +354,15 @@ function sidebarThreadSummariesEqual(
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     (left.settledAt ?? null) === (right.settledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
+    (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -361,8 +372,11 @@ function sidebarThreadSummariesEqual(
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.hasLiveTailWork === right.hasLiveTailWork &&
+    left.pendingBackgroundWorkCount === right.pendingBackgroundWorkCount &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    // The context never changes after creation; its URL identifies the item.
+    (left.sidechatContext?.url ?? null) === (right.sidechatContext?.url ?? null) &&
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
@@ -392,12 +406,15 @@ function buildSidebarThreadSummary(
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
     creationSource: thread.creationSource ?? null,
+    sourceThreadId: thread.sourceThreadId ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -407,8 +424,10 @@ function buildSidebarThreadSummary(
     hasPendingUserInput: metadata.hasPendingUserInput,
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
     hasLiveTailWork: metadata.hasLiveTailWork,
+    pendingBackgroundWorkCount: metadata.pendingBackgroundWorkCount,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
@@ -607,9 +626,14 @@ function rebuildThreadShellRecords(
     const next = normalizeThreadShellSnapshot(
       thread,
       previousThread,
-      thread.claudeCacheReview != null || previousThread?.claudeCacheReviewSequence !== undefined
+      thread.claudeCacheReview != null ||
+        previousThread?.claudeCacheReviewSequence !== undefined ||
+        thread.snoozedUntil != null ||
+        thread.snoozeReminderAt != null ||
+        previousThread?.snoozeSequence !== undefined
         ? snapshotSequence
         : undefined,
+      { restoringSession: true },
     );
     const threadId = next.shell.id;
 
@@ -666,13 +690,15 @@ function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppSta
   // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
   clearThreadDetailResumeCursor(threadId);
   if (
-    state.threadDetailSyncById === undefined ||
-    !Object.hasOwn(state.threadDetailSyncById, threadId)
+    !Object.hasOwn(state.threadDetailSyncById ?? {}, threadId) &&
+    !Object.hasOwn(state.threadDetailRevisionSequenceById ?? {}, threadId)
   ) {
     return state;
   }
-  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById;
-  return { ...state, threadDetailSyncById };
+  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById ?? {};
+  const { [threadId]: _revision, ...threadDetailRevisionSequenceById } =
+    state.threadDetailRevisionSequenceById ?? {};
+  return { ...state, threadDetailSyncById, threadDetailRevisionSequenceById };
 }
 
 export function markThreadDetailSyncFailedInClientState(
@@ -1318,6 +1344,10 @@ export function syncServerShellSnapshot(
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadDetailRevisionSequenceById: retainThreadScopedRecord(
+      state.threadDetailRevisionSequenceById,
+      nextThreadIds,
+    ),
   };
 
   const threads = getThreadsFromState(normalizedState);
@@ -1355,17 +1385,21 @@ function syncServerThreadDetailWithOptions(
   options?: {
     updateSidebarSummary?: boolean;
     snapshotSequence?: number;
+    replaceHistory?: boolean;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
-  const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
-    : thread;
+  const nextThreadDetail =
+    options && !options.replaceHistory
+      ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
+      : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
         state,
-        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence),
+        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
+          restoringSession: !state.threadsHydrated,
+        }),
         previousThread,
       ),
       thread.id,
@@ -1392,6 +1426,7 @@ export function syncServerThreadDetailHotPath(
   state: AppState,
   thread: ReadModelThread,
   snapshotSequence?: number,
+  historyRevisionSequence?: number,
 ): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
@@ -1399,10 +1434,29 @@ export function syncServerThreadDetailHotPath(
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, {
+  const previousRevision = state.threadDetailRevisionSequenceById?.[thread.id];
+  const next = syncServerThreadDetailWithOptions(state, thread, {
     updateSidebarSummary: false,
+    // Streaming text can legitimately be ahead of an ordinary projection. A
+    // newly observed rollback is different: preserving those rows would revive
+    // messages the server deliberately removed. Live rollback events also
+    // advance this fence, so subsequent snapshots keep newer in-flight text.
+    replaceHistory:
+      previousRevision !== undefined &&
+      historyRevisionSequence !== undefined &&
+      historyRevisionSequence !== previousRevision,
     ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
   });
+  if (historyRevisionSequence === undefined || historyRevisionSequence === previousRevision) {
+    return next;
+  }
+  return {
+    ...next,
+    threadDetailRevisionSequenceById: {
+      ...next.threadDetailRevisionSequenceById,
+      [thread.id]: historyRevisionSequence,
+    },
+  };
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1430,6 +1484,7 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
           event.thread,
           getThreadFromState(state, event.thread.id),
           event.sequence,
+          { restoringSession: !state.threadsHydrated },
         ),
       );
       return commitThreadProjection(nextState, event.thread.id);
@@ -1481,9 +1536,14 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       return normalizeThreadFromReadModel(
         thread,
         existing,
-        thread.claudeCacheReview != null || existing?.claudeCacheReviewSequence !== undefined
+        thread.claudeCacheReview != null ||
+          existing?.claudeCacheReviewSequence !== undefined ||
+          thread.snoozedUntil != null ||
+          thread.snoozeReminderAt != null ||
+          existing?.snoozeSequence !== undefined
           ? readModel.snapshotSequence
           : undefined,
+        { restoringSession: true },
       );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
@@ -1514,6 +1574,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadDetailRevisionSequenceById: retainThreadScopedRecord(
+      state.threadDetailRevisionSequenceById,
+      nextThreadIds,
+    ),
   };
   for (const thread of nextThreads) {
     // Read-model threads carry full detail (messages, activities), so they are synced by definition.
@@ -1555,6 +1619,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     normalizedState.turnDiffIdsByThreadId === state.turnDiffIdsByThreadId &&
     normalizedState.turnDiffSummaryByThreadId === state.turnDiffSummaryByThreadId &&
     normalizedState.threadDetailSyncById === state.threadDetailSyncById &&
+    normalizedState.threadDetailRevisionSequenceById === state.threadDetailRevisionSequenceById &&
     state.threadsHydrated
   ) {
     // Nothing to merge, but the snapshot is still authoritative at its own sequence. Recording it

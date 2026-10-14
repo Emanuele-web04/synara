@@ -1,13 +1,15 @@
 // FILE: PullRequestSummaryTab.tsx
-// Purpose: The Summary tab of the pull request detail surface — title + author line, plain
-//          meta rows (branch, reviewers, comments, checks), and the Description / Checks /
-//          Comments disclosure sections. Pure presentation over an already-loaded detail;
-//          all queries, actions, and tab switching stay in PullRequestDetailPanel.
+// Purpose: The Summary tab of the pull request detail surface — title + author line (unless the
+//          host shows a GitHubItemHeader), plain meta rows (branch, reviewers, comments, checks),
+//          and the Description / Checks / Comments disclosure sections. Presentation over an
+//          already-loaded detail plus the comment mutation; the detail query, actions, and tab
+//          switching stay in PullRequestDetailPanel.
 // Layer: Pull request presentation
-// Exports: PullRequestSummaryTab
+// Exports: PullRequestSummaryTab, PullRequestPageSummary, GitHubItemPageSummary, GitHubItemComments
 
-import type { PullRequestDetail } from "@synara/contracts";
-import { useState, type ReactNode } from "react";
+import type { PullRequestComment, PullRequestDetail } from "@synara/contracts";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import {
   PULL_REQUEST_CHECK_STATUS_LABELS,
@@ -15,9 +17,8 @@ import {
   summarizePullRequestComments,
   withStableCheckKeys,
 } from "~/components/chat/environment/environmentPullRequest.logic";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChatBubbleIcon, GitBranchIcon, UsersIcon } from "~/lib/icons";
+import { pullRequestCommentMutationOptions } from "~/lib/pullRequestReactQuery";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { ensureNativeApi } from "~/nativeApi";
 import { describePullRequestState } from "./pullRequestDetail.logic";
@@ -25,17 +26,22 @@ import { PullRequestActorLabel } from "./PullRequestActorLabel";
 import { PullRequestCheckStatusIcon } from "./PullRequestCheckStatusIcon";
 import { PullRequestConflictIcon } from "./pullRequestStatePresentation";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
+import { PullRequestMetaRow } from "./PullRequestMetaRow";
 import { PullRequestChecksRing } from "./PullRequestChecksRing";
 import { PullRequestCommentCard } from "./PullRequestCommentCard";
-import { PullRequestCommentComposer } from "./PullRequestCommentComposer";
+import {
+  PullRequestCommentComposer,
+  type GitHubCommentMutation,
+  type GitHubCommentTarget,
+} from "./PullRequestCommentComposer";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
+import { PullRequestDisclosureSection } from "./PullRequestDisclosureSection";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 import {
   PR_BODY_TEXT_CLASS_NAME,
   PR_FINE_TEXT_CLASS_NAME,
   PR_META_TEXT_CLASS_NAME,
-  PR_SECTION_TITLE_TEXT_CLASS_NAME,
 } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
@@ -51,84 +57,148 @@ function BranchName({ name }: { name: string }) {
   );
 }
 
-function MetaRow({
-  icon,
-  label,
+/**
+ * The Summary body on the code review page, the same for pull requests and issues: the
+ * description as plain markdown, then the comments. The facts (branch, reviewers, checks,
+ * assignees) are the page's info column instead.
+ */
+export function GitHubItemPageSummary({
+  body,
+  workspaceRoot,
+  commentCount,
   children,
 }: {
-  icon: ReactNode;
-  label: string;
+  body: string;
+  workspaceRoot: string;
+  commentCount: number;
+  /** The comments section's content, usually a GitHubItemComments. */
   children: ReactNode;
 }) {
   return (
-    <div className={cn(PR_META_TEXT_CLASS_NAME, "flex items-center gap-2 py-1.5")}>
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
+    <div>
+      <PullRequestMarkdown text={body} fallback="_No description provided._" cwd={workspaceRoot} />
+      <div className="mt-6">
+        <PullRequestDisclosureSection flush label="Comments" count={commentCount}>
+          {children}
+        </PullRequestDisclosureSection>
+      </div>
     </div>
   );
 }
 
-function DisclosureSection({
-  label,
-  count,
-  children,
-  defaultOpen: defaultOpenProp,
+/** A GitHub item's comments, oldest first (the last two open), then the comment composer. */
+export function GitHubItemComments({
+  comments,
+  itemUrl,
+  workspaceRoot,
+  warning,
+  target,
+  mutation,
 }: {
-  label: string;
-  count?: number;
-  children: ReactNode;
-  defaultOpen?: boolean;
+  comments: ReadonlyArray<PullRequestComment>;
+  itemUrl: string;
+  workspaceRoot: string;
+  /** Why some comments are missing, when they are. */
+  warning: string | null;
+  target: GitHubCommentTarget;
+  mutation: GitHubCommentMutation;
 }) {
-  const defaultOpen = defaultOpenProp ?? true;
-  const [open, setOpen] = useState(defaultOpen);
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      {/* Reference layout: title first, chevron riding to its right, count after — the
-          section reads as a heading with an affordance, not a tree node. */}
-      <CollapsibleTrigger
-        className={cn(
-          PR_SECTION_TITLE_TEXT_CLASS_NAME,
-          "flex w-full items-center gap-1.5 border-t border-border/60 px-5 py-3 text-left font-medium",
-        )}
-      >
-        <span>{label}</span>
-        <DisclosureChevron open={open} />
-        {count === undefined ? null : (
-          <span className={cn(PR_META_TEXT_CLASS_NAME, "tabular-nums text-muted-foreground")}>
-            {count}
-          </span>
-        )}
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="px-5 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
+    <div className="space-y-2">
+      {warning ? <PullRequestWarningNote>{warning}</PullRequestWarningNote> : null}
+      {comments.length === 0 ? (
+        <p className={cn(PR_BODY_TEXT_CLASS_NAME, "py-4 text-center text-muted-foreground")}>
+          No comments
+        </p>
+      ) : (
+        <div>
+          {comments.map((comment, index) => (
+            <PullRequestCommentCard
+              key={comment.id}
+              comment={comment}
+              prUrl={itemUrl}
+              workspaceRoot={workspaceRoot}
+              defaultOpen={index >= comments.length - 2}
+            />
+          ))}
+        </div>
+      )}
+      <PullRequestCommentComposer target={target} mutation={mutation} />
+    </div>
   );
 }
 
-export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
+function PullRequestComments({ detail }: { detail: PullRequestDetail }) {
+  const commentMutation = usePullRequestCommentMutation();
+  return (
+    <GitHubItemComments
+      comments={detail.comments}
+      itemUrl={detail.url}
+      workspaceRoot={detail.workspaceRoot}
+      warning={
+        detail.commentsIncomplete
+          ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
+          : detail.commentsTruncated
+            ? "More unresolved review comments may be available on GitHub."
+            : null
+      }
+      target={detail}
+      mutation={commentMutation}
+    />
+  );
+}
+
+/** The pull request's Summary body on the code review page. */
+export function PullRequestPageSummary({ detail }: { detail: PullRequestDetail }) {
+  return (
+    <GitHubItemPageSummary
+      body={detail.body}
+      workspaceRoot={detail.workspaceRoot}
+      commentCount={detail.comments.length}
+    >
+      <PullRequestComments detail={detail} />
+    </GitHubItemPageSummary>
+  );
+}
+
+function usePullRequestCommentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation(pullRequestCommentMutationOptions(queryClient));
+}
+
+export function PullRequestSummaryTab({
+  detail,
+  showHeading: showHeadingProp,
+}: {
+  detail: PullRequestDetail;
+  /** The title and author line. Off when the host already shows them in a GitHubItemHeader. */
+  showHeading?: boolean;
+}) {
+  const showHeading = showHeadingProp ?? true;
   return (
     <div className="h-full overflow-y-auto">
-      <section className="space-y-4 px-5 py-5">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold leading-snug">{detail.title}</h1>
-          {/* Muted line, with the author the one thing lifted out of it. */}
-          <PullRequestMetaLine
-            className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}
-          >
-            <PullRequestActorLabel actor={detail.author} className="font-medium text-foreground" />
-            <span>{formatRelativeTime(detail.updatedAt)}</span>
-            <span>{describePullRequestState(detail.state, detail.isDraft)}</span>
-          </PullRequestMetaLine>
-        </div>
+      <section className={cn("space-y-4 px-5", showHeading ? "py-5" : "py-3")}>
+        {showHeading ? (
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold leading-snug">{detail.title}</h1>
+            {/* Muted line, with the author the one thing lifted out of it. */}
+            <PullRequestMetaLine
+              className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}
+            >
+              <PullRequestActorLabel
+                actor={detail.author}
+                className="font-medium text-foreground"
+              />
+              <span>{formatRelativeTime(detail.updatedAt)}</span>
+              <span>{describePullRequestState(detail.state, detail.isDraft)}</span>
+            </PullRequestMetaLine>
+          </div>
+        ) : null}
         <div>
-          <MetaRow icon={<GitBranchIcon className="size-3.5" />} label="Branch">
+          <PullRequestMetaRow icon={<GitBranchIcon className="size-4" />} label="Branch">
             {/* One line: the branch names absorb every pixel the row has spare, and only the
                 separator and the counts are pinned. */}
-            <span className="flex items-center gap-1.5">
+            <span className="flex min-w-0 items-center gap-1.5">
               <BranchName name={detail.headBranch} />
               <span className="shrink-0 text-muted-foreground">›</span>
               <BranchName name={detail.baseBranch} />
@@ -139,17 +209,17 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
                 className="ml-1 shrink-0"
               />
             </span>
-          </MetaRow>
+          </PullRequestMetaRow>
           {/* Conflicts are a merge signal, not a state: git keeps draft/open orthogonal to
               mergeability. Red stays on the glyph only — the row text reads like the other
               meta rows, and the call to action lives in the header (a disabled Merge pill
               that says why, plus "Resolve conflicts" in its "…" menu). */}
           {detail.state === "open" && detail.mergeability === "conflicting" ? (
-            <MetaRow icon={<PullRequestConflictIcon className="size-3.5" />} label="Merge">
+            <PullRequestMetaRow icon={<PullRequestConflictIcon className="size-4" />} label="Merge">
               Conflicts with {detail.baseBranch}
-            </MetaRow>
+            </PullRequestMetaRow>
           ) : null}
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <PullRequestMetaRow icon={<UsersIcon className="size-4" />} label="Reviewers">
             {detail.reviewers.length === 0 ? (
               <span className="text-muted-foreground">None</span>
             ) : (
@@ -163,26 +233,29 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
                 ))}
               </span>
             )}
-          </MetaRow>
-          <MetaRow icon={<ChatBubbleIcon className="size-3.5" />} label="Comments">
+          </PullRequestMetaRow>
+          <PullRequestMetaRow icon={<ChatBubbleIcon className="size-4" />} label="Comments">
             {summarizePullRequestComments(detail.comments.length)}
-          </MetaRow>
+          </PullRequestMetaRow>
           {/* Tone tinting intentionally omitted: the summary reads as plain metadata
               here, matching the muted meta rows around it. */}
-          <MetaRow icon={<PullRequestChecksRing checks={detail.checks} />} label="Checks">
+          <PullRequestMetaRow
+            icon={<PullRequestChecksRing checks={detail.checks} />}
+            label="Checks"
+          >
             {summarizePullRequestChecks(detail.checks).label}
-          </MetaRow>
+          </PullRequestMetaRow>
         </div>
       </section>
       {/* No edit pencil here: there is no backend "edit PR description" action to back it. */}
-      <DisclosureSection label="Description">
+      <PullRequestDisclosureSection label="Description">
         <PullRequestMarkdown
           text={detail.body}
           fallback="_No description provided._"
           cwd={detail.workspaceRoot}
         />
-      </DisclosureSection>
-      <DisclosureSection label="Checks" count={detail.checks.length}>
+      </PullRequestDisclosureSection>
+      <PullRequestDisclosureSection label="Checks" count={detail.checks.length}>
         <div className="space-y-1">
           {detail.checks.length === 0 ? (
             <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
@@ -213,37 +286,11 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
             ))
           )}
         </div>
-      </DisclosureSection>
+      </PullRequestDisclosureSection>
       {/* Open by default so the comment composer is immediately reachable. */}
-      <DisclosureSection label="Comments" count={detail.comments.length}>
-        <div className="space-y-2">
-          {detail.commentsTruncated || detail.commentsIncomplete ? (
-            <PullRequestWarningNote>
-              {detail.commentsIncomplete
-                ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
-                : "More unresolved review comments may be available on GitHub."}
-            </PullRequestWarningNote>
-          ) : null}
-          {detail.comments.length === 0 ? (
-            <p className={cn(PR_BODY_TEXT_CLASS_NAME, "py-4 text-center text-muted-foreground")}>
-              No comments
-            </p>
-          ) : (
-            <div>
-              {detail.comments.map((comment, index) => (
-                <PullRequestCommentCard
-                  key={comment.id}
-                  comment={comment}
-                  prUrl={detail.url}
-                  workspaceRoot={detail.workspaceRoot}
-                  defaultOpen={index >= detail.comments.length - 2}
-                />
-              ))}
-            </div>
-          )}
-          <PullRequestCommentComposer detail={detail} />
-        </div>
-      </DisclosureSection>
+      <PullRequestDisclosureSection label="Comments" count={detail.comments.length}>
+        <PullRequestComments detail={detail} />
+      </PullRequestDisclosureSection>
     </div>
   );
 }

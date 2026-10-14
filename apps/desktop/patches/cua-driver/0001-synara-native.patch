@@ -1,3 +1,12 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml b/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
+--- a/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
++++ b/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
+@@ -11,4 +11,4 @@
+ [lib]
+-crate-type = ["rlib", "cdylib"]
++crate-type = ["rlib"]
+
+ [dependencies]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 index 87bc75ea7..69b5e580e 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
@@ -25224,3 +25233,1753 @@ index 3b16eb4..c06facc 100644
      #[test]
      fn non_standard_subrole_sibling_is_not_a_keyboard_destination() {
          let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -449,6 +449,26 @@
+             Err(error) => Err(error),
+         };
+
++        // AX values in web editors can represent one block, a stale shim, or
++        // a normalized value. They cannot prove a retryable partial insertion.
++        // Apply the same surface trust boundary before incomplete errors too.
++        let target_is_web_content = result
++            .as_ref()
++            .ok()
++            .and_then(|result| result.as_ref().ok())
++            .is_some_and(|outcome| {
++                path_has_untrusted_web_readback(outcome.path)
++                    && (outcome.verified || outcome.delivered_chars.is_some())
++                    && target_in_web_area(pid, element_ptr, window_id)
++            });
++        let result = result.map(|result| {
++            result.map(|mut outcome| {
++                if target_is_web_content {
++                    outcome.delivered_chars = None;
++                }
++                outcome
++            })
++        });
+         match result {
+             Ok(Ok(outcome)) if outcome.delivered_chars.is_some_and(|n| n < char_count) => {
+                 let delivered_chars = outcome.delivered_chars.unwrap_or_default();
+@@ -483,9 +503,6 @@
+                 // chrome (address bar, toolbar) stays trusted. Probe ONLY when a
+                 // path with AXValue-only verification would otherwise confirm, so
+                 // native types and already-unverified deliveries pay nothing.
+-                let target_is_web_content = verified
+-                    && path_has_untrusted_web_readback(path)
+-                    && target_in_web_area(pid, element_ptr, window_id);
+                 let verification = surface_verification(path, verified, target_is_web_content);
+                 let verified = verification.verified;
+                 let untrusted_web_readback = verification.untrusted_web_readback;
+@@ -950,6 +967,63 @@
+     Unverifiable,
+ }
+
++fn ax_text_delivery(
++    progress: Option<TypedProgress>,
++    requested_chars: usize,
++    interruption: Option<(String, usize)>,
++    semantic_progressive_success: bool,
++    target_is_web_content: bool,
++    target_description: &str,
++) -> Option<TypeTextDelivery> {
++    if let Some((reason, accepted_chars)) = interruption {
++        // AX web echoes do not prove renderer delivery, including after
++        // interruption. Accepted requests remain separate dispatch evidence.
++        let observed_chars = if target_is_web_content {
++            None
++        } else {
++            match progress {
++                Some(TypedProgress::Complete) => Some(requested_chars),
++                Some(TypedProgress::Partial(delivered)) => Some(delivered),
++                Some(TypedProgress::Unchanged) => Some(0),
++                Some(TypedProgress::Unverifiable) | None => None,
++            }
++        };
++        return Some(TypeTextDelivery::SemanticInterrupted {
++            reason,
++            accepted_chars,
++            observed_chars,
++        });
++    }
++    if progress == Some(TypedProgress::Complete) {
++        return Some(TypeTextDelivery::Typed(TypeTextOutcome {
++            detail: format!(" into{target_description}"),
++            path: PATH_AX,
++            verified: true,
++            delivered_chars: Some(requested_chars),
++        }));
++    }
++    if let Some(TypedProgress::Partial(delivered_chars)) = progress {
++        return Some(TypeTextDelivery::Typed(TypeTextOutcome {
++            detail: format!(" via partial AX write into{target_description}"),
++            path: PATH_AX,
++            verified: false,
++            delivered_chars: Some(delivered_chars),
++        }));
++    }
++    if semantic_progressive_success {
++        return Some(TypeTextDelivery::Typed(TypeTextOutcome {
++            detail: format!(" via focus-neutral semantic AX requests into{target_description}"),
++            path: PATH_AX,
++            verified: false,
++            // Success acknowledges requests, not an observed character count.
++            // Only a trusted unchanged native value supports a zero count.
++            delivered_chars: (!target_is_web_content && progress == Some(TypedProgress::Unchanged))
++                .then_some(0),
++        }));
++    }
++    None
++}
++
+ fn foreground_settle_ms(pid: i32, frontmost_pid: Option<i32>) -> u64 {
+     if frontmost_pid == Some(pid) {
+         20
+@@ -976,8 +1050,8 @@
+ }
+
+ /// Classify an observable insertion without mistaking a prefix for complete
+-/// delivery. A positive length delta is an exact delivered-character count for
+-/// insert-at-cursor typing; it is capped at the request size defensively.
++/// delivery. A partial count requires an exact inserted prefix with unchanged
++/// surrounding text; length growth alone is not delivery evidence.
+ fn typed_progress(before: Option<&str>, after: Option<&str>, text: &str) -> TypedProgress {
+     if text.is_empty() {
+         return TypedProgress::Complete;
+@@ -985,21 +1059,40 @@
+     let Some(after) = after else {
+         return TypedProgress::Unverifiable;
+     };
+-    if after.contains(text) {
++    if after.contains(text) && before.is_none_or(|before| !before.contains(text)) {
+         return TypedProgress::Complete;
++    }
++    // Upstream Cua also treats control characters as unobservable: Enter/Tab
++    // can split a block, submit a form, change focus, or reset the value.
++    if text.contains(['\n', '\r', '\t']) {
++        return TypedProgress::Unverifiable;
+     }
+     let Some(before) = before else {
+         return TypedProgress::Unverifiable;
+     };
+-    let delivered = after
++    if after == before {
++        return TypedProgress::Unchanged;
++    }
++    // Length growth alone is not a count: smart quotes, input masks and
++    // selected-text replacement can change it independently of typed bytes.
++    let shared_prefix_bytes: usize = before
+         .chars()
+-        .count()
+-        .saturating_sub(before.chars().count())
+-        .min(text.chars().count());
+-    if delivered == 0 {
+-        TypedProgress::Unchanged
++        .zip(after.chars())
++        .take_while(|(left, right)| left == right)
++        .map(|(character, _)| character.len_utf8())
++        .sum();
++    let Some(inserted) = after[shared_prefix_bytes..].strip_suffix(&before[shared_prefix_bytes..])
++    else {
++        return TypedProgress::Unverifiable;
++    };
++    if !inserted.is_empty() && text.starts_with(inserted) {
++        if inserted == text {
++            TypedProgress::Complete
++        } else {
++            TypedProgress::Partial(inserted.chars().count())
++        }
+     } else {
+-        TypedProgress::Partial(delivered)
++        TypedProgress::Unverifiable
+     }
+ }
+
+@@ -1140,10 +1233,10 @@
+     // it rather than being clobbered by it. Re-applying once on a failed
+     // read-back covers apps that install their responder slightly late.
+     if let Some((ptr, _)) = element_ptr_and_idx {
+-        let _ = crate::input::ax_actions::focus_element(ptr);
++        crate::input::ax_actions::focus_element(ptr)?;
+         if settle_ms > 0 && !crate::input::ax_actions::is_element_focused(pid, ptr) {
+             std::thread::sleep(FOCUS_REAPPLY_DELAY);
+-            let _ = crate::input::ax_actions::focus_element(ptr);
++            crate::input::ax_actions::focus_element(ptr)?;
+         }
+     }
+     // First-keystroke settle (foreground rung only — caller passes `settle_ms > 0`).
+@@ -1154,6 +1247,9 @@
+     // sites pass 0 — they have no front transition and must not pay this latency.
+     if settle_ms > 0 {
+         std::thread::sleep(std::time::Duration::from_millis(settle_ms));
++    }
++    if let Some((ptr, _)) = element_ptr_and_idx {
++        crate::input::cancellation::gate().check_ax_target(ptr)?;
+     }
+     crate::input::keyboard::type_text_with_delay(pid, text, delay_ms)?;
+
+@@ -1440,66 +1536,27 @@
+         } else {
+             None
+         };
+-        if let Some(reason) = interruption {
+-            let observed_chars = match ax_progress {
+-                Some(TypedProgress::Complete) => Some(text.chars().count()),
+-                Some(TypedProgress::Partial(delivered)) => Some(delivered),
+-                Some(TypedProgress::Unchanged) => Some(0),
+-                Some(TypedProgress::Unverifiable) | None => None,
+-            };
+-            if owns {
+-                unsafe {
+-                    CFRelease(element as _);
+-                }
+-            }
+-            return Ok(TypeTextDelivery::SemanticInterrupted {
+-                reason,
+-                accepted_chars,
+-                observed_chars,
+-            });
+-        }
+-        // AXValue is not renderer evidence in web content. An unchanged echo
+-        // there cannot prove that zero characters landed, so blind retry is
+-        // unsafe even though no synthesis has run yet.
+-        let unchanged_web_readback = ax_progress == Some(TypedProgress::Unchanged)
++        // Inspect ancestry while the exact AX element is still retained.
++        let target_is_web_content = (interruption.is_some()
++            || ax_progress == Some(TypedProgress::Unchanged))
+             && target_in_web_area(pid, Some((element as usize, idx_opt)), window_id);
++        let unchanged_web_readback =
++            ax_progress == Some(TypedProgress::Unchanged) && target_is_web_content;
+         if owns {
+             unsafe {
+                 CFRelease(element as _);
+             }
+         }
+-        if ax_progress == Some(TypedProgress::Complete) {
+-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
+-            return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
+-                detail: format!(" into{idx_str} {role} \"{title}\""),
+-                path: PATH_AX,
+-                verified: true,
+-                delivered_chars: Some(text.chars().count()),
+-            }));
+-        }
+-        if let Some(TypedProgress::Partial(delivered_chars)) = ax_progress {
+-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
+-            return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
+-                detail: format!(" via partial AX write into{idx_str} {role} \"{title}\""),
+-                path: PATH_AX,
+-                verified: false,
+-                delivered_chars: Some(delivered_chars),
+-            }));
+-        }
+-        if semantic_progressive && err == kAXErrorSuccess {
+-            let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
+-            return Ok(TypeTextDelivery::Typed(TypeTextOutcome {
+-                detail: format!(
+-                    " via focus-neutral semantic AX requests into{idx_str} {role} \"{title}\""
+-                ),
+-                path: PATH_AX,
+-                verified: false,
+-                delivered_chars: if unchanged_web_readback {
+-                    None
+-                } else {
+-                    Some(0)
+-                },
+-            }));
++        let idx_str = idx_opt.map(|i| format!(" [{i}]")).unwrap_or_default();
++        if let Some(delivery) = ax_text_delivery(
++            ax_progress,
++            text.chars().count(),
++            interruption.map(|reason| (reason, accepted_chars)),
++            semantic_progressive && err == kAXErrorSuccess,
++            target_is_web_content,
++            &format!("{idx_str} {role} \"{title}\""),
++        ) {
++            return Ok(delivery);
+         }
+         ax_attempt = match ax_progress {
+             Some(TypedProgress::Unchanged) if unchanged_web_readback => AxAttempt::Unverifiable,
+@@ -1716,6 +1773,115 @@
+     }
+
+     #[test]
++    fn editor_transformations_never_supply_a_retry_offset() {
++        for (before, after, text) in [
++            ("", "", "first\nsecond"),
++            ("", "1", "first\nsecond"),
++            ("", "“", "\"hello\""),
++            ("selected contents", "replacement", "replacement suffix"),
++            ("existing", "existingX", "hello"),
++            ("hi", "hi", "hi"),
++            ("hi", "hiX", "hi"),
++        ] {
++            assert!(matches!(
++                typed_progress(Some(before), Some(after), text),
++                TypedProgress::Unverifiable | TypedProgress::Unchanged
++            ));
++        }
++        assert_eq!(
++            typed_progress(Some("ab"), Some("a🦀b"), "🦀rest"),
++            TypedProgress::Partial(1)
++        );
++    }
++
++    #[test]
++    fn interrupted_semantic_web_delivery_never_exposes_a_retry_offset() {
++        for progress in [
++            TypedProgress::Complete,
++            TypedProgress::Partial(2),
++            TypedProgress::Unchanged,
++        ] {
++            let delivery = ax_text_delivery(
++                Some(progress),
++                5,
++                Some(("cancelled".into(), 2)),
++                true,
++                true,
++                " field",
++            );
++            let Some(TypeTextDelivery::SemanticInterrupted {
++                accepted_chars,
++                observed_chars,
++                ..
++            }) = delivery
++            else {
++                panic!("interrupted AX input must retain its interrupted result");
++            };
++            assert_eq!(accepted_chars, 2);
++            assert_eq!(
++                observed_chars, None,
++                "web readback {progress:?} cannot authorize retry"
++            );
++        }
++        let native = ax_text_delivery(
++            Some(TypedProgress::Partial(2)),
++            5,
++            Some(("cancelled".into(), 2)),
++            true,
++            false,
++            " field",
++        );
++        assert!(matches!(
++            native,
++            Some(TypeTextDelivery::SemanticInterrupted {
++                observed_chars: Some(2),
++                ..
++            })
++        ));
++    }
++
++    #[test]
++    fn successful_semantic_requests_preserve_unverifiable_delivery() {
++        for (before, after, text) in [
++            (Some(""), None, "hello"),
++            (Some(""), Some("“"), "\"hello\""),
++            (Some(""), Some("first"), "first\nsecond"),
++        ] {
++            let delivery = ax_text_delivery(
++                Some(typed_progress(before, after, text)),
++                text.chars().count(),
++                None,
++                true,
++                false,
++                " field",
++            );
++            let Some(TypeTextDelivery::Typed(outcome)) = delivery else {
++                panic!("accepted semantic requests must return their delivery outcome");
++            };
++            assert!(!outcome.verified);
++            assert_eq!(
++                outcome.delivered_chars, None,
++                "unverifiable input {text:?} cannot claim zero delivery"
++            );
++        }
++        let native = ax_text_delivery(
++            Some(TypedProgress::Unchanged),
++            5,
++            None,
++            true,
++            false,
++            " field",
++        );
++        assert!(matches!(
++            native,
++            Some(TypeTextDelivery::Typed(TypeTextOutcome {
++                delivered_chars: Some(0),
++                ..
++            }))
++        ));
++    }
++
++    #[test]
+     fn delivery_waits_through_a_partial_readback_until_complete() {
+         let text = "BEGIN-payload-END";
+         let mut values = std::collections::VecDeque::from([
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/window_scope.rs
+@@ -151,21 +151,18 @@
+         };
+     }
+
+-    // Matched: walk the requested window plus the non-window top-level children.
+-    //
+-    // The menu bar is deliberately among them. MACOS.md documents a
+-    // two-snapshot menu flow whose first step reads `AXMenuBarItem` rows
+-    // straight out of this window-scoped tree, and `get_window_state` is the
+-    // only tool that returns a subtree — dropping AXMenuBar here would remove
+-    // menu navigation with no replacement path. Keeping other non-window
+-    // children is also what `browser/consent_ui.rs` relies on to reach a
+-    // top-level `AXSheet` consent prompt.
++    // Matched: walk the requested window and explicit application surfaces.
++    // MACOS.md's two-snapshot menu flow needs the menu bar and open menus;
++    // browser/consent_ui.rs also needs top-level AXSheet consent prompts.
++    // Other application-level roots have no target-window ownership proof:
++    // a retained web area or group can expose another document's controls.
++    // Descendants of the matched window remain part of its normal walk.
+     let dialog_scope = matched.iter().any(|&i| candidates[i].is_dialog_like());
+     let walk = candidates
+         .iter()
+         .enumerate()
+         .filter(|(i, c)| {
+-            (c.role != "AXWindow" || matched.contains(i))
++            (matched.contains(i) || matches!(c.role.as_str(), "AXMenuBar" | "AXMenu" | "AXSheet"))
+                 && !(dialog_scope && c.role == "AXMenuBar")
+         })
+         .map(|(i, _)| i)
+@@ -200,6 +197,14 @@
+             TopLevelCandidate::new("AXMenuBar", None),
+             TopLevelCandidate::new("AXWindow", Some(11)),
+             TopLevelCandidate::new("AXWindow", Some(22)),
++            // Application-level content can retain an inactive document or a
++            // container for a sibling window. It has no target-window proof.
++            TopLevelCandidate::new("AXWebArea", None),
++            TopLevelCandidate::new("AXDocumentWeb", None),
++            TopLevelCandidate::new("document", None),
++            TopLevelCandidate::new("AXGroup", None),
++            TopLevelCandidate::new("AXToolbar", None),
++            TopLevelCandidate::new("AXUnknown", None),
+         ];
+         let d = decide_window_scope(&candidates, 22, never_called);
+         assert_eq!(d.scope, WindowScope::Matched);
+@@ -291,14 +296,15 @@
+     /// walks Chrome's other window ids expecting the consent `AXSheet` as a
+     /// top-level non-window child.
+     #[test]
+-    fn matched_window_keeps_sibling_sheets() {
++    fn matched_window_keeps_sibling_sheets_and_open_menus() {
+         let candidates = [
+             TopLevelCandidate::new("AXSheet", None),
+             TopLevelCandidate::new("AXWindow", Some(11)),
++            TopLevelCandidate::new("AXMenu", None),
+         ];
+         let d = decide_window_scope(&candidates, 11, never_called);
+         assert_eq!(d.scope, WindowScope::Matched);
+-        assert_eq!(d.walk, vec![0, 1]);
++        assert_eq!(d.walk, vec![0, 1, 2]);
+     }
+
+     #[test]
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+@@ -77,8 +77,13 @@
+ static RENDER: Mutex<Option<RenderMap>> = Mutex::new(None);
+ static OVERLAY_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
+
++pub(crate) fn overlay_window_id() -> Option<u32> {
++    let window_id = OVERLAY_WINDOW_ID.load(Ordering::Acquire);
++    (window_id != 0).then_some(window_id)
++}
++
+ pub(crate) fn is_overlay_window(window_id: u32) -> bool {
+-    window_id != 0 && OVERLAY_WINDOW_ID.load(Ordering::Acquire) == window_id
++    overlay_window_id() == Some(window_id)
+ }
+
+ /// The keyed, insertion-ordered collection of owned cursors that the render
+@@ -744,9 +749,9 @@
+     // otherwise show the overlay live while omitting it from an in-process
+     // display recording.
+     let _: () = msg_send![win, setSharingType: 1u64];
+-    // NSNormalWindowLevel = 0.  The overlay lives at the normal window level so
+-    // it appears in CGWindowList layer=0 results (which agents inspect via
+-    // list_windows).  Z-ordering above the target is managed dynamically via
++    // NSNormalWindowLevel = 0. The overlay shares ordinary window stacking,
++    // but list_windows excludes its registered ID from target/restore choices.
++    // Z-ordering above the target is managed dynamically via
+     // orderWindow:relativeTo: (see dispatch_pin_above / render_loop repin).
+     let _: () = msg_send![win, setLevel: 0i64];
+     // NSWindowCollectionBehaviorCanJoinAllSpaces(1<<0) | FullScreenAuxiliary(1<<8) | Stationary(1<<4)
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+@@ -81,6 +81,7 @@
+                 window_records_with_keyboard_focus(
+                     &windows,
+                     true,
++                    crate::cursor::overlay::overlay_window_id(),
+                     crate::ax::exact_target::keyboard_focused_window_id,
+                 )
+             })
+@@ -95,6 +96,7 @@
+             window_records_with_keyboard_focus(
+                 &windows,
+                 false,
++                crate::cursor::overlay::overlay_window_id(),
+                 crate::ax::exact_target::keyboard_focused_window_id,
+             )
+         };
+@@ -111,10 +113,18 @@
+ fn window_records_with_keyboard_focus(
+     windows: &[crate::windows::WindowInfo],
+     include_keyboard_focus: bool,
++    overlay_window_id: Option<u32>,
+     mut focused_window: impl FnMut(i32) -> Option<u32>,
+ ) -> Vec<Value> {
++    // The registered cursor surface is a visible layer-0 window, but cannot
++    // become key or receive input. Never offer it as an app/restore target.
++    // Keep ordinary windows even when they share its PID, title or geometry.
++    let windows: Vec<_> = windows
++        .iter()
++        .filter(|window| Some(window.window_id) != overlay_window_id)
++        .collect();
+     if !include_keyboard_focus {
+-        return windows.iter().map(window_record_json).collect();
++        return windows.into_iter().map(window_record_json).collect();
+     }
+     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+     let mut by_pid = std::collections::HashMap::<i32, Option<u32>>::new();
+@@ -198,10 +208,11 @@
+         let records = window_records_with_keyboard_focus(
+             &[window()],
+             args.bool_or("include_keyboard_focus", false),
++            None,
+             |_| panic!("Default window enumeration must not query Accessibility"),
+         );
+         assert_eq!(records, vec![window_record_json(&window())]);
+-        let records = window_records_with_keyboard_focus(&[window()], false, |_| {
++        let records = window_records_with_keyboard_focus(&[window()], false, None, |_| {
+             panic!("Disabled keyboard-focus observation must not query Accessibility")
+         });
+         assert_eq!(records, vec![window_record_json(&window())]);
+@@ -216,7 +227,7 @@
+         unknown.window_id = 44;
+         let mut reads = std::collections::HashMap::new();
+         let records =
+-            window_records_with_keyboard_focus(&[window(), sibling, unknown], true, |pid| {
++            window_records_with_keyboard_focus(&[window(), sibling, unknown], true, None, |pid| {
+                 *reads.entry(pid).or_insert(0) += 1;
+                 if pid == 123 {
+                     Some(42)
+@@ -229,8 +240,39 @@
+         assert_eq!(records[0]["keyboard_focused"], true);
+         assert_eq!(records[1]["keyboard_focused"], false);
+         assert!(records[2].get("keyboard_focused").is_none());
+-        let records = window_records_with_keyboard_focus(&[window()], true, |_| Some(99));
++        let records = window_records_with_keyboard_focus(&[window()], true, None, |_| Some(99));
+         assert!(records[0].get("keyboard_focused").is_none());
++    }
++
++    #[test]
++    fn enumeration_omits_only_the_registered_cursor_overlay() {
++        let mut sibling = window();
++        sibling.window_id = 43;
++        let mut overlay = window();
++        overlay.window_id = 99;
++        overlay.z_index = 100;
++        overlay.title.clear();
++        let windows = [overlay, window(), sibling];
++        for include_focus in [false, true] {
++            let records =
++                window_records_with_keyboard_focus(&windows, include_focus, Some(99), |_| Some(42));
++            let ids: Vec<u64> = records
++                .iter()
++                .map(|row| row["window_id"].as_u64().unwrap())
++                .collect();
++            assert_eq!(
++                ids,
++                vec![42, 43],
++                "the same PID's ordinary windows remain targetable"
++            );
++            let unowned =
++                window_records_with_keyboard_focus(&windows, include_focus, None, |_| None);
++            assert_eq!(
++                unowned.len(),
++                3,
++                "title/size/PID never infer overlay ownership"
++            );
++        }
+     }
+
+     #[test]
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -67,6 +67,121 @@
+         CFRelease(current as CFTypeRef);
+     }
+     resolved
++}
++
++/// A document root parked outside its own window is not the active visual
++/// document, even when the application retains it in AXChildren. Chromium
++/// clamps fully clipped bounds to a one-point edge; ordinary controls below
++/// the fold are deliberately outside this document-root policy.
++pub(crate) fn document_root_is_clipped(
++    role: &str,
++    frame: Option<[f64; 4]>,
++    window_frame: Option<[f64; 4]>,
++) -> bool {
++    if !super::tree::is_web_content_role(role) {
++        return false;
++    }
++    let (Some(frame), Some(window)) = (frame, window_frame) else {
++        return false;
++    };
++    let valid = |rect: [f64; 4]| {
++        rect.iter().all(|value| value.is_finite())
++            && rect[2] >= 1.0
++            && rect[3] >= 1.0
++            && (rect[0] + rect[2]).is_finite()
++            && (rect[1] + rect[3]).is_finite()
++    };
++    if !valid(frame) || !valid(window) {
++        return false;
++    }
++    let width =
++        ((frame[0] + frame[2]).min(window[0] + window[2]) - frame[0].max(window[0])).max(0.0);
++    let height =
++        ((frame[1] + frame[3]).min(window[1] + window[3]) - frame[1].max(window[1])).max(0.0);
++    (frame[2] > 1.0 && width <= 1.0) || (frame[3] > 1.0 && height <= 1.0)
++}
++
++/// Read a root's owning AXWindow, not the desktop or foreground window. This
++/// keeps the same policy for background windows and windows on another Space.
++/// Missing geometry does not invent evidence that a document is clipped.
++pub(crate) unsafe fn web_document_is_clipped(
++    element: AXUIElementRef,
++    role: &str,
++    frame: Option<[f64; 4]>,
++) -> bool {
++    if !super::tree::is_web_content_role(role) {
++        return false;
++    }
++    let Some(window) = copy_element_attr(element, "AXWindow") else {
++        return false;
++    };
++    super::bindings::AXUIElementSetMessagingTimeout(window, 0.025);
++    let window_frame = super::bindings::element_screen_rect(window);
++    CFRelease(window as CFTypeRef);
++    document_root_is_clipped(role, frame, window_frame)
++}
++
++/// Recheck document ancestry immediately before semantic mutation: a cached
++/// field can stay valid after its document is moved out of the window.
++/// Only positive clipping evidence refuses; unknown native geometry retains
++/// its existing semantics. All retained parents are released, including on
++/// timeout, and reads have both a per-object and overall bound.
++pub(crate) unsafe fn element_has_clipped_web_document(element: AXUIElementRef) -> bool {
++    // The first element is borrowed from the actuator. Its short inspection
++    // timeout must never leak into the subsequent AX mutation (which can land
++    // even when a too-short acknowledgement budget expires).
++    struct RestoreMutationTimeout(AXUIElementRef);
++    impl Drop for RestoreMutationTimeout {
++        fn drop(&mut self) {
++            unsafe {
++                super::bindings::AXUIElementSetMessagingTimeout(
++                    self.0,
++                    super::tree::AX_MESSAGING_TIMEOUT_SECONDS,
++                );
++            }
++        }
++    }
++    let _restore = RestoreMutationTimeout(element);
++    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
++    let mut current = element;
++    let mut owned = false;
++    let mut clipped = false;
++    for _ in 0..MAX_ANCESTRY_DEPTH {
++        if std::time::Instant::now() >= deadline {
++            break;
++        }
++        super::bindings::AXUIElementSetMessagingTimeout(current, 0.025);
++        let Some(role) = copy_string_attr(current, "AXRole") else {
++            break;
++        };
++        if matches!(role.as_str(), "AXWindow" | "AXApplication") {
++            break;
++        }
++        if super::tree::is_web_content_role(&role)
++            && web_document_is_clipped(
++                current,
++                &role,
++                super::bindings::element_screen_rect(current),
++            )
++        {
++            clipped = true;
++            break;
++        }
++        let parent = copy_element_attr(current, "AXParent");
++        if owned {
++            CFRelease(current as CFTypeRef);
++            owned = false;
++        }
++        let Some(parent) = parent else {
++            break;
++        };
++        current = parent;
++        owned = true;
++    }
++    if owned {
++        CFRelease(current as CFTypeRef);
++    }
++    clipped
+ }
+
+ /// The process's focused AX element, but only when it provably belongs to the
+@@ -341,9 +456,94 @@
+
+ #[cfg(test)]
+ mod tests {
++    use super::document_root_is_clipped;
+     use super::{
+         count_competing_keyboard_destinations, keyboard_focus_facts_match, AxWindowRecord,
+     };
++
++    #[test]
++    fn parked_web_document_geometry_does_not_address_an_inactive_page() {
++        let window = Some([0.0, 33.0, 1728.0, 1084.0]);
++        for (name, role, frame, owner, expected) in [
++            // Captured from the real Notion get_window_state production path.
++            (
++                "parked Notion document",
++                "AXWebArea",
++                Some([1727.0, 1116.0, 1728.0, 1048.0]),
++                window,
++                true,
++            ),
++            (
++                "fully outside",
++                "AXWebArea",
++                Some([1728.0, 1117.0, 1728.0, 1048.0]),
++                window,
++                true,
++            ),
++            (
++                "visible document",
++                "AXWebArea",
++                Some([0.0, 69.0, 1728.0, 1048.0]),
++                window,
++                false,
++            ),
++            (
++                "visible tab bar",
++                "AXWebArea",
++                Some([0.0, 33.0, 1728.0, 36.0]),
++                window,
++                false,
++            ),
++            (
++                "partial document",
++                "AXWebArea",
++                Some([1600.0, 1000.0, 1728.0, 1048.0]),
++                window,
++                false,
++            ),
++            (
++                "off-Space translated window",
++                "AXWebArea",
++                Some([-4000.0, -2964.0, 1728.0, 1048.0]),
++                Some([-4000.0, -3000.0, 1728.0, 1084.0]),
++                false,
++            ),
++            (
++                "ordinary offscreen native field",
++                "AXTextArea",
++                Some([1727.0, 1116.0, 300.0, 80.0]),
++                window,
++                false,
++            ),
++            (
++                "unknown document geometry",
++                "AXWebArea",
++                None,
++                window,
++                false,
++            ),
++            (
++                "unknown owner geometry",
++                "AXWebArea",
++                Some([1727.0, 1116.0, 1728.0, 1048.0]),
++                None,
++                false,
++            ),
++            (
++                "nonfinite document geometry",
++                "AXWebArea",
++                Some([f64::NAN, 1116.0, 1728.0, 1048.0]),
++                window,
++                false,
++            ),
++        ] {
++            assert_eq!(
++                document_root_is_clipped(role, frame, owner),
++                expected,
++                "{name}"
++            );
++        }
++    }
+
+     #[test]
+     fn inactive_app_focus_requires_exact_window_and_addressed_field() {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
+@@ -196,13 +196,28 @@
+     /// Semantic dispatch may address an exact descendant of a normal modal.
+     /// Raw events have no such ancestry proof and retain the stricter gate.
+     pub fn check_ax_target(&self, element: usize) -> anyhow::Result<()> {
++        let epoch = self.admission_epoch()?;
++        Self::validate_web_document(element)?;
++        self.validate_epoch(epoch)?;
+         self.check_modal_target(Some(element))
++    }
++
++    fn validate_web_document(element: usize) -> anyhow::Result<()> {
++        if unsafe {
++            crate::ax::exact_target::element_has_clipped_web_document(
++                element as crate::ax::bindings::AXUIElementRef,
++            )
++        } {
++            anyhow::bail!("native_input_target_changed: the addressed web document is clipped outside its owning window; observe current state before choosing a target");
++        }
++        Ok(())
+     }
+
+     pub fn post_ax<T>(&self, element: usize, send: impl FnOnce() -> T) -> anyhow::Result<T> {
+         let mut state = self.lock();
+         Self::validate_target(&mut state)?;
+         Self::validate_modal_target(&state, Some(element))?;
++        Self::validate_web_document(element)?;
+         Ok(send())
+     }
+
+@@ -297,6 +312,9 @@
+         let mut state = self.lock();
+         Self::validate_target(&mut state)?;
+         Self::validate_modal_target(&state, element)?;
++        if let Some(element) = element {
++            Self::validate_web_document(element)?;
++        }
+         held.release = Some(release);
+         state.held += 1;
+         down();
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+@@ -39,7 +39,7 @@
+ /// `AXUIElementCopyAttributeValue` after `spawn_blocking` starts, so the native
+ /// messaging timeout is what keeps an unresponsive app from retaining a worker
+ /// indefinitely.
+-const AX_MESSAGING_TIMEOUT_SECONDS: f32 = 2.0;
++pub(crate) const AX_MESSAGING_TIMEOUT_SECONDS: f32 = 2.0;
+
+ unsafe fn set_messaging_timeout(element: AXUIElementRef) {
+     let _ = AXUIElementSetMessagingTimeout(element, AX_MESSAGING_TIMEOUT_SECONDS);
+@@ -152,7 +152,7 @@
+ /// Walk the AX tree of `pid`, optionally filtered to a specific window.
+ ///
+ /// `window_id` — when Some, only the AXWindow matching that CGWindowID is
+-/// walked (plus non-window children like the menu bar). When None, all
++/// walked (plus application menus and sheets). When None, all
+ /// top-level children are walked.
+ ///
+ /// Key background-app fix: at the application root we union `AXChildren`
+@@ -254,7 +254,7 @@
+             }
+         }
+
+-        // Scope: keep non-window children (menu bar) + the target window —
++        // Scope: keep application menus/sheets + the target window —
+         // but ONLY once the target window has actually been identified. When
+         // nothing claims the requested id, `decide_window_scope` reports why
+         // and walks nothing; it must never fall back to "everything that isn't
+@@ -692,6 +692,15 @@
+
+     let role = role.unwrap_or_else(|| "AXUnknown".into());
+
++    // Never publish or cache a retained document parked outside this window.
++    // Ordinary offscreen controls inside a live document remain addressable.
++    if super::exact_target::web_document_is_clipped(element, &role, frame) {
++        for child in children {
++            CFRelease(child as CFTypeRef);
++        }
++        return;
++    }
++
+     let in_web_content = in_web_content || is_web_content_role(&role);
+
+     // Skip pure layout containers that have no interesting content.
+@@ -898,7 +907,7 @@
+     }
+ }
+
+-fn is_web_content_role(role: &str) -> bool {
++pub(crate) fn is_web_content_role(role: &str) -> bool {
+     let normalized = role
+         .chars()
+         .filter(|character| character.is_ascii_alphanumeric())
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/clipboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/clipboard.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/clipboard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/clipboard.rs
+@@ -1,17 +1,25 @@
+-use std::{path::Path, sync::Mutex};
++use std::{
++    path::Path,
++    sync::{Arc, Mutex},
++};
+
+ use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, ContentFormat};
+-use cua_driver_core::clipboard::ClipboardBackend;
++use cua_driver_core::clipboard::{ClipboardBackend, ClipboardPreserveError, ClipboardValue};
++use objc2::runtime::ProtocolObject;
++use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
++use objc2_foundation::{NSArray, NSData, NSString, NSURL};
+
+ pub struct MacosClipboard {
+-    context: Result<Mutex<ClipboardContext>, String>,
++    context: Result<Arc<Mutex<ClipboardContext>>, String>,
++    preserved: Arc<Mutex<Option<PreservedClipboard>>>,
+ }
+
+ impl MacosClipboard {
+     pub fn new() -> Self {
+         Self {
++            preserved: Arc::new(Mutex::new(None)),
+             context: ClipboardContext::new()
+-                .map(Mutex::new)
++                .map(|context| Arc::new(Mutex::new(context)))
+                 .map_err(|error| error.to_string()),
+         }
+     }
+@@ -25,19 +33,122 @@
+     }
+ }
+
++impl Drop for MacosClipboard {
++    fn drop(&mut self) {
++        let Ok(_context) = self.context() else {
++            return;
++        };
++        if let Ok(mut state) = self.preserved.lock() {
++            if let Some(token) = state.as_ref().map(|snapshot| snapshot.token.clone()) {
++                objc2::rc::autoreleasepool(|_| unsafe {
++                    let _ = restore_preserved_to(
++                        &NSPasteboard::generalPasteboard(),
++                        &mut state,
++                        &token,
++                    );
++                });
++            }
++        }
++    }
++}
++
+ fn absolute_existing_file(path: &str) -> Result<String, String> {
+     let path = Path::new(path);
+     if !path.is_absolute() {
+         return Err("clipboard file paths must be absolute".into());
+     }
+     let canonical = path.canonicalize().map_err(|error| error.to_string())?;
++    if path != canonical {
++        return Err("clipboard path changed canonical identity; nothing was written".into());
++    }
+     if !canonical.is_file() {
+         return Err("clipboard path must identify an existing file".into());
+     }
+     Ok(canonical.to_string_lossy().into_owned())
+ }
+
++fn bounded_clipboard_image(path: &str) -> Result<clipboard_rs::RustImageData, String> {
++    use std::os::unix::fs::OpenOptionsExt;
++    let file = std::fs::OpenOptions::new()
++        .read(true)
++        .custom_flags(libc::O_NOFOLLOW)
++        .open(path)
++        .map_err(|error| error.to_string())?;
++    let metadata = file.metadata().map_err(|error| error.to_string())?;
++    if !metadata.is_file() || metadata.len() > MAX_SNAPSHOT_BYTES as u64 {
++        return Err("clipboard image must be a bounded regular file; nothing was written".into());
++    }
++    absolute_existing_file(path)?;
++    let mut reader = image::ImageReader::new(std::io::BufReader::new(file))
++        .with_guessed_format()
++        .map_err(|error| error.to_string())?;
++    let mut limits = image::Limits::default();
++    limits.max_image_width = Some(8192);
++    limits.max_image_height = Some(8192);
++    limits.max_alloc = Some(64 * 1024 * 1024);
++    reader.limits(limits);
++    let image = reader.decode().map_err(|error| error.to_string())?;
++    if u64::from(image.width()) * u64::from(image.height()) > 16_000_000 {
++        return Err("clipboard image exceeds the pixel limit; nothing was written".into());
++    }
++    Ok(clipboard_rs::RustImageData::from_dynamic_image(image))
++}
++
+ impl ClipboardBackend for MacosClipboard {
++    fn write_preserving(
++        &self,
++        value: ClipboardValue,
++        token: String,
++    ) -> Result<String, ClipboardPreserveError> {
++        let runtime = tokio::runtime::Handle::try_current()
++            .map_err(|_| "clipboard preservation requires a cleanup runtime")?;
++        let _context = self.context()?;
++        let mut state = self
++            .preserved
++            .lock()
++            .map_err(|_| "clipboard preservation lock failed")?;
++        let result = objc2::rc::autoreleasepool(|_| unsafe {
++            write_preserved_to(&NSPasteboard::generalPasteboard(), &mut state, value, token)
++        });
++        let Some(cleanup_token) = state.as_ref().map(|snapshot| snapshot.token.clone()) else {
++            return result;
++        };
++        let cleanup_state = Arc::clone(&self.preserved);
++        let cleanup_context = Arc::clone(self.context.as_ref().expect("context locked above"));
++        // A lost response must not strand the user's clipboard indefinitely.
++        // Cleanup consumes only this token and never overwrites a newer copy.
++        runtime.spawn(async move {
++            tokio::time::sleep(SNAPSHOT_TTL).await;
++            let _ = tokio::task::spawn_blocking(move || {
++                let Ok(_context) = cleanup_context.lock() else {
++                    return;
++                };
++                if let Ok(mut state) = cleanup_state.lock() {
++                    objc2::rc::autoreleasepool(|_| unsafe {
++                        let _ = restore_preserved_to(
++                            &NSPasteboard::generalPasteboard(),
++                            &mut state,
++                            &cleanup_token,
++                        );
++                    });
++                }
++            })
++            .await;
++        });
++        result
++    }
++
++    fn restore_preserved(&self, token: &str) -> Result<bool, String> {
++        let _context = self.context()?;
++        let mut state = self
++            .preserved
++            .lock()
++            .map_err(|_| "clipboard preservation lock failed")?;
++        objc2::rc::autoreleasepool(|_| unsafe {
++            restore_preserved_to(&NSPasteboard::generalPasteboard(), &mut state, token)
++        })
++    }
++
+     fn available_formats(&self) -> Result<Vec<String>, String> {
+         self.context()?
+             .available_formats()
+@@ -59,7 +170,7 @@
+
+     fn write_image(&self, absolute_path: &str) -> Result<(), String> {
+         let path = absolute_existing_file(absolute_path)?;
+-        let image = clipboard_rs::RustImageData::from_path(&path).map_err(|e| e.to_string())?;
++        let image = bounded_clipboard_image(&path)?;
+         self.context()?.set_image(image).map_err(|e| e.to_string())
+     }
+
+@@ -71,9 +182,301 @@
+     }
+ }
+
++// Rich data stays inside this native process. Tokens reveal no clipboard bytes.
++const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
++const MAX_SNAPSHOT_ITEMS: usize = 32;
++const MAX_SNAPSHOT_TYPES: usize = 128;
++const SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(120);
++type ClipboardItems = Vec<Vec<(String, zeroize::Zeroizing<Vec<u8>>)>>;
++
++struct PreservedClipboard {
++    token: String,
++    expected_change: isize,
++    expires: std::time::Instant,
++    items: ClipboardItems,
++}
++
++unsafe fn capture_items(board: &NSPasteboard) -> Result<(isize, ClipboardItems), String> {
++    let version = board.changeCount();
++    let mut contents = Vec::new();
++    let mut bytes = 0usize;
++    let mut type_count = 0usize;
++    if let Some(items) = board.pasteboardItems() {
++        if items.len() > MAX_SNAPSHOT_ITEMS {
++            return Err("clipboard preservation item limit exceeded; nothing was written".into());
++        }
++        for item_index in 0..items.len() {
++            let item = items.objectAtIndex(item_index);
++            let mut values = Vec::new();
++            let kinds = item.types();
++            for type_index in 0..kinds.len() {
++                let kind = kinds.objectAtIndex(type_index);
++                type_count += 1;
++                if type_count > MAX_SNAPSHOT_TYPES {
++                    return Err(
++                        "clipboard preservation type limit exceeded; nothing was written".into(),
++                    );
++                }
++                let data = item
++                    .dataForType(&kind)
++                    .ok_or("clipboard representation is unreadable; nothing was written")?;
++                bytes = bytes
++                    .checked_add(data.len())
++                    .ok_or("clipboard snapshot is too large")?;
++                if bytes > MAX_SNAPSHOT_BYTES {
++                    return Err(
++                        "clipboard preservation byte limit exceeded; nothing was written".into(),
++                    );
++                }
++                values.push((
++                    kind.to_string(),
++                    zeroize::Zeroizing::new(data.bytes().to_vec()),
++                ));
++            }
++            contents.push(values);
++        }
++    } else if board.types().is_some_and(|types| !types.is_empty()) {
++        return Err(
++            "clipboard exposes unreadable legacy representations; nothing was written".into(),
++        );
++    }
++    if board.changeCount() != version {
++        return Err("clipboard changed during preservation; nothing was written".into());
++    }
++    Ok((version, contents))
++}
++
++unsafe fn materialize_items(
++    items: &ClipboardItems,
++) -> Result<objc2::rc::Retained<NSArray<ProtocolObject<dyn NSPasteboardWriting>>>, String> {
++    let mut native_items = Vec::new();
++    for representations in items {
++        let item = NSPasteboardItem::new();
++        for (kind, bytes) in representations {
++            if !item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(kind)) {
++                return Err(
++                    "clipboard representation could not be prepared; nothing was written".into(),
++                );
++            }
++        }
++        native_items.push(ProtocolObject::from_retained(item));
++    }
++    Ok(NSArray::from_vec(native_items))
++}
++
++unsafe fn replacement_items(value: ClipboardValue) -> Result<ClipboardItems, String> {
++    let (kind, bytes) = match value {
++        ClipboardValue::Text(text) => ("public.utf8-plain-text", text.into_bytes()),
++        ClipboardValue::Image(path) => {
++            let path = absolute_existing_file(&path)?;
++            let image = bounded_clipboard_image(&path)?;
++            (
++                "public.png",
++                image
++                    .to_png()
++                    .map_err(|error| error.to_string())?
++                    .get_bytes()
++                    .to_vec(),
++            )
++        }
++        ClipboardValue::File(path) => {
++            let path = absolute_existing_file(&path)?;
++            let url = NSURL::fileURLWithPath(&NSString::from_str(&path))
++                .absoluteString()
++                .ok_or("clipboard file URL could not be prepared")?;
++            ("public.file-url", url.to_string().into_bytes())
++        }
++    };
++    if bytes.len() > MAX_SNAPSHOT_BYTES {
++        return Err("clipboard replacement byte limit exceeded; nothing was written".into());
++    }
++    Ok(vec![vec![(kind.into(), zeroize::Zeroizing::new(bytes))]])
++}
++
++unsafe fn write_preserved_to(
++    board: &NSPasteboard,
++    state: &mut Option<PreservedClipboard>,
++    value: ClipboardValue,
++    token: String,
++) -> Result<String, ClipboardPreserveError> {
++    if state
++        .as_ref()
++        .is_some_and(|snapshot| snapshot.expires <= std::time::Instant::now())
++    {
++        let token = state.as_ref().unwrap().token.clone();
++        restore_preserved_to(board, state, &token)?;
++    }
++    if state.is_some() {
++        return Err("a preserved clipboard write is still pending; nothing was written".into());
++    }
++    // Fully prepare payload and restoration before clearing anything.
++    let replacement = materialize_items(&replacement_items(value)?)?;
++    let (version, items) = capture_items(board)?;
++    let _original = materialize_items(&items)?;
++    if board.changeCount() != version {
++        return Err("clipboard changed before replacement; nothing was written".into());
++    }
++    // Retain originals before the first mutation, including failed write/rollback paths.
++    *state = Some(PreservedClipboard {
++        token: token.clone(),
++        expected_change: version,
++        expires: std::time::Instant::now() + SNAPSHOT_TTL,
++        items,
++    });
++    state.as_mut().unwrap().expected_change = board.clearContents();
++    if !board.writeObjects(&replacement) {
++        let _ = restore_preserved_to(board, state, &token);
++        return Err(ClipboardPreserveError::attempted(
++            "clipboard replacement failed; guarded restoration was attempted",
++        ));
++    }
++    Ok(token)
++}
++
++unsafe fn restore_preserved_to(
++    board: &NSPasteboard,
++    state: &mut Option<PreservedClipboard>,
++    token: &str,
++) -> Result<bool, String> {
++    let Some(snapshot) = state.as_ref().filter(|snapshot| snapshot.token == token) else {
++        return Ok(false);
++    };
++    let expected_change = snapshot.expected_change;
++    if board.changeCount() != expected_change {
++        *state = None;
++        return Ok(false);
++    }
++    let items = materialize_items(&snapshot.items)?;
++    if board.changeCount() != expected_change {
++        *state = None;
++        return Ok(false);
++    }
++    // NSPasteboard has no CAS. Keep originals and the new owned count until
++    // restoration succeeds, so a failed write remains recoverable by its token.
++    state.as_mut().unwrap().expected_change = board.clearContents();
++    if !items.is_empty() && !board.writeObjects(&items) {
++        return Err("native clipboard restoration failed; snapshot retained for cleanup".into());
++    }
++    *state = None;
++    Ok(true)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn rich_clipboard_preservation_is_lossless_and_yields_to_external_copies() {
++        // A unique pasteboard exercises AppKit itself without touching the user's clipboard.
++        objc2::rc::autoreleasepool(|_| unsafe {
++            let board = NSPasteboard::pasteboardWithUniqueName();
++            let original: ClipboardItems = vec![
++                vec![
++                    (
++                        "public.utf8-plain-text".into(),
++                        zeroize::Zeroizing::new(b"original".to_vec()),
++                    ),
++                    (
++                        "public.html".into(),
++                        zeroize::Zeroizing::new(b"<b>original</b>".to_vec()),
++                    ),
++                ],
++                vec![(
++                    "public.png".into(),
++                    zeroize::Zeroizing::new(vec![0, 1, 2, 255]),
++                )],
++            ];
++            board.clearContents();
++            assert!(board.writeObjects(&materialize_items(&original).unwrap()));
++            let mut state = None;
++            let token = uuid::Uuid::new_v4().to_string();
++            assert_eq!(
++                write_preserved_to(
++                    &board,
++                    &mut state,
++                    ClipboardValue::Text("temporary".into()),
++                    token.clone()
++                )
++                .unwrap(),
++                token
++            );
++            assert_eq!(board.changeCount(), state.as_ref().unwrap().expected_change);
++            assert!(restore_preserved_to(&board, &mut state, &token).unwrap());
++            assert_eq!(capture_items(&board).unwrap().1, original);
++            assert!(!restore_preserved_to(&board, &mut state, &token).unwrap());
++
++            let token = uuid::Uuid::new_v4().to_string();
++            write_preserved_to(
++                &board,
++                &mut state,
++                ClipboardValue::Text("temporary".into()),
++                token.clone(),
++            )
++            .unwrap();
++            let external =
++                replacement_items(ClipboardValue::Text("new human copy".into())).unwrap();
++            board.clearContents();
++            assert!(board.writeObjects(&materialize_items(&external).unwrap()));
++            assert!(!restore_preserved_to(&board, &mut state, &token).unwrap());
++            assert_eq!(capture_items(&board).unwrap().1, external);
++
++            // Unknown tokens must not consume the real snapshot.
++            let token = uuid::Uuid::new_v4().to_string();
++            write_preserved_to(
++                &board,
++                &mut state,
++                ClipboardValue::Text("temporary".into()),
++                token.clone(),
++            )
++            .unwrap();
++            assert!(!restore_preserved_to(&board, &mut state, "wrong").unwrap());
++            assert!(restore_preserved_to(&board, &mut state, &token).unwrap());
++            assert_eq!(capture_items(&board).unwrap().1, external);
++            board.clearContents();
++        });
++    }
++
++    #[test]
++    fn preservation_limits_refuse_before_replacing_rich_data() {
++        objc2::rc::autoreleasepool(|_| unsafe {
++            let board = NSPasteboard::pasteboardWithUniqueName();
++            let original: ClipboardItems = vec![vec![(
++                "public.data".into(),
++                zeroize::Zeroizing::new(vec![7; MAX_SNAPSHOT_BYTES + 1]),
++            )]];
++            board.clearContents();
++            assert!(board.writeObjects(&materialize_items(&original).unwrap()));
++            let version = board.changeCount();
++            let mut state = None;
++            assert!(write_preserved_to(
++                &board,
++                &mut state,
++                ClipboardValue::Text("replacement".into()),
++                uuid::Uuid::new_v4().to_string()
++            )
++            .is_err());
++            assert_eq!(board.changeCount(), version);
++            assert!(state.is_none());
++            board.clearContents();
++        });
++    }
++
++    #[test]
++    fn clipboard_source_retargeted_after_binding_refuses() {
++        let directory = tempfile::tempdir().unwrap();
++        let directory = directory.path().canonicalize().unwrap();
++        let bound = directory.join("bound.png");
++        let outside = directory.join("outside.png");
++        std::fs::write(&bound, b"bound").unwrap();
++        std::fs::write(&outside, b"outside").unwrap();
++        let canonical = absolute_existing_file(bound.to_str().unwrap()).unwrap();
++        std::fs::remove_file(&bound).unwrap();
++        std::os::unix::fs::symlink(&outside, &bound).unwrap();
++        assert!(absolute_existing_file(&canonical)
++            .unwrap_err()
++            .contains("canonical identity"));
++        assert!(bounded_clipboard_image(&canonical).is_err());
++    }
+
+     #[test]
+     fn rejects_relative_local_paths_before_clipboard_access() {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/Cargo.toml b/libs/cua-driver/rust/crates/platform-macos/Cargo.toml
+--- a/libs/cua-driver/rust/crates/platform-macos/Cargo.toml
++++ b/libs/cua-driver/rust/crates/platform-macos/Cargo.toml
+@@ -53,7 +53,7 @@
+     # transitive deps.
+     "NSImage", "NSImageView", "NSTextField", "NSControl", "NSCell",
+     # System cursor shape reporting (cursor_shape adapter).
+-    "NSCursor",
++    "NSCursor", "NSPasteboard", "NSPasteboardItem",
+     "block2", "libc",
+ ] }
+
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/clipboard.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/clipboard.rs
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/clipboard.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/clipboard.rs
+@@ -14,7 +14,50 @@
+     tool_args::parse_typed_input,
+ };
+
++#[derive(Debug)]
++pub struct ClipboardPreserveError {
++    pub message: String,
++    pub dispatched: bool,
++}
++impl ClipboardPreserveError {
++    pub fn attempted(message: impl Into<String>) -> Self {
++        Self {
++            message: message.into(),
++            dispatched: true,
++        }
++    }
++}
++impl From<String> for ClipboardPreserveError {
++    fn from(message: String) -> Self {
++        Self {
++            message,
++            dispatched: false,
++        }
++    }
++}
++impl From<&str> for ClipboardPreserveError {
++    fn from(message: &str) -> Self {
++        message.to_owned().into()
++    }
++}
++
++pub enum ClipboardValue {
++    Text(String),
++    Image(String),
++    File(String),
++}
++
+ pub trait ClipboardBackend: Send + Sync {
++    fn write_preserving(
++        &self,
++        _value: ClipboardValue,
++        _token: String,
++    ) -> Result<String, ClipboardPreserveError> {
++        Err("clipboard preservation is unsupported on this platform; nothing was written".into())
++    }
++    fn restore_preserved(&self, _token: &str) -> Result<bool, String> {
++        Err("clipboard preservation is unsupported on this platform; nothing was written".into())
++    }
+     fn available_formats(&self) -> Result<Vec<String>, String>;
+     fn read_text(&self) -> Result<Option<String>, String>;
+     fn write_text(&self, text: String) -> Result<(), String>;
+@@ -129,47 +172,107 @@
+         let supplied = usize::from(input.text.is_some())
+             + usize::from(input.image_path.is_some())
+             + usize::from(input.file_path.is_some());
+-        if supplied != 1 {
++        if (input.restore_token.is_some()
++            && (supplied != 0 || input.preserve || input.preserve_token.is_some()))
++            || (input.preserve_token.is_some() && !input.preserve)
++            || (input.restore_token.is_none() && supplied != 1)
++        {
+             return ToolResult::error(
+-                "clipboard_write requires exactly one of text, image_path, or file_path",
++                "clipboard_write requires exactly one of text, image_path, file_path, or restore_token; restoration cannot preserve",
+             );
+         }
+
++        let preserve_token = input
++            .preserve_token
++            .clone()
++            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
++        if uuid::Uuid::parse_str(&preserve_token).is_err() {
++            return ToolResult::error("preserve_token must be a UUID; nothing was written");
++        }
+         let backend = self.backend.clone();
+         let result = tokio::task::spawn_blocking(move || {
+-            let written_type = if let Some(text) = input.text {
+-                backend.write_text(text)?;
+-                "text"
+-            } else if let Some(path) = input.image_path {
+-                backend.write_image(&path)?;
+-                "image"
+-            } else if let Some(path) = input.file_path {
+-                backend.write_file_url(&path)?;
+-                "file_url"
++            let (written_type, restore_token, restored) = if let Some(token) = input.restore_token {
++                (
++                    "restored",
++                    None,
++                    Some(
++                        backend
++                            .restore_preserved(&token)
++                            .map_err(ClipboardPreserveError::attempted)?,
++                    ),
++                )
+             } else {
+-                unreachable!("exactly one clipboard value was checked above")
++                let (kind, value) = if let Some(text) = input.text {
++                    ("text", ClipboardValue::Text(text))
++                } else if let Some(path) = input.image_path {
++                    ("image", ClipboardValue::Image(path))
++                } else {
++                    (
++                        "file_url",
++                        ClipboardValue::File(input.file_path.expect("content checked")),
++                    )
++                };
++                let token = if input.preserve {
++                    Some(backend.write_preserving(value, preserve_token)?)
++                } else {
++                    match value {
++                        ClipboardValue::Text(text) => backend
++                            .write_text(text)
++                            .map_err(ClipboardPreserveError::attempted)?,
++                        ClipboardValue::Image(path) => backend
++                            .write_image(&path)
++                            .map_err(ClipboardPreserveError::attempted)?,
++                        ClipboardValue::File(path) => backend
++                            .write_file_url(&path)
++                            .map_err(ClipboardPreserveError::attempted)?,
++                    }
++                    None
++                };
++                (kind, token, None)
+             };
+-            let types = normalize_types(backend.available_formats()?);
+-            Ok::<_, String>((written_type, types))
++            let types = match backend.available_formats() {
++                Ok(types) => normalize_types(types),
++                Err(error) => {
++                    if let Some(token) = &restore_token {
++                        let _ = backend.restore_preserved(token);
++                    }
++                    return Err(ClipboardPreserveError::attempted(error));
++                }
++            };
++            Ok::<_, ClipboardPreserveError>((written_type, types, restore_token, restored))
+         })
+         .await;
+
+-        let (written_type, types) = match result {
++        let (written_type, types, restore_token, restored) = match result {
+             Ok(Ok(value)) => value,
+-            Ok(Err(error)) => return unavailable("write", error),
++            Ok(Err(error)) => {
++                let mut result = unavailable("write", error.message);
++                if !error.dispatched {
++                    if let Some(structured) = result.structured_content.as_mut() {
++                        structured["effect"] = serde_json::json!("not-dispatched");
++                        structured["code"] = serde_json::json!("clipboard_prepare_failed");
++                    }
++                }
++                return result;
++            }
+             Err(error) => return unavailable("write", format!("worker failed: {error}")),
+         };
+         let output = ClipboardWriteOutput {
++            restore_token,
++            clipboard_restored: restored,
+             supported: true,
+             written_type: written_type.into(),
+             types,
+             privacy_sensitive: true,
+             content_redacted_from_telemetry: true,
+         };
+-        ToolResult::text(format!(
+-            "Clipboard write succeeded as {written_type}; inspect structuredContent.types before paste."
+-        ))
+-        .with_structured(serde_json::to_value(output).expect("clipboard output serializes"))
++        let message = match restored {
++            Some(true) => "Original clipboard restored.".to_owned(),
++            Some(false) => "Clipboard restoration skipped: token was consumed or the clipboard changed.".to_owned(),
++            None => format!("Clipboard write succeeded as {written_type}; inspect structuredContent.types before paste."),
++        };
++        ToolResult::text(message)
++            .with_structured(serde_json::to_value(output).expect("clipboard output serializes"))
+     }
+ }
+
+@@ -265,6 +368,24 @@
+         assert_eq!(output["text"], "private value");
+         assert_eq!(output["privacy_sensitive"], true);
+         assert_eq!(output["content_redacted_from_telemetry"], true);
++    }
++
++    #[tokio::test]
++    async fn unsupported_preservation_refuses_before_modifying_the_clipboard() {
++        let backend = Arc::new(FakeClipboard::default());
++        backend.write_text("original".into()).unwrap();
++        let write = ClipboardWriteTool {
++            backend: backend.clone(),
++        }
++        .invoke(serde_json::json!({"text":"new", "preserve":true,
++                "preserve_token":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}))
++        .await;
++        assert_eq!(write.is_error, Some(true));
++        assert_eq!(
++            write.structured_content.unwrap()["effect"],
++            "not-dispatched"
++        );
++        assert_eq!(backend.read_text().unwrap().as_deref(), Some("original"));
+     }
+
+     #[tokio::test]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+@@ -2084,7 +2084,14 @@
+                     } else {
+                         ("file_path", "file_url")
+                     };
+-                let source = canonical_existing_file(required_path_arg(args, argument)?)?;
++                let requested = required_path_arg(args, argument)?;
++                let source = canonical_existing_file(requested)?;
++                if Path::new(requested) != Path::new(&source) {
++                    return Err(protected_refusal(
++                        "clipboard_path_changed",
++                        "Clipboard path changed canonical identity; nothing was read",
++                    ));
++                }
+                 args[argument] = Value::String(source.clone());
+                 (
+                     serde_json::json!({
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+@@ -847,6 +847,19 @@
+ #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
+ #[serde(deny_unknown_fields)]
+ pub struct ClipboardWriteInput {
++    /// Preserve all existing native clipboard representations before replacement.
++    /// Unsupported platforms refuse before changing the clipboard.
++    #[serde(default)]
++    pub preserve: bool,
++    /// Optional caller-generated UUID retained across a lost response for cleanup.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[schemars(schema_with = "string_schema")]
++    pub preserve_token: Option<String>,
++    /// Consume an opaque token to restore a preserved clipboard only if unchanged.
++    /// Mutually exclusive with content and preserve.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[schemars(schema_with = "string_schema")]
++    pub restore_token: Option<String>,
+     /// Plain text to place on the clipboard.
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     #[schemars(schema_with = "string_schema")]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
+@@ -439,6 +439,10 @@
+
+ #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Record)]
+ pub struct ClipboardWriteOutput {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub restore_token: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub clipboard_restored: Option<bool>,
+     pub supported: bool,
+     pub written_type: String,
+     pub types: Vec<String>,
+@@ -451,8 +455,11 @@
+         if !self.supported {
+             return Err("successful clipboard writes must be supported".into());
+         }
+-        if !matches!(self.written_type.as_str(), "text" | "image" | "file_url") {
+-            return Err("written_type must be text, image, or file_url".into());
++        if !matches!(
++            self.written_type.as_str(),
++            "text" | "image" | "file_url" | "restored"
++        ) {
++            return Err("written_type must be text, image, file_url, or restored".into());
+         }
+         if !self.privacy_sensitive || !self.content_redacted_from_telemetry {
+             return Err("clipboard privacy metadata must remain enabled".into());
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
+@@ -114,7 +114,7 @@
+ fn clipboard_write() -> ToolContract {
+     let mut contract = contract::<ClipboardWriteInput, ClipboardWriteOutput>(
+         "clipboard_write",
+-        "Replace the system clipboard with exactly one value: plain text, an image from an absolute local path, or a file URL from an absolute local path. Returns the available types for read-back before paste.",
++        "Replace the system clipboard with exactly one value: plain text, an image from an absolute local path, or a file URL from an absolute local path. Returns available types for read-back before paste. On macOS preserve:true retains all existing representations in a bounded opaque restore_token; clipboard_write with only restore_token consumes it and restores only if nobody has changed the clipboard.",
+         &["clipboard.write", "clipboard.write.text", "clipboard.write.image", "clipboard.write.file_url", "clipboard.types"],
+         ToolAnnotations {
+             read_only: false,
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -44,6 +44,19 @@
+             | "browser_download"
+             | "browser_pointer"
+     )
++}
++
++#[cfg(target_os = "macos")]
++pub(crate) fn is_clipboard_restoration(name: &str, arguments: &Value) -> bool {
++    name == "clipboard_write"
++        && arguments.as_object().is_some_and(|args| {
++            args.keys()
++                .all(|key| matches!(key.as_str(), "restore_token" | "session" | "_session_id"))
++                && args
++                    .get("restore_token")
++                    .and_then(Value::as_str)
++                    .is_some_and(|token| uuid::Uuid::parse_str(token).is_ok())
++        })
+ }
+
+ #[cfg(target_os = "macos")]
+@@ -244,7 +257,9 @@
+         // A request interrupted during target resolution cannot join the
+         // reopened epoch after older input has drained.
+         #[cfg(target_os = "macos")]
+-        let native_epoch = if is_native_input_tool(name) {
++        let native_epoch = if is_native_input_tool(name)
++            && !is_clipboard_restoration(name, &arguments)
++        {
+             let gate = platform_macos::input::cancellation::gate();
+             let admission = match _expected_input_epoch {
+                 Some(epoch) => gate.validate_epoch(epoch),
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -481,6 +481,16 @@
+     if !trusted_host {
+         return Err("native input requires the authenticated embedded host".into());
+     }
++    #[cfg(target_os = "macos")]
++    if crate::sdk_adapter::is_clipboard_restoration(
++        request.name.as_deref().unwrap_or(""),
++        &request
++            .args
++            .clone()
++            .unwrap_or_else(|| serde_json::json!({})),
++    ) {
++        return Ok(None);
++    }
+     #[derive(serde::Deserialize)]
+     struct InputAdmission {
+         expected_input_epoch: u64,
+@@ -710,7 +720,7 @@
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(39);
++        metadata["synara_native_revision"] = serde_json::json!(40);
+     }
+     DaemonResponse::ok(metadata)
+ }
+@@ -997,6 +1007,18 @@
+             let request: DaemonRequest = serde_json::from_str(wire).unwrap();
+             super::host_input_epoch(wire, &request, embedded, trusted)
+         };
++        let restore = r#"{"method":"call","name":"clipboard_write","args":{"restore_token":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}}"#;
++        assert_eq!(parse(restore, true, true).unwrap(), None);
++        assert!(parse(restore, true, false).is_err());
++        for args in [
++            serde_json::json!({"restore_token": "invalid"}),
++            serde_json::json!({"restore_token": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "text": "new content"}),
++            serde_json::json!({"restore_token": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "preserve": true}),
++        ] {
++            let request = serde_json::json!({"method":"call","name":"clipboard_write","args":args})
++                .to_string();
++            assert!(parse(&request, true, true).is_err());
++        }
+         let wire = r#"{"method":"call","name":"click","expected_input_epoch":7,"args":{"expected_input_epoch":99}}"#;
+         assert_eq!(parse(wire, true, true).unwrap(), Some(7));
+         assert!(parse(wire, true, false).is_err());

@@ -29,6 +29,7 @@ it.effect("wakes a long sleep when an automation definition changes", () =>
     const automationService = {
       list: unusedEffect,
       create: unusedEffect,
+      createProjectManaged: unusedEffect,
       update: unusedEffect,
       delete: unusedEffect,
       resolveProposal: unusedEffect,
@@ -87,6 +88,7 @@ it.effect("wakes a pending heartbeat sleep when a stop evaluation is recorded", 
     const automationService = {
       list: unusedEffect,
       create: unusedEffect,
+      createProjectManaged: unusedEffect,
       update: unusedEffect,
       delete: unusedEffect,
       resolveProposal: unusedEffect,

@@ -7,6 +7,7 @@ export function hardenBrowserAnnotationWebviewPreferences(input: {
   readonly webPreferences: WebPreferences;
 }): boolean {
   if (input.partition !== input.expectedPartition) return false;
+  input.webPreferences.focusOnNavigation = false;
   input.webPreferences.preload = input.preloadPath;
   input.webPreferences.partition = input.expectedPartition;
   input.webPreferences.contextIsolation = true;

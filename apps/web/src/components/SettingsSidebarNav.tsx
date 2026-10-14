@@ -87,7 +87,6 @@ function SettingsSearchResultRow(props: {
 
 export function SettingsSidebarNav(props: {
   activeSection: SettingsSectionId;
-  onBack: () => void;
   onSelectSection: (section: SettingsSectionId, options?: { target?: string }) => void;
   /**
    * Which conditionally-rendered rows exist on this machine, so the search
@@ -130,24 +129,9 @@ export function SettingsSidebarNav(props: {
 
   return (
     <div className="px-1.5 py-1.5">
-      <div className="mb-3">
-        <button
-          type="button"
-          className={cn(
-            SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
-            SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
-          )}
-          onClick={props.onBack}
-        >
-          <SidebarLeadingIcon size="sm" tone="text-inherit">
-            <CentralIcon name="arrow-left" className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
-          </SidebarLeadingIcon>
-          <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>Back to app</span>
-        </button>
-      </div>
-
       <div className="mb-3 px-1">
         <SearchInput
+          shape="capsule"
           value={query}
           spellCheck={false}
           autoCorrect="off"

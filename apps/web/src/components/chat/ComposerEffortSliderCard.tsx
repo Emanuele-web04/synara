@@ -5,12 +5,18 @@
 // Depends on: shared trait resolution + effort-change planning, the trait commit hook,
 //   and the shared Slider primitive.
 
-import type { ProviderKind, ProviderModelDescriptor, ThreadId } from "@synara/contracts";
+import type {
+  ProviderInstanceId,
+  ProviderKind,
+  ProviderModelDescriptor,
+  ThreadId,
+} from "@synara/contracts";
 
 import { ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ProviderOptions } from "../../providerModelOptions";
 import { Slider } from "../ui/slider";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   getComposerTraitSelection,
@@ -24,12 +30,14 @@ import { useComposerTraitCommit } from "./useComposerTraitCommit";
 
 type ComposerEffortSliderCardProps = {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId | null | undefined;
   threadId: ThreadId;
   model: string | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
   modelOptions: ProviderOptions | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  fastModeNotice?: FastModeNotice | null | undefined;
 };
 
 const CARD_ICON_BUTTON_CLASS_NAME =
@@ -51,7 +59,13 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { effortLevels, defaultEffort, effort, fastModeEnabled, ultrathinkPromptControlled } =
     selection;
   const supportsFastMode = supportsComposerFastModeControl(selection);
-  const commitTrait = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTrait = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: props.providerInstanceId,
+    model,
+    modelOptions,
+  });
 
   const ladderIndex = resolveComposerEffortLadderIndex(selection);
   const activeLevel = effortLevels[ladderIndex];
@@ -92,6 +106,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           <FastModeToggle
             tone="accent"
             enabled={fastModeEnabled}
+            notice={props.fastModeNotice}
             onToggle={() => commitTrait({ fastMode: !fastModeEnabled })}
           />
         ) : (

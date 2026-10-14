@@ -1,12 +1,4 @@
-// FILE: DockTerminalPane.tsx
-// Purpose: Render an independent terminal workspace inside the right dock for a host thread.
-// Layer: Chat right-dock UI
-// Depends on: useTerminalSurfaceController (shared store wiring), ThreadTerminalDrawer.
-//
-// The dock terminal set is isolated from the bottom drawer via a synthetic scope id
-// (dockTerminalThreadId), so the two never share xterm instances. All store wiring is
-// shared with other terminal surfaces through useTerminalSurfaceController; only the
-// "ensure a terminal is open" policy is surface-specific (here: a single terminal-only page).
+// A single terminal panel with an independent, chat-owned dock session.
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -19,6 +11,7 @@ import {
   getTerminalContextComposerTarget,
   subscribeTerminalContextComposerTarget,
 } from "~/lib/terminalContextComposerRegistry";
+import { useTerminalStateStore } from "~/terminalStateStore";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
@@ -26,13 +19,16 @@ import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 
 export function DockTerminalPane(props: {
   hostThreadId: ThreadId;
+  paneId: string;
   projectId: ProjectId | null;
+  paneScopeId?: string;
   // When false the pane stays mounted but hidden (another dock tab is active),
   // so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
   onClosePanel: () => void;
 }) {
   const scopeId = dockTerminalThreadId(props.hostThreadId);
+  const paneScopeId = props.paneScopeId ?? SINGLE_CHAT_PANE_SCOPE_ID;
   const threadWorkspace = useStore(
     useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
@@ -55,16 +51,18 @@ export function DockTerminalPane(props: {
     : {};
 
   const terminal = useTerminalSurfaceController(scopeId);
-  const { terminalState, openTerminalThreadPage, bumpFocusRequest, newTerminalGroup } = terminal;
-  const closedBySessionExitRef = useRef(false);
+  const { terminalState } = terminal;
+  const ensureDockTerminal = useTerminalStateStore((state) => state.ensureDockTerminal);
+  const terminalId = terminalState.dockTerminalIdsByPaneId?.[props.paneId];
+  const initializedPaneRef = useRef<string | null>(null);
+  const setActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
   const subscribeToComposerTarget = useCallback(
-    (listener: () => void) =>
-      subscribeTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID, listener),
-    [],
+    (listener: () => void) => subscribeTerminalContextComposerTarget(paneScopeId, listener),
+    [paneScopeId],
   );
   const readComposerTarget = useCallback(
-    () => getTerminalContextComposerTarget(SINGLE_CHAT_PANE_SCOPE_ID),
-    [],
+    () => getTerminalContextComposerTarget(paneScopeId),
+    [paneScopeId],
   );
   const composerTarget = useSyncExternalStore(
     subscribeToComposerTarget,
@@ -72,32 +70,27 @@ export function DockTerminalPane(props: {
     readComposerTarget,
   );
 
-  // A dock terminal pane normally shows a live terminal. An `exit` is final,
-  // though: do not recreate a replacement terminal just as the panel closes.
+  // Ensure a session only on first mount of this scope. Explicit close and shell
+  // exit must not race an effect that creates a replacement behind the panel.
   useEffect(() => {
-    if (terminalState.terminalOpen || closedBySessionExitRef.current) {
-      return;
-    }
-    openTerminalThreadPage(scopeId, { terminalOnly: true });
-  }, [openTerminalThreadPage, scopeId, terminalState.terminalOpen]);
+    const paneKey = `${scopeId}:${props.paneId}`;
+    if (initializedPaneRef.current === paneKey) return;
+    initializedPaneRef.current = paneKey;
+    ensureDockTerminal(scopeId, props.paneId);
+  }, [ensureDockTerminal, props.paneId, scopeId]);
 
-  const createTerminal = () => {
-    closedBySessionExitRef.current = false;
-    if (!terminalState.terminalOpen) {
-      openTerminalThreadPage(scopeId, { terminalOnly: true });
-      bumpFocusRequest();
-      return;
-    }
-    newTerminalGroup();
-  };
+  useEffect(() => {
+    if (terminalId && (props.isActive ?? true)) setActiveTerminal(scopeId, terminalId);
+  }, [props.isActive, scopeId, setActiveTerminal, terminalId]);
 
   const onSessionExited = (terminalId: string) => {
     const disposition = terminal.handleDockTerminalSessionExited(terminalId);
-    if (disposition === "final") {
-      closedBySessionExitRef.current = true;
+    if (disposition !== "ignored") {
       props.onClosePanel();
     }
   };
+
+  if (!terminalId) return null;
 
   return (
     <ThreadTerminalDrawer
@@ -105,30 +98,13 @@ export function DockTerminalPane(props: {
       threadId={scopeId}
       cwd={cwd}
       runtimeEnv={runtimeEnv}
-      height={terminalState.terminalHeight}
-      presentationMode="workspace"
       isVisible={props.isActive ?? true}
-      terminalIds={terminalState.terminalIds}
       terminalLabelsById={terminalState.terminalLabelsById}
       terminalTitleOverridesById={terminalState.terminalTitleOverridesById}
       terminalCliKindsById={terminalState.terminalCliKindsById}
-      terminalAttentionStatesById={terminalState.terminalAttentionStatesById ?? {}}
-      runningTerminalIds={terminalState.runningTerminalIds}
-      activeTerminalId={terminalState.activeTerminalId}
-      terminalGroups={terminalState.terminalGroups}
-      activeTerminalGroupId={terminalState.activeTerminalGroupId}
+      activeTerminalId={terminalId}
       focusRequestId={terminal.focusRequestId}
-      onSplitTerminal={terminal.splitRight}
-      onSplitTerminalDown={terminal.splitDown}
-      onNewTerminal={createTerminal}
-      onNewTerminalTab={terminal.createTerminalTab}
-      onMoveTerminalToGroup={terminal.moveTerminalToNewGroup}
-      onActiveTerminalChange={terminal.activateTerminal}
-      onCloseTerminal={terminal.closeTerminal}
       onTerminalSessionExited={onSessionExited}
-      onCloseTerminalGroup={terminal.closeTerminalGroup}
-      onHeightChange={terminal.setTerminalHeight}
-      onResizeTerminalSplit={terminal.resizeTerminalSplit}
       onTerminalMetadataChange={terminal.setTerminalMetadata}
       onTerminalActivityChange={terminal.setTerminalActivity}
       onAddTerminalContext={composerTarget}

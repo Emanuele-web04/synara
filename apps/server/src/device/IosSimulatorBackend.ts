@@ -72,6 +72,10 @@ import {
 } from "./helperSandbox.ts";
 
 const SIMCTL_TIMEOUT_MS = 30_000;
+/** How long one `simctl list devices` answer serves repeat callers; see listDevicesUnchecked. */
+const DEVICE_LIST_CACHE_MS = 1_500;
+/** How long the machine-wide `xcode-select -p` answer is reused; see xcodeSelectPath. */
+const XCODE_SELECT_CACHE_MS = 15_000;
 const BOOT_TIMEOUT_MS = 120_000;
 const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_GRACE_MS = 15_000;
@@ -164,7 +168,7 @@ function mapSimctlState(raw: unknown): DeviceDescriptor["state"] {
 }
 
 /** `com.apple.CoreSimulator.SimRuntime.iOS-26-0` -> `iOS 26.0`. */
-export function formatRuntimeIdentifier(identifier: string): string {
+function formatRuntimeIdentifier(identifier: string): string {
   const tail = identifier.split(".").pop() ?? identifier;
   const match = /^([A-Za-z]+)-(.+)$/u.exec(tail);
   if (!match) return tail;
@@ -296,6 +300,14 @@ export class IosSimulatorBackend implements DeviceBackend {
   private deviceTypes: Promise<DeviceTypeCatalogue> | null = null;
   /** One `/Applications` scan per process; see discoverXcodeDeveloperDir. */
   private xcodeDiscovery: Promise<string | null> | null = null;
+  private xcodeSelectCache: {
+    readonly resolvedAtMs: number;
+    readonly developerDir: Promise<string | null>;
+  } | null = null;
+  private deviceListCache: {
+    readonly listedAtMs: number;
+    readonly devices: Promise<readonly DeviceDescriptor[]>;
+  } | null = null;
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
@@ -519,7 +531,7 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean } = {},
+    options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
   ): Promise<DeviceScreenshotResult> {
     // Captured to a temp file either way, because `simctl io screenshot` only
     // writes to a path. When the caller wants it kept, it is moved next to the
@@ -533,9 +545,16 @@ export class IosSimulatorBackend implements DeviceBackend {
       if (info.size > MAX_SCREENSHOT_BYTES) {
         throw new DeviceBackendError("Screenshot exceeded the maximum supported size");
       }
-      const bytes = await readFile(file);
+      const fullBytes = await readFile(file);
+      const savedPath =
+        options.save === true ? await this.saveScreenshotFile(udid, fullBytes) : null;
+      // Inline consumers (agent tool results) ride JSON-RPC frames with byte
+      // caps, so oversized shots are resampled rather than rejected.
+      const bytes =
+        options.maxInlineBytes === undefined || fullBytes.byteLength <= options.maxInlineBytes
+          ? fullBytes
+          : await this.resampleScreenshotPng(file, directory, options.maxInlineBytes);
       const dimensions = readPngDimensions(bytes);
-      const savedPath = options.save === true ? await this.saveScreenshotFile(udid, bytes) : null;
       return {
         ...(savedPath ? { path: savedPath } : {}),
         udid,
@@ -550,6 +569,38 @@ export class IosSimulatorBackend implements DeviceBackend {
     } finally {
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * Downscale a captured PNG with `sips` until it fits `maxBytes`. Stepping the
+   * longest edge down keeps screenshots legible for models while staying well
+   * under inline transport caps; a still-oversized result fails loudly instead
+   * of silently breaking the agent's session transport.
+   */
+  private async resampleScreenshotPng(
+    sourceFile: string,
+    directory: string,
+    maxBytes: number,
+  ): Promise<Buffer> {
+    let smallest: Buffer | null = null;
+    for (const maxDimension of [1170, 840, 600]) {
+      const target = path.join(directory, `screenshot-${String(maxDimension)}.png`);
+      const result = await runProcess("/usr/bin/sips", [
+        "-Z",
+        String(maxDimension),
+        sourceFile,
+        "--out",
+        target,
+      ]);
+      if (result.code !== 0) continue;
+      const bytes = await readFile(target);
+      if (bytes.byteLength <= maxBytes) return bytes;
+      if (!smallest || bytes.byteLength < smallest.byteLength) smallest = bytes;
+    }
+    if (!smallest || smallest.byteLength > maxBytes) {
+      throw new DeviceBackendError("Screenshot exceeded the maximum supported size");
+    }
+    return smallest;
   }
 
   /**
@@ -951,6 +1002,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (this.osPlatform !== "darwin") {
       throw new DeviceBackendError("iOS simulators are only available on macOS");
     }
+    // Anything but a read can change what `list devices` reports; drop the
+    // short-lived listing cache before the command runs so the next listing
+    // sees the mutation (boot, shutdown, create, erase, ...).
+    if (args[0] !== "list") this.deviceListCache = null;
     return await this.run("xcrun", ["simctl", ...args], {
       timeoutMs: options.timeoutMs ?? SIMCTL_TIMEOUT_MS,
       allowNonZeroExit: true,
@@ -968,8 +1023,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  /**
+   * One `simctl list` serves every caller within a short window: a single
+   * manager snapshot lists twice (availability, then discovery) and agent tool
+   * calls arrive seconds apart. The window is short enough that a device the
+   * user boots from Simulator.app still shows up promptly, and any simctl
+   * mutation issued through this backend drops the cache immediately.
+   */
   private async listDevicesUnchecked(): Promise<readonly DeviceDescriptor[]> {
     if (this.osPlatform !== "darwin") return [];
+    const cached = this.deviceListCache;
+    if (cached !== null && Date.now() - cached.listedAtMs < DEVICE_LIST_CACHE_MS) {
+      return await cached.devices;
+    }
+    const listedAtMs = Date.now();
+    const devices = this.listDevicesFresh();
+    const entry = { listedAtMs, devices };
+    this.deviceListCache = entry;
+    try {
+      return await devices;
+    } catch (error) {
+      if (this.deviceListCache === entry) this.deviceListCache = null;
+      throw error;
+    }
+  }
+
+  private async listDevicesFresh(): Promise<readonly DeviceDescriptor[]> {
     const [result, catalogue] = await Promise.all([
       this.simctl(["list", "devices", "--json"]).catch(() => null),
       this.deviceTypeCatalogue(),
@@ -1021,6 +1100,22 @@ export class IosSimulatorBackend implements DeviceBackend {
   private async xcodeSelectPath(): Promise<string | null> {
     const override = this.developerDirOverride();
     if (override !== null) return override;
+    const cached = this.xcodeSelectCache;
+    if (cached !== null && Date.now() - cached.resolvedAtMs < XCODE_SELECT_CACHE_MS) {
+      return await cached.developerDir;
+    }
+    const entry = { resolvedAtMs: Date.now(), developerDir: this.resolveXcodeSelectPath() };
+    this.xcodeSelectCache = entry;
+    return await entry.developerDir;
+  }
+
+  /**
+   * The machine-wide selection, re-read on a short interval rather than once
+   * per process: `sudo xcode-select -s` from the setup checklist must take
+   * effect without a restart, but `toolchainEnv()` consults this for every
+   * simctl and xcodebuild spawn, which made it the most-run subprocess.
+   */
+  private async resolveXcodeSelectPath(): Promise<string | null> {
     const result = await this.run("xcode-select", ["-p"], {
       timeoutMs: 10_000,
       allowNonZeroExit: true,
@@ -1344,7 +1439,7 @@ function waitForProcessExit(
  * stale descriptor: the attachment is live enough to answer, but its HID client
  * is bound to a boot that is gone, so the fix is to rebind and retry once.
  */
-export function isInputNotDeliveredError(error: unknown): boolean {
+function isInputNotDeliveredError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /not delivered to the simulator/iu.test(message);
 }

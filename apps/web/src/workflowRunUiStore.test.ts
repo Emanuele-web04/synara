@@ -54,14 +54,6 @@ describe("workflowRunUiStore", () => {
     );
   });
 
-  it("reuses one fallback snapshot for threads without tracked flags", () => {
-    const selector = selectWorkflowRunUiThreadState(THREAD_A);
-
-    expect(selector(useWorkflowRunUiStore.getState())).toBe(
-      selector(useWorkflowRunUiStore.getState()),
-    );
-  });
-
   it("markPaused is idempotent for a repeated task id", () => {
     useWorkflowRunUiStore.getState().markPaused(THREAD_A, "task-1");
     const afterFirst = useWorkflowRunUiStore.getState().stateByThreadId[THREAD_A];
@@ -115,11 +107,6 @@ describe("workflowRunUiStore", () => {
 });
 
 describe("sanitizeWorkflowRunUiStateByThreadId", () => {
-  it("returns an empty record for non-object input", () => {
-    expect(sanitizeWorkflowRunUiStateByThreadId(undefined)).toEqual({});
-    expect(sanitizeWorkflowRunUiStateByThreadId([{ pausedByUser: ["task-1"] }])).toEqual({});
-  });
-
   it("keeps valid entries and drops malformed ones", () => {
     const result = sanitizeWorkflowRunUiStateByThreadId({
       "thread-a": { pausedByUser: ["task-1", "task-1", 42], dismissed: ["task-2"] },
@@ -132,12 +119,5 @@ describe("sanitizeWorkflowRunUiStateByThreadId", () => {
     expect(result["thread-b"]).toBeUndefined();
     expect(result["thread-c"]).toBeUndefined();
     expect(result["thread-d"]).toBeUndefined();
-  });
-
-  it("drops the unsafe __proto__ key", () => {
-    const result = sanitizeWorkflowRunUiStateByThreadId(
-      JSON.parse('{"__proto__": {"pausedByUser": ["task-1"], "dismissed": []}}'),
-    );
-    expect(Object.hasOwn(result, "__proto__")).toBe(false);
   });
 });

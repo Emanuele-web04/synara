@@ -281,7 +281,7 @@ function DiffFilesSidebar(props: {
   };
 
   return (
-    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
+    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 app-content-surface lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 px-3">
         <DiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/86">
@@ -353,7 +353,7 @@ function EditorActivityBar(props: {
   const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
-      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
+      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 app-content-surface"
       aria-label="Editor activity bar"
     >
       <ExplorerActivityBarButton
@@ -580,7 +580,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   };
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-root)] text-foreground">
+    <div
+      data-editor-workspace
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface text-foreground"
+    >
       <div
         className={cn(
           "flex shrink-0 items-center gap-2 px-2 sm:px-3",
@@ -757,7 +760,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               state survive toggling the pane. */}
           <aside
             className={cn(
-              "min-h-[18rem] w-full shrink-0 bg-[var(--color-background-surface)] lg:h-full lg:w-[var(--editor-chat-pane-width)]",
+              "min-h-[18rem] w-full shrink-0 app-content-surface lg:h-full lg:w-[var(--editor-chat-pane-width)]",
               chatPaneVisible ? "flex" : "hidden",
             )}
             style={

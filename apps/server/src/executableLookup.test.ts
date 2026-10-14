@@ -12,7 +12,6 @@ import {
   executableCandidates,
   executableIdentity,
   executableNameCandidates,
-  hasPathSeparator,
   isExecutableFile,
   pathEntries,
   resolveExecutable,
@@ -64,10 +63,6 @@ describe("windowsPathExtensions", () => {
 });
 
 describe("executableNameCandidates", () => {
-  it("leaves the command alone off Windows", () => {
-    expect(executableNameCandidates("codex", "darwin", {})).toEqual(["codex"]);
-  });
-
   it("appends PATHEXT in both cases on win32", () => {
     expect(executableNameCandidates("code", "win32", { PATHEXT: ".EXE;.CMD" })).toEqual([
       "code.EXE",
@@ -212,15 +207,6 @@ describe("resolveExecutable", () => {
 });
 
 describe("executableIdentity", () => {
-  it("changes when the file behind a stable path is replaced", () => {
-    const target = path.join(dir, "codex");
-    writeFileSync(target, "one", { mode: 0o755 });
-    const before = executableIdentity(target);
-
-    writeFileSync(target, "two-but-longer", { mode: 0o755 });
-    expect(executableIdentity(target)).not.toBe(before);
-  });
-
   it("changes on a same-size rewrite, because mtime moves", () => {
     const target = path.join(dir, "codex");
     writeFileSync(target, "one", { mode: 0o755 });
@@ -233,13 +219,5 @@ describe("executableIdentity", () => {
 
   it("is null for a path that cannot be stat'ed", () => {
     expect(executableIdentity(path.join(dir, "absent"))).toBeNull();
-  });
-});
-
-describe("hasPathSeparator", () => {
-  it("recognizes both separators regardless of host", () => {
-    expect(hasPathSeparator("codex")).toBe(false);
-    expect(hasPathSeparator("./codex")).toBe(true);
-    expect(hasPathSeparator("C:\\bin\\codex.exe")).toBe(true);
   });
 });

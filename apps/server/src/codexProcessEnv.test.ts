@@ -1,17 +1,144 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  chmodSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildCodexAppServerArgs,
+  buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
   disableCodexConfigSections,
+  hydrateCodexProviderCredentialEnvironment,
+  isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
+  mergeShellEnvPolicyExclude,
   prioritizeCodexOverlayEntries,
+  readCodexSharedContinuationGeneration,
+  type CodexOverlayEntryLinker,
+  writeCodexOverlayConfigAtomically,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
+import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
+
+describe("hydrateCodexProviderCredentialEnvironment", () => {
+  it("hydrates only missing provider credentials without trusting shell PATH", () => {
+    const readEnvironment = vi.fn(() => ({
+      AZURE_OPENAI_API_KEY: "shell-key",
+      PATH: "/untrusted/shell/bin",
+    }));
+    const hydrated = hydrateCodexProviderCredentialEnvironment({
+      env: { PATH: "/trusted/bin" },
+      credentialEnvNames: ["AZURE_OPENAI_API_KEY"],
+      trustedEnv: { SHELL: "/bin/zsh" },
+      platform: "darwin",
+      readEnvironment,
+    });
+    expect(hydrated).toEqual({
+      PATH: "/trusted/bin",
+      AZURE_OPENAI_API_KEY: "shell-key",
+    });
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", ["AZURE_OPENAI_API_KEY"]);
+  });
+
+  it("keeps an inherited provider credential and skips shell probing", () => {
+    const readEnvironment = vi.fn();
+    const hydrated = hydrateCodexProviderCredentialEnvironment({
+      env: { AZURE_OPENAI_API_KEY: "inherited-key" },
+      credentialEnvNames: ["AZURE_OPENAI_API_KEY"],
+      platform: "linux",
+      readEnvironment,
+    });
+    expect(hydrated.AZURE_OPENAI_API_KEY).toBe("inherited-key");
+    expect(readEnvironment).not.toHaveBeenCalled();
+  });
+});
+
+describe("writeCodexOverlayConfigAtomically", () => {
+  it("keeps the old complete config when publication is interrupted", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-publish-"));
+    const targetPath = path.join(root, "config.toml");
+    writeFileSync(targetPath, 'model = "old"\n', "utf8");
+    let temporaryPath: string | undefined;
+
+    try {
+      await expect(
+        writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n', {
+          beforeRename: (candidatePath) => {
+            temporaryPath = candidatePath;
+            expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
+            expect(readFileSync(candidatePath, "utf8")).toBe('model = "new"\n');
+            throw new Error("simulated publication interruption");
+          },
+        }),
+      ).rejects.toThrow("simulated publication interruption");
+
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
+      if (!temporaryPath) {
+        throw new Error("Expected atomic publication to create a temporary config path.");
+      }
+      expect(existsSync(temporaryPath)).toBe(false);
+
+      await writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n');
+
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "new"\n');
+      if (process.platform !== "win32") {
+        expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves both publication and cleanup errors", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-cleanup-"));
+    const targetPath = path.join(root, "config.toml");
+    writeFileSync(targetPath, 'model = "old"\n', "utf8");
+
+    try {
+      let thrown: unknown;
+      try {
+        await writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n', {
+          beforeRename: () => {
+            throw new Error("primary publication failure");
+          },
+          removeTemporaryFile: () => {
+            throw new Error("temporary cleanup failure");
+          },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(AggregateError);
+      const aggregate = thrown as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors.map((error) => (error as Error).message)).toEqual([
+        "primary publication failure",
+        "temporary cleanup failure",
+      ]);
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", async () => {
@@ -73,6 +200,20 @@ describe("prioritizeCodexOverlayEntries", () => {
 describe("disableCodexConfigSections", () => {
   const canonicalHeader = '[plugins."computer-use@openai-bundled"]';
 
+  it("rejects an unsupported multiline plugin flag instead of corrupting its TOML", () => {
+    const source = `${canonicalHeader}\nenabled = """\ntrue\n"""\n`;
+    expect(() => disableCodexConfigSections(source, [canonicalHeader], true)).toThrow(
+      /enabled.*boolean/,
+    );
+  });
+
+  it.each(['"enabled"', "'enabled'"])("disables a quoted %s flag without duplicates", (key) => {
+    const source = `${canonicalHeader}\n${key} = true\n`;
+    expect(parseToml(disableCodexConfigSections(source, [canonicalHeader], true)).plugins).toEqual({
+      "computer-use@openai-bundled": { enabled: false },
+    });
+  });
+
   it.each([
     ["literal-quoted", "[plugins.'computer-use@openai-bundled']"],
     ["whitespace-varied", '[ plugins . "computer-use@openai-bundled" ]'],
@@ -89,6 +230,47 @@ describe("disableCodexConfigSections", () => {
     expect(result.match(/enabled = false/g)).toHaveLength(1);
     expect(result).not.toContain(canonicalHeader);
   });
+});
+
+describe("mergeShellEnvPolicyExclude", () => {
+  it.each(['"exclude"', "'exclude'", String.raw`"excl\u0075de"`])(
+    "merges a quoted %s key without duplicating it",
+    (key) => {
+      const source = `[shell_environment_policy]\n${key} = ["USER_SECRET"]\n`;
+      const merged = mergeShellEnvPolicyExclude(source, "SYNARA_AGENT_GATEWAY_TOKEN");
+      expect(parseToml(merged).shell_environment_policy).toEqual({
+        exclude: ["SYNARA_AGENT_GATEWAY_TOKEN", "USER_SECRET"],
+      });
+      expect(mergeShellEnvPolicyExclude(merged, "SYNARA_AGENT_GATEWAY_TOKEN")).toBe(merged);
+    },
+  );
+
+  it.each(['"""', "'''"])(
+    "preserves %s multiline exclusion values and ignores keys in instruction strings",
+    (delimiter) => {
+      const source = [
+        "[shell_environment_policy]",
+        `notes = ${delimiter}`,
+        'exclude = ["EXAMPLE_ONLY"]',
+        delimiter,
+        "exclude = [",
+        `${delimiter}keep "SYNARA_AGENT_GATEWAY_TOKEN" inside this larger`,
+        `pattern${delimiter},`,
+        '"USER_SECRET",',
+        "]",
+      ].join("\n");
+      const merged = mergeShellEnvPolicyExclude(source, "SYNARA_AGENT_GATEWAY_TOKEN");
+      expect(parseToml(merged).shell_environment_policy).toEqual({
+        notes: 'exclude = ["EXAMPLE_ONLY"]\n',
+        exclude: [
+          "SYNARA_AGENT_GATEWAY_TOKEN",
+          'keep "SYNARA_AGENT_GATEWAY_TOKEN" inside this larger\npattern',
+          "USER_SECRET",
+        ],
+      });
+      expect(mergeShellEnvPolicyExclude(merged, "SYNARA_AGENT_GATEWAY_TOKEN")).toBe(merged);
+    },
+  );
 });
 
 describe("buildCodexProcessEnv", () => {
@@ -136,8 +318,133 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("removes an account-scoped active provider key unless the instance supplies it", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-explicit-env-"));
+    const codexHome = path.join(root, "codex-home");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      'model_provider = "custom"\n[model_providers.custom]\nenv_key = "ACME_PROVIDER_TOKEN"\n',
+      "utf8",
+    );
+
+    try {
+      const isolated = await buildCodexProcessEnv({
+        env: { HOME: root, ACME_PROVIDER_TOKEN: "ambient-secret" },
+        homePath: codexHome,
+        skipHomeOverlay: true,
+        isolateProviderCredentials: true,
+        explicitProviderEnvironment: {},
+        platform: "win32",
+      });
+      expect(isolated.ACME_PROVIDER_TOKEN).toBeUndefined();
+
+      const explicit = await buildCodexProcessEnv({
+        env: { HOME: root, ACME_PROVIDER_TOKEN: "instance-secret" },
+        homePath: codexHome,
+        skipHomeOverlay: true,
+        isolateProviderCredentials: true,
+        explicitProviderEnvironment: { ACME_PROVIDER_TOKEN: "instance-secret" },
+        platform: "win32",
+      });
+      expect(explicit.ACME_PROVIDER_TOKEN).toBe("instance-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pins a fresh shared continuation source to one durable generation", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-"));
+    const codexHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+        platform: "win32",
+      });
+      const generation = readCodexSharedContinuationGeneration({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+      const marker = JSON.parse(
+        readFileSync(path.join(codexHome, "synara-shared-continuation-v2.json"), "utf8"),
+      ) as { generation?: unknown; version?: unknown };
+      expect(marker).toMatchObject({ version: 2, generation });
+      expect(existsSync(path.join(codexHome, "synara-shared-continuation-v1.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects replacement or damaged state under a persisted continuation generation", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-replaced-"));
+    const codexHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    const env = { SYNARA_HOME: runtimeHome };
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      await buildCodexProcessEnv({ env, homePath: codexHome, platform: "win32" });
+      const generation = readCodexSharedContinuationGeneration({ env, homePath: codexHome });
+      expect(generation).toBeDefined();
+      await expect(
+        buildCodexProcessEnv({
+          env,
+          homePath: codexHome,
+          platform: "win32",
+          expectedSharedContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
+        }),
+      ).rejects.toThrow(/has generation.*expected/);
+
+      rmSync(path.join(codexHome, "sessions"), { recursive: true, force: true });
+      await expect(
+        buildCodexProcessEnv({ env, homePath: codexHome, platform: "win32" }),
+      ).rejects.toThrow(/missing 'sessions'|refusing to recreate/);
+      expect(existsSync(path.join(codexHome, "sessions"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pins app-server continuation and credential-store config at CLI precedence", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), 'synara-codex-home-"quoted"-'));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      const launch = await buildCodexProcessLaunchContext({
+        env: {
+          SYNARA_HOME: runtimeHome,
+          CODEX_SQLITE_HOME: path.join(runtimeHome, "inherited-wrong-home"),
+        },
+        homePath: codexHome,
+        platform: "win32",
+      });
+
+      expect(launch.env.CODEX_SQLITE_HOME).toBe(codexHome);
+      expect(launch.appServerArgs).toEqual([
+        "app-server",
+        "--config",
+        `sqlite_home=${JSON.stringify(codexHome)}`,
+        "--config",
+        'cli_auth_credentials_store="file"',
+      ]);
+      expect(launch.appServerArgs).toEqual(buildCodexAppServerArgs(codexHome));
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("registers the active custom provider env key for diagnostic redaction", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-provider-key-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     writeFileSync(
       path.join(codexHome, "config.toml"),
       [
@@ -150,14 +457,18 @@ describe("buildCodexProcessEnv", () => {
     );
 
     try {
-      await buildCodexProcessEnv({ env: { CODEX_HOME: codexHome }, platform: "win32" });
+      await buildCodexProcessEnv({
+        env: { CODEX_HOME: codexHome, SYNARA_HOME: runtimeHome },
+        platform: "win32",
+      });
       expect(isProviderCredentialKey("ACME-LICENSE.INTEGRATION")).toBe(true);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 
-  it("keeps a user-provided CODEX_SQLITE_HOME for the session overlay", async () => {
+  it("pins CODEX_SQLITE_HOME to the source home for the session overlay", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-home-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     const sqliteHome = mkdtempSync(path.join(os.tmpdir(), "synara-user-sqlite-home-"));
@@ -171,11 +482,83 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
-      expect(env.CODEX_SQLITE_HOME).toBe(sqliteHome);
+      expect(env.CODEX_SQLITE_HOME).toBe(codexHome);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
       rmSync(sqliteHome, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a config sqlite_home that escapes the source Codex home", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-config-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(path.join(codexHome, "config.toml"), 'sqlite_home = "/tmp/other-codex"', "utf8");
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome },
+          homePath: codexHome,
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/sqlite_home.*source CODEX_HOME/);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects root sqlite_home despite a misleading selected-profile source path", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-root-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'profile = "work"',
+        'sqlite_home = "/tmp/foreign-codex-home"',
+        "",
+        "[profiles.work]",
+        `sqlite_home = ${JSON.stringify(codexHome)}`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome },
+          homePath: codexHome,
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/sqlite_home.*source CODEX_HOME/);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores profile sqlite_home lookalikes that Codex does not apply", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-profile-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      ['profile = "work"', "", "[profiles.work]", 'sqlite_home = "/tmp/ignored-profile-home"'].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+        platform: "win32",
+      });
+      expect(env.CODEX_SQLITE_HOME).toBe(codexHome);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 
@@ -249,6 +632,833 @@ describe("buildCodexProcessEnv", () => {
     } finally {
       rmSync(sourceHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces the managed MCP endpoint inherited from another Synara overlay", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-parent-overlay-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-child-runtime-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+      "",
+      "[shell_environment_policy]",
+      'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: [
+          "[mcp_servers.synara]",
+          'url = "http://127.0.0.1:64449/mcp"',
+          'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+          "",
+          "[shell_environment_policy]",
+          'exclude = ["SYNARA_AGENT_GATEWAY_TOKEN"]',
+        ].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("drops an inherited managed block when a probe appends no section", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-parent-probe-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-child-probe-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      'bearer_token_env_var = "SYNARA_AGENT_GATEWAY_TOKEN"',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('model = "gpt-5.6-sol"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig).not.toContain("# >>> synara managed config >>>");
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores managed marker text embedded in TOML string values", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-text-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-runtime-"));
+    const sourceConfig = [
+      'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      'guide = """',
+      "  # >>> synara managed config >>>",
+      "  keep this indented text intact",
+      "  # <<< synara managed config <<<",
+      '"""',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "# <<< synara managed config <<<",
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain(
+        'notes = "wrap overlays with # >>> synara managed config >>> and # <<< synara managed config <<< markers"',
+      );
+      expect(overlayConfig).toContain("  keep this indented text intact");
+      expect(overlayConfig).toContain("  # >>> synara managed config >>>");
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(1);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unindented marker lines inside TOML multiline strings", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-multiline-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-multiline-rt-"));
+    const sourceConfig = [
+      'basic = """',
+      "# >>> synara managed config >>>",
+      "basic string content stays",
+      "# <<< synara managed config <<<",
+      '"""',
+      "literal = '''",
+      "# >>> synara managed config >>>",
+      "literal string content stays",
+      '# <<< synara managed config <<< """ still literal',
+      "'''",
+      'inline = """one""" # a comment mentioning """',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "# <<< synara managed config <<<",
+      "",
+      "[tail]",
+      'kept = "after the managed block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain("basic string content stays");
+      expect(overlayConfig).toContain("literal string content stays");
+      expect(overlayConfig).toContain('# <<< synara managed config <<< """ still literal');
+      expect(overlayConfig).toContain('kept = "after the managed block"');
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      // Two string-embedded begin markers plus the single rebuilt block.
+      expect(overlayConfig.match(/^# >>> synara managed config >>>$/gm)).toHaveLength(3);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['"""', "'''"])(
+    "preserves complete TOML examples inside %s instructions while replacing inherited MCP config",
+    async (delimiter) => {
+      const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-toml-example-"));
+      const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-toml-example-rt-"));
+      const instructions = [
+        "# >>> synara managed config >>>",
+        "[mcp_servers.synara]",
+        'url = "https://example.test/documentation"',
+        "[shell_environment_policy]",
+        'exclude = ["EXAMPLE_ONLY"]',
+        '[plugins."browser@openai-bundled"]',
+        "enabled = true",
+        "# <<< synara managed config <<<",
+      ].join("\n");
+      const sourceConfig = [
+        'profile = "work"',
+        `instructions = ${delimiter}`,
+        instructions,
+        delimiter,
+        "# >>> synara managed config >>>",
+        "[mcp_servers.synara]",
+        'url = "http://127.0.0.1:61240/mcp"',
+        "# <<< synara managed config <<<",
+        "[profiles.work]",
+        'model = "gpt-5.6-sol"',
+        "[shell_environment_policy]",
+        'inherit = "core"',
+        `notes = ${delimiter}`,
+        'exclude = ["EXAMPLE_ONLY"]',
+        delimiter,
+        'exclude = ["USER_SECRET"]',
+      ].join("\n");
+      writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+      const original = parseToml(sourceConfig);
+
+      try {
+        const env = await buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+          platform: "win32",
+          appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:64449/mcp"),
+        });
+        const overlayConfig = readFileSync(path.join(env.CODEX_HOME!, "config.toml"), "utf8");
+        expect(overlayConfig).toContain(instructions);
+        const parsed = parseToml(overlayConfig);
+        expect(parsed.instructions).toBe(original.instructions);
+        expect(parsed.profile).toBe("work");
+        expect(parsed.profiles).toEqual(original.profiles);
+        expect(parsed.mcp_servers).toEqual({
+          synara: {
+            url: "http://127.0.0.1:64449/mcp",
+            bearer_token_env_var: "SYNARA_AGENT_GATEWAY_TOKEN",
+          },
+        });
+        expect(parsed.shell_environment_policy).toEqual({
+          inherit: "core",
+          notes: 'exclude = ["EXAMPLE_ONLY"]\n',
+          exclude: ["SYNARA_AGENT_GATEWAY_TOKEN", "USER_SECRET"],
+        });
+        expect(parsed.plugins).toMatchObject({ "browser@openai-bundled": { enabled: false } });
+        expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+      } finally {
+        rmSync(sourceHome, { recursive: true, force: true });
+        rmSync(runtimeHome, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("preserves user tables between an unmatched begin and a later complete managed block", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-parent-"));
+    const parentRuntimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-rt-"));
+    const inheritedConfigHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-inherited-"));
+    const childRuntimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-truncated-child-"));
+    const sourceConfig = [
+      'profile = "work"',
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:60000/mcp"',
+      "[profiles.work]",
+      'model = "gpt-5.6-sol"',
+      "[user_table]",
+      'kept = "after the truncated block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const parentEnv = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: parentRuntimeHome, CODEX_HOME: sourceHome },
+        platform: "win32",
+        appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:61240/mcp"),
+      });
+      const parentConfig = readFileSync(path.join(parentEnv.CODEX_HOME!, "config.toml"), "utf8");
+      // Carry the exact inherited config into a real home. Current continuation
+      // policy independently rejects using another overlay's symlinked state.
+      writeFileSync(path.join(inheritedConfigHome, "config.toml"), parentConfig, "utf8");
+      const childEnv = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: childRuntimeHome, CODEX_HOME: inheritedConfigHome },
+        platform: "win32",
+        appendConfigToml: buildCodexMcpConfigToml("http://127.0.0.1:64449/mcp"),
+      });
+      const childConfigPath = path.join(childEnv.CODEX_HOME!, "config.toml");
+      const childConfig = readFileSync(childConfigPath, "utf8");
+      const parsed = parseToml(childConfig);
+      expect(parsed.user_table).toEqual({ kept: "after the truncated block" });
+      expect(parsed.profiles).toEqual({ work: { model: "gpt-5.6-sol" } });
+      expect(parsed.profile).toBe("work");
+      expect(childConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(childConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(childConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(parentEnv.CODEX_HOME!, "config.toml"), "utf8")).toBe(
+        parentConfig,
+      );
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+      // A same-instance auth probe must recover only the complete current block.
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: childRuntimeHome, CODEX_HOME: inheritedConfigHome },
+        platform: "win32",
+      });
+      expect(readFileSync(childConfigPath, "utf8")).toBe(childConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(parentRuntimeHome, { recursive: true, force: true });
+      rmSync(inheritedConfigHome, { recursive: true, force: true });
+      rmSync(childRuntimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves config after an unmatched managed begin marker", async () => {
+    const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-truncated-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-marker-truncated-rt-"));
+    const sourceConfig = [
+      'model = "gpt-5.6-sol"',
+      "",
+      "# >>> synara managed config >>>",
+      "[mcp_servers.synara]",
+      'url = "http://127.0.0.1:61240/mcp"',
+      "",
+      "[user_table]",
+      'kept = "after the truncated block"',
+    ].join("\n");
+    writeFileSync(path.join(sourceHome, "config.toml"), sourceConfig, "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+        platform: "darwin",
+        appendConfigToml: ["[mcp_servers.synara]", 'url = "http://127.0.0.1:64449/mcp"'].join("\n"),
+      });
+      const overlayHome = env.CODEX_HOME;
+      if (!overlayHome) throw new Error("Expected a child Synara Codex home overlay.");
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+
+      expect(overlayConfig).toContain('model = "gpt-5.6-sol"');
+      expect(overlayConfig).toContain("[user_table]");
+      expect(overlayConfig).toContain('kept = "after the truncated block"');
+      // The stale endpoint is replaced by the session table, and the new
+      // block is still appended even though a begin marker already exists.
+      expect(overlayConfig).toContain('url = "http://127.0.0.1:64449/mcp"');
+      expect(overlayConfig).not.toContain("http://127.0.0.1:61240/mcp");
+      expect(overlayConfig.match(/^# <<< synara managed config <<<$/gm)).toHaveLength(1);
+      expect(overlayConfig.match(/^\[mcp_servers\.synara\]$/gm)).toHaveLength(1);
+      expect(readFileSync(path.join(sourceHome, "config.toml"), "utf8")).toBe(sourceConfig);
+    } finally {
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildCodexProcessEnv account overlays", () => {
+  function makeAccountFixture() {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-account-overlay-"));
+    const homePath = path.join(root, "codex-home");
+    const shadowHomePath = path.join(root, "codex-shadow-work");
+    mkdirSync(homePath, { recursive: true });
+    mkdirSync(shadowHomePath, { recursive: true });
+    writeFileSync(path.join(homePath, "auth.json"), '{"account":"default"}', "utf8");
+    writeFileSync(path.join(homePath, "models_cache.json"), '{"models":[]}', "utf8");
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    return {
+      root,
+      homePath,
+      shadowHomePath,
+      env: {
+        HOME: root,
+        SYNARA_HOME: path.join(root, "synara-runtime"),
+      } satisfies NodeJS.ProcessEnv,
+    };
+  }
+
+  it("shares continuation state across account overlays while keeping private state separate", async () => {
+    const fixture = makeAccountFixture();
+    const personalShadowHomePath = path.join(fixture.root, "codex-shadow-personal");
+    mkdirSync(personalShadowHomePath, { recursive: true });
+    writeFileSync(path.join(personalShadowHomePath, "auth.json"), '{"account":"personal"}', "utf8");
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+
+    try {
+      const personalEnv = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: personalShadowHomePath,
+        accountId: "personal",
+        platform: "win32",
+      });
+      expect(personalEnv.CODEX_HOME).toBeTruthy();
+      expect(personalEnv.CODEX_SQLITE_HOME).toBe(fixture.homePath);
+      expect(
+        isCodexSharedContinuationStatePrepared({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: personalShadowHomePath,
+          accountId: "personal",
+        }),
+      ).toBe(true);
+      const personalSessionsPath = path.join(personalEnv.CODEX_HOME!, "sessions");
+      expect(lstatSync(personalSessionsPath).isSymbolicLink()).toBe(true);
+      writeFileSync(path.join(personalSessionsPath, "thread-personal.jsonl"), "personal", "utf8");
+
+      const workEnv = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(workEnv.CODEX_HOME).not.toBe(personalEnv.CODEX_HOME);
+      expect(workEnv.CODEX_SQLITE_HOME).toBe(fixture.homePath);
+      expect(
+        readFileSync(path.join(workEnv.CODEX_HOME!, "sessions", "thread-personal.jsonl"), "utf8"),
+      ).toBe("personal");
+      expect(path.resolve(readlinkSync(path.join(workEnv.CODEX_HOME!, "auth.json")))).toBe(
+        path.resolve(path.join(fixture.shadowHomePath, "auth.json")),
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves legacy-only continuation state and requires an explicit migration", async () => {
+    const fixture = makeAccountFixture();
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+    });
+    mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
+    writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/refusing to migrate legacy state automatically/);
+      expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
+        "legacy",
+      );
+      expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("links account-private auth from the shadow home instead of the shared home", async () => {
+    const fixture = makeAccountFixture();
+    const shadowAuthPath = path.join(fixture.shadowHomePath, "auth.json");
+    writeFileSync(shadowAuthPath, '{"account":"work"}', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      expect(env.CODEX_HOME).toBeTruthy();
+      expect(path.resolve(env.CODEX_HOME!)).not.toBe(path.resolve(fixture.homePath));
+      const overlayAuthPath = path.join(env.CODEX_HOME!, "auth.json");
+      expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
+      expect(path.resolve(readlinkSync(overlayAuthPath))).toBe(path.resolve(shadowAuthPath));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when shadow-home auth cannot be linked into the account overlay", async () => {
+    const fixture = makeAccountFixture();
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+    const firstEnv = await buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+    const overlayHomePath = firstEnv.CODEX_HOME;
+    expect(overlayHomePath).toBeTruthy();
+    if (!overlayHomePath) {
+      throw new Error("Expected Codex overlay home path.");
+    }
+    unlinkSync(path.join(overlayHomePath, "auth.json"));
+    chmodSync(overlayHomePath, 0o500);
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/EACCES|EPERM/);
+    } finally {
+      chmodSync(overlayHomePath, 0o700);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("tolerates shadow homes with no auth state yet", async () => {
+    const fixture = makeAccountFixture();
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      expect(env.CODEX_HOME).toBeTruthy();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["auth.json", "models_cache.json"] as const)(
+    "rejects shadow-home %s state that is itself a symlink",
+    async (entryName) => {
+      const fixture = makeAccountFixture();
+      symlinkSync(
+        path.join(fixture.homePath, "auth.json"),
+        path.join(fixture.shadowHomePath, entryName),
+      );
+
+      try {
+        await expect(
+          buildCodexProcessEnv({
+            env: fixture.env,
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath,
+            accountId: "work",
+            platform: "win32",
+          }),
+        ).rejects.toThrow(/is a symlink/);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a shadow home directory that is itself a symlink", async () => {
+    const fixture = makeAccountFixture();
+    const aliasedShadowHome = path.join(path.dirname(fixture.shadowHomePath), "codex-shadow-alias");
+    rmSync(fixture.shadowHomePath, { recursive: true, force: true });
+    symlinkSync(fixture.homePath, aliasedShadowHome);
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: aliasedShadowHome,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/shadow home/i);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a shadow home reached through a parent symlink that aliases CODEX_HOME", async () => {
+    const fixture = makeAccountFixture();
+    const aliasedParent = path.join(fixture.root, "aliased-parent");
+    symlinkSync(fixture.root, aliasedParent);
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: path.join(aliasedParent, path.basename(fixture.homePath)),
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/different from CODEX_HOME/);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an explicitly repeated shared home isolated", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = {
+      ...fixture.env,
+      CODEX_HOME: fixture.homePath,
+    };
+    writeFileSync(path.join(fixture.homePath, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: sharedEnv,
+        homePath: fixture.homePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const accountHomePath = env.CODEX_HOME;
+      expect(accountHomePath).toBeTruthy();
+      expect(path.resolve(accountHomePath!)).not.toBe(path.resolve(fixture.homePath));
+      expect(() => lstatSync(path.join(accountHomePath!, "auth.json"))).toThrow();
+      expect(readFileSync(path.join(accountHomePath!, "config.toml"), "utf8")).toContain(
+        'model = "gpt-5.4"',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors private state only from a distinct dedicated home", async () => {
+    const fixture = makeAccountFixture();
+    const dedicatedHomePath = path.join(fixture.root, "codex-work-home");
+    mkdirSync(dedicatedHomePath, { recursive: true });
+    writeFileSync(path.join(dedicatedHomePath, "auth.json"), '{"account":"work"}', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          ...fixture.env,
+          CODEX_HOME: fixture.homePath,
+        },
+        homePath: dedicatedHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const accountHomePath = env.CODEX_HOME;
+      expect(accountHomePath).toBeTruthy();
+      expect(path.resolve(accountHomePath!)).not.toBe(path.resolve(dedicatedHomePath));
+      expect(readFileSync(path.join(accountHomePath!, "auth.json"), "utf8")).toBe(
+        '{"account":"work"}',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shared auth out of account overlays without a shadow home", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const overlayHomePath = env.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      expect(path.resolve(overlayHomePath!)).not.toBe(path.resolve(fixture.homePath));
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(() => lstatSync(path.join(overlayHomePath!, entry))).toThrow();
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors private auth from an account's own dedicated home", async () => {
+    const fixture = makeAccountFixture();
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const overlayHomePath = env.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        const overlayPrivateStatePath = path.join(overlayHomePath!, entry);
+        expect(lstatSync(overlayPrivateStatePath).isSymbolicLink()).toBe(true);
+        expect(path.resolve(readlinkSync(overlayPrivateStatePath))).toBe(
+          path.resolve(path.join(fixture.homePath, entry)),
+        );
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a forced-copy launch when authoritative auth changes after the copy", async () => {
+    const fixture = makeAccountFixture();
+    const sourceAuthPath = path.join(fixture.homePath, "auth.json");
+    const firstAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-first", access_token: "first" },
+    });
+    const secondAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-second", access_token: "second" },
+    });
+    writeFileSync(sourceAuthPath, firstAuth, "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+    });
+    const overlayAuthPath = path.join(overlayHomePath, "auth.json");
+    const raceAfterAuthCopy: CodexOverlayEntryLinker = {
+      symlink: vi.fn(async (sourcePath, targetPath, type) => {
+        if (path.basename(String(targetPath)) === "auth.json") {
+          throw new Error("auth symlinks unavailable");
+        }
+        symlinkSync(sourcePath, targetPath, type);
+      }),
+      copyFile: vi.fn(async (sourcePath, targetPath) => {
+        copyFileSync(sourcePath, targetPath);
+        if (path.basename(String(targetPath)) === "auth.json") {
+          writeFileSync(sourcePath, secondAuth, "utf8");
+        }
+      }),
+    };
+
+    try {
+      await expect(
+        buildCodexProcessLaunchContext({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          platform: "win32",
+          overlayEntryLinker: raceAfterAuthCopy,
+        }),
+      ).rejects.toThrow(/authentication changed during app-server launch preparation/);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe(firstAuth);
+      expect(readFileSync(sourceAuthPath, "utf8")).toBe(secondAuth);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an A-to-B-to-A race that leaves fallback auth on the wrong account", async () => {
+    const fixture = makeAccountFixture();
+    const sourceAuthPath = path.join(fixture.homePath, "auth.json");
+    const firstAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-first", access_token: "first" },
+    });
+    const secondAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-second", access_token: "second" },
+    });
+    writeFileSync(sourceAuthPath, firstAuth, "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+    });
+    const overlayAuthPath = path.join(overlayHomePath, "auth.json");
+    const copyWhileAuthoritativeTemporarilyChanges: CodexOverlayEntryLinker = {
+      symlink: vi.fn(async (sourcePath, targetPath, type) => {
+        if (path.basename(String(targetPath)) === "auth.json") {
+          throw new Error("auth symlinks unavailable");
+        }
+        symlinkSync(sourcePath, targetPath, type);
+      }),
+      copyFile: vi.fn(async (sourcePath, targetPath) => {
+        if (path.basename(String(targetPath)) !== "auth.json") {
+          copyFileSync(sourcePath, targetPath);
+          return;
+        }
+        writeFileSync(sourcePath, secondAuth, "utf8");
+        copyFileSync(sourcePath, targetPath);
+        writeFileSync(sourcePath, firstAuth, "utf8");
+      }),
+    };
+
+    try {
+      await expect(
+        buildCodexProcessLaunchContext({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          platform: "win32",
+          overlayEntryLinker: copyWhileAuthoritativeTemporarilyChanges,
+        }),
+      ).rejects.toThrow(/authentication did not match the authoritative account/);
+      expect(readFileSync(sourceAuthPath, "utf8")).toBe(firstAuth);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe(secondAuth);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops legacy shared-auth aliases from account overlays and keeps own logins", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    try {
+      const firstEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      const overlayHomePath = firstEnv.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      // Simulate legacy overlay state that symlinked shared private files in.
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        symlinkSync(path.join(fixture.homePath, entry), path.join(overlayHomePath!, entry));
+      }
+
+      const secondEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(secondEnv.CODEX_HOME).toBe(overlayHomePath);
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(() => lstatSync(path.join(overlayHomePath!, entry))).toThrow();
+      }
+
+      // The account's own real private files must survive re-preparation.
+      writeFileSync(path.join(overlayHomePath!, "auth.json"), '{"account":"work"}', "utf8");
+      writeFileSync(path.join(overlayHomePath!, "models_cache.json"), '{"models":[]}', "utf8");
+      const thirdEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(thirdEnv.CODEX_HOME).toBe(overlayHomePath);
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(lstatSync(path.join(overlayHomePath!, entry)).isFile()).toBe(true);
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 });

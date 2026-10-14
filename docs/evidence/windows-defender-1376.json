@@ -1,0 +1,239 @@
+{
+  "collectedAt": "2026-09-30",
+  "issue": "https://github.com/Emanuele-web04/synara/issues/1376",
+  "mainCommit": "529ad049cb106c998010f5400189515008997aa4",
+  "method": "Static extraction with 7-Zip 24.09 and SHA-256 comparison of extracted .exe/.dll/.node files with PE magic. No sample execution or antivirus scan.",
+  "windowsDefenderResult": "not performed; isolated Windows environment unavailable",
+  "artifacts": [
+    {
+      "version": "0.9.1",
+      "source": {
+        "commit": "eaa61eded31b6755d4f30ba8eabc5d905cf817cb",
+        "tag": "v0.9.1",
+        "lockfileSha256": "692e33ccbe949cf5f48abea77d33858907638dc746e3e05ed14e66564c658e63"
+      },
+      "file": {
+        "fileName": "Synara-0.9.1-x64.exe",
+        "size": 225595797,
+        "sha256": "893438647667a4f6aeb2929897a0131dd95e5c0686ec2958e5968cdb75f3496b"
+      },
+      "url": "https://github.com/Emanuele-web04/synara/releases/download/v0.9.1/Synara-0.9.1-x64.exe",
+      "installerCertificateTableBytes": 0,
+      "provenanceSigningStatus": "unsigned-explicit-release"
+    },
+    {
+      "version": "0.9.2",
+      "source": {
+        "commit": "a33435c18474eb7816582004e45f87382965ac8d",
+        "tag": "v0.9.2",
+        "lockfileSha256": "f19a4bbdd2db57dbb2f3998fe8737d619656d9b5fb95832c5273096670bb2ab7"
+      },
+      "file": {
+        "fileName": "Synara-0.9.2-x64.exe",
+        "size": 225688617,
+        "sha256": "fee21f614136df8ff0a1e97649886060625c843d34e724b62410164634928dcb"
+      },
+      "url": "https://github.com/Emanuele-web04/synara/releases/download/v0.9.2/Synara-0.9.2-x64.exe",
+      "installerCertificateTableBytes": 0,
+      "provenanceSigningStatus": "unsigned-explicit-release"
+    }
+  ],
+  "extractedPeComparison": {
+    "counts": {
+      "v0.9.1": 49,
+      "v0.9.2": 48
+    },
+    "unchanged": 37,
+    "changed": {
+      "nsis/$R0/Uninstall Synara.exe": {
+        "before": {
+          "size": 133261,
+          "sha256": "42902272c2316fce4b16a03b8cbf62198e587018a469c301c12d134e823578ae",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 133262,
+          "sha256": "cffe58c8874123157cf2d56cbae156b315696aea27e069e4fa060dcc1b10f7d6",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/Synara.exe": {
+        "before": {
+          "size": 235533824,
+          "sha256": "76b9dfc25b76b790aeab22a9622fd452b264a93946c7371d8b37b9a5e1e54710",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 235533824,
+          "sha256": "62a744804c5ebe083bb96e168e59087c1f935fa9eaf432b552f63d18cae7a2a4",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/@esbuild/win32-x64/esbuild.exe": {
+        "before": {
+          "size": 11670528,
+          "sha256": "ec02ee9b14ab332416fedd10614dfb80eed5304d94f67745067c011934a8c3c3",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 11694592,
+          "sha256": "c7bee37877d0aa6a046e52783fa0a2cf1a9ce5579d68bb3083bda99d4bff18ef",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/msgpackr-extract/build/Release/extract.node": {
+        "before": {
+          "size": 112640,
+          "sha256": "a632d7f846957bffdc4555e36d85f017f0b6b518e91d6184d1d96f5468a1ea5d",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 112640,
+          "sha256": "e01ced8c5268ef84f40d93b1f4c425a8400cf17a63223ec0fcc73aa33220c933",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/node-pty/build/Release/conpty.node": {
+        "before": {
+          "size": 312320,
+          "sha256": "bae4453ef73e09402322ca2d3290d01915417f562ec66a403eb571a6f23f9869",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 312320,
+          "sha256": "bd25c083da189cf503a03e267c2f0b07088e4c1fda3cace8b4d8ef4c95e650cb",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/node-pty/build/Release/conpty_console_list.node": {
+        "before": {
+          "size": 134656,
+          "sha256": "291744a39290b3f86c23e91b63e9b03421ae31179872b70f6a249adcae3b3b76",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 134656,
+          "sha256": "566cfc947bf4bb2c58cef8c91676526171e15775d92b9bc6643068b82f367ab6",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node": {
+        "before": {
+          "size": 303616,
+          "sha256": "896effde522ee933c61585e9a83de4534b44071fa0bea7b59face8da15b3b4a6",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 303616,
+          "sha256": "78726a52aade705b8b262c31637ea2d043655ae9128c9e03bb5e94b7ce91acd8",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/node-pty/build/Release/winpty-agent.exe": {
+        "before": {
+          "size": 309760,
+          "sha256": "28bb46b8db526e86a00dbe214602b64fb016fb98d307b59ee74220574bd62658",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 309760,
+          "sha256": "de4c86007efc7a39a9dcaa925492bda3e247de6b72cd000be3748b30ad274f2a",
+          "certificateTableBytes": 0
+        }
+      },
+      "payload/resources/app.asar.unpacked/node_modules/node-pty/build/Release/winpty.dll": {
+        "before": {
+          "size": 258560,
+          "sha256": "624872931450ac41657966c36ab3f2985dee6a1e1742408b54571547f2de288c",
+          "certificateTableBytes": 0
+        },
+        "after": {
+          "size": 258560,
+          "sha256": "1e356861abd919ffa61ab0b9bc6eed21a6b69099d1c9066cd0415ec366025942",
+          "certificateTableBytes": 0
+        }
+      }
+    },
+    "added": {
+      "payload/resources/app.asar.unpacked/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-arm64/win32-platform.node": {
+        "size": 9216,
+        "sha256": "0e5671ab39ef577940483ced58fdf29ecdf5f864f368d90a771eec4aeeae11b8",
+        "certificateTableBytes": 0
+      },
+      "payload/resources/app.asar.unpacked/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-x64/win32-platform.node": {
+        "size": 8704,
+        "sha256": "51bee02bcb73b165ab92af75ae15b88aba3f5d99f072e63ef60af92ffdc4d565",
+        "certificateTableBytes": 0
+      }
+    },
+    "removed": {
+      "payload/resources/app.asar.unpacked/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-arm64/win32-console-mode.node": {
+        "size": 4096,
+        "sha256": "5bc2f926c6a663df6c8b70d3387cab72a9387172e27eb598e93b490d96a5074e",
+        "certificateTableBytes": 0
+      },
+      "payload/resources/app.asar.unpacked/node_modules/@earendil-works/pi-tui/native/win32/prebuilds/win32-x64/win32-console-mode.node": {
+        "size": 4608,
+        "sha256": "e40df72050ed02d451dee887b2e2a7408d7de27c5f483af8c489801bb3ae098d",
+        "certificateTableBytes": 0
+      },
+      "payload/resources/app.asar.unpacked/node_modules/@mariozechner/clipboard-win32-x64-msvc/clipboard.win32-x64-msvc.node": {
+        "size": 1351680,
+        "sha256": "2b75a71676a9054323a223c7853570fa44bf73a701d6c3160219ec0971052fd5",
+        "certificateTableBytes": 0
+      }
+    }
+  },
+  "selectedUnchangedPeFiles": {
+    "nsis/$PLUGINSDIR/SpiderBanner.dll": {
+      "size": 9216,
+      "sha256": "996a259e53ca18b89ec36d038c40148957c978c0fd600a268497d4c92f882a93",
+      "certificateTableBytes": 0
+    },
+    "nsis/$PLUGINSDIR/StdUtils.dll": {
+      "size": 102400,
+      "sha256": "b72e9013a6204e9f01076dc38dabbf30870d44dfc66962adbf73619d4331601e",
+      "certificateTableBytes": 0
+    },
+    "nsis/$PLUGINSDIR/System.dll": {
+      "size": 12288,
+      "sha256": "3eb38ae99653a7dbc724132ee240f6e5c4af4bfe7c01d31d23faf373f9f2eaca",
+      "certificateTableBytes": 0
+    },
+    "nsis/$PLUGINSDIR/WinShell.dll": {
+      "size": 3072,
+      "sha256": "9be85b986ea66a6997dde658abe82b3147ed2a1a3dcb784bb5176f41d22815a6",
+      "certificateTableBytes": 0
+    },
+    "nsis/$PLUGINSDIR/nsExec.dll": {
+      "size": 6656,
+      "sha256": "5d9ceb1ce5f35aea5f9e5a0c0edeeec04dfefe0c77890c80c70e98209b58b962",
+      "certificateTableBytes": 0
+    },
+    "nsis/$PLUGINSDIR/nsis7z.dll": {
+      "size": 434176,
+      "sha256": "b393f05e8ff919ef071181050e1873c9a776e1a0ae8329aefff7007d0cadf592",
+      "certificateTableBytes": 0
+    },
+    "payload/resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe": {
+      "size": 219715232,
+      "sha256": "85429000ec9b80082613e9ecd2e0d3b2276c9d5b22a681936575d2c4c2f342ed",
+      "certificateTableBytes": 10400
+    },
+    "payload/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe": {
+      "size": 1148448,
+      "sha256": "d1fe7faa62f9e955e2ac2371f95d7e5513df4d496255097158f979c94782c5fc",
+      "certificateTableBytes": 10272
+    },
+    "payload/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/winpty-agent.exe": {
+      "size": 307712,
+      "sha256": "0c4834a0ab2a4f8c855a2f1db9b21fa6e5fc324ae8e3c82addd53d503d999825",
+      "certificateTableBytes": 0
+    },
+    "payload/resources/app.asar.unpacked/node_modules/rookie-cookies-win32-x64-msvc/rookie_cookies.win32-x64-msvc.node": {
+      "size": 6007296,
+      "sha256": "0122fad4f117714ab1f6e350b3d13bfd5912b490f4f0ad7f78aeb58b94fc34ab",
+      "certificateTableBytes": 0
+    }
+  }
+}

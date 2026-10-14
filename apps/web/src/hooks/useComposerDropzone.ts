@@ -71,7 +71,7 @@ export function shouldBlockDisabledComposerDropzoneTransfer(
   return disabled && (types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE) || types.includes("Files"));
 }
 
-export function shouldResetComposerDropzoneAfterUnhandledFileDrop(
+function shouldResetComposerDropzoneAfterUnhandledFileDrop(
   files: ComposerDropzoneFileSplit,
   genericFiles: ComposerDropzoneGenericFileMode,
 ): boolean {

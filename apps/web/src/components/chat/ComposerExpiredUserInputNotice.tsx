@@ -1,9 +1,13 @@
 import type { ThreadId } from "@synara/contracts";
+import { cn } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import {
   restoreUserInputDraft,
   type PendingUserInputRecoveryDraft,
 } from "../../pendingUserInputRecovery";
+import { ComposerStackedPanel } from "./ComposerStackedPanel";
+import { COMPOSER_INLINE_ACTION_PILL_CLASS_NAME } from "./composerPickerStyles";
+import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
 
 export function ComposerExpiredUserInputNotice({
   threadId,
@@ -34,19 +38,20 @@ export function ComposerExpiredUserInputNotice({
     onRestore(prompt);
   };
   return (
-    <div
-      className="mb-2 rounded-xl border border-border px-4 py-3 text-ui leading-snug"
+    <ComposerStackedPanel
+      detached
+      className={cn(COMPOSER_NOTICE_CONTENT_CLASS_NAME, "mb-2")}
       role="status"
     >
       <p>These questions have expired. Restore your answers to review and send as a new message.</p>
-      <div className="mt-2 flex gap-3">
-        <button type="button" className="font-medium underline" onClick={restore}>
+      <div className="mt-2 flex flex-wrap gap-3">
+        <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={restore}>
           Restore answers
         </button>
-        <button type="button" className="text-muted-foreground" onClick={dismiss}>
+        <button type="button" className={COMPOSER_INLINE_ACTION_PILL_CLASS_NAME} onClick={dismiss}>
           Dismiss
         </button>
       </div>
-    </div>
+    </ComposerStackedPanel>
   );
 }

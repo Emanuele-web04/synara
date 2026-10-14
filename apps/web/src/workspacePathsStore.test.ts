@@ -94,6 +94,7 @@ describe("workspacePathsStore", () => {
       homeDir: "/Users/tester",
       chatWorkspaceRoot: "/Users/tester/Documents/Synara",
       studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
     });
 
     expect(useWorkspacePathsStore.getState().homeDir).toBe("/Users/tester");
@@ -102,6 +103,9 @@ describe("workspacePathsStore", () => {
     );
     expect(useWorkspacePathsStore.getState().studioWorkspaceRoot).toBe(
       "/Users/tester/Documents/Synara/Studio",
+    );
+    expect(useWorkspacePathsStore.getState().groupsWorkspaceRoot).toBe(
+      "/Users/tester/Documents/Synara/Groups",
     );
   });
 
@@ -124,6 +128,7 @@ describe("workspacePathsStore", () => {
       "/Users/tester/Documents/Synara",
     );
     expect(workspaceModule.useWorkspacePathsStore.getState().studioWorkspaceRoot).toBeNull();
+    expect(workspaceModule.useWorkspacePathsStore.getState().groupsWorkspaceRoot).toBeNull();
   });
 
   it("migrates cached paths without retaining legacy workspace pages", async () => {

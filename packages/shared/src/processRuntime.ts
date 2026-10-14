@@ -3,6 +3,7 @@
 // Layer: Shared platform runtime
 
 import {
+  execSync as nodeExecSync,
   execFile as nodeExecFile,
   spawn as nodeSpawn,
   spawnSync as nodeSpawnSync,
@@ -10,13 +11,20 @@ import {
   type ChildProcessWithoutNullStreams,
   type ExecFileException,
   type ExecFileOptionsWithStringEncoding,
+  type ExecSyncOptionsWithStringEncoding,
   type SpawnOptions,
   type SpawnSyncOptionsWithBufferEncoding,
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
 } from "node:child_process";
 
-import { prepareProcess, type ProcessLaunchInput, type ProcessLaunchPlan } from "./platformProcess";
+import {
+  lowerProcessPriority,
+  prepareProcess,
+  type ProcessLaunchInput,
+  type ProcessLaunchPlan,
+} from "./platformProcess";
+import { resolveWindowsComSpec } from "./platformEnvironment";
 
 import { trackProcessSpawn } from "./processSpawnOutcome";
 export { didProcessFailToSpawn } from "./processSpawnOutcome";
@@ -26,6 +34,8 @@ type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExec
 type ProcessGroupOptions = {
   /** Own a POSIX process group while keeping Windows launches attached for tree control. */
   readonly ownProcessGroup?: boolean;
+  /** Opt-in for agent processes; internal request-path helpers keep their priority. */
+  readonly lowerPriority?: boolean;
 };
 
 export type RuntimeSpawnOptions = Omit<
@@ -53,6 +63,12 @@ export type RuntimeExecFileOptions = Omit<
 > &
   ProcessPlanningOptions;
 
+export type RuntimeExecShellSyncOptions = Omit<
+  ExecSyncOptionsWithStringEncoding,
+  "shell" | "windowsHide"
+> &
+  Pick<ProcessLaunchInput, "platform">;
+
 type PipeStdio = "pipe" | readonly ["pipe", "pipe", "pipe"];
 type PlanningOptions =
   | RuntimeSpawnOptions
@@ -66,6 +82,7 @@ function planFromOptions(
   options: PlanningOptions,
 ): ProcessLaunchPlan {
   return prepareProcess(command, args, {
+    ...("lowerPriority" in options && options.lowerPriority ? { lowerPriority: true } : {}),
     ...(options.platform !== undefined ? { platform: options.platform } : {}),
     ...(typeof options.cwd === "string" ? { cwd: options.cwd } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
@@ -77,11 +94,12 @@ function planFromOptions(
 
 function runtimeOptions<T extends ProcessPlanningOptions & ProcessGroupOptions>(
   options: T,
-): Omit<T, "platform" | "requireExecutable" | "ownProcessGroup"> {
+): Omit<T, "platform" | "requireExecutable" | "ownProcessGroup" | "lowerPriority"> {
   const {
     platform: _platform,
     requireExecutable: _requireExecutable,
     ownProcessGroup: _ownProcessGroup,
+    lowerPriority: _lowerPriority,
     ...nodeOptions
   } = options;
   return nodeOptions;
@@ -104,21 +122,7 @@ export function spawnProcess(
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
   const plan = planFromOptions(command, args, options);
-  return trackProcessSpawn(
-    nodeSpawn(plan.command, plan.args, {
-      ...runtimeOptions(options),
-      ...(options.ownProcessGroup
-        ? {
-            detached:
-              plan.executionBackend === "native" &&
-              (options.platform ?? process.platform) !== "win32",
-          }
-        : {}),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    }),
-  );
+  return spawnPlannedProcess(plan, options);
 }
 
 /** Spawn an already planned command. Used by infrastructure that logs the plan first. */
@@ -134,21 +138,26 @@ export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options: RuntimeSpawnOptions = {},
 ): ChildProcess {
-  return trackProcessSpawn(
-    nodeSpawn(plan.command, plan.args, {
-      ...runtimeOptions(options),
-      ...(options.ownProcessGroup
-        ? {
-            detached:
-              plan.executionBackend === "native" &&
-              (options.platform ?? process.platform) !== "win32",
-          }
-        : {}),
-      shell: false,
-      windowsHide: plan.windowsHide,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    }),
-  );
+  const child = nodeSpawn(plan.command, plan.args, {
+    ...runtimeOptions(options),
+    ...(options.ownProcessGroup
+      ? {
+          detached:
+            plan.executionBackend === "native" &&
+            (options.platform ?? process.platform) !== "win32",
+        }
+      : {}),
+    shell: false,
+    windowsHide: plan.windowsHide,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+  });
+  if (
+    options.lowerPriority &&
+    ((options.platform ?? process.platform) === "win32" || !plan.priorityBeforeExec)
+  ) {
+    lowerProcessPriority(child.pid, options);
+  }
+  return trackProcessSpawn(child);
 }
 
 /** Synchronous counterpart used by bounded discovery and compatibility probes. */
@@ -174,6 +183,23 @@ export function spawnProcessSync(
     windowsHide: plan.windowsHide,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   }) as SpawnSyncReturns<string> | SpawnSyncReturns<Buffer>;
+}
+
+/**
+ * Runs an explicitly configured shell snippet while keeping host shell and
+ * window policy inside the shared process boundary.
+ */
+export function execShellCommandSync(
+  command: string,
+  options: RuntimeExecShellSyncOptions,
+): string {
+  const { platform = process.platform, ...nodeOptions } = options;
+  const env = nodeOptions.env ?? process.env;
+  return nodeExecSync(command, {
+    ...nodeOptions,
+    shell: platform === "win32" ? resolveWindowsComSpec(env) : "/bin/sh",
+    windowsHide: platform === "win32",
+  });
 }
 
 /** Callback-compatible execFile for SDK hooks that require that interface. */

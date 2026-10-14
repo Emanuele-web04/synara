@@ -1,0 +1,87 @@
+{
+  "collectedUtcDate": "2026-09-30",
+  "environment": "Disposable GitHub-hosted Windows Server 2022; no Windows 11 browser qualification",
+  "officialInstallers": {
+    "0.9.1": "893438647667a4f6aeb2929897a0131dd95e5c0686ec2958e5968cdb75f3496b",
+    "0.9.2": "fee21f614136df8ff0a1e97649886060625c843d34e724b62410164634928dcb"
+  },
+  "releaseGuardRegression": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/36739468968",
+    "engine": "1.1.26080.3",
+    "definitions": "1.459.485.0",
+    "oldInstaller": "explicit clean, exit 0, original hash retained",
+    "newInstaller": "Trojan:Win32/Kepavll!rfn detected and quarantined",
+    "actualPathsNotExcluded": true
+  },
+  "componentIsolation": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/36739469057",
+    "sampleCount": 107,
+    "coverage": "Inventoried PE files, app.asar and complete app-64.7z from both versions",
+    "eachSample": "explicit clean, exit 0, actual path not excluded, original hash retained",
+    "limitation": "A clean app.asar scan does not establish inspection of every embedded JavaScript file"
+  },
+  "controlledRebuild": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/36740232673",
+    "artifact": "qualified-experimental-installer-normal",
+    "sha256": "f48ef644748694f9538ec313e998bfa0def5b3776858d41537cae07261a18387",
+    "electronBuilder": "26.15.3",
+    "compression": "normal",
+    "windowsInstallerGuid": "368107a8-afe6-5db5-ab3b-d4f331684868",
+    "embeddedFiles": 340,
+    "embeddedPayloadMatchesOriginalBySha256": true,
+    "artifactUrl": "https://github.com/Emanuele-web04/synara/actions/runs/36740232673/artifacts/11109114425",
+    "artifactExpiresAt": "2026-10-14T15:59:09Z"
+  },
+  "sameDefinitionPair": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/36742048832",
+    "engine": "1.1.26080.3",
+    "definitions": "1.459.486.0",
+    "definitionsUnchangedAcrossPair": true,
+    "actualPathsNotExcluded": true,
+    "original": {
+      "name": "original",
+      "expectedHash": "fee21f614136df8ff0a1e97649886060625c843d34e724b62410164634928dcb",
+      "definitionBefore": "1.459.486.0",
+      "excluded": false,
+      "scanExit": 0,
+      "explicitNoThreats": false,
+      "definitionAfter": "1.459.486.0"
+    },
+    "rebuilt": {
+      "name": "normal",
+      "expectedHash": "f48ef644748694f9538ec313e998bfa0def5b3776858d41537cae07261a18387",
+      "definitionBefore": "1.459.486.0",
+      "excluded": false,
+      "scanExit": 0,
+      "explicitNoThreats": true,
+      "hashAfter": "f48ef644748694f9538ec313e998bfa0def5b3776858d41537cae07261a18387",
+      "definitionAfter": "1.459.486.0"
+    }
+  },
+  "distribution": "No release asset, update feed, signing policy, cloud participation or automatic sample-submission setting was changed.",
+  "installedRuntime": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/36744320200",
+    "baselineVersion": "0.9.1.0",
+    "upgradedVersion": "0.9.2.0",
+    "matchingInstalledFiles": 334,
+    "existingArm64OmissionsAlsoAbsentInBaseline": [
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\third_party\\conpty\\1.23.251008001\\win10-arm64\\conpty.dll",
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\third_party\\conpty\\1.23.251008001\\win10-arm64\\OpenConsole.exe",
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-arm64\\winpty-agent.exe",
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-arm64\\winpty.dll",
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-arm64\\conpty\\conpty.dll",
+      "resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-arm64\\conpty\\OpenConsole.exe"
+    ],
+    "actualInstalledX64RuntimeDependencies": "passed",
+    "actualInstalledAppAndBackendStartup": "passed",
+    "engine": "1.1.26080.3",
+    "definitions": "1.459.486.0",
+    "antivirusAndRealtimeActiveAfterStartup": true,
+    "detectionsAfterStartup": [],
+    "limitations": [
+      "Windows on ARM not qualified",
+      "Six pre-existing ARM64 helper omissions remain",
+      "Windows 11 browser download not qualified"
+    ]
+  }
+}

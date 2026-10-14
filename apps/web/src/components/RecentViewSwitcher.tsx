@@ -17,7 +17,7 @@ import { cn } from "../lib/utils";
 import type { RecentViewDisplayEntry } from "../recentViews.logic";
 import { ProviderIcon } from "./ProviderIcon";
 import TerminalIdentityIcon from "./terminal/TerminalIdentityIcon";
-import { Kbd } from "./ui/kbd";
+import { ShortcutKbd } from "./ui/kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 // Keycap hints rendered in the switcher footer. These mirror the real bindings:
@@ -102,7 +102,7 @@ export function RecentViewSwitcher(props: {
         aria-activedescendant={`recent-view-switcher-${selectedIndex}`}
         // Same skin as the ⌘K / ⌘P palettes (ui/command popup): squircle 2xl surface,
         // settings-scale type, 30px single-line rows with the zinc highlight.
-        className="palette-surface w-[min(32rem,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] text-[var(--color-text-foreground)] shadow-2xl shadow-black/30 backdrop-blur-xl"
+        className="palette-surface squircle w-[min(32rem,calc(100vw-2rem))] overflow-hidden rounded-3xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] text-[var(--color-text-foreground)] shadow-2xl shadow-black/30 backdrop-blur-xl"
       >
         <div className="flex flex-col p-1.5">
           <div className="px-2.5 pt-1.5 pb-1 text-ui-xs text-muted-foreground/70">Recent views</div>
@@ -115,7 +115,7 @@ export function RecentViewSwitcher(props: {
                 role="option"
                 aria-selected={selected}
                 className={cn(
-                  "palette-row flex min-h-[30px] items-center gap-3 rounded-[20px] px-2.5 transition-colors",
+                  "palette-row squircle flex min-h-[30px] items-center gap-3 rounded-[20px] px-2.5 transition-colors",
                   selected
                     ? "bg-zinc-500/8 text-foreground dark:bg-zinc-400/10"
                     : "text-foreground",
@@ -159,9 +159,10 @@ export function RecentViewSwitcher(props: {
                 <TooltipTrigger
                   render={
                     <span className="pointer-events-auto inline-flex cursor-default">
-                      <Kbd className="h-[17px] rounded-md px-1.5 text-ui-xs text-muted-foreground/80">
-                        {footerKeyLabel(shortcut)}
-                      </Kbd>
+                      <ShortcutKbd
+                        shortcutLabel={footerKeyLabel(shortcut)}
+                        className="h-[17px] text-ui-xs"
+                      />
                     </span>
                   }
                 />

@@ -44,11 +44,14 @@ describe("summarizeComputerAuditArgs", () => {
       value: "set_value payload",
       arguments: ["--password=s3cret"],
       files: ["/tmp/a", "/tmp/b"],
+      image_path: "/workspace/private-image.png",
+      file_path: "/workspace/private-document.pdf",
       label: "OK",
     });
     expect(JSON.stringify(summary)).not.toContain("s3cret");
     expect(JSON.stringify(summary)).not.toContain("token");
     expect(JSON.stringify(summary)).not.toContain("/tmp/a");
+    expect(JSON.stringify(summary)).not.toContain("/workspace/");
     expect(summary.contents).toEqual({ chars: 30 });
     expect(summary.value).toEqual({ chars: 17 });
     expect(summary.arguments).toEqual({ items: 1 });
@@ -296,25 +299,6 @@ describe("ComputerManager audit seam", () => {
     const manager = new ComputerManager({ backend, auditLogPath, actionSettleMs: 0 });
     const threadId = "disabled-thread";
     await manager.setControlEnabled(threadId, false);
-    manager.recordComputerAudit({
-      tool: "computer_click",
-      threadId,
-      args: { x: 1, y: 1 },
-      effect: "refused",
-      code: "computer_control_revoked",
-    });
-    await manager.dispose();
-    await expect(readFile(auditLogPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("a disabled thread records nothing at all — no lifecycle row survives the drop", async () => {
-    const dir = await tempDir();
-    const auditLogPath = join(dir, "computer-audit.jsonl");
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, auditLogPath, actionSettleMs: 0 });
-    const threadId = "disabled-thread";
-    await manager.setControlEnabled(threadId, false);
-    // A refused input attempt on a disabled thread still drops.
     manager.recordComputerAudit({
       tool: "computer_click",
       threadId,

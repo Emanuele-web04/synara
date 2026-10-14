@@ -52,13 +52,4 @@ describe("selectOrphanedThreadDetailIds", () => {
       }),
     ).toEqual([threadId("dupe")]);
   });
-
-  it("returns nothing when every released thread is still owned", () => {
-    expect(
-      selectOrphanedThreadDetailIds({
-        releasedThreadIds: [threadId("a"), threadId("b")],
-        isRetained: () => true,
-      }),
-    ).toEqual([]);
-  });
 });

@@ -2,15 +2,25 @@
 // Purpose: Public Zustand facade for composer drafts, model choices, attachments, and persistence.
 // Exports: Stable composer draft API, hooks, and promotion helpers.
 
-import { type ModelSelection, type ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  type ModelSelection,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ThreadId,
+} from "@synara/contracts";
+import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 
 import { createComposerDraftStoreState } from "./composerDraftActions";
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
+  composerThreadDraftIsPending,
+  composerThreadDraftPreviewText,
   selectComposerThreadDraft,
+  selectThreadIdsWithPendingDraft,
   type ComposerDraftStoreState,
   type ComposerThreadDraftState,
 } from "./composerDraftDomain";
@@ -38,6 +48,7 @@ export {
 } from "./composerDraftAttachments";
 export {
   captureComposerPromptHistorySavedDraft,
+  composerThreadDraftIsPending,
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
   PersistedComposerImageAttachment,
@@ -60,6 +71,7 @@ export type {
 export type { BrowserAnnotationDraft } from "./lib/browserAnnotations";
 export {
   deriveEffectiveComposerModelState,
+  providerInstanceModelSelectionKey,
   resolvePreferredComposerModelSelection,
 } from "./composerDraftModels";
 export type { EffectiveComposerModelState } from "./composerDraftModels";
@@ -117,9 +129,33 @@ export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftS
   return useComposerDraftStore((state) => selectComposerThreadDraft(state, threadId));
 }
 
+export function useThreadHasPendingDraft(threadId: ThreadId): boolean {
+  return useComposerDraftStore((state) => {
+    const draft = state.draftsByThreadId[threadId];
+    return draft !== undefined && composerThreadDraftIsPending(draft);
+  });
+}
+
+/** Short excerpt of the chat's unsent prompt, or null when it has no draft text. */
+export function useThreadDraftPreviewText(threadId: ThreadId): string | null {
+  return useComposerDraftStore((state) =>
+    composerThreadDraftPreviewText(state.draftsByThreadId[threadId]),
+  );
+}
+
+/**
+ * Threads whose composer holds an unsent message. The set only changes identity when
+ * a thread gains or loses its draft, not on every keystroke.
+ */
+export function useThreadIdsWithPendingDraft(): ReadonlySet<ThreadId> {
+  const threadIds = useComposerDraftStore(useShallow(selectThreadIdsWithPendingDraft));
+  return useMemo(() => new Set(threadIds), [threadIds]);
+}
+
 export function useEffectiveComposerModelState(input: {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
@@ -131,6 +167,7 @@ export function useEffectiveComposerModelState(input: {
   return deriveEffectiveComposerModelState({
     draft,
     selectedProvider: input.selectedProvider,
+    selectedProviderInstanceId: input.selectedProviderInstanceId,
     threadModelSelection: input.threadModelSelection,
     projectModelSelection: input.projectModelSelection,
     customModelsByProvider: input.customModelsByProvider,

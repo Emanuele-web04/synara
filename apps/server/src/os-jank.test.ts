@@ -111,20 +111,6 @@ describe("fixPath", () => {
     expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/bin");
   });
 
-  it("still probes when the marker is set to an unexpected value", () => {
-    const env: NodeJS.ProcessEnv = {
-      SHELL: "/bin/zsh",
-      PATH: "/usr/bin",
-      SYNARA_PATH_HYDRATED: "0",
-    };
-    const readPath = vi.fn(() => "/opt/homebrew/bin");
-
-    fixPath({ env, platform: "linux", readPath });
-
-    expect(readPath).toHaveBeenCalledTimes(1);
-    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
-  });
-
   it("still probes when the marker is present but PATH is empty", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",

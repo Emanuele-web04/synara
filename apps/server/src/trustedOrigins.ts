@@ -6,6 +6,7 @@
 //          shouldRejectUntrustedRequestOrigin
 
 import {
+  SYNARA_BETA_DESKTOP_ORIGIN,
   SYNARA_CANARY_DESKTOP_ORIGIN,
   SYNARA_CUA_DESKTOP_ORIGIN,
   SYNARA_DESKTOP_ORIGIN,
@@ -18,6 +19,7 @@ export const DESKTOP_APP_CORS_ORIGINS: ReadonlySet<string> = new Set([
   SYNARA_DESKTOP_ORIGIN,
   SYNARA_CANARY_DESKTOP_ORIGIN,
   SYNARA_CUA_DESKTOP_ORIGIN,
+  SYNARA_BETA_DESKTOP_ORIGIN,
 ]);
 
 export function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined) {

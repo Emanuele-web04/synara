@@ -62,6 +62,48 @@ describe("useLocalStorage cross-window synchronization", () => {
     }
   });
 
+  it("shares one decoded value between subscribers and keeps it across a write that changes nothing", async () => {
+    const schema = Schema.Struct({ count: Schema.Number });
+    setLocalStorageItem(STORAGE_KEY, { count: 1 }, schema);
+    const first = await renderHook(() => useLocalStorage(STORAGE_KEY, { count: 0 }, schema));
+    const second = await renderHook(() => useLocalStorage(STORAGE_KEY, { count: 0 }, schema));
+    try {
+      const shared = first.result.current[0];
+      expect(shared).toEqual({ count: 1 });
+      expect(second.result.current[0]).toBe(shared);
+
+      // Re-normalizing to the same stored value is what every settings subscriber does on
+      // mount: it must not hand either subscriber a new object to re-render for.
+      flushSync(() => first.result.current[1]((previous) => ({ ...previous })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(first.result.current[0]).toBe(shared);
+      expect(second.result.current[0]).toBe(shared);
+
+      flushSync(() => first.result.current[1]({ count: 2 }));
+      await vi.waitFor(() => expect(second.result.current[0]).toEqual({ count: 2 }));
+      await vi.waitFor(() => expect(first.result.current[0]).toBe(second.result.current[0]));
+    } finally {
+      await first.unmount();
+      await second.unmount();
+    }
+  });
+
+  it("re-syncs a subscriber left stale by a direct write when the hook writes the same value", async () => {
+    const first = await renderHook(() => useLocalStorage(STORAGE_KEY, "none", Schema.String));
+    const second = await renderHook(() => useLocalStorage(STORAGE_KEY, "none", Schema.String));
+    try {
+      // Written past the hook (no notification), then chosen again through it.
+      setLocalStorageItem(STORAGE_KEY, "cursor", Schema.String);
+      flushSync(() => first.result.current[1]("cursor"));
+
+      expect(first.result.current[0]).toBe("cursor");
+      await vi.waitFor(() => expect(second.result.current[0]).toBe("cursor"));
+    } finally {
+      await first.unmount();
+      await second.unmount();
+    }
+  });
+
   it("falls back on corrupt cross-window data and recovers on the next valid value", async () => {
     setLocalStorageItem(STORAGE_KEY, "initial", Schema.String);
     const hook = await renderHook(() => useLocalStorage(STORAGE_KEY, "fallback", Schema.String));

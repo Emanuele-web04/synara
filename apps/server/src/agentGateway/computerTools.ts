@@ -1,5 +1,6 @@
 import { parseCuaActionDiagnostics } from "@synara/shared/cuaActionDiagnostics";
 import { ComputerProgressGuard, type ComputerProgressAction } from "./computerProgressGuard.ts";
+import { boundComputerPastePayload, readComputerPastePayload } from "./computerPasteInput.ts";
 import { beginComputerTurnCall } from "../computer/computerTurnTiming.ts";
 import {
   bindComputerTargetRef,
@@ -82,6 +83,7 @@ import {
 } from "../computer/screenshotFrames.ts";
 import { withDesktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { ComputerApprovalExpiredError } from "../computer/ComputerApprovalGate.ts";
 import { cuaCaptureReuseEnabled } from "../computer/computerCallContext.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import { withComputerTask } from "../computer/computerTaskContext.ts";
@@ -141,7 +143,7 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * matters, and the description alone does not stop a relaunch loop.
  */
 const INPUT_PAUSE_REQUERY_HINT =
-  "Observe a usable window of the affected app after physical input stops; never replay an uncertain action.";
+  "To resume, call computer_get_state with the paused window_id, or with include_screenshot: true when no window is named; never replay an uncertain action.";
 
 const LAUNCH_NULL_WINDOW_GUIDANCE =
   "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";
@@ -257,6 +259,53 @@ function computerAuditResultWindowId(value: unknown): string | undefined {
     : undefined;
 }
 
+const READ_ONLY_RUN_STEP_TYPES = new Set(["get_state", "wait", "verify_state"]);
+
+/** Attribute only completed mutations; a closing observation is not their target. */
+function computerRunProgress(value: unknown): {
+  readonly hasMutations: boolean;
+  readonly resolvedTargetKey?: string;
+  readonly verifiedWindowIds: readonly string[];
+} {
+  const batch = value as { steps?: unknown } | null | undefined;
+  if (!Array.isArray(batch?.steps)) return { hasMutations: true, verifiedWindowIds: [] };
+  const steps = batch.steps as Array<{
+    type: string;
+    ok?: boolean;
+    skipped?: boolean;
+    result?: unknown;
+  }>;
+  let mutationWindowId: string | undefined;
+  let targetsKnown = true;
+  let lastMutationIndex = -1;
+  for (const [index, step] of steps.entries()) {
+    if (step.skipped || READ_ONLY_RUN_STEP_TYPES.has(step.type)) continue;
+    lastMutationIndex = index;
+    const windowId = step.ok ? computerAuditResultWindowId(step.result) : undefined;
+    if (!windowId || (mutationWindowId !== undefined && mutationWindowId !== windowId)) {
+      targetsKnown = false;
+    }
+    mutationWindowId ??= windowId;
+  }
+  const resolvedTargetKey = targetsKnown ? mutationWindowId : undefined;
+  const verifiedWindowIds = steps.flatMap((step, index) => {
+    if (step.type !== "verify_state" || !step.ok || step.skipped) return [];
+    const result = step.result as { status?: unknown; stable?: unknown } | null | undefined;
+    const windowId = computerAuditResultWindowId(result);
+    if (result?.status !== "satisfied" || result.stable !== true || !windowId) return [];
+    // A verification before later input cannot establish that later input's
+    // effect. Mixed/unknown mutations need independent explicit verification.
+    return lastMutationIndex === -1 || (index > lastMutationIndex && resolvedTargetKey === windowId)
+      ? [windowId]
+      : [];
+  });
+  return {
+    hasMutations: lastMutationIndex !== -1,
+    ...(resolvedTargetKey ? { resolvedTargetKey } : {}),
+    verifiedWindowIds,
+  };
+}
+
 /**
  * The effect a completed call earned: the delivered verdict when one rode the
  * result (`verified`, `dispatched-unknown`, `not-dispatched`), and the honest
@@ -299,6 +348,8 @@ export function computerAuditErrorOutcome(error: unknown): {
   readonly diagnostics?: ComputerAuditEntry["diagnostics"];
   readonly layer?: ComputerAuditEntry["layer"];
 } {
+  if (error instanceof ComputerApprovalExpiredError)
+    return { effect: error.effect, code: error.code };
   // A CuaActionError already carries the delivery taxonomy's verdict.
   if (error instanceof CuaActionError)
     return {
@@ -324,6 +375,8 @@ export interface AgentGatewayComputerToolsOptions {
   readonly manager: ComputerManager;
   /** Already registered Computer tools from another family, for on-demand help only. */
   readonly relatedTools?: readonly ToolEntry[];
+  /** Workspace boundary for local image/file clipboard payloads. */
+  readonly resolveWorkspaceRoot?: (context: ToolContext) => Effect.Effect<string | null>;
   readonly resolveSpaceDesignation?: (context: ToolContext) => Promise<readonly number[]>;
   readonly authorizeAction?: (
     name: string,
@@ -359,6 +412,48 @@ export interface AgentGatewayComputerToolsOptions {
   readonly resolveForegroundAuthorization?: (
     context: ToolContext,
   ) => Promise<ComputerForegroundAuthorization>;
+  /**
+   * Ask the user, on the approval card, whether this task may bring windows
+   * to the front. Called before the desktop queue for a raise-shaped call the
+   * task text did not authorize; an approval makes the resolver above answer
+   * yes for the rest of the turn. Absent means the refusal stands.
+   */
+  readonly requestForegroundConsent?: (
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
+}
+
+/**
+ * Whether a call can move a window in front of the user, mirroring every site
+ * that resolves foreground authorization — including the steps of a run, so
+ * consent is asked once up front rather than refused halfway through. A step
+ * behind if_element/unless_element still asks: a run that stops partway
+ * leaves the app half-changed, which costs more than one card.
+ */
+function callNeedsForeground(
+  name: string,
+  args: Record<string, unknown>,
+  dialect: string,
+): boolean {
+  if (args.delivery_mode === "foreground") return true;
+  // Standalone tools and run steps share names once the prefix is dropped.
+  const raises = (type: unknown, step: Record<string, unknown>): boolean =>
+    type === "activate_window" ||
+    type === "invoke_menu" ||
+    (type === "launch_app" && dialect !== "macos" && step.hidden === false);
+  if (name !== "computer_run") return raises(name.replace(/^computer_/, ""), args);
+  return (
+    Array.isArray(args.steps) &&
+    args.steps.some(
+      (step: unknown) =>
+        typeof step === "object" &&
+        step !== null &&
+        raises((step as Record<string, unknown>).type, step as Record<string, unknown>),
+    )
+  );
 }
 
 /**
@@ -1743,8 +1838,47 @@ export function makeAgentGatewayComputerTools(
    * read: the shared clipboard is gated for privacy, and re-reading it is not
    * a loop hazard the way a repeated keystroke is.
    */
-  const isMutatingToolCall = (toolName: string): boolean =>
-    computerToolRequiresApproval(toolName) && toolName !== "computer_read_clipboard";
+  const isMutatingToolCall = (toolName: string, args: Record<string, unknown>): boolean => {
+    if (!computerToolRequiresApproval(toolName) || toolName === "computer_read_clipboard")
+      return false;
+    // Read-only batches observe existing input; they must not become another
+    // uncertain mutation merely because computer_run can also send input.
+    return !(
+      toolName === "computer_run" &&
+      Array.isArray(args.steps) &&
+      args.steps.length > 0 &&
+      args.steps.every(
+        (step: unknown) =>
+          typeof step === "object" &&
+          step !== null &&
+          READ_ONLY_RUN_STEP_TYPES.has((step as { type?: string }).type ?? ""),
+      )
+    );
+  };
+
+  const progressScope = (context: ToolContext): ComputerProgressAction["scope"] | undefined =>
+    context.callerTurnId
+      ? {
+          threadId: context.callerThreadId,
+          turnId: context.callerTurnId,
+          sessionKey: context.callerSessionKey,
+        }
+      : undefined;
+
+  const verifyState = async (
+    windowId: string,
+    predicates: readonly Record<string, unknown>[],
+    context: ToolContext,
+    recordProgress = true,
+  ) => {
+    const result = await manager.verifyState(windowId, predicates);
+    assertDesktopOperationActive();
+    const scope = progressScope(context);
+    if (recordProgress && scope && result.status === "satisfied" && result.stable) {
+      progressGuard.recordVerifiedProgress(scope, windowId);
+    }
+    return result;
+  };
 
   /** Deterministic key for one call: tool name + args with volatile fields out. */
   const repeatedActionKey = (toolName: string, args: Record<string, unknown>): string => {
@@ -1804,7 +1938,7 @@ export function makeAgentGatewayComputerTools(
           ...(outcome.layer ? { layer: outcome.layer } : {}),
         });
       };
-      const mutating = isMutatingToolCall(name);
+      const mutating = isMutatingToolCall(name, args);
       const actionKey = mutating ? repeatedActionKey(name, args) : "";
       let progressAction: ComputerProgressAction | undefined;
       return Effect.tryPromise({
@@ -1816,7 +1950,8 @@ export function makeAgentGatewayComputerTools(
           }
           // Fresh screenshots and alternating failed techniques must not
           // disguise retries. No turn ID means no cross-turn retained guard.
-          if (mutating && context.callerTurnId) {
+          const scope = progressScope(context);
+          if (mutating && scope) {
             // History lookup is not target validation: frame-setting x/y are
             // desktop bounds, not screenshot pixels, and consent still runs
             // before parsing or resolving a requested input target.
@@ -1826,11 +1961,7 @@ export function makeAgentGatewayComputerTools(
                 ? elementRefTables.get(context.callerThreadId)?.entries.get(args.ref)?.windowId
                 : undefined;
             progressAction = {
-              scope: {
-                threadId: context.callerThreadId,
-                turnId: context.callerTurnId,
-                sessionKey: context.callerSessionKey,
-              },
+              scope,
               targetKey:
                 typeof requestedWindow === "string"
                   ? requestedWindow
@@ -1879,6 +2010,30 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
+          }
+          // Visible-use consent is collected here, before the desktop queue, so
+          // a prompt the user has not answered yet never holds the desktop.
+          if (
+            options.requestForegroundConsent !== undefined &&
+            callNeedsForeground(name, args, manager.agentDialect) &&
+            !(await foregroundAuthorization(context)).userRequestedVisibleUse &&
+            !(await options.requestForegroundConsent(name, args, context, abortSignal))
+          ) {
+            audit({ effect: "refused", code: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE });
+            return {
+              result: {
+                ...mcpToolResultJson({
+                  error: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+                  message:
+                    "Showing windows on screen was declined or cancelled for " +
+                    "this task, so no window was raised and no input was sent. Do not ask again " +
+                    "in this turn: continue with background input, or report what cannot be " +
+                    "done without the foreground.",
+                }),
+                isError: true,
+              },
+              signal: undefined,
+            };
           }
           // Any non-scroll call breaks an unchanged-scroll streak: the model
           // looked or did something else instead of scrolling blindly on.
@@ -2003,6 +2158,12 @@ export function makeAgentGatewayComputerTools(
               resultAvailability(value)?.kind !== "permission-required",
           );
           const payload = isToolResult(value) ? toolResultPayload(value) : value;
+          const batchProgress = name === "computer_run" ? computerRunProgress(payload) : undefined;
+          if (scope && batchProgress) {
+            for (const windowId of batchProgress.verifiedWindowIds) {
+              progressGuard.recordVerifiedProgress(scope, windowId);
+            }
+          }
           const measured = payload as
             | { scroll?: { traveledY?: unknown }; observationEvidence?: unknown }
             | undefined;
@@ -2015,7 +2176,9 @@ export function makeAgentGatewayComputerTools(
               },
             }),
           });
-          if (progressAction) {
+          // Conditional mutations can all skip while read steps complete.
+          // Those observations neither arm a loop nor erase earlier uncertainty.
+          if (progressAction && batchProgress?.hasMutations !== false) {
             const batch = payload as { steps?: Array<{ error?: { code?: unknown } }> } | undefined;
             const refusalCode =
               name === "computer_run" &&
@@ -2023,8 +2186,22 @@ export function makeAgentGatewayComputerTools(
               Array.isArray(batch?.steps)
                 ? batch.steps.find((step) => typeof step.error?.code === "string")?.error?.code
                 : undefined;
+            // Correlated scroll travel is evidence of progress even when the
+            // native wheel dispatch cannot itself verify delivery. A fresh
+            // image alone, or zero/unknown travel, never clears uncertainty.
+            const measuredScrollProgress =
+              name === "computer_scroll" &&
+              successEffect === "dispatched-unknown" &&
+              typeof measured?.scroll?.traveledY === "number" &&
+              Number.isFinite(measured.scroll.traveledY) &&
+              measured.scroll.traveledY !== 0;
+            const inlineVerifiedProgress =
+              batchProgress?.resolvedTargetKey !== undefined &&
+              batchProgress.verifiedWindowIds.includes(batchProgress.resolvedTargetKey);
+            const resolvedTargetKey = batchProgress?.resolvedTargetKey ?? resultWindowId;
             progressGuard.record(progressAction, {
-              effect: successEffect,
+              effect: measuredScrollProgress || inlineVerifiedProgress ? "verified" : successEffect,
+              ...(resolvedTargetKey === undefined ? {} : { resolvedTargetKey }),
               ...(typeof refusalCode === "string" ? { code: refusalCode } : {}),
             });
           }
@@ -2106,16 +2283,28 @@ export function makeAgentGatewayComputerTools(
                   }),
                   isError: true,
                 }
-              : error instanceof CuaActionError
+              : error instanceof ComputerApprovalExpiredError
                 ? {
-                    ...mcpToolResultJson(cuaActionErrorPayload(error)),
+                    ...mcpToolResultJson({
+                      error: {
+                        code: error.code,
+                        effect: error.effect,
+                        retryable: error.retryable,
+                        message: error.message,
+                      },
+                    }),
                     isError: true,
                   }
-                : error instanceof ComputerTargetError
-                  ? targetErrorResult(error)
-                  : error instanceof ComputerLeaseError
-                    ? leaseErrorResult(error)
-                    : mcpToolResultError(errorText(error));
+                : error instanceof CuaActionError
+                  ? {
+                      ...mcpToolResultJson(cuaActionErrorPayload(error)),
+                      isError: true,
+                    }
+                  : error instanceof ComputerTargetError
+                    ? targetErrorResult(error)
+                    : error instanceof ComputerLeaseError
+                      ? leaseErrorResult(error)
+                      : mcpToolResultError(errorText(error));
           // A missing OS grant is the only failure a user has to act on, so it
           // is the only one that raises a card. Everything else — a target that
           // moved, an undelivered keystroke, arguments the desktop refused — is
@@ -2272,6 +2461,12 @@ export function makeAgentGatewayComputerTools(
         result.clampedTo ?? result.point,
         context.callerThreadId,
         readiness === undefined,
+        (capture) =>
+          !["computer_type_text", "computer_set_value", "computer_select_text"].includes(
+            result.action,
+          ) &&
+          frames.matchLatest(context.callerThreadId, capture.screenshot, capture.windowId) !==
+            undefined,
       ),
     );
   };
@@ -2448,7 +2643,7 @@ export function makeAgentGatewayComputerTools(
     activate_window: ["window_id", "windowId"],
     launch_app: ["app", "arguments", "wait_for_window", "hidden"],
     write_clipboard: ["text"],
-    paste: ["text", "window_id", "windowId"],
+    paste: ["text", "image_path", "file_path", "window_id", "windowId"],
     set_window_frame: ["window_id", "windowId", "x", "y", "width", "height"],
     invoke_menu: ["window_id", "windowId", "app", "pid", "path"],
     kill_app: ["window_id", "windowId"],
@@ -2482,11 +2677,11 @@ export function makeAgentGatewayComputerTools(
    * What stays deferred is what must stay fresh: semantic targets resolve
    * against live state inside each manager call, at the moment that step runs.
    */
-  const prepareRunStep = (
+  const prepareRunStep = async (
     type: string,
     step: Record<string, unknown>,
     context: ToolContext,
-  ): (() => Promise<unknown>) => {
+  ): Promise<() => Promise<unknown>> => {
     const threadId = context.callerThreadId;
     switch (type) {
       case "click": {
@@ -2673,9 +2868,14 @@ export function makeAgentGatewayComputerTools(
         return () => manager.writeClipboard(threadId, text);
       }
       case "paste": {
-        const text = readClipboardText(step);
+        const payload = await boundComputerPastePayload(
+          readComputerPastePayload(step),
+          context,
+          desktopOperationSignal(),
+          options.resolveWorkspaceRoot,
+        );
         const windowId = readWindowIdArg(step);
-        return () => manager.paste(threadId, text, windowId);
+        return () => manager.paste(threadId, payload, windowId);
       }
       case "set_window_frame": {
         const windowId = readWindowIdArg(step);
@@ -2784,7 +2984,9 @@ export function makeAgentGatewayComputerTools(
           );
         }
         const expect = raw as Record<string, unknown>[];
-        return () => manager.verifyState(windowId, expect);
+        // The completed batch decides whether later input invalidates this
+        // verification; do not clear history in the middle of its sequence.
+        return async () => ({ ...(await verifyState(windowId, expect, context, false)), windowId });
       }
       default:
         throw new ToolInputError(`Unknown run step type ${JSON.stringify(type)}.`);
@@ -2912,40 +3114,42 @@ export function makeAgentGatewayComputerTools(
     }
     // Validate everything before anything dispatches: a batch that cannot
     // parse is refused whole rather than running its good half.
-    const prepared: PreparedRunStep[] = rawSteps.map((entry, index) => {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-        throw new ToolInputError(`Step ${index} must be an object with a "type" field.`);
-      }
-      const step = entry as Record<string, unknown>;
-      const type = readStringArg(step, "type");
-      const fields = type === undefined ? undefined : RUN_STEP_FIELDS[type];
-      if (type === undefined || fields === undefined) {
-        throw new ToolInputError(
-          `Step ${index}: "type" must be one of ${Object.keys(RUN_STEP_FIELDS).join(", ")}.`,
+    const prepared: PreparedRunStep[] = await Promise.all(
+      rawSteps.map(async (entry, index) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          throw new ToolInputError(`Step ${index} must be an object with a "type" field.`);
+        }
+        const step = entry as Record<string, unknown>;
+        const type = readStringArg(step, "type");
+        const fields = type === undefined ? undefined : RUN_STEP_FIELDS[type];
+        if (type === undefined || fields === undefined) {
+          throw new ToolInputError(
+            `Step ${index}: "type" must be one of ${Object.keys(RUN_STEP_FIELDS).join(", ")}.`,
+          );
+        }
+        const unknown = Object.keys(step).filter(
+          (key) =>
+            key !== "type" &&
+            !fields.includes(key) &&
+            !(RUN_CONDITION_FIELDS as readonly string[]).includes(key),
         );
-      }
-      const unknown = Object.keys(step).filter(
-        (key) =>
-          key !== "type" &&
-          !fields.includes(key) &&
-          !(RUN_CONDITION_FIELDS as readonly string[]).includes(key),
-      );
-      if (unknown.length > 0) {
-        throw new ToolInputError(
-          `Step ${index} (${type}): unknown field ${unknown
-            .map((key) => JSON.stringify(key))
-            .join(", ")}.`,
-        );
-      }
-      return {
-        type,
-        step,
-        ifElement: readStepElementCondition(step, "if_element", threadId),
-        unlessElement: readStepElementCondition(step, "unless_element", threadId),
-        continueOnError: readBooleanArg(step, "continue_on_error") === true,
-        run: prepareRunStep(type, step, context),
-      };
-    });
+        if (unknown.length > 0) {
+          throw new ToolInputError(
+            `Step ${index} (${type}): unknown field ${unknown
+              .map((key) => JSON.stringify(key))
+              .join(", ")}.`,
+          );
+        }
+        return {
+          type,
+          step,
+          ifElement: readStepElementCondition(step, "if_element", threadId),
+          unlessElement: readStepElementCondition(step, "unless_element", threadId),
+          continueOnError: readBooleanArg(step, "continue_on_error") === true,
+          run: await prepareRunStep(type, step, context),
+        };
+      }),
+    );
 
     const steps: Record<string, unknown>[] = [];
     let stopped = false;
@@ -3647,7 +3851,7 @@ export function makeAgentGatewayComputerTools(
         },
         annotations: { title: "Verify computer state", ...READ_ONLY_TOOL_ANNOTATIONS },
       },
-      handler: handle("computer_verify_state", async (args) => {
+      handler: handle("computer_verify_state", async (args, context) => {
         const windowId = readWindowIdArg(args);
         if (!windowId) throw new ToolInputError("window_id is required.");
         const raw = args.expect;
@@ -3656,7 +3860,7 @@ export function makeAgentGatewayComputerTools(
         for (const predicate of raw)
           if (!predicate || typeof predicate !== "object" || Array.isArray(predicate))
             throw new ToolInputError("Each expect predicate must be an object.");
-        return manager.verifyState(windowId, raw as Record<string, unknown>[]);
+        return verifyState(windowId, raw as Record<string, unknown>[], context);
       }),
     },
     {
@@ -4374,8 +4578,8 @@ export function makeAgentGatewayComputerTools(
     ),
     observedActionEntry(
       "computer_paste",
-      "Paste text",
-      `Paste text into the target control through the clipboard — the fast path for long or awkward text computer_type_text would spend many keystrokes on. It saves the current clipboard, writes the text, sends the paste shortcut, then puts the user's contents back and reports clipboardRestored. A clipboard holding an image or other non-text content cannot be saved and is replaced. ${SHARED_CLIPBOARD_NOTE} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      "Paste content",
+      `Paste text or a workspace image/file via the app's paste command. Requires clipboard preservation; clipboardRestored reports restoration without overwriting a newer human copy. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4383,18 +4587,33 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             description: "The exact text to paste at the caret.",
           },
+          image_path: {
+            type: "string",
+            description: "Absolute workspace image path.",
+          },
+          file_path: {
+            type: "string",
+            description: "Absolute workspace file path.",
+          },
           ...keyboardTargetProperties,
         },
-        required: ["text"],
+        oneOf: [{ required: ["text"] }, { required: ["image_path"] }, { required: ["file_path"] }],
         additionalProperties: false,
       },
-      async (args, context) =>
-        manager.paste(context.callerThreadId, readClipboardText(args), readWindowIdArg(args)),
+      async (args, context) => {
+        const payload = await boundComputerPastePayload(
+          readComputerPastePayload(args),
+          context,
+          desktopOperationSignal(),
+          options.resolveWorkspaceRoot,
+        );
+        return manager.paste(context.callerThreadId, payload, readWindowIdArg(args));
+      },
     ),
     actionEntry(
       "computer_activate_window",
       "Activate window",
-      "Bring a window into view and aim the agent keyboard at it — only when the user's own task text asked to see the screen; otherwise refused with foreground_not_requested (naming an app is not asking to see it). Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
+      "Bring a window into view and aim the agent keyboard at it. Unless the user's own task text asked to see the screen (naming an app is not), Synara asks them on an approval card; a decline returns foreground_not_requested. Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
       {
         type: "object",
         properties: {
@@ -4424,7 +4643,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_set_value",
       "Set computer value",
-      "Set the value of a uniquely labelled accessible control after a fresh snapshot, through its freshly resolved element token. The label comes from computer_get_state's elements list; this writes atomically instead of typing keystrokes, so prefer it over click-then-type for any field that appears there. It replaces the control's whole value rather than inserting at the caret.",
+      "Replace an accessible control's complete value atomically through its exact AX element. Use an observed ref or label from computer_get_state. Rich web editors may ignore AX writes or omit input events: inspect the returned screenshot before continuing; never replay an uncertain write. Prefer computer_type_text for insertion.",
       {
         type: "object",
         properties: {

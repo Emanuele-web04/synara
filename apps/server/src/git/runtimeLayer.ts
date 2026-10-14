@@ -4,6 +4,7 @@ import { GitCoreLive } from "./Layers/GitCore";
 import { GitHubCliLive } from "./Layers/GitHubCli";
 import { GitManagerLive } from "./Layers/GitManager";
 import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
+import { ClaudeTextGenerationServiceLive } from "./Layers/ClaudeTextGeneration";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
 import { CursorTextGenerationServiceLive } from "./Layers/CursorTextGeneration";
 import { DroidTextGenerationServiceLive } from "./Layers/DroidTextGeneration";
@@ -26,11 +27,14 @@ const textGenerationProviderLayers = Effect.gen(function* () {
 }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 
 export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
+  Layer.provide(ClaudeTextGenerationServiceLive),
   Layer.provide(CodexTextGenerationServiceLive),
   Layer.provide(CursorTextGenerationServiceLive),
   Layer.provide(DroidTextGenerationServiceLive),
   Layer.provide(textGenerationProviderLayers),
   Layer.provide(ServerSettingsLive),
+  Layer.provide(GitCoreLive),
+  Layer.provide(GitHubCliLive),
 );
 
 export const GitManagerLayerLive = GitManagerLive.pipe(

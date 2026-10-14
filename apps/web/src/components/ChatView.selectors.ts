@@ -95,13 +95,34 @@ function threadSliceRefsEqual(left: ThreadSliceRefs | undefined, right: ThreadSl
   );
 }
 
+// A lineage entry copies only these shell fields, so a shell rewritten for anything else
+// (`updatedAt` on every streamed token) must not rebuild the lineage and its breadcrumbs.
+function threadLineageShellsEqual(
+  left: ThreadShell | undefined,
+  right: ThreadShell | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.id === right.id &&
+    left.title === right.title &&
+    left.parentThreadId === right.parentThreadId &&
+    left.subagentAgentId === right.subagentAgentId &&
+    left.subagentNickname === right.subagentNickname &&
+    left.subagentRole === right.subagentRole
+  );
+}
+
 function threadLineageSliceRefsEqual(
   left: ThreadLineageSliceRefs | undefined,
   right: ThreadLineageSliceRefs,
 ): boolean {
   return (
     left !== undefined &&
-    left.shell === right.shell &&
+    threadLineageShellsEqual(left.shell, right.shell) &&
     left.activityIds === right.activityIds &&
     left.activities === right.activities
   );

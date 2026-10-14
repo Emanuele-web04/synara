@@ -65,4 +65,72 @@ describe("persistent macOS app icons", () => {
       persistMacAppIcon({ bundlePath, cacheDirectory, png: null }),
     ).resolves.toBeUndefined();
   });
+
+  it("re-stamps a replacement bundle even when its directory mtime is preserved", async () => {
+    const target = Path.join(cacheDirectory, "Synara.app");
+    await FS.mkdir(target);
+    const fixedTime = new Date("2026-01-01T00:00:00.000Z");
+    await FS.utimes(target, fixedTime, fixedTime);
+    const original = await FS.stat(target);
+    const input = { bundlePath: target, cacheDirectory, png: null };
+
+    await persistMacAppIcon(input);
+    await persistMacAppIcon(input);
+    expect(execProcessFile).toHaveBeenCalledTimes(1);
+
+    // Keep the old inode allocated so the fresh app cannot reuse its identity.
+    await FS.rename(target, `${target}.previous`);
+    await FS.mkdir(target);
+    await FS.utimes(target, fixedTime, fixedTime);
+    const replacement = await FS.stat(target);
+    expect(replacement.mtimeMs).toBe(original.mtimeMs);
+    expect(replacement.ino).not.toBe(original.ino);
+
+    await persistMacAppIcon(input);
+    expect(execProcessFile).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(execProcessFile).mock.calls[1]![1][4]).toBe(target);
+  });
+
+  it("records the bundle after a successful native write and retries a failed new choice", async () => {
+    const target = Path.join(cacheDirectory, "Synara.app");
+    await FS.mkdir(target);
+    // Native custom-icon writes change the bundle directory's metadata.
+    vi.mocked(execProcessFile).mockImplementationOnce((_command, _args, _options, callback) => {
+      void FS.writeFile(Path.join(target, "Icon"), "custom icon metadata").then(() => {
+        callback(null, "", "");
+      });
+      return {} as ReturnType<typeof execProcessFile>;
+    });
+    const input = { bundlePath: target, cacheDirectory, png: Buffer.from("old artwork") };
+    await persistMacAppIcon(input);
+    await persistMacAppIcon(input);
+    expect(execProcessFile).toHaveBeenCalledTimes(1);
+
+    const failure = new Error("The app is temporarily not writable");
+    vi.mocked(execProcessFile).mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(failure, "", "");
+      return {} as ReturnType<typeof execProcessFile>;
+    });
+    const changed = { ...input, png: Buffer.from("new artwork") };
+    await expect(persistMacAppIcon(changed)).rejects.toBe(failure);
+    await persistMacAppIcon(changed);
+    expect(execProcessFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries when the bundle is replaced while a native write is completing", async () => {
+    const target = Path.join(cacheDirectory, "Synara.app");
+    await FS.mkdir(target);
+    vi.mocked(execProcessFile).mockImplementationOnce((_command, _args, _options, callback) => {
+      void FS.rename(target, `${target}.previous`).then(async () => {
+        await FS.mkdir(target);
+        callback(null, "", "");
+      });
+      return {} as ReturnType<typeof execProcessFile>;
+    });
+    const input = { bundlePath: target, cacheDirectory, png: null };
+
+    await persistMacAppIcon(input);
+    await persistMacAppIcon(input);
+    expect(execProcessFile).toHaveBeenCalledTimes(2);
+  });
 });

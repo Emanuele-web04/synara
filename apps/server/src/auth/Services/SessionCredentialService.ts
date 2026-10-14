@@ -80,6 +80,11 @@ export interface SessionCredentialServiceShape {
   readonly revokeAllExcept: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<number, SessionCredentialError>;
+  /** Session-owned work survives socket loss, but never revocation or durable expiry. */
+  readonly runAuthenticatedWork: <A, E, R>(
+    sessionId: AuthSessionId,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | SessionCredentialError, R>;
   readonly runAuthenticatedConnection: <A, E, R>(
     sessionId: AuthSessionId,
     effect: Effect.Effect<A, E, R>,

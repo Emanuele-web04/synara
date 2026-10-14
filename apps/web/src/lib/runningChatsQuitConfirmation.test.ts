@@ -3,9 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   isRunningChatForQuit,
   listRunningChatsFromDesktopStore,
-  quitResumeContinuationPrompt,
-  runningChatDisplayTitle,
-  runningChatsQuitCopy,
   stopRunningChatsForQuit,
 } from "./runningChatsQuitConfirmation";
 
@@ -18,11 +15,6 @@ describe("running chats quit confirmation", () => {
     );
     expect(isRunningChatForQuit({ session: { status: "ready" } })).toBe(false);
     expect(isRunningChatForQuit({ session: null })).toBe(false);
-  });
-
-  it("falls back to Untitled thread for blank titles", () => {
-    expect(runningChatDisplayTitle("  ")).toBe("Untitled thread");
-    expect(runningChatDisplayTitle("Fix the tray")).toBe("Fix the tray");
   });
 
   it("lists sidebar and session-only running chats without duplicates", () => {
@@ -45,40 +37,6 @@ describe("running chats quit confirmation", () => {
       { id: "b", title: "Session-only connecting" },
       { id: "a", title: "Sidebar running" },
     ]);
-  });
-
-  it("builds singular and plural English copy", () => {
-    expect(runningChatsQuitCopy([{ id: "a", title: "Fix the tray" }])).toEqual({
-      title: "A chat is still running",
-      description: "Work in progress will stop when Synara is closed.",
-      resumeLabel: "Resume chat automatically",
-      stayLabel: "Cancel",
-      quitLabel: "Quit",
-    });
-    expect(
-      runningChatsQuitCopy(
-        [
-          { id: "a", title: "One" },
-          { id: "b", title: "Two" },
-        ],
-        "Synara Canary",
-      ),
-    ).toEqual({
-      title: "Chats are still running",
-      description: "Work in progress will stop when Synara Canary is closed.",
-      resumeLabel: "Resume chats automatically",
-      stayLabel: "Cancel",
-      quitLabel: "Quit",
-    });
-  });
-
-  it("builds the continuation prompt from the app name", () => {
-    expect(quitResumeContinuationPrompt()).toBe(
-      "Synara was closed while this chat was still running. Continue where you left off.",
-    );
-    expect(quitResumeContinuationPrompt("Synara Canary")).toBe(
-      "Synara Canary was closed while this chat was still running. Continue where you left off.",
-    );
   });
 
   it("interrupts running chats without waiting for them to settle", async () => {

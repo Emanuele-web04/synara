@@ -6,42 +6,11 @@ import "../../index.css";
 
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
+
+vi.mock("@synara/shared/betaFeatures", { spy: true });
 
 import { AppIconPicker } from "./AppIconPicker";
-
-function readTopLeftAlpha(image: HTMLImageElement): number {
-  const canvas = document.createElement("canvas");
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
-  const context = canvas.getContext("2d");
-  context?.drawImage(image, 0, 0);
-  return context?.getImageData(0, 0, 1, 1).data[3] ?? -1;
-}
-
-it("uses inset transparent artwork and selects it", async () => {
-  const onValueChange = vi.fn();
-  const mounted = await render(
-    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
-  );
-
-  await expect.element(mounted.getByRole("button", { name: "Default icon" })).toBeVisible();
-  const iconButton = mounted.getByRole("button", { name: "Icon", exact: true });
-  const artwork = iconButton.element().querySelector("img");
-  if (!(artwork instanceof HTMLImageElement)) throw new Error("Icon artwork is missing");
-  await vi.waitFor(() => expect(artwork.complete).toBe(true));
-  const buttonRect = iconButton.element().getBoundingClientRect();
-  const artworkRect = artwork.getBoundingClientRect();
-
-  expect(buttonRect.width).toBe(50);
-  expect(artworkRect.width).toBe(40);
-  expect(artworkRect.left).toBe(buttonRect.left + 5);
-  expect(artworkRect.top).toBe(buttonRect.top + 5);
-  expect(readTopLeftAlpha(artwork)).toBe(0);
-
-  await iconButton.click();
-
-  expect(onValueChange).toHaveBeenCalledWith("icon");
-});
 
 it("shows a loading state and ignores extra clicks while an apply is in flight", async () => {
   let release: (() => void) | undefined;
@@ -114,4 +83,28 @@ it("hides the unsupported dark icon off macOS", async () => {
   );
 
   await expect.element(mounted.getByRole("button", { name: "Dark icon" })).not.toBeInTheDocument();
+});
+
+it("applies the separate Beta choice without exposing it on Stable", async () => {
+  vi.mocked(desktopFlavorFromProtocol).mockReturnValue("production");
+  const onValueChange = vi.fn();
+  const stable = await render(
+    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+  );
+  await expect.element(stable.getByRole("button", { name: "Beta icon" })).not.toBeInTheDocument();
+  await stable.unmount();
+  vi.mocked(desktopFlavorFromProtocol).mockReturnValue("beta");
+  try {
+    const beta = await render(
+      <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+    );
+    const betaButton = beta.getByRole("button", { name: "Beta icon" });
+    await expect.element(betaButton).toBeVisible();
+    await expect.element(beta.getByRole("button", { name: "Default icon" })).toBeVisible();
+    await expect.element(beta.getByRole("button", { name: "Dark icon" })).toBeVisible();
+    await betaButton.click();
+    expect(onValueChange).toHaveBeenCalledExactlyOnceWith("beta");
+  } finally {
+    vi.mocked(desktopFlavorFromProtocol).mockReturnValue("production");
+  }
 });

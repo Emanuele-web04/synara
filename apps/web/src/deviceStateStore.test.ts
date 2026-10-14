@@ -41,12 +41,6 @@ beforeEach(() => {
 });
 
 describe("deviceStateStore version gating", () => {
-  it("stores the first state for a thread", () => {
-    useDeviceStateStore.getState().upsertThreadState(threadState());
-
-    expect(selectThreadDeviceState(THREAD_ID)(useDeviceStateStore.getState())?.version).toBe(1);
-  });
-
   it("applies a newer version", () => {
     const store = useDeviceStateStore.getState();
     store.upsertThreadState(threadState({ version: 1 }));

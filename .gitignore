@@ -48,3 +48,6 @@ __screenshots__/
 .unlazy/
 # Claude Code worktrees are local scratch checkouts, not part of the repo.
 .claude/worktrees/
+
+# Local implementation plans.
+/plans/

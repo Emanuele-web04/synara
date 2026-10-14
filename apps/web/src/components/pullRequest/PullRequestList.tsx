@@ -1,76 +1,148 @@
 // FILE: PullRequestList.tsx
-// Purpose: The pull requests list body — renders entries as PullRequestRows, either flat or
-//          under the involvement group headers produced by groupPullRequestEntriesByInvolvement
-//          (the "All" tab). Rows use repository + number identity because the global list has
-//          one row per remote PR; selection still retains project context for the detail panel.
+// Purpose: The GitHub inbox list body — Pinned, then All (or the involvement sections), built
+//          from the sidebar's own list sections: each shows its first page of rows with "Show
+//          more" / "Show less". Pinned and All stay open; involvement sections fold behind their
+//          label. All shows its label only under Pinned, so an unpinned list reads like GitHub's. Rows use repository + number identity because the
+//          list has one row per remote item; selection still retains project context for the
+//          detail.
 // Layer: Pull request presentation
 // Exports: PullRequestList
 
-import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
-import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
+import type { GitHubInboxItem, GitHubInboxSort, ProjectId } from "@synara/contracts";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import { resolveSidebarThreadListPaging } from "~/components/Sidebar.logic";
+import {
+  SidebarCollapsibleSection,
+  SidebarSectionLabel,
+  SidebarShowMoreRow,
+} from "~/components/SidebarListSection";
+import {
+  pullRequestListEntryKey,
+  type PullRequestListGroup,
+  type PullRequestListGroupKey,
+} from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
-import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
-import { cn } from "~/lib/utils";
+
+/** Rows a section shows first, and how many each "Show more" adds. */
+const SECTION_PAGE_SIZE = 10;
+
+// The list bleeds past the column padding by the rows' own inner padding, so a row's hover
+// surface keeps a halo while its title sits on the filter bar's vertical, and nothing (the
+// disclosure region clips its content) cuts the halo or a focus ring off. Section labels and the
+// paging row pad by the same amount to stay on that vertical.
+const LIST_BLEED_CLASS_NAME = "-mx-3";
+const LIST_INSET_CLASS_NAME = "px-3";
 
 export const PullRequestList = function PullRequestList({
-  entries,
-  grouped,
-  selectedProjectId,
-  selectedRepo,
-  selectedNumber,
+  groups,
+  sort,
+  isSelected,
+  isSectionOpen,
+  onToggleSection,
   showProjectTitle: showProjectTitleProp,
-  showDiffColors: showDiffColorsProp,
+  projectIconFor,
   onSelect,
   onTogglePinned,
 }: {
-  entries: PullRequestListEntry[];
-  grouped: PullRequestListGroup[] | null;
-  selectedProjectId: ProjectId | undefined;
-  selectedRepo: string | undefined;
-  selectedNumber: number | undefined;
+  groups: ReadonlyArray<PullRequestListGroup>;
+  sort: GitHubInboxSort;
+  isSelected: (entry: GitHubInboxItem) => boolean;
+  /** Whether a collapsible section is expanded. Pinned and All are always open. */
+  isSectionOpen: (key: PullRequestListGroupKey) => boolean;
+  onToggleSection: (key: PullRequestListGroupKey) => void;
   showProjectTitle?: boolean;
-  showDiffColors?: boolean;
-  onSelect: (entry: PullRequestListEntry) => void;
-  onTogglePinned: (entry: PullRequestListEntry) => void;
+  projectIconFor?: (projectId: ProjectId) => ReactNode;
+  onSelect: (entry: GitHubInboxItem) => void;
+  onTogglePinned: (entry: GitHubInboxItem) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
-  const showDiffColors = showDiffColorsProp ?? true;
-  const renderEntry = (entry: PullRequestListEntry) => (
+  // Extra pages each section has revealed. Not persisted: a fresh visit starts at the first page.
+  const [extraPages, setExtraPages] = useState<Partial<Record<PullRequestListGroupKey, number>>>(
+    {},
+  );
+  // A pin moves the row into (or out of) another section, which remounts it and drops focus.
+  // Hand focus to the same row's pin control once the move has rendered.
+  const pinFocusKey = useRef<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const key = pinFocusKey.current;
+    if (key === null) return;
+    pinFocusKey.current = null;
+    const pin = Array.from(
+      containerRef.current?.querySelectorAll<HTMLElement>("[data-pull-request-row]") ?? [],
+    )
+      .find((row) => `${row.dataset.repository}#${row.dataset.pullRequestNumber}` === key)
+      ?.parentElement?.querySelector<HTMLElement>("button[aria-pressed]");
+    pin?.focus();
+  });
+  const renderEntry = (entry: GitHubInboxItem) => (
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}
       entry={entry}
+      sort={sort}
       showProjectTitle={showProjectTitle}
-      showDiffColors={showDiffColors}
-      selected={
-        selectedProjectId === entry.projectId &&
-        selectedRepo === entry.repository &&
-        selectedNumber === entry.number
-      }
+      {...(showProjectTitle && projectIconFor
+        ? { projectIcon: projectIconFor(entry.projectId) }
+        : {})}
+      selected={isSelected(entry)}
       onClick={onSelect}
-      onTogglePinned={onTogglePinned}
+      onTogglePinned={(current) => {
+        pinFocusKey.current = `${current.repository}#${current.number}`;
+        onTogglePinned(current);
+      }}
     />
   );
-  if (grouped) {
-    return (
-      <div className="space-y-0.5">
-        {grouped.flatMap((group, groupIndex) => [
-          // Keep headers and keyed rows as direct siblings. When a pin moves a row between
-          // groups, React can move the same DOM node instead of remounting it and losing focus.
-          <h2
-            key={`group:${group.key}`}
-            className={cn(
-              PR_FINE_TEXT_CLASS_NAME,
-              PR_QUIET_INK_CLASS_NAME,
-              "pb-0.5 font-medium",
-              groupIndex > 0 && "pt-2.5",
+  return (
+    <div ref={containerRef} className={`flex flex-col gap-3 ${LIST_BLEED_CLASS_NAME}`}>
+      {groups.map((group) => {
+        const paging = resolveSidebarThreadListPaging({
+          totalCount: group.entries.length,
+          baseLimit: SECTION_PAGE_SIZE,
+          pageSize: SECTION_PAGE_SIZE,
+          requestedExtraPages: extraPages[group.key] ?? 0,
+        });
+        const setPages = (pages: number) =>
+          setExtraPages((current) => ({ ...current, [group.key]: Math.max(0, pages) }));
+        const rows = (
+          <>
+            {group.entries.slice(0, paging.previewLimit).map(renderEntry)}
+            <SidebarShowMoreRow
+              canShowMore={paging.canShowMore}
+              canShowLess={paging.canShowLess}
+              onShowMore={() => setPages(paging.effectiveExtraPages + 1)}
+              onShowLess={() => setPages(paging.effectiveExtraPages - 1)}
+              className={LIST_INSET_CLASS_NAME}
+            />
+          </>
+        );
+        return (
+          <section key={group.key} aria-label={group.label} data-inbox-section={group.key}>
+            {group.key === "pinned" || group.key === "all" ? (
+              <>
+                {group.key === "pinned" || groups.length > 1 ? (
+                  <SidebarSectionLabel
+                    as="h2"
+                    label={group.label}
+                    className={LIST_INSET_CLASS_NAME}
+                  />
+                ) : null}
+                <div className="flex flex-col gap-0.5">{rows}</div>
+              </>
+            ) : (
+              <SidebarCollapsibleSection
+                label={group.label}
+                open={isSectionOpen(group.key)}
+                onToggle={() => onToggleSection(group.key)}
+                headerClassName={LIST_INSET_CLASS_NAME}
+                headingLevel={2}
+              >
+                {rows}
+              </SidebarCollapsibleSection>
             )}
-          >
-            {group.label}
-          </h2>,
-          ...group.entries.map(renderEntry),
-        ])}
-      </div>
-    );
-  }
-  return <div className="space-y-0.5">{entries.map(renderEntry)}</div>;
+          </section>
+        );
+      })}
+    </div>
+  );
 };

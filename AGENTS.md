@@ -16,15 +16,30 @@ Read only what the task needs:
 
 - Product and ownership semantics: [core concepts](docs/core-concepts.md) and [providers](docs/providers.md).
 - Contribution and verification conventions: [CONTRIBUTING.md](CONTRIBUTING.md) and the affected package's scripts.
-- Release/signing work: [release guide](docs/release.md). Local Canary operations: [Canary guide](docs/canary.md).
+- Release/signing work: [release guide](docs/release.md). Beta channel and flavor work: [Beta guide](BETA.md). Local Canary operations: [Canary guide](docs/canary.md).
 - Current commands, toolchain requirements, and patched dependencies: [package.json](package.json), `bun.lock`, and `.mise.toml`. Resolve current paths from the checkout rather than relying on an old repository map.
+
+## Beta and Stable
+
+Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Synara Beta**. [BETA.md](BETA.md) has the full picture; these rules apply to every change:
+
+- There is no Beta branch. Merge into `main`; the release tag picks the app (`vX.Y.Z` is Stable, `vX.Y.Z-beta.N` is Beta). Beta tags carry the _next_ Stable version (`v0.9.2` → `v0.9.3-beta.1`).
+- Beta and Stable have separate identities, data homes (`~/.synara` vs `~/.synara-beta`), and update feeds. Do not add code that reads, writes, or updates across them, except the one-way Stable → Beta copy in the Beta channel code.
+- Everything you merge ships in both apps. To keep a feature out of Stable, add its key to `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`, refuse it on the server (authoritative), hide its entry points on the web, and make persisted state for it inert on Stable. Hiding UI alone is not a gate.
+- Migrations run in both apps. A migration added for a Beta-only feature must be additive so Stable ignores it safely.
+- Diagnostics are Beta-only. Never send diagnostics from Stable, and route every field through the shared allowlist and `diagnosticsRedaction.ts`. Never collect chat content, prompts, file contents, project names, credentials, or identity.
 
 ## Transcript and UI safeguards
 
-- Auto-follow represents real assistant text streaming, not generic work, buffering, reconnecting, pending approvals, or tool-only activity. Tool/work rows must not retrigger message-arrival auto-stick behavior.
+- UI changes require explicit user authorization. This includes changes to layout, styling, typography, visible text, controls, navigation, animations, and user-facing interaction behavior on any surface. A general request to fix, refactor, or improve something does not authorize incidental UI changes.
+- If a task needs a UI change that the user has not explicitly requested or approved, notify the user of the proposed visible or interaction change and why it is needed, then wait for authorization before implementing that part. Continue independent work within the authorized scope. An explicit UI request authorizes that scope; do not ask again unless the scope expands.
+- Before committing, pushing, or opening/updating a PR, review the diff for UI changes and exclude any that lack explicit authorization. Tests, screenshots, and passing checks do not substitute for authorization. Report authorized UI changes clearly in the completion summary and PR description.
+- Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
+- Do not use Tailwind `group-has-*`, `peer-has-*`, or `has-*` stacked with `*:`/`**:`. One such rule makes Chrome restyle the whole document whenever rows mount; use a descendant subject (`[&:has(x)_input]:`), a CSS variable, or a named variant in [index.css](apps/web/src/index.css). `apps/web/src/hasSelectorVariants.test.ts` fails when they are added.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
 - Reuse before you build. Before adding a dialog, sheet, input, button, row, hook, store, or helper function, search the codebase for one that already does the job and use it, extending it with a prop or variant when it almost fits. When a second surface needs the same shape as an existing one, extract the shared piece (as [AnnouncementSheet.tsx](apps/web/src/components/AnnouncementSheet.tsx) does for one-time announcements) and switch both to it instead of copying markup or logic. Write something from scratch only when nothing comparable exists, and say so in the completion report.
+- Keep menus compact. Variants of one action (handoff targets, copy variants, fork targets, hub moves) share a single parent row that opens a submenu instead of each taking a top-level line. Imperative context menus get this from `children` on `ContextMenuItem` via [contextMenuGroup.ts](apps/web/src/lib/contextMenuGroup.ts), which renders a native submenu on desktop and a flyout in the browser; React menus use `MenuSub` from [menu.tsx](apps/web/src/components/ui/menu.tsx). A group with a single entry stays a plain row.
 - UI text must follow the font size the user chose in Settings. Use the `text-ui` tokens defined in the `@theme` block of [index.css](apps/web/src/index.css) and driven by [useAppTypography.ts](apps/web/src/hooks/useAppTypography.ts): `text-ui` for body copy, `text-ui-sm`/`text-ui-xs` for secondary text, `text-ui-lg` for emphasized lines and small panel titles, and `text-chat*` for transcript content. Inherit the UI font family. Do not use fixed Tailwind sizes such as `text-sm`, `text-xs`, or `text-[11px]`, or the long `text-[length:var(--app-font-size-…)]` form. Only dialog titles and large headings may use a fixed size; `apps/web/src/uiFontSize.test.ts` fails when fixed sizes are added.
 
 ## Local instance isolation
@@ -33,7 +48,13 @@ Use a separate home directory and unused server/web ports when another Synara in
 
 For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client configuration; remove it only from the isolated test process when appropriate, never from production policy. Check both IPv4 and IPv6 listeners. An empty UI with a healthy `orchestration.getSnapshot` is a connection/hydration lead, not permission to alter SQLite data.
 
+## Reporting style
+
+Write replies and completion reports as a TL;DR: the result first, then only what the reader needs to act. Prefer dense information over prose: use tables for measurements, comparisons, and per-case results, and short bullets for findings and open decisions. Cut narration of steps taken, restated requests, and closing recaps. Keep failures, unverified behavior, and required decisions; shorten the wording, never the facts.
+
 ## Verification and completion
+
+Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 
 Use the smallest relevant checks while iterating. For code changes, finish with `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and affected Vitest tests. Use `bun run test`, never `bun test`, which selects a different runner. Cross-package or lifecycle changes warrant the broader repository test suite.
 

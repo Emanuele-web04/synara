@@ -23,7 +23,7 @@ export type ProjectFileEncoding = typeof ProjectFileEncoding.Type;
 export const ProjectFileLineEnding = Schema.Literals(["lf", "crlf", "cr", "mixed"]);
 export type ProjectFileLineEnding = typeof ProjectFileLineEnding.Type;
 
-export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
+export const ProjectKind = Schema.Literals(["project", "chat", "studio", "group"]);
 export type ProjectKind = typeof ProjectKind.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({

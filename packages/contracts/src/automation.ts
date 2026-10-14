@@ -37,6 +37,10 @@ export type AutomationCronExpression = typeof AutomationCronExpression.Type;
 export const AutomationSchedule = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({
+    type: Schema.Literal("project-event"),
+    projectId: ProjectId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("once"),
     runAt: AutomationIsoDateTime,
   }),
@@ -96,6 +100,7 @@ export const DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS = 60;
 export const AutomationTrigger = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({ type: Schema.Literal("scheduled") }),
+  Schema.Struct({ type: Schema.Literal("project-event") }),
 ]);
 export type AutomationTrigger = typeof AutomationTrigger.Type;
 
@@ -281,6 +286,8 @@ export const AutomationDefinition = Schema.Struct({
   ),
   /** Number of runs created so far; used to enforce maxIterations. */
   iterationCount: NonNegativeInt,
+  /** Project Coordinator owns this definition; ordinary automation edits cannot change ownership. */
+  managedByProject: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   createdAt: AutomationIsoDateTime,
   updatedAt: AutomationIsoDateTime,
   archivedAt: Schema.NullOr(AutomationIsoDateTime),

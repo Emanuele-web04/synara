@@ -68,7 +68,7 @@ interface ChatWorkspaceSelectionInput {
   isServerThread: boolean;
   isLocalDraftThread: boolean;
   isHomeChatContainer: boolean;
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   hasNativeUserMessages: boolean;
   composerEditorRef: RefObject<ComposerPromptEditorHandle | null>;
   scheduleComposerFocus: () => void;
@@ -83,7 +83,7 @@ export function useChatWorkspaceSelection({
   isServerThread,
   isLocalDraftThread,
   isHomeChatContainer,
-  isStudioContainer,
+  isGroupContainer,
   hasNativeUserMessages,
   composerEditorRef,
   scheduleComposerFocus,
@@ -165,7 +165,7 @@ export function useChatWorkspaceSelection({
     // Picker-menu resets still restore focus because the editor is no longer active in that path.
     const restoreComposerFocus = !composerEditorRef.current?.isFocused();
     if (isLocalDraftThread) {
-      if (isStudioContainer) {
+      if (isGroupContainer) {
         setDraftThreadContext(threadId, {
           envMode: "local",
           branch: null,
@@ -221,7 +221,7 @@ export function useChatWorkspaceSelection({
       setStoreThreadWorkspace(activeThread.id, {
         envMode: "local",
         worktreePath: null,
-        ...(isStudioContainer ? { workingDirectory: null } : {}),
+        ...(isGroupContainer ? { workingDirectory: null } : {}),
       });
       const api = readNativeApi();
       if (api && !hasNativeUserMessages && !activeThread.session) {
@@ -231,7 +231,7 @@ export function useChatWorkspaceSelection({
           threadId: activeThread.id,
           envMode: "local",
           worktreePath: null,
-          ...(isStudioContainer ? { workingDirectory: null } : {}),
+          ...(isGroupContainer ? { workingDirectory: null } : {}),
         });
       }
     }
@@ -246,7 +246,7 @@ export function useChatWorkspaceSelection({
     homeDir,
     isHomeChatContainer,
     isLocalDraftThread,
-    isStudioContainer,
+    isGroupContainer,
     moveEmptyDraftToLocalProject,
     scheduleComposerFocus,
     setDraftThreadContext,
@@ -257,7 +257,7 @@ export function useChatWorkspaceSelection({
 
   const handleSelectWorkspaceRoot = useCallback(
     (workspaceRoot: string) => {
-      if (isStudioContainer) {
+      if (isGroupContainer) {
         if (isLocalDraftThread) {
           setDraftThreadContext(threadId, {
             envMode: "local",
@@ -311,7 +311,7 @@ export function useChatWorkspaceSelection({
       activeThread,
       hasNativeUserMessages,
       isLocalDraftThread,
-      isStudioContainer,
+      isGroupContainer,
       scheduleComposerFocus,
       setDraftThreadContext,
       setStoreThreadWorkspace,

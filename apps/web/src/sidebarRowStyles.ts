@@ -26,6 +26,9 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
+/** A chat back from snooze and not yet opened: outlined so it stands out until read. */
+export const SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME = "bg-info/8 ring-1 ring-info/50 ring-inset";
+
 /**
  * Resting foreground for primary sidebar item labels and their accompanying
  * leading/pin icons (inactive thread name, project/folder name, folder + pin
@@ -34,8 +37,29 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
+/** A project's display name in sidebar project rows and headers. */
+export const SIDEBAR_PROJECT_NAME_CLASS_NAME = [
+  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+].join(" ");
+
+/**
+ * A control that takes over a header row's leading glyph slot (the project pin, a hub's
+ * thread disclosure). Pair it with `sidebarHoverRevealHideClassName("project-header")` on
+ * the resting glyph so the two swap in place.
+ */
+export const SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME =
+  "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
+
+/** Keeps a leading-slot action hidden until its `group/project-header` row is hovered or focused. */
+export const SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME =
+  "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:project-header-focus:pointer-events-auto md:project-header-focus:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
+
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
+/** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
+export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
+
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
@@ -87,7 +111,7 @@ const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, stri
   "activity-row":
     "transition-opacity group-hover/activity-row:pointer-events-none group-hover/activity-row:opacity-0 group-focus-within/activity-row:pointer-events-none group-focus-within/activity-row:opacity-0",
   "project-header":
-    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 group-has-[:focus-visible]/project-header:pointer-events-none group-has-[:focus-visible]/project-header:opacity-0",
+    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 project-header-focus:pointer-events-none project-header-focus:opacity-0",
   "thread-row":
     "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
 };

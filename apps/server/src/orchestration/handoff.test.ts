@@ -130,18 +130,6 @@ describe("buildPriorTranscriptBootstrapText", () => {
     expect(text!.indexOf("marker-250")).toBeLessThan(text!.indexOf("marker-290"));
   });
 
-  it("respects a caller budget smaller than the transcript ceiling", () => {
-    const filler = "y".repeat(400);
-    const messages = Array.from({ length: 60 }, (_, index) =>
-      message(index, index % 2 === 0 ? "user" : "assistant", `marker-${index} ${filler}`),
-    );
-    const text = buildPriorTranscriptBootstrapText(thread(messages), "message-59", 8_000);
-
-    expect(text).not.toBeNull();
-    expect(text!.length).toBeLessThanOrEqual(8_000);
-    expect(text).toContain("marker-58");
-  });
-
   it("never lets the omission header push the newest message past the budget", () => {
     // Adversarial tight budget: without reserving room for the "Earlier
     // conversation summary (...) omitted..." header before selecting

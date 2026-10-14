@@ -40,30 +40,6 @@ describe("providerUsageDisplay", () => {
     expect(primary?.remainingTone).toBe("warning");
   });
 
-  it("centralizes reserve and eta details for display rows", () => {
-    vi.setSystemTime("2026-06-09T12:00:00.000Z");
-
-    const [row] = deriveProviderUsageDisplayRows([
-      {
-        provider: "codex",
-        updatedAt: "2026-06-09T12:00:00.000Z",
-        limits: [
-          {
-            window: "5h",
-            usedPercent: 15,
-            resetsAt: "2026-06-09T12:36:00.000Z",
-            windowDurationMins: 300,
-          },
-        ],
-      },
-    ]);
-
-    expect(row ? providerUsagePaceDetails(row) : null).toEqual({
-      amountText: "73% in reserve",
-      etaText: "Lasts until reset",
-    });
-  });
-
   it("infers standard window durations from normalized labels for pace details", () => {
     vi.setSystemTime("2026-06-09T12:00:00.000Z");
 

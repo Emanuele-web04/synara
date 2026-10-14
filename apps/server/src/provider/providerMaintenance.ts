@@ -84,6 +84,20 @@ const latestVersionCache = new Map<
   string,
   { readonly expiresAt: number; readonly version: string | null }
 >();
+
+/** V2 ships under different packages; never suggest a V1 package for a V2 binary. */
+export function withOpenCodeMaintenanceVersion(
+  definition: PackageManagedProviderMaintenanceDefinition,
+  version: string | null | undefined,
+): PackageManagedProviderMaintenanceDefinition {
+  if (definition.provider !== "opencode" || !version?.startsWith("2.")) return definition;
+  return {
+    ...definition,
+    npmPackageName: "@opencode/cli",
+    latestVersionSource: { kind: "npm", name: "@opencode/cli" },
+    homebrew: { name: "anomalyco/tap/opencode-v2", kind: "formula" },
+  };
+}
 const SEMVER_NUMBER_SEGMENT = /^\d+$/;
 
 function nonEmptyString(value: unknown): string | null {
@@ -726,7 +740,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
     return {
       ...status,
       versionAdvisory: createProviderVersionAdvisory({
-        provider: status.provider,
+        provider: maintenanceCapabilities.provider,
         currentVersion: status.version ?? null,
         checkedAt: status.checkedAt,
         maintenanceCapabilities,
@@ -738,7 +752,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
   return {
     ...status,
     versionAdvisory: createProviderVersionAdvisory({
-      provider: status.provider,
+      provider: maintenanceCapabilities.provider,
       currentVersion: status.version,
       latestVersion,
       checkedAt: DateTime.formatIso(yield* DateTime.now),

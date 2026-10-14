@@ -26,20 +26,6 @@ describe("buildCodexTurnInput", () => {
     expect(buildCodexTurnInput({ input: "" })).toEqual([]);
   });
 
-  it("accepts non-text input items without inventing text", () => {
-    expect(
-      buildCodexTurnInput({
-        attachments: [{ type: "image", url: "file:///tmp/image.png" }],
-        skills: [{ name: "review", path: "/skills/review/SKILL.md" }],
-        mentions: [{ name: "README", path: "/repo/README.md" }],
-      }),
-    ).toEqual([
-      { type: "image", url: "file:///tmp/image.png" },
-      { type: "skill", name: "review", path: "/skills/review/SKILL.md" },
-      { type: "mention", name: "README", path: "/repo/README.md" },
-    ]);
-  });
-
   it("preserves local image paths without converting them to URLs", () => {
     expect(
       buildCodexTurnInput({

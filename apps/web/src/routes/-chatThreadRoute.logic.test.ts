@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import { ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,10 +6,7 @@ import {
   normalizeSingleSearchFromPane,
   resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
-  resolveSingleProjectId,
   resolveSplitPaneCloseDecision,
-  resolveSplitPaneMaximizeDecision,
-  resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
   stripEditorViewSearchParams,
 } from "./-chatThreadRoute.logic";
@@ -19,19 +16,6 @@ const SIDECHAT_THREAD_ID = ThreadId.makeUnsafe("thread-sidechat");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-2");
 const TURN_ID = TurnId.makeUnsafe("turn-1");
 const OTHER_TURN_ID = TurnId.makeUnsafe("turn-2");
-const PROJECT_ID = ProjectId.makeUnsafe("project-1");
-const DRAFT_PROJECT_ID = ProjectId.makeUnsafe("project-draft");
-
-describe("resolveThreadPickerTitle", () => {
-  it("falls back to a stable untitled label", () => {
-    expect(resolveThreadPickerTitle(null)).toBe("New chat");
-    expect(resolveThreadPickerTitle("")).toBe("New chat");
-  });
-
-  it("preserves non-empty thread titles", () => {
-    expect(resolveThreadPickerTitle("Bug bash")).toBe("Bug bash");
-  });
-});
 
 describe("resolveFilePreviewWorkspaceRoot", () => {
   it("uses the project cwd for local threads", () => {
@@ -77,22 +61,6 @@ describe("resolveFilePreviewWorkspaceRoot", () => {
 });
 
 describe("single chat route helpers", () => {
-  it("prefers the server thread project and falls back to the draft project", () => {
-    expect(
-      resolveSingleProjectId({
-        threadProjectId: PROJECT_ID,
-        draftProjectId: DRAFT_PROJECT_ID,
-      }),
-    ).toBe(PROJECT_ID);
-    expect(
-      resolveSingleProjectId({
-        threadProjectId: null,
-        draftProjectId: DRAFT_PROJECT_ID,
-      }),
-    ).toBe(DRAFT_PROJECT_ID);
-    expect(resolveSingleProjectId({ threadProjectId: null, draftProjectId: null })).toBeNull();
-  });
-
   it("normalizes split pane browser and diff state for single-chat navigation", () => {
     expect(
       normalizeSingleSearchFromPane({
@@ -284,40 +252,6 @@ describe("resolveToggledChatPanelPatch", () => {
       diffTurnId: OTHER_TURN_ID,
       diffFilePath: "src/browser.tsx",
     });
-  });
-});
-
-describe("resolveSplitPaneMaximizeDecision", () => {
-  it("targets the focused thread and preserves its panel state for single-chat navigation", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: THREAD_ID,
-        focusedPanelState: {
-          panel: "diff",
-          diffTurnId: TURN_ID,
-          diffFilePath: "src/chat.tsx",
-        },
-      }),
-    ).toEqual({
-      splitViewIdToRemove: "split-1",
-      threadId: THREAD_ID,
-      panelState: {
-        panel: "diff",
-        diffTurnId: TURN_ID,
-        diffFilePath: "src/chat.tsx",
-      },
-    });
-  });
-
-  it("does not invent a target when the focused pane is empty", () => {
-    expect(
-      resolveSplitPaneMaximizeDecision({
-        splitViewId: "split-1",
-        focusedThreadId: null,
-        focusedPanelState: null,
-      }),
-    ).toBeNull();
   });
 });
 

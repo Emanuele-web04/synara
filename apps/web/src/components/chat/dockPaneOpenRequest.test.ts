@@ -20,19 +20,6 @@ describe("routeSingleDockPaneOpenRequest", () => {
     expect(calls).toEqual(["hydrate", `open:${CURRENT_THREAD_ID}`]);
   });
 
-  it("hydrates before opening so an agent request never waits on a suspended frame", () => {
-    const calls: string[] = [];
-
-    routeSingleDockPaneOpenRequest({
-      currentThreadId: CURRENT_THREAD_ID,
-      requestedThreadId: CURRENT_THREAD_ID,
-      requestImmediateHydration: () => calls.push("hydrate"),
-      openPane: () => calls.push("open"),
-    });
-
-    expect(calls[0]).toBe("hydrate");
-  });
-
   it("remembers a background thread's pane without hydrating or navigating away", () => {
     const calls: string[] = [];
 

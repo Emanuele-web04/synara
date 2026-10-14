@@ -48,7 +48,8 @@ interface RpcRequest {
 
 interface PipeClient {
   readonly socket: Net.Socket;
-  pending: Buffer;
+  pendingChunks: Buffer[];
+  pendingBytes: number;
   inFlightRequests: number;
   sessionId: string | null;
   threadId: ThreadId | null;
@@ -156,6 +157,24 @@ function encodeFrame(message: unknown): Buffer {
     header.writeUInt32BE(payload.length, 0);
   }
   return Buffer.concat([header, payload]);
+}
+
+/**
+ * Bytes needed before the first pending frame can be decoded: the header
+ * alone while it is still incomplete, then header + payload. `null` when the
+ * header already announces an oversized frame, mirroring `decodeFrames`.
+ */
+function expectedFrameLength(chunks: ReadonlyArray<Buffer>): number | null {
+  const header = Buffer.alloc(FRAME_HEADER_BYTES);
+  let copied = 0;
+  for (const chunk of chunks) {
+    if (copied >= FRAME_HEADER_BYTES) break;
+    copied += chunk.copy(header, copied, 0, Math.min(chunk.length, FRAME_HEADER_BYTES - copied));
+  }
+  if (copied < FRAME_HEADER_BYTES) return FRAME_HEADER_BYTES;
+  const length = OS.endianness() === "LE" ? header.readUInt32LE(0) : header.readUInt32BE(0);
+  if (length > MAX_MESSAGE_BYTES) return null;
+  return FRAME_HEADER_BYTES + length;
 }
 
 function decodeFrames(
@@ -306,7 +325,8 @@ export class BrowserHostPipeServer {
     }
     const client: PipeClient = {
       socket,
-      pending: Buffer.alloc(0),
+      pendingChunks: [],
+      pendingBytes: 0,
       inFlightRequests: 0,
       sessionId: null,
       threadId: null,
@@ -327,12 +347,31 @@ export class BrowserHostPipeServer {
   }
 
   private handleData(client: PipeClient, chunk: Buffer): void {
-    const decoded = decodeFrames(Buffer.concat([client.pending, chunk]));
+    // Accumulate chunks and only concatenate once the pending bytes can hold a
+    // complete frame. Re-concatenating the whole pending buffer on every socket
+    // chunk made reassembling a multi-megabyte screenshot frame quadratic
+    // (~1 GiB of memmove for one 10 MiB frame) on the main-process event loop.
+    client.pendingChunks.push(chunk);
+    client.pendingBytes += chunk.length;
+    const expectedFrameBytes = expectedFrameLength(client.pendingChunks);
+    if (expectedFrameBytes === null) {
+      client.socket.destroy();
+      return;
+    }
+    if (client.pendingBytes < expectedFrameBytes) {
+      return;
+    }
+    const decoded = decodeFrames(
+      client.pendingChunks.length === 1
+        ? client.pendingChunks[0]!
+        : Buffer.concat(client.pendingChunks, client.pendingBytes),
+    );
     if (!decoded) {
       client.socket.destroy();
       return;
     }
-    client.pending = decoded.remaining;
+    client.pendingChunks = decoded.remaining.length > 0 ? [decoded.remaining] : [];
+    client.pendingBytes = decoded.remaining.length;
     for (const raw of decoded.messages) {
       if (client.inFlightRequests >= this.maxInFlightRequests) {
         const id = parseRpcRequest(raw)?.id;

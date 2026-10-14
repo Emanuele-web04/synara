@@ -1,5 +1,6 @@
 import type { KeybindingShortcut } from "@synara/contracts";
 
+import { shortcutKeyFromEventCode } from "~/keybindings";
 import { getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 /**
@@ -43,30 +44,72 @@ export function normalizeShortcutKeyToken(key: string): string | null {
 }
 
 /**
- * Captures one key or a modifier combination. Three tokens is the maximum
- * supported by the UI (two modifiers plus the base key); returning null keeps
- * modifier-only keydowns from committing an incomplete binding.
+ * The keybinding config value for a keydown, such as "mod+shift+k", or null while only
+ * modifiers are down. Three tokens is the most the UI supports (two modifiers plus the
+ * key). Reads the key the same way as the shortcut recorder, so Option+S on macOS is
+ * "alt+s" rather than the "ß" it types.
  */
 export function keybindingFromKeyboardEvent(
-  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"> &
+    Partial<Pick<KeyboardEvent, "code">>,
   platform = getNavigatorPlatform(),
 ): string | null {
-  const keyToken = normalizeShortcutKeyToken(event.key);
-  if (!keyToken) return null;
+  const shortcut = shortcutFromKeyboardEvent(event, platform);
+  if (!shortcut) return null;
+  const modifiers = [
+    shortcut.modKey,
+    shortcut.metaKey,
+    shortcut.ctrlKey,
+    shortcut.altKey,
+    shortcut.shiftKey,
+  ].filter(Boolean).length;
+  return modifiers <= 2 ? keybindingValueFromShortcut(shortcut) : null;
+}
 
-  const parts: string[] = [];
-  if (isMacPlatform(platform)) {
-    if (event.metaKey) parts.push("mod");
-    if (event.ctrlKey) parts.push("ctrl");
-  } else {
-    if (event.ctrlKey) parts.push("mod");
-    if (event.metaKey) parts.push("meta");
-  }
-  if (event.altKey) parts.push("alt");
-  if (event.shiftKey) parts.push("shift");
-  parts.push(keyToken);
+/**
+ * The shortcut a keydown stands for, or null while only modifiers are down or the key
+ * has no name in the keybindings config.
+ *
+ * The typed character wins when it is a plain letter or digit, so the binding shows the
+ * key the user's layout prints. Anything else falls back to the physical key: holding
+ * Option on macOS turns S into "ß" and Space into a non-breaking space, and Shift turns
+ * 1 into "!", none of which is what the user means to bind.
+ */
+export function shortcutFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"> &
+    Partial<Pick<KeyboardEvent, "code">>,
+  platform = getNavigatorPlatform(),
+): KeybindingShortcut | null {
+  const typedKey = event.key.toLowerCase();
+  const key = /^[a-z0-9]$/.test(typedKey)
+    ? typedKey
+    : (shortcutKeyFromEventCode(event.code) ?? shortcutKeyFromToken(event.key));
+  if (!key) return null;
 
-  return parts.length <= 3 ? parts.join("+") : null;
+  return { key, ...shortcutModifiersFromKeyboardEvent(event, platform) };
+}
+
+/** The modifiers held during a key event, with the platform's primary one as `mod`. */
+export function shortcutModifiersFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
+  platform = getNavigatorPlatform(),
+): Omit<KeybindingShortcut, "key"> {
+  const isMac = isMacPlatform(platform);
+  return {
+    modKey: isMac ? event.metaKey : event.ctrlKey,
+    metaKey: isMac ? false : event.metaKey,
+    ctrlKey: isMac ? event.ctrlKey : false,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+  };
+}
+
+// Resolved shortcuts spell these two keys out; the config syntax abbreviates them.
+function shortcutKeyFromToken(key: string): string | null {
+  const token = normalizeShortcutKeyToken(key);
+  if (token === "space") return " ";
+  if (token === "esc") return "escape";
+  return token;
 }
 
 export function keybindingValueFromShortcut(shortcut: KeybindingShortcut): string {

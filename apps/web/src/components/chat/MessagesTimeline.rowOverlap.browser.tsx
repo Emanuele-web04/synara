@@ -227,6 +227,54 @@ describe("MessagesTimeline row overlap under streaming", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps a long transcript readable after batched updates and viewport resizing", async () => {
+    const handleRef: { current: HarnessHandle | null } = { current: null };
+    const host = createTimelineHost();
+    const screen = await render(<RowOverlapTimeline handleRef={handleRef} />, { container: host });
+    try {
+      await expect.poll(() => handleRef.current?.listRef.current != null).toBe(true);
+      handleRef.current!.update(() =>
+        Array.from({ length: 240 }, (_, index) =>
+          messageEntry(
+            `history-${index}`,
+            index % 2 === 0 ? "user" : "assistant",
+            `History ${index}. ${"Variable length response text. ".repeat(1 + (index % 12))}`,
+          ),
+        ),
+      );
+      for (let frame = 0; frame < 10; frame += 1) await nextFrame();
+      await handleRef.current!.listRef.current?.scrollToEnd({ animated: false });
+      await expect
+        .poll(() => document.querySelector('[data-message-id="history-239"]') != null)
+        .toBe(true);
+      for (let batch = 0; batch < 8; batch += 1) {
+        host.style.width = batch % 2 === 0 ? "380px" : "800px";
+        handleRef.current!.update((current) => [
+          ...current,
+          ...Array.from({ length: 12 }, (_, index) =>
+            index % 2 === 0
+              ? messageEntry(
+                  `burst-${batch}-${index}`,
+                  "assistant",
+                  "Batched narration. ".repeat(5 + index),
+                )
+              : commandEntry(`burst-${batch}-${index}`, `echo step-${index}`, "completed"),
+          ),
+        ]);
+        for (let frame = 0; frame < 2; frame += 1) await nextFrame();
+        await handleRef.current!.listRef.current?.scrollToEnd({ animated: false });
+        await expect
+          .poll(() => document.querySelector(`[data-message-id="burst-${batch}-10"]`) != null)
+          .toBe(true);
+        for (let frame = 0; frame < 20; frame += 1) await nextFrame();
+        expect(deepestRowOverlap().overlapPx, `batch ${batch}`).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   it("keeps virtualized rows from overlapping while tool calls stream, groups collapse, and disclosures animate", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
     const host = createTimelineHost();

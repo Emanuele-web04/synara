@@ -7,21 +7,23 @@ Synara connects to the OpenCode runtime installed on your machine. OpenCode owns
 
 ## Install
 
-The official installer is:
+For OpenCode V2, the official installer is:
 
 ```bash
-curl -fsSL https://opencode.ai/install | bash
+curl -fsSL https://opencode.ai/v2/install | bash
 ```
 
 OpenCode can also be installed through npm or Homebrew:
 
 ```bash
-npm install -g opencode-ai
+npm install -g @opencode/cli
 ```
 
 ```bash
-brew install anomalyco/tap/opencode
+brew install anomalyco/tap/opencode-v2
 ```
+
+V1 and V2 both provide `opencode`. Remove a package-managed V1 installation before installing V2 with a package manager; the V2 installer replaces the existing native binary. Keep a backup of your provider configuration while checking the migration. Synara also continues to support existing V1 servers.
 
 Synara looks for the `opencode` executable. Verify it with:
 
@@ -108,6 +110,16 @@ Synara does not currently classify OpenCode as supporting native live-turn steer
 
 Synara 0.8.0 removed the retired Kilo Code provider. During the database upgrade, existing Kilo tasks and provider-session identities are migrated to OpenCode, along with saved favorite-provider and editor-tab selections. Review the migrated task's OpenCode executable, credentials, and model catalog before continuing important work.
 
+## Migrating to OpenCode V2
+
+Point the existing OpenCode provider account at your V2 executable, or configure its V2 server URL and password. Start a new Synara provider session after changing the executable. Synara detects the API before sending work and uses the native V2 client for models, agents, sessions, streaming, approvals, forms, attachments, forks, rollback, compaction, and text generation.
+
+Keep the same OpenCode account and data directories when continuing existing sessions. OpenCode owns migration of its native history and credentials; Synara preserves its stored session IDs and does not replace missing sessions with empty ones. Complete any migration OpenCode requests before resuming old tasks.
+
+Supported V1 configuration remains readable by V2. V1 plugins require porting to the new plugin API. If you convert configuration to native V2 syntax, do not subsequently run V1 against those files. See the [official migration guide](https://opencode.ai/v2/docs/migrate-v1/).
+
+The Synara MCP gateway remains task-scoped. V2 registration is followed by a connection-status check; an accepted configuration alone does not mean the gateway is ready. Standard question forms use Synara’s existing question UI. Forms with external, hidden, or conditional fields must be completed in OpenCode and can be cancelled from Synara.
+
 ## Configuration
 
 Keep provider credentials and model definitions in OpenCode’s supported configuration locations. Project-level configuration can intentionally differ from global configuration, so verify the catalog from the same repository Synara will open.
@@ -150,9 +162,9 @@ Not every underlying provider supports the same options. Reproduce the selection
 
 ## Official documentation
 
-- [OpenCode introduction and installation](https://opencode.ai/docs)
-- [OpenCode providers](https://opencode.ai/docs/providers)
-- [OpenCode configuration](https://opencode.ai/docs/config)
+- [OpenCode introduction and installation](https://opencode.ai/v2/docs)
+- [OpenCode providers](https://opencode.ai/v2/docs/providers)
+- [OpenCode configuration](https://opencode.ai/v2/docs/config)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
 

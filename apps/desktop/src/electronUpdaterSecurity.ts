@@ -13,8 +13,6 @@ import {
 import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
 import { resolveWindowsPowerShellExecutable } from "@synara/shared/platformEnvironment";
 
-export { parseDistinguishedName } from "@synara/shared/windowsCertificate";
-
 type Logger = {
   info?(message: string): void;
   warn?(message: string): void;

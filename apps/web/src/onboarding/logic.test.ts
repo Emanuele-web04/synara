@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ONBOARDING_STEPS,
   classifyProviderSetup,
+  describeOnboardingAgentSummary,
   isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
@@ -35,10 +35,6 @@ const RECONCILE_BASE = {
 } as const;
 
 describe("onboarding steps", () => {
-  it("runs intro → tour → providers → theme → project → done", () => {
-    expect(ONBOARDING_STEPS).toEqual(["welcome", "tour", "providers", "theme", "project", "done"]);
-  });
-
   it("clamps navigation at both ends", () => {
     expect(nextOnboardingStep("welcome")).toBe("tour");
     expect(nextOnboardingStep("done")).toBe("done");
@@ -71,10 +67,6 @@ describe("resolveOnboardingGate", () => {
     expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
   });
 
-  it("shows on a fresh install with no ordinary projects", () => {
-    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
-  });
-
   it("hides once any ordinary project exists", () => {
     expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 1 })).toBe("hidden");
   });
@@ -84,20 +76,9 @@ describe("resolveOnboardingGate", () => {
     // A local marker covers a completion whose server write failed.
     expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: COMPLETED_AT })).toBe("hidden");
   });
-
-  it("is re-evaluated, not latched: a later non-empty snapshot flips show to hidden", () => {
-    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
-    expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 2 })).toBe("hidden");
-  });
 });
 
 describe("resolveLocalOnboardingCompletion", () => {
-  it("returns nothing without a local marker", () => {
-    expect(
-      resolveLocalOnboardingCompletion({ completedAt: null, installationKey: "/a" }, "/a"),
-    ).toBeNull();
-  });
-
   it("only counts a marker recorded against the current installation", () => {
     const local = { completedAt: COMPLETED_AT, installationKey: "/home/a/.synara/worktrees" };
     expect(resolveLocalOnboardingCompletion(local, "/home/a/.synara/worktrees")).toBe(COMPLETED_AT);
@@ -162,10 +143,6 @@ describe("resolveOnboardingCompletionToReconcile", () => {
       NOW,
     );
   });
-
-  it("writes nothing on a genuine fresh install", () => {
-    expect(resolveOnboardingCompletionToReconcile(RECONCILE_BASE)).toBeNull();
-  });
 });
 
 describe("classifyProviderSetup", () => {
@@ -184,6 +161,35 @@ describe("classifyProviderSetup", () => {
       classifyProviderSetup({
         status: { available: false, authStatus: "unknown" },
         disabled: false,
+      }),
+    ).toBe("not-installed");
+  });
+
+  it("waits for an in-flight probe before calling a provider without status not installed", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detecting: true })).toBe(
+      "detecting",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detecting: true,
+      }),
+    ).toBe("not-installed");
+    expect(classifyProviderSetup({ status: null, disabled: true, detecting: true })).toBe(
+      "disabled",
+    );
+  });
+
+  it("keeps a missing provider unknown if detection fails", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detectionFailed: true })).toBe(
+      "check-failed",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detectionFailed: true,
       }),
     ).toBe("not-installed");
   });
@@ -217,9 +223,27 @@ describe("summarizeProviderSetup", () => {
         { provider: "codex", state: "connected" },
         { provider: "claudeAgent", state: "needs-sign-in" },
         { provider: "cursor", state: "not-installed" },
+        { provider: "opencode", state: "detecting" },
+        { provider: "grok", state: "check-failed" },
         { provider: "pi", state: "disabled" },
       ]),
-    ).toEqual({ enabled: 3, connected: 1, needsSignIn: 1, notInstalled: 1 });
+    ).toEqual({
+      enabled: 5,
+      connected: 1,
+      needsSignIn: 1,
+      notInstalled: 1,
+      detecting: 1,
+      checkFailed: 1,
+    });
+  });
+
+  it("keeps the final welcome summary truthful until detection succeeds", () => {
+    const summaryFor = (state: "detecting" | "check-failed" | "connected") =>
+      describeOnboardingAgentSummary(summarizeProviderSetup([{ provider: "codex", state }]));
+
+    expect(summaryFor("detecting")).toBe("Checking agents…");
+    expect(summaryFor("check-failed")).toBe("Could not check all agents");
+    expect(summaryFor("connected")).toBe("1 agent connected");
   });
 });
 

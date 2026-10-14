@@ -1,5 +1,5 @@
 // FILE: deferredChatMount.ts
-// Purpose: Schedules deferred chat mounting with a bounded fallback when Chromium
+// Purpose: Schedules deferred chat mounting and after-paint work with a bounded fallback when Chromium
 //          suppresses animation frames during Electron startup/background throttling.
 // Layer: Chat surface lifecycle helper
 
@@ -48,5 +48,46 @@ export function scheduleDeferredChatMount(
     scheduler.clearTimeout(fallbackTimer);
     scheduler.cancelAnimationFrame(firstFrame);
     scheduler.cancelAnimationFrame(secondFrame);
+  };
+}
+
+/**
+ * Run `onReady` right after the next paint: the frame callback hands off to a timer, which
+ * fires once that frame is on screen rather than a whole frame later. For work that must
+ * not delay a visual acknowledgement (a pressed tab's highlight) but should start as soon
+ * as it shows. Same bounded fallback and cleanup contract as `scheduleDeferredChatMount`.
+ */
+export function scheduleAfterNextPaint(
+  scheduler: DeferredChatMountScheduler,
+  onReady: () => void,
+): () => void {
+  let frame = 0;
+  let afterPaintTimer = 0;
+  let fallbackTimer = 0;
+  let settled = false;
+
+  const markReady = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    scheduler.clearTimeout(fallbackTimer);
+    scheduler.clearTimeout(afterPaintTimer);
+    onReady();
+  };
+
+  fallbackTimer = scheduler.setTimeout(markReady, DEFERRED_CHAT_MOUNT_FALLBACK_MS);
+  frame = scheduler.requestAnimationFrame(() => {
+    if (settled) {
+      return;
+    }
+    afterPaintTimer = scheduler.setTimeout(markReady, 0);
+  });
+
+  return () => {
+    settled = true;
+    scheduler.clearTimeout(fallbackTimer);
+    scheduler.clearTimeout(afterPaintTimer);
+    scheduler.cancelAnimationFrame(frame);
   };
 }

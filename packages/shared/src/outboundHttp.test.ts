@@ -1,12 +1,19 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
   createServer as createHttpServer,
   type RequestListener,
   type Server as HttpServer,
 } from "node:http";
+import { stripTypeScriptTypes } from "node:module";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { decodeOutboundJson, outboundHttp } from "./outboundHttp";
+import { OutboundPolicyError } from "./outboundHttpPolicy";
 
 /**
  * A port nothing is listening on, so every connection attempt is refused.
@@ -82,6 +89,73 @@ const loopbackPolicyFor = (allowedOrigins: ReadonlyArray<string>, maxRedirects =
  * continued, and the process then died on the second emit.
  */
 describe("outbound requests that cannot connect", () => {
+  it("survives an immediate TLS connection error and serves the next request", async () => {
+    // A synchronous pinned lookup can destroy the TLS socket during its
+    // constructor, before Node attaches its error handlers. Keep the fatal
+    // regression in a child process and exercise the real transport there.
+    const directory = await mkdtemp(join(tmpdir(), "synara-outbound-tls-"));
+    try {
+      for (const name of ["outboundHttpPolicy", "outboundHttp"]) {
+        const source = await readFile(new URL(`./${name}.ts`, import.meta.url), "utf8");
+        const transformed = stripTypeScriptTypes(source, { mode: "transform" }).replace(
+          '"./outboundHttpPolicy"',
+          '"./outboundHttpPolicy.mjs"',
+        );
+        await writeFile(join(directory, `${name}.mjs`), transformed);
+      }
+      const fixture = join(directory, "connection-failure.mjs");
+      await writeFile(
+        fixture,
+        `import assert from "node:assert/strict";
+import dns from "node:dns/promises";
+import { createServer } from "node:http";
+import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
+import { outboundHttp, OutboundHttpError } from "./outboundHttp.mjs";
+
+// Pin localhost to IPv4; the connection failure itself comes from the OS.
+const lookup = dns.lookup;
+dns.lookup = (hostname, options) => hostname === "localhost"
+  ? Promise.resolve([{ address: "127.0.0.1", family: 4 }])
+  : lookup(hostname, options);
+syncBuiltinESMExports();
+const policy = {
+  service: "tls-lifecycle-test", allowedOrigins: ["https://localhost"],
+  timeoutMs: 1000, maxRequestBytes: 0, maxResponseBytes: 1024,
+  maxRedirects: 0, maxConcurrent: 1, maxQueued: 1, requirePublicAddress: false,
+};
+// TEST-NET-1 is not a local interface, so bind fails before TLS setup completes.
+https.globalAgent.options.localAddress = "192.0.2.123";
+await assert.rejects(outboundHttp.request({ policy, url: "https://localhost/" }),
+  (error) => error instanceof OutboundHttpError && error.code === "request"
+    && error.cause?.code === "EADDRNOTAVAIL");
+delete https.globalAgent.options.localAddress;
+
+const server = createServer((_request, response) => response.end("ok"));
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+try {
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const response = await outboundHttp.request({
+    policy: { ...policy, allowedOrigins: [origin], allowLoopbackHttp: true },
+    url: origin,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(new TextDecoder().decode(response.body), "ok");
+} finally {
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+console.log("survived");
+`,
+      );
+      const { stdout } = await promisify(execFile)(process.execPath, [fixture], {
+        timeout: 10_000,
+      });
+      expect(stdout.trim()).toBe("survived");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("rejects rather than hanging", async () => {
     const port = await refusedPort();
 
@@ -93,18 +167,61 @@ describe("outbound requests that cannot connect", () => {
       }),
     ).rejects.toThrow(/Outbound request failed/u);
   });
+});
 
-  it("stays usable for the next caller after a connection failure", async () => {
-    const port = await refusedPort();
+// A literal 198.18.x.x URL exercises the pinned-address check without DNS:
+// literal hosts go through the same assertion as resolved answers.
+const benchmarkPolicyFor = (origin: string) => ({
+  service: "benchmark-test",
+  allowedOrigins: [origin],
+  timeoutMs: 2_000,
+  maxRequestBytes: 0,
+  maxResponseBytes: 1024,
+  maxRedirects: 0,
+  maxConcurrent: 1,
+  maxQueued: 1,
+  requirePublicAddress: true,
+});
 
+describe("benchmark-range opt-in", () => {
+  it("rejects a 198.18.0.0/15 destination by default", async () => {
     await expect(
       outboundHttp.request({
-        policy: policyFor(port),
-        url: `https://127.0.0.1:${port}/again.ico`,
-        headers: { Accept: "image/*" },
+        policy: benchmarkPolicyFor("https://198.18.0.1"),
+        url: "https://198.18.0.1/",
       }),
-    ).rejects.toThrow(/Outbound request failed/u);
+    ).rejects.toMatchObject({ code: "private-address" });
   });
+
+  it("lets an opted-in request past the address check", async () => {
+    // Nothing answers on the benchmark range here, so the request still fails at
+    // the socket — the assertion is that policy stopped rejecting it.
+    const failure = await outboundHttp
+      .request({
+        policy: {
+          ...benchmarkPolicyFor("https://198.18.0.1"),
+          allowBenchmarkAddressRange: true,
+        },
+        url: "https://198.18.0.1/",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).not.toBeInstanceOf(OutboundPolicyError);
+  });
+
+  it.each(["https://10.0.0.1", "https://127.0.0.1", "https://169.254.169.254"])(
+    "still rejects other blocked ranges with the opt-in: %s",
+    async (origin) => {
+      await expect(
+        outboundHttp.request({
+          policy: { ...benchmarkPolicyFor(origin), allowBenchmarkAddressRange: true },
+          url: `${origin}/`,
+        }),
+      ).rejects.toMatchObject({ code: "private-address" });
+    },
+  );
 });
 
 describe("loopback HTTP transport", () => {

@@ -57,7 +57,7 @@ export function readServerMemoryDiagnosticSnapshot(): ServerMemoryDiagnosticSnap
   };
 }
 
-export function toServerMemoryDiagnosticLogPayload(
+function toServerMemoryDiagnosticLogPayload(
   snapshot: ServerMemoryDiagnosticSnapshot,
 ): ServerMemoryDiagnosticLogPayload {
   return {

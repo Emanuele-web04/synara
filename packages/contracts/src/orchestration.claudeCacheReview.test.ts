@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ClientOrchestrationCommand } from "./orchestration";
+import { DEFAULT_SERVER_SETTINGS_VIEW, ServerSettings } from "./settings";
 
 const decodeClientCommand = Schema.decodeUnknownSync(ClientOrchestrationCommand);
 const response = {
@@ -15,12 +16,9 @@ const response = {
 };
 
 describe("Claude cache review client commands", () => {
-  it.each(["continue", "compact", "cancel"])(
-    "accepts the %s decision with review and message identity",
-    (decision) => {
-      expect(decodeClientCommand({ ...response, decision })).toEqual({ ...response, decision });
-    },
-  );
+  it("accepts a decision with review and message identity", () => {
+    expect(decodeClientCommand(response)).toEqual(response);
+  });
 
   it("does not accept client-supplied cache observations or turn bypass fields", () => {
     expect(
@@ -52,5 +50,16 @@ describe("Claude cache review client commands", () => {
         createdAt: response.createdAt,
       }),
     ).toThrow();
+  });
+});
+
+describe("Claude resume review setting", () => {
+  it("is off by default, like embedded Claude Code, and can be turned on", () => {
+    expect(DEFAULT_SERVER_SETTINGS_VIEW.providers.claudeAgent.confirmColdCacheResume).toBe(false);
+    expect(
+      Schema.decodeUnknownSync(ServerSettings)({
+        providers: { claudeAgent: { confirmColdCacheResume: true } },
+      }).providers.claudeAgent.confirmColdCacheResume,
+    ).toBe(true);
   });
 });

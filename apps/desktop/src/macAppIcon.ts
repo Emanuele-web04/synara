@@ -8,6 +8,12 @@ import * as Path from "node:path";
 
 import { execProcessFile } from "@synara/shared/processRuntime";
 
+import {
+  bundleSignatureFromStats,
+  isBundleStable,
+  type BundleSignature,
+} from "./bundleSwapDetection";
+
 // NSWorkspace writes custom-icon metadata outside the signed Contents tree.
 // Passing nil restores the bundle's appearance-aware icon. Arguments are data,
 // never interpolated into this script. This does not automate another app.
@@ -25,6 +31,20 @@ function run(argv) {
 }
 `;
 
+let lastPersistedIcon: {
+  readonly bundlePath: string;
+  readonly digest: string | null;
+  readonly signature: BundleSignature;
+} | null = null;
+
+async function readBundleSignature(bundlePath: string): Promise<BundleSignature | null> {
+  try {
+    return bundleSignatureFromStats(await FS.stat(bundlePath));
+  } catch {
+    return null;
+  }
+}
+
 // Call through the desktop icon apply queue: NSWorkspace icon writes must not
 // overlap. PNG bytes come from Electron because native tools cannot read ASAR.
 export async function persistMacAppIcon(input: {
@@ -32,9 +52,19 @@ export async function persistMacAppIcon(input: {
   readonly cacheDirectory: string;
   readonly png: Buffer | null;
 }): Promise<void> {
+  const digest =
+    input.png === null ? null : Crypto.createHash("sha256").update(input.png).digest("hex");
+  const signature = await readBundleSignature(input.bundlePath);
+  if (
+    lastPersistedIcon?.bundlePath === input.bundlePath &&
+    lastPersistedIcon.digest === digest &&
+    isBundleStable(lastPersistedIcon.signature, signature)
+  ) {
+    return;
+  }
+
   let imagePath = "";
   if (input.png !== null) {
-    const digest = Crypto.createHash("sha256").update(input.png).digest("hex");
     imagePath = Path.join(input.cacheDirectory, `${digest}.png`);
     await FS.mkdir(input.cacheDirectory, { recursive: true });
     await FS.writeFile(imagePath, input.png);
@@ -48,4 +78,18 @@ export async function persistMacAppIcon(input: {
       (error) => (error ? reject(error) : resolve()),
     );
   });
+
+  // NSWorkspace can change directory metadata itself. Remember the result only
+  // after success on the same bundle; a concurrent replacement must retry.
+  const persistedSignature = await readBundleSignature(input.bundlePath);
+  lastPersistedIcon =
+    signature === null ||
+    persistedSignature === null ||
+    signature.inode !== persistedSignature.inode
+      ? null
+      : {
+          bundlePath: input.bundlePath,
+          digest,
+          signature: persistedSignature,
+        };
 }

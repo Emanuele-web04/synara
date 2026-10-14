@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import {
   NATIVE_SURFACE_OCCLUSION_SYNC_EVENT,
   observeNativeSurfaceOverlay,
@@ -51,5 +52,26 @@ it("notifies on mount, resize, movement, hiding and cleanup without observing un
   } finally {
     window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, notify);
     delete document.body.dataset.unrelated;
+  }
+});
+
+it("hides native surfaces under the fallback confirm dialog while it is open", async () => {
+  const notify = vi.fn();
+  window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, notify);
+  try {
+    const result = showConfirmDialogFallback('Delete thread "Demo"?\nThis cannot be undone.');
+
+    const popup = document.querySelector<HTMLElement>("[data-slot='alert-dialog-popup']");
+    expect(popup?.getAttribute("aria-modal")).toBe("true");
+    expect(document.querySelector("[data-slot='alert-dialog-backdrop']")).not.toBeNull();
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    popup?.querySelector<HTMLButtonElement>("button")?.click();
+
+    await expect(result).resolves.toBe(false);
+    expect(document.querySelector("[data-slot='alert-dialog-popup']")).toBeNull();
+    expect(notify).toHaveBeenCalledTimes(2);
+  } finally {
+    window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, notify);
   }
 });

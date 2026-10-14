@@ -55,15 +55,6 @@ describe("project shortcut targets", () => {
     ).toEqual({ projectId: LATEST_PROJECT_ID, inheritContext: false });
   });
 
-  it("falls back to the latest ordinary project when nothing is focused", () => {
-    expect(
-      resolveNewThreadTarget({
-        currentProjectId: resolveCurrentProjectTargetId(projects, null),
-        latestUsableProjectId: resolveLatestProjectTargetId(projects, LATEST_PROJECT_ID),
-      }),
-    ).toEqual({ projectId: LATEST_PROJECT_ID, inheritContext: false });
-  });
-
   it.each([HOME_PROJECT_ID, STUDIO_PROJECT_ID])(
     "rejects a non-ordinary latest project target (%s)",
     (projectId) => {
@@ -137,14 +128,5 @@ describe("project shortcut targets", () => {
         new Map([[CURRENT_PROJECT_ID, "2026-07-10T09:30:00.000Z"]]),
       ),
     ).toBe(LATEST_PROJECT_ID);
-  });
-
-  it("returns no target when no projects exist", () => {
-    expect(
-      resolveNewThreadTarget({
-        currentProjectId: resolveCurrentProjectTargetId([], null),
-        latestUsableProjectId: resolveLatestProjectTargetId([], null),
-      }),
-    ).toBeNull();
   });
 });

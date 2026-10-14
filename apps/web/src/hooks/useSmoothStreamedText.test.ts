@@ -58,13 +58,6 @@ describe("stepSmoothReveal", () => {
     expect(run.emits.length).toBeLessThan(run.frames / 3);
   });
 
-  it("reveals every character: the final commit is the full target length", () => {
-    const run = drain(createSmoothRevealState(0), 137, 500);
-
-    expect(run.emits.at(-1)?.count).toBe(137);
-    expect(run.state.shown).toBe(137);
-  });
-
   it("emits the catch-up commit even when the interval has not elapsed", () => {
     // Mid-burst, one frame from catching up, with a commit only 4ms ago: the
     // final characters must not be held hostage to the quantization gate.

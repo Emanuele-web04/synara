@@ -2,13 +2,18 @@
 // Purpose: Shared renderer for PR descriptions and comment bodies — GitHub-flavored bodies
 //          pass through the pure preprocessing (template comments stripped, `<br>` tags
 //          resolved) and `<details>` blocks render as native closed disclosures instead of
-//          leaking literal tags and boilerplate walls into the view.
+//          leaking literal tags and boilerplate walls into the view. Images open in the
+//          shared fullscreen preview, navigable across the whole body.
 // Layer: Pull request presentation
 // Exports: PullRequestMarkdown
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
+import { ExpandedImageOverlay } from "~/components/chat/ExpandedImageOverlay";
+import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
+import { useExpandedImagePreview } from "~/components/chat/useExpandedImagePreview";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
@@ -18,7 +23,19 @@ import {
 } from "./pullRequestMarkdown.logic";
 import { PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 
-function DetailsSection({ summary, body, cwd }: { summary: string; body: string; cwd: string }) {
+type ImageExpandHandler = (preview: ExpandedImagePreview, sourceImage?: HTMLImageElement) => void;
+
+function DetailsSection({
+  summary,
+  body,
+  cwd,
+  onImageExpand,
+}: {
+  summary: string;
+  body: string;
+  cwd: string;
+  onImageExpand: ImageExpandHandler;
+}) {
   // Closed by default, matching GitHub: these blocks are boilerplate by convention.
   const [open, setOpen] = useState(false);
   return (
@@ -39,6 +56,7 @@ function DetailsSection({ summary, body, cwd }: { summary: string; body: string;
               text={body}
               cwd={cwd}
               isStreaming={false}
+              onImageExpand={onImageExpand}
               className={cn("pull-request-prose", PR_BODY_TEXT_CLASS_NAME)}
             />
           ) : null}
@@ -58,6 +76,22 @@ export function PullRequestMarkdown({
   fallback: string;
   cwd: string;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { expandedImage, setExpandedImage, closeExpandedImage, navigateExpandedImage } =
+    useExpandedImagePreview();
+  // Widen the clicked image to every image currently rendered in this body, so the
+  // preview can step through a PR's before/after screenshots.
+  const expandImage: ImageExpandHandler = (preview, sourceImage) => {
+    const elements = Array.from(
+      containerRef.current?.querySelectorAll<HTMLImageElement>("img[data-expandable-image]") ?? [],
+    );
+    const index = sourceImage ? elements.indexOf(sourceImage) : -1;
+    const images = elements.map((image) => ({
+      src: image.getAttribute("src") ?? "",
+      name: image.alt || "Image",
+    }));
+    setExpandedImage(index < 0 ? preview : { images, index });
+  };
   const sections = splitPullRequestMarkdownSections(preparePullRequestMarkdown(text));
   if (sections.length === 0) {
     return (
@@ -70,7 +104,7 @@ export function PullRequestMarkdown({
     );
   }
   return (
-    <div>
+    <div ref={containerRef}>
       {sections.map((section, index) =>
         section.kind === "markdown" ? (
           <ChatMarkdown
@@ -80,13 +114,31 @@ export function PullRequestMarkdown({
             text={section.text}
             cwd={cwd}
             isStreaming={false}
+            onImageExpand={expandImage}
             className={cn("pull-request-prose", PR_BODY_TEXT_CLASS_NAME)}
           />
         ) : (
-          // oxlint-disable-next-line no-array-index-key
-          <DetailsSection key={index} summary={section.summary} body={section.body} cwd={cwd} />
+          <DetailsSection
+            // oxlint-disable-next-line no-array-index-key
+            key={index}
+            summary={section.summary}
+            body={section.body}
+            cwd={cwd}
+            onImageExpand={expandImage}
+          />
         ),
       )}
+      {/* Portaled so the dock pane's clipping and transforms cannot trap the fixed overlay. */}
+      {expandedImage
+        ? createPortal(
+            <ExpandedImageOverlay
+              expandedImage={expandedImage}
+              onClose={closeExpandedImage}
+              onNavigate={navigateExpandedImage}
+            />,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

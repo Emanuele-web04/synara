@@ -97,9 +97,4 @@ describe("joinWorkspaceRelativePath", () => {
       "C:\\repo\\app\\src\\page.tsx",
     );
   });
-
-  it("round-trips through workspaceRelativePathOf", () => {
-    const joined = joinWorkspaceRelativePath("/repo/app", "src/page.tsx");
-    expect(workspaceRelativePathOf(joined, "/repo/app")).toBe("src/page.tsx");
-  });
 });

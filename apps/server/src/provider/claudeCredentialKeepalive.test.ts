@@ -3,10 +3,12 @@
 // Layer: Provider utility tests.
 // Exports: Vitest coverage for apps/server/src/provider/claudeCredentialKeepalive.ts.
 import { describe, it, assert } from "@effect/vitest";
+import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 
 import {
   CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS,
   CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS,
+  claudeCredentialKeepaliveTargets,
   createClaudeCredentialKeepaliveController,
   isClaudeCredentialKeepaliveEnabled,
   resolveClaudeCredentialKeepaliveBinaryPath,
@@ -98,6 +100,66 @@ describe("claudeCredentialKeepalive", () => {
 
     assert.deepEqual(started, ["/one/claude", "/two/claude"]);
     assert.deepEqual(stopped, ["/one/claude", "/two/claude"]);
+  });
+
+  it("keeps each Claude account fresh and restarts only the account that changed", async () => {
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const controller = createClaudeCredentialKeepaliveController({
+      start: (input) => {
+        const label = `${input?.accountLabel ?? "default"}:${input?.processEnv?.CLAUDE_CONFIG_DIR ?? ""}`;
+        started.push(label);
+        return {
+          stop: async () => {
+            stopped.push(label);
+          },
+        };
+      },
+    });
+    const work = { id: "claude_work", processEnv: { CLAUDE_CONFIG_DIR: "/work/.claude" } };
+    const team = { id: "claude_team", processEnv: { CLAUDE_CONFIG_DIR: "/team/.claude" } };
+
+    await controller.reconcile({ enabled: true, accounts: [work, team] });
+    await controller.reconcile({ enabled: true, accounts: [work, team] });
+    await controller.reconcile({
+      enabled: false,
+      accounts: [work, { ...team, processEnv: { CLAUDE_CONFIG_DIR: "/team2/.claude" } }],
+    });
+    await controller.stop();
+
+    assert.deepEqual(started, [
+      "default:",
+      "claude_work:/work/.claude",
+      "claude_team:/team/.claude",
+      "claude_team:/team2/.claude",
+    ]);
+    assert.deepEqual(stopped.toSorted(), [
+      "claude_team:/team/.claude",
+      "claude_team:/team2/.claude",
+      "claude_work:/work/.claude",
+      "default:",
+    ]);
+  });
+
+  it("derives one keepalive target per enabled Claude account", () => {
+    const targets = claudeCredentialKeepaliveTargets(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          claude_work: { driver: "claudeAgent", config: { homePath: "/accounts/work" } },
+          claude_off: { driver: "claudeAgent", enabled: false, config: {} },
+          codex_work: { driver: "codex", config: {} },
+        },
+      },
+      { homeDir: "/home/user", stateDir: "/state" },
+    );
+
+    assert.equal(targets.enabled, true);
+    assert.deepEqual(
+      targets.accounts?.map((account) => account.id),
+      ["claude_work"],
+    );
+    assert.equal(targets.accounts?.[0]?.processEnv.HOME, "/accounts/work");
   });
 
   it("aborts and waits for an in-flight auth probe when stopped", async () => {

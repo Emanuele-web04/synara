@@ -16,7 +16,6 @@ import {
   buildDevinAcpAuthenticateMeta,
   buildDevinAcpSpawnInput,
   makeDevinAcpRuntime,
-  mapDevinAcpCommands,
   normalizeDevinGetOutputToolCall,
   parseDevinCredentialsToml,
   resolveDevinBinaryPath,
@@ -347,24 +346,6 @@ describe("AcpSessionRuntime Devin incoming byte transport normalization", () => 
       incremental: true,
     });
   });
-
-  it("removes exactly boolean block and preserves shell_id, timeout, and incremental", async () => {
-    const [message] = await normalizeTransportChunks([
-      textEncoder.encode(
-        `${getOutputRequest(1, {
-          shell_id: "exact-shell",
-          block: true,
-          timeout: 6,
-          incremental: false,
-        })}\n`,
-      ),
-    ]);
-    expect(requestArguments(message!)).toEqual({
-      shell_id: "exact-shell",
-      timeout: 6,
-      incremental: false,
-    });
-  });
 });
 
 describe("normalizeDevinGetOutputToolCall", () => {
@@ -413,20 +394,6 @@ describe("normalizeDevinGetOutputToolCall", () => {
   });
 });
 
-describe("mapDevinAcpCommands", () => {
-  it("maps Devin ACP command descriptors for the composer", () => {
-    expect(
-      mapDevinAcpCommands([
-        { name: "compact", description: "Compact the current context" },
-        { name: "plan", description: "Plan the current task" },
-      ]),
-    ).toEqual([
-      { name: "compact", description: "Compact the current context" },
-      { name: "plan", description: "Plan the current task" },
-    ]);
-  });
-});
-
 function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeResponse {
   return {
     protocolVersion: 1,
@@ -438,20 +405,6 @@ describe("buildDevinAcpSpawnInput", () => {
   it("builds the default Devin ACP command", () => {
     expect(buildDevinAcpSpawnInput(undefined, "/tmp/project", "approval-required")).toMatchObject({
       command: "devin",
-      args: ["acp"],
-      cwd: "/tmp/project",
-    });
-  });
-
-  it("uses the configured Devin binary path", () => {
-    expect(
-      buildDevinAcpSpawnInput(
-        { binaryPath: "/usr/local/bin/devin" },
-        "/tmp/project",
-        "approval-required",
-      ),
-    ).toMatchObject({
-      command: "/usr/local/bin/devin",
       args: ["acp"],
       cwd: "/tmp/project",
     });

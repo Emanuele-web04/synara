@@ -2,14 +2,17 @@
 // Purpose: Geometry for the floating composer — the transcript scrolls *under* the
 //   frosted composer, so its measured height becomes the transcript's bottom content inset.
 // Layer: Chat composer layout helper
-// Exports: useComposerOverlayHeight (measure), composerTranscriptBottomInsetPx (derive inset)
+// Exports: useComposerOverlayHeight (measure), composerTranscriptBottomInsetPx (derive inset),
+//   composerOverlayScrollFadeVars (transcript edge fade)
 //
 // The composer is absolutely positioned at `bottom-full` of the in-flow block that
 // carries the trailing gutter (and the git BranchToolbar), so the transcript's scroll
-// viewport ends exactly at the composer's BOTTOM edge. Content stays fully painted
-// while it scrolls behind the glass (the frosted surface is what dims and blurs it);
-// a viewport mask only dissolves it in a short band just above the composer's footer
-// row, so nothing ever shows behind the send controls or the padding strip below.
+// viewport ends exactly at the composer's BOTTOM edge. While the transcript is scrolled
+// away from its end, the shared scroll edge fade dissolves rows just above the
+// composer's top edge; approaching the end, that fade slides away under the glass so
+// the resting tail is never cut. A second mask always dissolves content in a short band
+// just above the composer's footer row, so nothing ever shows behind the send controls
+// or the padding strip below.
 
 import { useCallback, useRef, useState } from "react";
 
@@ -28,6 +31,11 @@ export const COMPOSER_OVERLAY_TUCK_PX = 20;
  */
 export function composerTranscriptBottomInsetPx(overlayHeightPx: number): number {
   return Math.max(0, Math.round(overlayHeightPx) - COMPOSER_OVERLAY_TUCK_PX);
+}
+
+/** Inverse of composerTranscriptBottomInsetPx: the composer's top edge above the viewport bottom. */
+function composerOverlayHeightFromInsetPx(bottomInsetPx: number): number {
+  return Math.max(0, Math.round(bottomInsetPx) + COMPOSER_OVERLAY_TUCK_PX);
 }
 
 /**
@@ -67,7 +75,7 @@ export function composerOverlayScrollMaskImage(
   bottomClearancePx = COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
 ): string | null {
   if (bottomInsetPx <= 0) return null;
-  const overlayHeightPx = Math.max(0, Math.round(bottomInsetPx) + COMPOSER_OVERLAY_TUCK_PX);
+  const overlayHeightPx = composerOverlayHeightFromInsetPx(bottomInsetPx);
 
   const fadeEndPx = Math.min(
     overlayHeightPx,
@@ -75,6 +83,32 @@ export function composerOverlayScrollMaskImage(
   );
   const fadeStartPx = Math.min(overlayHeightPx, fadeEndPx + COMPOSER_OVERLAY_MASK_FADE_PX);
   return `linear-gradient(to bottom, #000 calc(100% - ${fadeStartPx}px), transparent calc(100% - ${fadeEndPx}px))`;
+}
+
+/**
+ * Inputs for the transcript's `scroll-edge-fade` (index.css) while the composer floats
+ * over it: the bottom edge fade ends at the composer's top edge, so rows dissolve
+ * before they reach the glass instead of being cut by it, and the footer dissolve
+ * above is intersected with it. Null when there is no composer inset (the fade then
+ * sits at the viewport's bottom edge).
+ */
+export function composerOverlayScrollFadeVars(
+  bottomInsetPx: number,
+  bottomClearancePx = COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
+): {
+  "--scroll-edge-fade-inset-b": string;
+  "--scroll-edge-fade-layer": string;
+  "--scroll-edge-fade-tuck": string;
+} | null {
+  const maskImage = composerOverlayScrollMaskImage(bottomInsetPx, bottomClearancePx);
+  if (!maskImage) return null;
+  return {
+    "--scroll-edge-fade-inset-b": `${composerOverlayHeightFromInsetPx(bottomInsetPx)}px`,
+    "--scroll-edge-fade-layer": maskImage,
+    // Read by the whole-window glass rule in index.css, where the transcript dissolves
+    // over a tuck-sized band ending at the composer's top edge instead of running under it.
+    "--scroll-edge-fade-tuck": `${COMPOSER_OVERLAY_TUCK_PX}px`,
+  };
 }
 
 /** Gap between the composer's top edge and floating transcript affordances. */

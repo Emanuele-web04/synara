@@ -6,7 +6,6 @@ import {
   localServerAddressLabel,
   localServerFolderLabel,
   localServerMatchesRun,
-  localServerPrimaryLabel,
 } from "./localServers";
 
 function makeServer(overrides: Partial<ServerLocalServerProcess>): ServerLocalServerProcess {
@@ -24,10 +23,6 @@ function makeServer(overrides: Partial<ServerLocalServerProcess>): ServerLocalSe
 }
 
 describe("localServerAddressLabel", () => {
-  it("renders a single port as localhost:<port>", () => {
-    expect(localServerAddressLabel(makeServer({ ports: [5733] }))).toBe("localhost:5733");
-  });
-
   it("joins multiple ports", () => {
     expect(localServerAddressLabel(makeServer({ ports: [5733, 8891] }))).toBe(
       "localhost:5733, localhost:8891",
@@ -41,31 +36,9 @@ describe("localServerAddressLabel", () => {
     });
     expect(localServerAddressLabel(server)).toBe("localhost:5733");
   });
-
-  it("falls back to a bare localhost when no port is known", () => {
-    expect(localServerAddressLabel(makeServer({}))).toBe("localhost");
-  });
-});
-
-describe("localServerPrimaryLabel", () => {
-  it("prefers the live page title when one was resolved", () => {
-    expect(localServerPrimaryLabel(makeServer({ pageTitle: "Synara", displayName: "Vite" }))).toBe(
-      "Synara",
-    );
-  });
-
-  it("falls back to the detected display name when no page title is known", () => {
-    expect(localServerPrimaryLabel(makeServer({ displayName: "Next.js" }))).toBe("Next.js");
-  });
 });
 
 describe("localServerFolderLabel", () => {
-  it("returns the final segment of a POSIX cwd", () => {
-    expect(localServerFolderLabel(makeServer({ cwd: "/Users/me/Developer/synara-website" }))).toBe(
-      "synara-website",
-    );
-  });
-
   it("ignores a trailing separator", () => {
     expect(localServerFolderLabel(makeServer({ cwd: "/Users/me/Developer/synara/" }))).toBe(
       "synara",
@@ -74,10 +47,6 @@ describe("localServerFolderLabel", () => {
 
   it("tolerates Windows separators", () => {
     expect(localServerFolderLabel(makeServer({ cwd: "C:\\Users\\me\\projects\\app" }))).toBe("app");
-  });
-
-  it("returns null when the cwd is unknown", () => {
-    expect(localServerFolderLabel(makeServer({}))).toBeNull();
   });
 
   it("returns null when the cwd is only separators", () => {

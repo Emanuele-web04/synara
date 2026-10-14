@@ -7,7 +7,7 @@ export function ExpiredSidechatNotice({ onStartNew }: { readonly onStartNew: () 
       role="status"
     >
       <span className="min-w-0 text-[var(--color-text-foreground-secondary)]">
-        This side chat expired after 1 hour of inactivity. Start a new side chat.
+        This side chat expired after a period of inactivity. Start a new side chat.
       </span>
       <Button type="button" variant="outline" size="sm" onClick={onStartNew}>
         Start new

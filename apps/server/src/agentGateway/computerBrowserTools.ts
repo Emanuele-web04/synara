@@ -26,7 +26,6 @@
  *   boundary is Synara's own filesystem policy on top of that.
  */
 import { realpath } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
 import { Effect } from "effect";
 
 import type { ComputerBrowserToolName } from "@synara/contracts";
@@ -37,6 +36,8 @@ import {
   type ComputerBrowserCallResult,
 } from "../computer/ComputerBackend.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { ComputerApprovalExpiredError } from "../computer/ComputerApprovalGate.ts";
+import { boundedWorkspacePath } from "./computerWorkspacePath.ts";
 import type { ComputerManager } from "../computer/ComputerManager.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import {
@@ -57,6 +58,7 @@ import {
   computerApprovalRequiredError,
   computerAuditErrorOutcome,
   cuaActionErrorPayload,
+  type AgentGatewayComputerToolsOptions,
 } from "./computerTools.ts";
 import {
   computerAuditGatewayRequestId,
@@ -83,6 +85,8 @@ export interface AgentGatewayComputerBrowserToolsOptions {
   readonly resolveForegroundAuthorization?: (
     context: ToolContext,
   ) => Promise<ComputerForegroundAuthorization>;
+  /** Same visible-use approval card the desktop tools show; see computerTools. */
+  readonly requestForegroundConsent?: AgentGatewayComputerToolsOptions["requestForegroundConsent"];
   /**
    * The caller thread's canonical workspace root, for bounding upload and
    * download paths. Absent or unresolved means the file-transfer tools refuse
@@ -165,27 +169,6 @@ function browserResultToMcp(result: ComputerBrowserCallResult): McpToolCallResul
     ...(result.isError === true ? { isError: true } : {}),
     ...(structuredContent !== undefined ? { structuredContent } : {}),
   };
-}
-
-/**
- * Canonicalize one model-supplied filesystem path and prove it resolves inside
- * the workspace. The canonical path is what gets dispatched — a symlink
- * cannot widen the approved set, and the driver's own canonicality check
- * then passes by construction.
- */
-async function boundedWorkspacePath(
-  raw: unknown,
-  workspaceRoot: string,
-  field: string,
-): Promise<string> {
-  if (typeof raw !== "string" || raw.length === 0 || !isAbsolute(raw))
-    throw new ToolInputError(`"${field}" must be an absolute path.`);
-  const canonical = await realpath(raw).catch(() => {
-    throw new ToolInputError(`"${field}" does not resolve to an existing path.`);
-  });
-  if (canonical !== workspaceRoot && !canonical.startsWith(workspaceRoot + sep))
-    throw new ToolInputError(`"${field}" resolves outside the active workspace.`);
-  return canonical;
 }
 
 /**
@@ -441,14 +424,30 @@ export function makeAgentGatewayComputerBrowserTools(
 ): ReadonlyArray<ToolEntry> {
   const { manager } = options;
 
-  const assertVisibleBrowserAllowed = async (context: ToolContext): Promise<void> => {
+  const assertVisibleBrowserAllowed = async (
+    context: ToolContext,
+    consent?: { readonly args: Record<string, unknown>; readonly signal: AbortSignal },
+  ): Promise<void> => {
     const authorization = await Promise.resolve()
       .then(() => options.resolveForegroundAuthorization?.(context))
       .catch(() => COMPUTER_FOREGROUND_NOT_AUTHORIZED);
-    if (authorization?.userRequestedVisibleUse !== true) {
+    if (
+      authorization?.userRequestedVisibleUse !== true &&
+      !(
+        consent !== undefined &&
+        options.requestForegroundConsent !== undefined &&
+        (await options.requestForegroundConsent(
+          "computer_browser_prepare",
+          consent.args,
+          context,
+          consent.signal,
+        ))
+      )
+    ) {
       throw new CuaActionError(
-        "The user's task did not ask for a visible browser. Keep windowed false " +
-          "to work in the background, or ask the user to confirm they want to watch.",
+        "Showing a browser window was not allowed for this task (declined or cancelled). " +
+          "Keep windowed false to work in the background, and do not ask " +
+          "again in this turn.",
         "not-dispatched",
         COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
       );
@@ -617,8 +616,13 @@ export function makeAgentGatewayComputerBrowserTools(
           }
           const visibleLaunch =
             name === "computer_browser_prepare" && effectiveArgs.windowed === true;
-          // Refuse before asking the user to approve a call that cannot run.
-          if (visibleLaunch) await assertVisibleBrowserAllowed(context);
+          // The Linux host refuses every visible launch, so the user is never
+          // asked to approve one there.
+          const asksForVisibleUse =
+            options.requestForegroundConsent !== undefined && manager.agentDialect === "macos";
+          // Without a way to ask, refuse before asking the user to approve a
+          // call that cannot run.
+          if (visibleLaunch && !asksForVisibleUse) await assertVisibleBrowserAllowed(context);
           if (computerBrowserToolRequiresApproval(name, effectiveArgs)) {
             if (!options.authorizeAction) {
               audit({ effect: "refused", code: "approval_unavailable" });
@@ -637,6 +641,12 @@ export function makeAgentGatewayComputerBrowserTools(
               );
             }
           }
+          // Visible-use consent follows routine approval, as on the desktop tools.
+          if (visibleLaunch && asksForVisibleUse)
+            await assertVisibleBrowserAllowed(context, {
+              args: effectiveArgs,
+              signal: abortSignal,
+            });
           await Effect.runPromise(context.assertCallerTurnActive(), { signal: abortSignal });
           abortSignal.throwIfAborted();
           const boundedArgs = await boundBrowserPaths(
@@ -687,9 +697,26 @@ export function makeAgentGatewayComputerBrowserTools(
                   ],
                   isError: true as const,
                 }
-              : error instanceof ComputerBackendError || error instanceof ToolInputError
-                ? mcpToolResultError(error.message)
-                : mcpToolResultError(errorText(error));
+              : error instanceof ComputerApprovalExpiredError
+                ? {
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: JSON.stringify({
+                          error: {
+                            code: error.code,
+                            effect: error.effect,
+                            retryable: error.retryable,
+                            message: error.message,
+                          },
+                        }),
+                      },
+                    ],
+                    isError: true as const,
+                  }
+                : error instanceof ComputerBackendError || error instanceof ToolInputError
+                  ? mcpToolResultError(error.message)
+                  : mcpToolResultError(errorText(error));
           return Effect.succeed(failure);
         }),
       );
@@ -757,7 +784,7 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_prepare",
       "Prepare browser",
-      `Prepare driver-owned isolated Chromium (profile.mode "isolated_new" or "isolated_named", allow_launch:true), headless by default. Or detect an existing endpoint with pid (+ window_id), allow_launch:false and no strategy. Linux control requires the verified driver and packaged host's confirmed direct-X11 Escape listener; only owned isolated headless targets support mutation. Wayland/XWayland and standalone hosts permit reads/passive prepare only. Linux refuses visible launch and personal-profile control. On macOS, windowed:true needs the user's request to watch; otherwise foreground_not_requested. Prefer "isolated_named" to preserve a profile across restarts; "isolated_new" starts empty. Use prepared_pid with computer_browser_state. Existing-profile attachment needs a consent grant this embedding cannot host (browser_consent_required).`,
+      `Prepare driver-owned isolated Chromium (profile.mode "isolated_new" or "isolated_named", allow_launch:true), headless by default. Or detect an existing endpoint with pid (+ window_id), allow_launch:false and no strategy. Linux control requires the verified driver and packaged host's confirmed direct-X11 Escape listener; only owned isolated headless targets support mutation. Wayland/XWayland and standalone hosts permit reads/passive prepare only. Linux refuses visible launch and personal-profile control. On macOS, windowed:true needs the user's request to watch or their approval on the card Synara shows; a decline returns foreground_not_requested. Prefer "isolated_named" to preserve a profile across restarts; "isolated_new" starts empty. Use prepared_pid with computer_browser_state. Existing-profile attachment needs a consent grant this embedding cannot host (browser_consent_required).`,
       {
         type: "object",
         properties: {

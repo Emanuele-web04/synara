@@ -22,7 +22,13 @@ export function ClaudeCacheDetails({
     <div className="space-y-1.5 border-t border-border/50 pt-2 text-ui leading-snug text-muted-foreground">
       <div className="font-medium text-foreground">Claude prompt cache: {label}</div>
       {observation?.ttlSeconds !== undefined ? (
-        <div>Observed lifetime: {formatCacheDuration(observation.ttlSeconds)}</div>
+        <div>
+          Observed lifetime:{" "}
+          {observation.partialTtlSeconds !== undefined
+            ? `${formatCacheDuration(observation.partialTtlSeconds)} to `
+            : ""}
+          {formatCacheDuration(observation.ttlSeconds)}
+        </div>
       ) : (
         <div>Cache lifetime is unavailable.</div>
       )}

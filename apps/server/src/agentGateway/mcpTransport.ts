@@ -122,6 +122,18 @@ export function makeAgentGatewayMcpTransport(input: {
   readonly computerControlCapability?: AgentGatewayCapability;
 }): AgentGatewayShape["handleMcpPost"] {
   const toolsByName = new Map(input.tools.map((tool) => [tool.definition.name, tool]));
+  // The catalog is immutable after construction, so the sanitized `tools/list`
+  // definitions (a recursive schema walk plus JSON clone per tool) are computed
+  // once here instead of on every request.
+  const servedDefinitionByToolName = new Map<string, ToolEntry["definition"]>();
+  for (const tool of input.tools) {
+    servedDefinitionByToolName.set(tool.definition.name, {
+      ...tool.definition,
+      // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
+      // returns a fresh object for object input, so this restores the static type.
+      inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<string, unknown>,
+    });
+  }
   const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
     Effect.gen(function* () {
       switch (request.method) {
@@ -142,15 +154,16 @@ export function makeAgentGatewayMcpTransport(input: {
               // Discovery-only tools stay callable by exact name — toolsByName
               // is built from the unfiltered catalog — but do not advertise.
               .filter((tool) => tool.discoveryOnly !== true)
-              .map((tool) => ({
-                ...tool.definition,
-                // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
-                // returns a fresh object for object input, so this restores the static type.
-                inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
-                  string,
-                  unknown
-                >,
-              })),
+              .map(
+                (tool) =>
+                  servedDefinitionByToolName.get(tool.definition.name) ?? {
+                    ...tool.definition,
+                    inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                      string,
+                      unknown
+                    >,
+                  },
+              ),
           });
         case "tools/call": {
           const toolName = request.params.name;

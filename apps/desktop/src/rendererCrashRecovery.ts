@@ -2,11 +2,11 @@
 // Purpose: Pure recovery policy for main-window renderer crashes: which exit reasons may
 //          be reloaded automatically, the reload backoff, and the cap that stops a loop.
 // Layer: Desktop window supervision
-// Exports: RendererCrashPolicy, rendererReloadDelayMs, isRecoverableRendererCrashReason
+// Exports: RendererCrashPolicy
 
 /** First backoff step; doubles per crash inside the same streak. */
-export const RENDERER_RELOAD_BASE_DELAY_MS = 500;
-export const RENDERER_RELOAD_MAX_DELAY_MS = 4_000;
+const RENDERER_RELOAD_BASE_DELAY_MS = 500;
+const RENDERER_RELOAD_MAX_DELAY_MS = 4_000;
 
 /**
  * Automatic reloads allowed inside one crash streak before the user is asked instead.
@@ -36,11 +36,11 @@ export const RENDERER_CRASH_STREAK_WINDOW_MS = 60_000;
  */
 const RECOVERABLE_RENDERER_CRASH_REASONS: ReadonlySet<string> = new Set(["crashed", "oom"]);
 
-export function isRecoverableRendererCrashReason(reason: string): boolean {
+function isRecoverableRendererCrashReason(reason: string): boolean {
   return RECOVERABLE_RENDERER_CRASH_REASONS.has(reason);
 }
 
-export function rendererReloadDelayMs(attempt: number): number {
+function rendererReloadDelayMs(attempt: number): number {
   const step = Math.max(1, Math.floor(attempt)) - 1;
   return Math.min(RENDERER_RELOAD_BASE_DELAY_MS * 2 ** step, RENDERER_RELOAD_MAX_DELAY_MS);
 }

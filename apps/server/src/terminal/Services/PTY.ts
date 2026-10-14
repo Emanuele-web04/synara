@@ -38,6 +38,8 @@ export interface PtyProcess {
 export interface PtySpawnInput {
   shell: string;
   args?: string[];
+  /** Preserve an already prepared Windows command line without C-runtime quoting. */
+  windowsVerbatimArguments?: true;
   cwd: string;
   cols: number;
   rows: number;

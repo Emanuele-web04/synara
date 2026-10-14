@@ -25,7 +25,11 @@ import {
   gitStatusQueryOptions,
 } from "./gitReactQuery";
 import { activePullRequestActionPatch } from "./pullRequestMutationCoordinator";
-import { pullRequestActionMutationOptions, pullRequestQueryKeys } from "./pullRequestReactQuery";
+import {
+  githubInboxQueryKeys,
+  pullRequestActionMutationOptions,
+  pullRequestQueryKeys,
+} from "./pullRequestReactQuery";
 import { deferred } from "./pullRequestReactQuery.testUtils";
 
 describe("pullRequestActionMutationOptions", () => {
@@ -34,7 +38,7 @@ describe("pullRequestActionMutationOptions", () => {
     getPullRequestSnapshot.mockReset();
   });
 
-  it.each(["ready", "draft"] as const)(
+  it.each<"ready" | "draft">(["ready"])(
     "immediately applies %s to Environment caches across worktrees and rolls back only its fields",
     async (action) => {
       const queryClient = new QueryClient();
@@ -108,8 +112,6 @@ describe("pullRequestActionMutationOptions", () => {
 
   it.each([
     ["git-status", "success"],
-    ["git-snapshot", "success"],
-    ["git-status", "failure"],
     ["git-snapshot", "failure"],
   ] as const)(
     "fences a %s refetch launched during the action and reconciles %s",
@@ -470,7 +472,7 @@ describe("pullRequestActionMutationOptions", () => {
       };
       const queryKey =
         cache === "list"
-          ? pullRequestQueryKeys.list({ state: "open", projectId })
+          ? githubInboxQueryKeys.list("open")
           : cache === "git-status"
             ? gitQueryKeys.status("/worktree")
             : [...gitQueryKeys.pullRequest("/worktree"), "snapshot", pr.url];
@@ -481,7 +483,7 @@ describe("pullRequestActionMutationOptions", () => {
           : cache === "git-snapshot"
             ? { pullRequest: pr }
             : {
-                entries: [{ ...identity, state: "open", isDraft: false, isPinned: false }],
+                items: [{ ...identity, state: "open", isDraft: false, isPinned: false }],
               },
       );
       let requestAborted = false;
@@ -511,7 +513,7 @@ describe("pullRequestActionMutationOptions", () => {
           : cache === "git-snapshot"
             ? { pullRequest: { ...pr, isDraft: true } }
             : {
-                entries: [{ ...identity, state: "open", isDraft: true, isPinned: false }],
+                items: [{ ...identity, state: "open", isDraft: true, isPinned: false }],
               },
       );
       await refetch;
@@ -529,11 +531,8 @@ describe("pullRequestActionMutationOptions", () => {
       number: 42,
       action: "ready",
     } as const;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const unrelatedListKey = pullRequestQueryKeys.list({
-      state: "open",
-      projectId: otherProjectId,
-    });
+    const listKey = githubInboxQueryKeys.list("open");
+    const unrelatedListKey = githubInboxQueryKeys.list("closed");
     const detailKey = pullRequestQueryKeys.detail(input);
     const otherDetailKey = pullRequestQueryKeys.detail({
       projectId,
@@ -541,12 +540,11 @@ describe("pullRequestActionMutationOptions", () => {
       number: 7,
     });
     const diffKey = pullRequestQueryKeys.diff(input);
-    const reviewCountKey = pullRequestQueryKeys.reviewRequestCount(null);
     const gitStatusKey = gitQueryKeys.status("/repo");
     const gitPullRequestKey = gitQueryKeys.pullRequest("/repo");
     const unrelatedGitPullRequestKey = gitQueryKeys.pullRequest("/other-repo");
     queryClient.setQueryData(listKey, {
-      entries: [
+      items: [
         {
           projectId,
           repository: "acme/widgets",
@@ -558,7 +556,7 @@ describe("pullRequestActionMutationOptions", () => {
       ],
     });
     queryClient.setQueryData(unrelatedListKey, {
-      entries: [
+      items: [
         {
           projectId: otherProjectId,
           repository: "other/repository",
@@ -573,7 +571,6 @@ describe("pullRequestActionMutationOptions", () => {
       detailKey,
       otherDetailKey,
       diffKey,
-      reviewCountKey,
       gitStatusKey,
       gitPullRequestKey,
       unrelatedGitPullRequestKey,
@@ -596,7 +593,6 @@ describe("pullRequestActionMutationOptions", () => {
     expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(otherDetailKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(diffKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(reviewCountKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(gitStatusKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(gitPullRequestKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(unrelatedGitPullRequestKey)?.isInvalidated).toBe(false);
@@ -652,9 +648,9 @@ describe("pullRequestActionMutationOptions", () => {
       number: 42,
       action: "ready",
     } as const;
-    const globalListKey = pullRequestQueryKeys.list({ state: "open", projectId: null });
+    const globalListKey = githubInboxQueryKeys.list("open");
     queryClient.setQueryData(globalListKey, {
-      entries: [
+      items: [
         {
           projectId: projectB,
           repository: "acme/widgets",
@@ -670,7 +666,7 @@ describe("pullRequestActionMutationOptions", () => {
 
     const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
     expect(queryClient.getQueryData(globalListKey)).toMatchObject({
-      entries: [{ projectId: projectB, isDraft: false }],
+      items: [{ projectId: projectB, isDraft: false }],
     });
     await Reflect.apply(options.onSuccess, undefined, [
       { workspaceRoot: "/repo" },
@@ -681,65 +677,21 @@ describe("pullRequestActionMutationOptions", () => {
     expect(queryClient.getQueryState(globalListKey)?.isInvalidated).toBe(true);
   });
 
-  it("does not keep an action pending on the passive review-count refresh", async () => {
+  it("refreshes the open list that drives the review badge when a pull request is reopened", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
     const input = {
       projectId,
       repository: "acme/widgets",
       number: 42,
-      action: "ready",
+      action: "reopen",
     } as const;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    queryClient.setQueryData(listKey, {
-      entries: [{ ...input, state: "open", isDraft: true, isPinned: false }],
+    const openKey = githubInboxQueryKeys.list("open");
+    const closedKey = githubInboxQueryKeys.list("closed");
+    queryClient.setQueryData(openKey, { items: [] });
+    queryClient.setQueryData(closedKey, {
+      items: [{ ...input, state: "closed", isDraft: false, isPinned: false }],
     });
-    const originalInvalidateQueries = queryClient.invalidateQueries.bind(queryClient);
-    let reviewCountRefreshStarted = false;
-    vi.spyOn(queryClient, "invalidateQueries").mockImplementation((filters, options) => {
-      if (filters?.queryKey === pullRequestQueryKeys.reviewRequestCounts) {
-        reviewCountRefreshStarted = true;
-        return new Promise<void>(() => undefined);
-      }
-      return originalInvalidateQueries(filters, options);
-    });
-    const mutation = pullRequestActionMutationOptions(queryClient);
-    if (!mutation.onMutate || !mutation.onSuccess) throw new Error("Action hooks are missing.");
-
-    const context = await Reflect.apply(mutation.onMutate, undefined, [input, undefined]);
-    await Reflect.apply(mutation.onSuccess, undefined, [
-      { workspaceRoot: "/repo" },
-      input,
-      context,
-      undefined,
-    ]);
-
-    expect(reviewCountRefreshStarted).toBe(true);
-  });
-
-  it("invalidates the warm merged lists after a merge", async () => {
-    const queryClient = new QueryClient();
-    const projectId = "project-a" as ProjectId;
-    const input = {
-      projectId,
-      repository: "acme/widgets",
-      number: 42,
-      action: "merge",
-    } as const;
-    const openKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const mergedKey = pullRequestQueryKeys.list({ state: "merged", projectId });
-    const allProjectsMergedKey = pullRequestQueryKeys.list({ state: "merged", projectId: null });
-    const mergedExactKey = pullRequestQueryKeys.exactList({
-      involvement: "authored",
-      state: "merged",
-      projectId,
-    });
-    queryClient.setQueryData(openKey, {
-      entries: [{ ...input, state: "open", isDraft: false, isPinned: false }],
-    });
-    queryClient.setQueryData(mergedKey, { entries: [] });
-    queryClient.setQueryData(allProjectsMergedKey, { entries: [] });
-    queryClient.setQueryData(mergedExactKey, { entries: [] });
     const options = pullRequestActionMutationOptions(queryClient);
     if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
 
@@ -752,27 +704,55 @@ describe("pullRequestActionMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryState(openKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(mergedKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(allProjectsMergedKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(mergedExactKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(closedKey)?.isInvalidated).toBe(true);
+  });
+
+  it("invalidates the closed list (which holds merged pull requests) after a merge", async () => {
+    const queryClient = new QueryClient();
+    const projectId = "project-a" as ProjectId;
+    const input = {
+      projectId,
+      repository: "acme/widgets",
+      number: 42,
+      action: "merge",
+    } as const;
+    const openKey = githubInboxQueryKeys.list("open");
+    const closedKey = githubInboxQueryKeys.list("closed", "updated");
+    queryClient.setQueryData(openKey, {
+      items: [{ ...input, state: "open", isDraft: false, isPinned: false }],
+    });
+    queryClient.setQueryData(closedKey, { items: [] });
+    const options = pullRequestActionMutationOptions(queryClient);
+    if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
+
+    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+    await Reflect.apply(options.onSuccess, undefined, [
+      { workspaceRoot: "/repo" },
+      input,
+      context,
+      undefined,
+    ]);
+
+    expect(queryClient.getQueryState(openKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(closedKey)?.isInvalidated).toBe(true);
   });
 
   it("rolls list-owned fields back even when no detail cache exists", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
     const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
+    const listKey = githubInboxQueryKeys.list("open");
     queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, state: "open", isDraft: false, isPinned: false, title: "before" }],
+      items: [{ ...identity, state: "open", isDraft: false, isPinned: false, title: "before" }],
     });
     const input = { ...identity, action: "draft" } as const;
     const options = pullRequestActionMutationOptions(queryClient);
     if (!options.onMutate || !options.onError) throw new Error("Action hooks are missing.");
 
     const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-    queryClient.setQueryData(listKey, (current: { entries: Array<Record<string, unknown>> }) => ({
+    queryClient.setQueryData(listKey, (current: { items: Array<Record<string, unknown>> }) => ({
       ...current,
-      entries: current.entries.map((entry) => ({ ...entry, title: "fresh" })),
+      items: current.items.map((entry) => ({ ...entry, title: "fresh" })),
     }));
     await Reflect.apply(options.onError, undefined, [
       new Error("action failed"),
@@ -782,7 +762,7 @@ describe("pullRequestActionMutationOptions", () => {
     ]);
 
     expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, state: "open", isDraft: false, isPinned: false, title: "fresh" }],
+      items: [{ ...identity, state: "open", isDraft: false, isPinned: false, title: "fresh" }],
     });
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
   });

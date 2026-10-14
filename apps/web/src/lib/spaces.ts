@@ -13,12 +13,12 @@ import {
 
 import type { Project } from "~/types";
 import { isHomeChatContainerProject } from "~/lib/chatProjects";
-import { isStudioContainerProject } from "~/lib/studioProjects";
+import { isGroupContainerProject } from "~/lib/groupProjects";
 import type { ServerWorkspacePaths } from "~/lib/serverWorkspacePaths";
 import { newCommandId, newSpaceId } from "~/lib/utils";
 
 /**
- * Spaces organize ordinary projects only: the Chats and Studio containers are reachable
+ * Spaces organize ordinary projects only: the Chats and Groups containers are reachable
  * from every Space and so belong to none. This is the membership rule the whole feature
  * turns on — the sidebar list, the tab activity dots, the pickers, and the shortcut
  * targets all have to agree on it, so it lives here rather than being spelled out again
@@ -31,7 +31,7 @@ export function isOrdinarySpaceProject(
   return (
     project?.kind === "project" &&
     !isHomeChatContainerProject(project, paths) &&
-    !isStudioContainerProject(project, paths)
+    !isGroupContainerProject(project, paths)
   );
 }
 

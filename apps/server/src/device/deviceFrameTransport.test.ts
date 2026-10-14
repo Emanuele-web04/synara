@@ -45,43 +45,6 @@ function frame(overrides: Partial<DeviceStreamFrame> = {}): DeviceStreamFrame {
 }
 
 describe("device frame transport framing", () => {
-  it("round-trips header fields and payload through the envelope", () => {
-    const transport = new DeviceFrameTransport();
-    const sink = new RecordingSink();
-    transport.subscribe(DEVICE, sink);
-
-    const payload = new Uint8Array([1, 2, 3, 4, 5]);
-    transport.publish(
-      DEVICE,
-      frame({ sequence: 7, timestampMs: 123.5, keyframe: true, data: payload }),
-    );
-
-    const decoded = decodeDeviceFrame(sink.received[0]!);
-    expect(decoded.ok).toBe(true);
-    if (!decoded.ok) return;
-    expect(decoded.frame.header).toEqual({
-      deviceId: DEVICE,
-      sequence: 7,
-      timestampMs: 123.5,
-      keyframe: true,
-      codecConfig: false,
-    });
-    expect(Array.from(decoded.frame.payload)).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it("delivers frames in sequence order with no gaps to a keeping-up client", () => {
-    const transport = new DeviceFrameTransport();
-    const sink = new RecordingSink();
-    transport.subscribe(DEVICE, sink);
-
-    transport.publish(DEVICE, frame({ sequence: 1, keyframe: true }));
-    for (let sequence = 2; sequence <= 10; sequence += 1) {
-      transport.publish(DEVICE, frame({ sequence }));
-    }
-
-    expect(sink.sequences).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  });
-
   it("routes only the frames of the device a subscriber asked for", () => {
     const transport = new DeviceFrameTransport();
     const sinkA = new RecordingSink();

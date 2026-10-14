@@ -3,16 +3,9 @@
 // Layer: Release/build helper
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  lstatSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { hashFile } from "./file-digest.ts";
+import { runMacCommand } from "./mac-notarization.ts";
+import { lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -144,16 +137,6 @@ function requireSingleArtifact(
   return matches[0]!;
 }
 
-function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolveHash, reject) => {
-    const hash = createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolveHash(hash.digest("hex")));
-  });
-}
-
 export async function collectReleaseArtifactDigests(
   assetsDirectory: string,
   artifactFileNames?: ReadonlyArray<string>,
@@ -236,7 +219,11 @@ function verifyMacSignatures(
       );
     }
     runCommand("spctl", ["--assess", "--type", "execute", "--verbose=4", appBundlePath]);
-    runCommand("xcrun", ["stapler", "validate", appBundlePath]);
+    runMacCommand(
+      "xcrun",
+      ["stapler", "validate", appBundlePath],
+      "provenance-app-staple-validation",
+    );
 
     const diskImagePath = join(input.assetsDirectory, diskImage.fileName);
     runCommand("codesign", ["--verify", "--strict", "--verbose=4", diskImagePath]);
@@ -258,7 +245,11 @@ function verifyMacSignatures(
       "--verbose=4",
       diskImagePath,
     ]);
-    runCommand("xcrun", ["stapler", "validate", diskImagePath]);
+    runMacCommand(
+      "xcrun",
+      ["stapler", "validate", diskImagePath],
+      "provenance-dmg-staple-validation",
+    );
 
     return {
       status: "verified",

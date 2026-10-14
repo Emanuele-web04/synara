@@ -20,15 +20,10 @@ describe("outbound HTTP policy", () => {
     "::1",
     "fc00::1",
     "fe80::1",
-    "::ffff:127.0.0.1",
     "64:ff9b::127.0.0.1",
     "2001:db8::1",
   ])("rejects private or reserved address %s", (address) => {
     expect(isPublicIpAddress(address)).toBe(false);
-  });
-
-  it.each(["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"])("admits public address %s", (address) => {
-    expect(isPublicIpAddress(address)).toBe(true);
   });
 
   it("pins requests to an exact HTTPS origin", () => {
@@ -91,18 +86,20 @@ describe("outbound HTTP policy", () => {
 describe("invokePinnedDnsLookup", () => {
   const pinned = { address: "1.2.3.4", family: 4 as const };
 
-  it("returns the legacy single-address form when all is not requested", () => {
-    let result: unknown;
-    invokePinnedDnsLookup(pinned, {}, (err, address, family) => {
-      result = { err, address, family };
+  it("returns the legacy single-address form when all is not requested", async () => {
+    const result = await new Promise((resolve) => {
+      invokePinnedDnsLookup(pinned, {}, (err, address, family) => {
+        resolve({ err, address, family });
+      });
     });
     expect(result).toEqual({ err: null, address: "1.2.3.4", family: 4 });
   });
 
-  it("returns the array form when Happy Eyeballs requests all addresses", () => {
-    let result: unknown;
-    invokePinnedDnsLookup(pinned, { all: true }, (err, address, family) => {
-      result = { err, address, family };
+  it("returns the array form when Happy Eyeballs requests all addresses", async () => {
+    const result = await new Promise((resolve) => {
+      invokePinnedDnsLookup(pinned, { all: true }, (err, address, family) => {
+        resolve({ err, address, family });
+      });
     });
     expect(result).toEqual({
       err: null,

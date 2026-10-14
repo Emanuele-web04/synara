@@ -3,7 +3,7 @@
 // Layer: Chat composer state hook
 // Depends on: composer draft store and provider option patch helpers.
 
-import type { ProviderKind, ThreadId } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind, ThreadId } from "@synara/contracts";
 import { useCallback } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -15,10 +15,11 @@ import { buildNextProviderOptions, type ProviderOptions } from "../../providerMo
 export function useComposerTraitCommit(input: {
   threadId: ThreadId;
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId | null | undefined;
   model: string | null | undefined;
   modelOptions: ProviderOptions | null | undefined;
 }): (patch: Record<string, unknown>) => void {
-  const { threadId, provider, model, modelOptions } = input;
+  const { threadId, provider, providerInstanceId, model, modelOptions } = input;
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   return useCallback(
     (patch: Record<string, unknown>) => {
@@ -26,9 +27,13 @@ export function useComposerTraitCommit(input: {
         threadId,
         provider,
         buildNextProviderOptions(provider, modelOptions, patch),
-        { ...(model !== undefined ? { model } : {}), persistSticky: true },
+        {
+          ...(providerInstanceId ? { instanceId: providerInstanceId } : {}),
+          ...(model !== undefined ? { model } : {}),
+          persistSticky: true,
+        },
       );
     },
-    [threadId, provider, modelOptions, model, setProviderModelOptions],
+    [threadId, provider, providerInstanceId, modelOptions, model, setProviderModelOptions],
   );
 }

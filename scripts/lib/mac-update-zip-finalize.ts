@@ -18,6 +18,9 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { serializeMacUpdateManifest } from "./mac-update-manifest.ts";
+import { resolveSingleMacDmgFileName } from "./mac-dmg-finalize.ts";
+
 import {
   buildMacUpdateZipSymlinkEntries,
   isZipInfoSymlink,
@@ -166,6 +169,40 @@ function computeSha512Base64(filePath: string): Promise<string> {
   });
 }
 
+function resolveDmgUpdateZip(stageDistDir: string, entries: ReadonlyArray<string>) {
+  // The retained stage owns the package identity, including recovery after a
+  // failed DMG notarization or an interrupted ZIP/manifest finalization.
+  // Legacy ZIP stages cannot reconstruct a missing manifest from this identity.
+  const packagePath = join(dirname(stageDistDir), "package.json");
+  if (!existsSync(packagePath)) return undefined;
+  const stagedPackage = JSON.parse(readFileSync(packagePath, "utf8")) as {
+    version?: unknown;
+    productName?: unknown;
+    build?: { mac?: { target?: unknown }; publish?: unknown };
+  };
+  const targets = stagedPackage.build?.mac?.target;
+  if (!Array.isArray(targets) || targets.length !== 1 || targets[0] !== "dmg") return undefined;
+  const version = stagedPackage.version;
+  if (
+    typeof version !== "string" ||
+    typeof stagedPackage.productName !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
+  ) {
+    throw new Error("Creating a macOS update ZIP requires a versioned DMG-only packaging stage.");
+  }
+  const dmgFileName = resolveSingleMacDmgFileName(entries);
+  const artifactPrefix = `${stagedPackage.productName.replaceAll(" ", "-")}-${version}-`;
+  if (!dmgFileName.startsWith(artifactPrefix)) {
+    throw new Error("macOS DMG filename does not match its staged package identity.");
+  }
+  const publish = stagedPackage.build?.publish;
+  return {
+    zipFileName: `${dmgFileName.slice(0, -4)}.zip`,
+    version,
+    hasUpdaterFeed: Array.isArray(publish) && publish.length > 0,
+  };
+}
+
 // Recreates the update zip with macOS-native metadata, then validates the same
 // extracted app shape Squirrel.Mac will hand to ShipIt during installation.
 export async function finalizeMacUpdateZip(
@@ -184,7 +221,21 @@ export async function finalizeMacUpdateZip(
   }
 
   const distEntries = readdirSync(options.stageDistDir);
-  const zipFileName = resolveSingleMacUpdateZipFileName(distEntries);
+  const manifestNames = resolveMacUpdateManifestFileNames(distEntries, { required: false });
+  const existingZipFileName = distEntries.some((entry) => entry.endsWith(".zip"))
+    ? resolveSingleMacUpdateZipFileName(distEntries)
+    : undefined;
+  const dmgUpdateZip =
+    !existingZipFileName || (options.requireUpdateManifest !== false && manifestNames.length === 0)
+      ? resolveDmgUpdateZip(options.stageDistDir, distEntries)
+      : undefined;
+  if (existingZipFileName && dmgUpdateZip && existingZipFileName !== dmgUpdateZip.zipFileName) {
+    throw new Error("macOS update ZIP filename does not match its staged package identity.");
+  }
+  const zipFileName =
+    existingZipFileName ??
+    dmgUpdateZip?.zipFileName ??
+    resolveSingleMacUpdateZipFileName(distEntries);
   const zipPath = join(options.stageDistDir, zipFileName);
   const appBundleName = basename(appBundlePath);
   const appBundleParent = dirname(appBundlePath);
@@ -217,9 +268,26 @@ export async function finalizeMacUpdateZip(
   const sha512 = await computeSha512Base64(zipPath);
 
   const updatedManifestPaths: string[] = [];
-  for (const manifestName of resolveMacUpdateManifestFileNames(distEntries, {
-    required: options.requireUpdateManifest ?? true,
-  })) {
+  if (
+    dmgUpdateZip?.hasUpdaterFeed &&
+    options.requireUpdateManifest !== false &&
+    manifestNames.length === 0
+  ) {
+    const manifestPath = join(options.stageDistDir, "latest-mac.yml");
+    writeFileSync(
+      manifestPath,
+      serializeMacUpdateManifest({
+        version: dmgUpdateZip.version,
+        releaseDate: new Date().toISOString(),
+        files: [{ url: zipFileName, sha512, size: zipStat.size }],
+        extras: { path: zipFileName, sha512 },
+      }),
+    );
+    updatedManifestPaths.push(manifestPath);
+  } else if (manifestNames.length === 0 && options.requireUpdateManifest !== false) {
+    throw new Error("Expected at least one macOS update manifest, found 0.");
+  }
+  for (const manifestName of manifestNames) {
     const manifestPath = join(options.stageDistDir, manifestName);
     const manifest = readFileSync(manifestPath, "utf8");
     const nextManifest = updateMacUpdateManifestZipEntry(manifest, zipFileName, {

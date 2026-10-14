@@ -40,7 +40,7 @@ type AcpCanonicalRequestType = Extract<
   "exec_command_approval" | "file_read_approval" | "file_change_approval" | "tool_approval"
 >;
 
-function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
+export function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
   switch (kind) {
     case "execute":
       return "exec_command_approval";
@@ -265,6 +265,7 @@ export function makeAcpTokenUsageEvent(input: {
   readonly provider: ProviderKind;
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
+  readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
   readonly usage: ThreadTokenUsageSnapshot;
   readonly method?: string;
   readonly rawPayload: unknown;
@@ -275,6 +276,7 @@ export function makeAcpTokenUsageEvent(input: {
     provider: input.provider,
     threadId: input.threadId,
     turnId: input.turnId,
+    ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
       usage: input.usage,
     },

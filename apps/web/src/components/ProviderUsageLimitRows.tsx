@@ -7,7 +7,7 @@ import {
   providerUsageProgressTrackProps,
   type ProviderUsageDisplayRow,
 } from "~/lib/providerUsageDisplay";
-import { cn } from "~/lib/utils";
+import { StatusDot } from "~/components/ui/status-chip";
 
 import { UsageProgressTrack } from "./UsageProgressTrack";
 
@@ -73,8 +73,8 @@ function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
     <div className="space-y-1.5">
       <div className="flex items-center gap-1.5">
         <span className="text-ui leading-snug font-medium text-foreground">{row.label}</span>
-        <span
-          className={cn("size-1.5 shrink-0 rounded-full", trackProps.markerClassName)}
+        <StatusDot
+          className={trackProps.markerClassName}
           title={row.pace ? `Usage pace: ${row.pace.status}` : undefined}
           aria-hidden
         />

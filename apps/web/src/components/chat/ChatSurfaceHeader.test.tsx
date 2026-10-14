@@ -14,16 +14,4 @@ describe("ChatSurfaceHeader", () => {
 
     expect(markup).toBe("");
   });
-
-  it("renders the normal chat header when visible", () => {
-    const markup = renderToStaticMarkup(
-      <ChatSurfaceHeader className="chat-header">
-        <span>Primary chat</span>
-      </ChatSurfaceHeader>,
-    );
-
-    expect(markup).toContain("<header");
-    expect(markup).toContain("chat-header");
-    expect(markup).toContain("Primary chat");
-  });
 });

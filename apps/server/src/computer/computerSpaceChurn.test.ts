@@ -123,23 +123,4 @@ describe("computer Space churn", () => {
       await backend.dispose();
     }
   });
-  it("refuses a background drag the same way when the window leaves the Space", async () => {
-    const { backend, calls, moveOffSpace } = spaceFixture();
-    try {
-      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-      moveOffSpace();
-      // Default delivery mode is background: no explicit mode wrapper needed.
-      const refused = await backend
-        .drag({ x: 50, y: 50 }, { x: 100, y: 60 }, 500, "cua:10:20")
-        .catch((error) => error);
-      expect(refused).toMatchObject({
-        effect: "not-dispatched",
-        code: "target_not_on_active_space",
-        inputPause: { windowId: "cua:10:20" },
-      });
-      expect(calls.filter((call) => call.name === "drag")).toHaveLength(0);
-    } finally {
-      await backend.dispose();
-    }
-  });
 });

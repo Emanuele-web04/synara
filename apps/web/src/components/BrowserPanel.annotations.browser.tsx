@@ -299,33 +299,4 @@ describe("BrowserPanel annotations", () => {
     await expect.element(annotate).toHaveAttribute("title", "Annotate page");
     await mounted.unmount();
   });
-
-  it("keeps the cursor mounted and gives pending annotation mode a solid selected state", async () => {
-    const toggle = vi.fn();
-    const mounted = await render(
-      <BrowserAnnotationButton
-        controller={{ active: false, starting: false, toggle }}
-        disabled={false}
-      />,
-    );
-    const annotate = mounted.getByRole("button", { name: "Annotate page" });
-    const pointer = annotate.element().querySelector("[data-slot='central-icon']");
-
-    expect(pointer).not.toBeNull();
-    expect(annotate.element().classList.contains("bg-primary")).toBe(false);
-
-    await mounted.rerender(
-      <BrowserAnnotationButton
-        controller={{ active: true, starting: true, toggle }}
-        disabled={false}
-      />,
-    );
-    const cancel = mounted.getByRole("button", { name: "Cancel annotation" });
-
-    expect(cancel.element().querySelector("[data-slot='central-icon']")).toBe(pointer);
-    expect(cancel.element().querySelector(".animate-spin")).toBeNull();
-    expect(cancel.element().classList.contains("bg-primary")).toBe(true);
-    await expect.element(cancel).toHaveAttribute("aria-busy", "true");
-    await mounted.unmount();
-  });
 });

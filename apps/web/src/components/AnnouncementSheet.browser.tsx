@@ -2,11 +2,12 @@ import "../index.css";
 
 import { useState } from "react";
 import { page } from "vitest/browser";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
+import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 
 function Sheet(props: { title: string }) {
   const [open, setOpen] = useState(true);
@@ -25,9 +26,31 @@ function Sheet(props: { title: string }) {
 }
 
 describe("AnnouncementSheet", () => {
+  beforeEach(() => {
+    useOnboardingDialogStore.setState({
+      startupGateSettled: true,
+      isOpen: false,
+      betaWelcomePending: false,
+    });
+  });
   afterEach(() => {
     useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
     document.body.innerHTML = "";
+  });
+
+  it("waits for the first-run decision and lazy onboarding before claiming the slot", async () => {
+    useOnboardingDialogStore.setState({ startupGateSettled: false });
+    const screen = await render(<Sheet title="Announcement" />);
+    try {
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBeNull();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      useOnboardingDialogStore.setState({ startupGateSettled: true, isOpen: true });
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      useOnboardingDialogStore.getState().close();
+      await expect.element(page.getByRole("dialog", { name: "Announcement" })).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("shows one startup announcement at a time and the next after a dismiss", async () => {

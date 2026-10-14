@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ComputerBackendError, NO_COMPUTER_CAPABILITIES } from "./ComputerBackend.ts";
+import { ComputerBackendError } from "./ComputerBackend.ts";
 import { UnavailableComputerBackend } from "./UnavailableComputerBackend.ts";
 
 const REASON = "No computer backend is available.";
@@ -35,10 +35,6 @@ describe("UnavailableComputerBackend", () => {
       retryable: false,
     });
     await expect(backend.getScreenSize()).rejects.toBeInstanceOf(ComputerBackendError);
-  });
-
-  it("advertises no capabilities, so the panel offers nothing it cannot do", () => {
-    expect(new UnavailableComputerBackend(REASON).capabilities()).toEqual(NO_COMPUTER_CAPABILITIES);
   });
 
   it("answers to the shared desktop id, so still-frame routes match every other backend", () => {

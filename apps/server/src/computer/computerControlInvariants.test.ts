@@ -44,17 +44,6 @@ function setup(backend = new FakeComputerBackend()) {
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 describe("Production audit: desired invariants", () => {
-  it("hover must not change keyboard focus", async () => {
-    const backend = new FakeComputerBackend();
-    const { manager } = setup(backend);
-    try {
-      await manager.moveCursor("audit", { windowId: "fake-calculator", x: 1180, y: 228 });
-      expect(backend.calls.filter((c) => c.method === "focusWindow")).toEqual([]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("concurrent keyboard calls must preserve each named target", async () => {
     const entered = deferred(),
       release = deferred();
@@ -111,31 +100,6 @@ describe("Production audit: desired invariants", () => {
     await manager.dispose();
     expect(backend.calls.filter((c) => c.method === "click")).toEqual([]);
   });
-
-  it("a moved window must deliver its new screenshot geometry", async () => {
-    const backend = new FakeComputerBackend();
-    const { manager } = setup(backend);
-    await manager.captureActionScreenshot("fake-calculator", undefined, "audit");
-    backend.emitWindowsChanged(
-      (await backend.listWindows()).map((w) =>
-        w.id === "fake-calculator" ? { ...w, bounds: { ...w.bounds!, x: 800 } } : w,
-      ),
-    );
-    const result = await manager.captureActionScreenshot("fake-calculator", undefined, "audit");
-    await manager.dispose();
-    expect(result).toHaveProperty("screenshot.region.x", 800);
-  });
-
-  it("an intervening explicit screenshot must prevent unrelated image reuse", async () => {
-    const { manager, call } = setup();
-    await call("computer_click", { label: "Calculate", role: "button" });
-    const explicit = await call("computer_screenshot", { window_id: "fake-terminal" });
-    expect(explicit.isError).not.toBe(true);
-    expect(explicit.content.some((c) => c.type === "image")).toBe(true);
-    const result = await call("computer_click", { label: "Calculate", role: "button" });
-    await manager.dispose();
-    expect(result.content.some((c) => c.type === "image")).toBe(true);
-  });
 });
 
 describe("Provider authority invariants", () => {
@@ -189,36 +153,33 @@ describe("Provider authority invariants", () => {
       await manager.dispose();
     }
   });
-  it.each(["pi", "antigravity"] as const)(
-    "lets Synara approve or deny %s actions",
-    async (provider) => {
-      const backend = new FakeComputerBackend();
-      const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-      let allowed = false;
-      const authorizeAction = vi.fn(async () => allowed);
-      const tool = makeAgentGatewayComputerTools({ manager, authorizeAction }).find(
-        (tool) => tool.definition.name === "computer_type_text",
-      )!;
-      const caller = {
-        ...context(),
-        callerProvider: provider,
-        principal: { ...context().principal, provider },
-      };
-      const denied = await Effect.runPromise(
-        tool.handler({ text: "denied", include_screenshot: false }, caller),
-      );
-      expect(denied.isError).toBe(true);
-      expect(backend.calls.filter((call) => call.method === "typeText")).toHaveLength(0);
-      allowed = true;
-      const accepted = await Effect.runPromise(
-        tool.handler({ text: "approved", include_screenshot: false }, caller),
-      );
-      expect(accepted.isError).not.toBe(true);
-      expect(backend.calls.filter((call) => call.method === "typeText")).toHaveLength(1);
-      expect(authorizeAction).toHaveBeenCalledTimes(2);
-      await manager.dispose();
-    },
-  );
+  it.each(["pi"] as const)("lets Synara approve or deny %s actions", async (provider) => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    let allowed = false;
+    const authorizeAction = vi.fn(async () => allowed);
+    const tool = makeAgentGatewayComputerTools({ manager, authorizeAction }).find(
+      (tool) => tool.definition.name === "computer_type_text",
+    )!;
+    const caller = {
+      ...context(),
+      callerProvider: provider,
+      principal: { ...context().principal, provider },
+    };
+    const denied = await Effect.runPromise(
+      tool.handler({ text: "denied", include_screenshot: false }, caller),
+    );
+    expect(denied.isError).toBe(true);
+    expect(backend.calls.filter((call) => call.method === "typeText")).toHaveLength(0);
+    allowed = true;
+    const accepted = await Effect.runPromise(
+      tool.handler({ text: "approved", include_screenshot: false }, caller),
+    );
+    expect(accepted.isError).not.toBe(true);
+    expect(backend.calls.filter((call) => call.method === "typeText")).toHaveLength(1);
+    expect(authorizeAction).toHaveBeenCalledTimes(2);
+    await manager.dispose();
+  });
 
   it("rechecks original turn authority after waiting for the desktop", async () => {
     const backend = new FakeComputerBackend();

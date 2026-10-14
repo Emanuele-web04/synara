@@ -31,6 +31,60 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect(
+    "keeps workspace classification on the owning turn without resurrecting pending starts",
+    () =>
+      Effect.gen(function* () {
+        const turns = yield* ProjectionTurnRepository;
+        const threadId = ThreadId.makeUnsafe("workspace-marker-thread");
+        const messageId = MessageId.makeUnsafe("workspace-marker-message");
+        const turnId = TurnId.makeUnsafe("workspace-marker-turn");
+        const request = {
+          threadId,
+          messageId,
+          requestedAt: "2026-10-10T10:00:00.000Z",
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+        };
+        yield* turns.replacePendingTurnStart(request);
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }))
+            .startedWithoutGitWorkspace,
+        );
+        yield* turns.upsertByTurnId({
+          threadId,
+          turnId,
+          pendingMessageId: messageId,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: null,
+          state: "running",
+          requestedAt: request.requestedAt,
+          startedAt: request.requestedAt,
+          completedAt: null,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        });
+        yield* turns.deletePendingTurnStartByThreadId({ threadId });
+        // A lagging checkpoint consumer now handles the original domain request.
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getByTurnId({ threadId, turnId }))
+            .startedWithoutGitWorkspace,
+        );
+        assert.isTrue(Option.isNone(yield* turns.getPendingTurnStartByThreadId({ threadId })));
+        const newerMessageId = MessageId.makeUnsafe("newer-workspace-message");
+        yield* turns.replacePendingTurnStart({ ...request, messageId: newerMessageId });
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        const newer = Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }));
+        assert.strictEqual(newer.messageId, newerMessageId);
+        assert.isFalse(newer.startedWithoutGitWorkspace);
+      }),
+  );
+
   it.effect("persists cache reviews, preserves omitted reviews, and clears them explicitly", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
@@ -218,6 +272,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.defaultModelSelection, {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.4",
       });
     }),
@@ -285,8 +340,67 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
         model: "claude-opus-4-6",
       });
+    }),
+  );
+
+  it.effect("round-trips a standalone sidechat context and reads other threads as null", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const context = {
+        kind: "github-item",
+        itemKind: "pullRequest",
+        repository: "octo/repo",
+        number: 7,
+        url: "https://github.com/octo/repo/pull/7",
+      } as const;
+      const base = {
+        projectId: ProjectId.makeUnsafe("project-sidechat-context"),
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        notes: null,
+        goal: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: "2026-09-30T10:00:00.000Z",
+        updatedAt: "2026-09-30T10:00:00.000Z",
+        deletedAt: null,
+      } as const;
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+        title: "Sidechat: Fix it",
+        sidechatContext: context,
+        sidechatLastActivityAt: base.createdAt,
+      });
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-ordinary"),
+        title: "Ordinary",
+      });
+
+      const sidechat = yield* threads.getById({
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+      });
+      const ordinary = yield* threads.getById({ threadId: ThreadId.makeUnsafe("thread-ordinary") });
+      assert.deepStrictEqual(Option.getOrNull(sidechat)?.sidechatContext, context);
+      assert.strictEqual(Option.getOrNull(ordinary)?.sidechatContext ?? null, null);
     }),
   );
 

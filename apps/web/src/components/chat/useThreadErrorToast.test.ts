@@ -7,7 +7,11 @@ import { ThreadId } from "@synara/contracts";
 import { formatProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 import { describe, expect, it } from "vitest";
 
-import { buildThreadErrorToastOptions, threadErrorToastId } from "./useThreadErrorToast";
+import {
+  buildThreadErrorToastOptions,
+  decideThreadErrorToastAction,
+  threadErrorToastId,
+} from "./useThreadErrorToast";
 
 const threadId = ThreadId.makeUnsafe("11111111-1111-4111-8111-111111111111");
 
@@ -52,5 +56,90 @@ describe("buildThreadErrorToastOptions", () => {
 
   it("hides the action for unrelated thread errors", () => {
     expect(build("The provider rejected the prompt.").actionProps).toBeUndefined();
+  });
+});
+
+describe("decideThreadErrorToastAction", () => {
+  const error = "Provider adapter request failed (grok): connect ETIMEDOUT";
+
+  it("keeps the hydrated stored error off the toast surface", () => {
+    expect(
+      decideThreadErrorToastAction({
+        previous: undefined,
+        error,
+        liveToastOpen: false,
+        threadVisible: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("toasts when a live error lands on a thread that is not visible", () => {
+    expect(
+      decideThreadErrorToastAction({
+        previous: "an earlier failure",
+        error,
+        liveToastOpen: false,
+        threadVisible: false,
+      }),
+    ).toBe("toast");
+    expect(
+      decideThreadErrorToastAction({
+        previous: null,
+        error,
+        liveToastOpen: false,
+        threadVisible: false,
+      }),
+    ).toBe("toast");
+  });
+
+  it("never toasts a live error while the thread is on screen", () => {
+    // The transcript's inline banner already reports it — a toast would show
+    // the same failure twice.
+    expect(
+      decideThreadErrorToastAction({
+        previous: "an earlier failure",
+        error,
+        liveToastOpen: false,
+        threadVisible: true,
+      }),
+    ).toBe("none");
+    expect(
+      decideThreadErrorToastAction({
+        previous: null,
+        error,
+        liveToastOpen: false,
+        threadVisible: true,
+      }),
+    ).toBe("none");
+    expect(
+      decideThreadErrorToastAction({
+        previous: error,
+        error,
+        liveToastOpen: true,
+        threadVisible: true,
+      }),
+    ).toBe("none");
+  });
+
+  it("does not re-toast the same stored value on re-render", () => {
+    expect(
+      decideThreadErrorToastAction({
+        previous: error,
+        error,
+        liveToastOpen: false,
+        threadVisible: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("refreshes in place while a live toast is already open", () => {
+    expect(
+      decideThreadErrorToastAction({
+        previous: error,
+        error,
+        liveToastOpen: true,
+        threadVisible: false,
+      }),
+    ).toBe("refresh");
   });
 });

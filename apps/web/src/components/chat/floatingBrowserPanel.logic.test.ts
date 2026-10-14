@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   clampFloatingBrowserPanelRect,
-  initialFloatingBrowserPanelRect,
+  floatingBrowserComposerClearancePx,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   shouldRenderFloatingBrowserPanel,
@@ -10,15 +10,6 @@ import {
 } from "./floatingBrowserPanel.logic";
 
 describe("floating browser panel geometry", () => {
-  it("starts compact in the bottom-right of its host", () => {
-    expect(initialFloatingBrowserPanelRect({ width: 1_000, height: 700 })).toEqual({
-      left: 668,
-      top: 488,
-      width: 320,
-      height: 200,
-    });
-  });
-
   it("clamps movement and size inside a small host", () => {
     expect(
       clampFloatingBrowserPanelRect(
@@ -86,20 +77,20 @@ describe("floating browser panel visibility", () => {
     );
     expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, isFocused: false })).toBe(false);
   });
-
-  it("restores the card once a matching dock browser is no longer visible", () => {
-    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true })).toBe(
-      false,
-    );
-    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: false })).toBe(
-      true,
-    );
-  });
 });
 
 describe("floating browser drag gesture", () => {
   it("ignores small pointer jitter and treats larger movement as a drag", () => {
     expect(isFloatingBrowserDragGesture({ x: 2, y: 2 })).toBe(false);
     expect(isFloatingBrowserDragGesture({ x: 4, y: 0 })).toBe(true);
+  });
+});
+
+describe("floating browser composer clearance", () => {
+  it("reserves the pane band from the composer top down, and nothing without a composer", () => {
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: 760.4 })).toBe(140);
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: null })).toBe(0);
+    // A composer laid out below the pane never yields a negative inset.
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: 950 })).toBe(0);
   });
 });

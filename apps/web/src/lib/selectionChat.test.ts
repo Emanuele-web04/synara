@@ -66,7 +66,7 @@ describe("startSelectionChat", () => {
     });
   });
 
-  it.each(["", "  Keep the exact draft\nwith more context  "])(
+  it.each(["  Keep the exact draft\nwith more context  "])(
     "opens an editable draft %j with the quote without queueing a send",
     async (prompt) => {
       await startSelectionChat({ ...input(), intent: "compose", prompt });

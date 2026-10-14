@@ -100,6 +100,36 @@ afterEach(() => {
 });
 
 describe("codexUsageFetcher", () => {
+  it("never reads the default login when a selected account home has no credential", async () => {
+    const { codexHome } = makeCodexHome({
+      tokens: { access_token: makeJwt(NOW_MS + 60 * 60 * 1000), account_id: "personal" },
+    });
+    const homeDir = nodePath.join(codexHome, "user");
+    mkdirSync(nodePath.join(homeDir, ".codex"), { recursive: true });
+    writeFileSync(
+      nodePath.join(homeDir, ".codex", "auth.json"),
+      JSON.stringify({
+        tokens: { access_token: makeJwt(NOW_MS + 60 * 60 * 1000), account_id: "personal" },
+      }),
+    );
+    readKeychainPasswordMock.mockResolvedValue(
+      JSON.stringify({
+        tokens: { access_token: "global-keychain-token", account_id: "personal" },
+      }),
+    );
+    const fetchMock = vi.fn(async () => jsonResponse(USAGE_BODY));
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch({
+      ...makeCtx(nodePath.join(codexHome, "missing-account"), homeDir),
+      isolateCredentials: true,
+    });
+
+    expect(snapshot.status).toBe("needs-auth");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readKeychainPasswordMock).not.toHaveBeenCalled();
+  });
+
   it("tries a still-valid keychain token when read-only refresh cannot rotate it", async () => {
     const codexHome = mkdtempSync(nodePath.join(os.tmpdir(), "synara-codex-keychain-"));
     tempDirs.push(codexHome);

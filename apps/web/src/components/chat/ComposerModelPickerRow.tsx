@@ -6,11 +6,11 @@
 
 import { type ProviderModelDescriptor } from "@synara/contracts";
 
-import { type StarredModel, starredModelKey } from "~/lib/starredModels";
+import { type StarredModel, starredModelSlotKey } from "~/lib/starredModels";
 import { cn } from "~/lib/utils";
 import { type ProviderOptions } from "../../providerModelOptions";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
-import { Kbd } from "../ui/kbd";
+import { ShortcutKbd } from "../ui/kbd";
 import {
   MenuGroup,
   MenuGroupLabel,
@@ -42,11 +42,13 @@ export function ComposerModelPickerRow(props: {
   providerOptions: ProviderOptions | undefined;
   runtimeModels: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   prompt: string;
-  starredKeySet: ReadonlySet<string>;
+  /** `starredModelSlotKey`s of every starred preset. */
+  starredModelSlots: ReadonlySet<string>;
   onSelect: (row: PickerRow) => void;
   /** Null hides the hover effort side block (the picker's footer slider owns effort). */
   onSelectEffort: ((row: PickerRow, effort: string) => void) | null;
   onToggleStar: (entry: StarredModel) => void;
+  onUnstarModel: (entry: Pick<StarredModel, "provider" | "instanceId" | "model">) => void;
 }) {
   const { row } = props;
   const selection = getComposerTraitSelection(
@@ -62,10 +64,13 @@ export function ComposerModelPickerRow(props: {
   );
   const starEntry: StarredModel = row.preset ?? {
     provider: row.provider,
+    ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     model: row.model,
     ...resolveStarredTraits(selection),
   };
-  const starred = row.preset !== null || props.starredKeySet.has(starredModelKey(starEntry));
+  // Provider rows ignore the pinned traits: the provider's current traits are shared by
+  // all of its models, so matching them would hide the star of every other preset.
+  const starred = row.preset !== null || props.starredModelSlots.has(starredModelSlotKey(row));
   // Starred rows already pin their effort; Ultrathink locks the ladder to the prompt.
   const onSelectEffort = props.onSelectEffort;
   const effortLevels =
@@ -83,7 +88,9 @@ export function ComposerModelPickerRow(props: {
           ? `Remove ${row.name} from starred`
           : `Star ${row.name} with its current effort and speed`
       }
-      onToggle={() => props.onToggleStar(starEntry)}
+      onToggle={() =>
+        row.preset === null && starred ? props.onUnstarModel(row) : props.onToggleStar(starEntry)
+      }
     />
   );
 
@@ -102,9 +109,10 @@ export function ComposerModelPickerRow(props: {
         {row.detail}
       </span>
       {props.shortcutHint ? (
-        <Kbd className="h-4 min-w-4 shrink-0 px-1 text-ui-2xs text-muted-foreground">
-          {props.shortcutHint}
-        </Kbd>
+        <ShortcutKbd
+          shortcutLabel={props.shortcutHint}
+          className="h-4 min-w-4 shrink-0 text-ui-2xs"
+        />
       ) : null}
       {row.selectableModel !== null ? starButton : null}
     </>

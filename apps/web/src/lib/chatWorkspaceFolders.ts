@@ -26,13 +26,13 @@ function joinWorkspacePath(root: string, ...segments: readonly string[]): string
 }
 
 // Uses the user's local calendar day, matching the date-bucketed folders Codex creates.
-export function formatChatWorkspaceDate(date: Date): string {
+function formatChatWorkspaceDate(date: Date): string {
   return [date.getFullYear(), padDatePart(date.getMonth() + 1), padDatePart(date.getDate())].join(
     "-",
   );
 }
 
-export function slugifyChatWorkspaceSeed(seed: string): string {
+function slugifyChatWorkspaceSeed(seed: string): string {
   const normalized = seed
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")

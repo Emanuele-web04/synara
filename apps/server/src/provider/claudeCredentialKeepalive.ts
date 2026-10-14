@@ -18,13 +18,25 @@
 // process mishandling refresh-token rotation). This keeps the Keychain token perpetually
 // fresh, so the SDK session always reads a valid token.
 //
+// Every enabled Claude account (provider instance) is kept fresh: each config dir has
+// its own Keychain item, so each account runs `claude auth status` in its own
+// launch environment.
+//
 // Opt in:   SYNARA_CLAUDE_KEEPALIVE=1
 // Tune:     SYNARA_CLAUDE_KEEPALIVE_MINUTES=<n>   (default 30)
 
 import { execProcessFile } from "@synara/shared/processRuntime";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
+import type { ServerSettings } from "@synara/contracts";
+import {
+  deriveProviderInstances,
+  providerStartOptionsFromInstance,
+} from "@synara/shared/providerInstances";
+
 import { acquireClaudeAuthStatusLock } from "./claudeAuthStatusLock";
+import { buildClaudeInstanceProcessEnv } from "./claudeEnvironment";
 import { buildClaudeProcessEnv } from "./claudeProcessEnv";
 
 const execFileAsync = promisify(execProcessFile);
@@ -75,6 +87,7 @@ async function nudgeClaudeTokenRefresh(
   binaryPath: string,
   homeDir: string | undefined,
   signal: AbortSignal,
+  processEnv: NodeJS.ProcessEnv | undefined,
 ): Promise<void> {
   const release = await acquireClaudeAuthStatusLockWithSignal(signal);
   try {
@@ -82,7 +95,7 @@ async function nudgeClaudeTokenRefresh(
       encoding: "utf8",
       timeout: COMMAND_TIMEOUT_MS,
       signal,
-      env: buildClaudeProcessEnv(homeDir ? { homeDir } : undefined),
+      env: processEnv ?? buildClaudeProcessEnv(homeDir ? { homeDir } : undefined),
       requireExecutable: true,
     });
   } finally {
@@ -127,10 +140,22 @@ export interface ClaudeCredentialKeepaliveHandle {
   readonly stop: () => Promise<void>;
 }
 
+/** A non-default Claude account whose OAuth token is kept fresh too. */
+export interface ClaudeCredentialKeepaliveAccount {
+  /** Stable account identity (the provider instance id). */
+  readonly id: string;
+  readonly binaryPath?: string;
+  /** The environment this account's `claude` CLI is launched with. */
+  readonly processEnv: NodeJS.ProcessEnv;
+}
+
 export interface ClaudeCredentialKeepaliveController {
   readonly reconcile: (input: {
+    /** Whether the default Claude account is enabled. */
     readonly enabled: boolean;
     readonly binaryPath?: string;
+    /** Additional enabled accounts, each refreshed in its own environment. */
+    readonly accounts?: ReadonlyArray<ClaudeCredentialKeepaliveAccount>;
   }) => Promise<void>;
   readonly stop: () => Promise<void>;
 }
@@ -140,10 +165,15 @@ export function startClaudeCredentialKeepalive(input?: {
   readonly env?: NodeJS.ProcessEnv;
   readonly binaryPath?: string;
   readonly homeDir?: string;
+  /** Account launch environment; the default account derives one from `homeDir`. */
+  readonly processEnv?: NodeJS.ProcessEnv;
+  /** Names the account in log lines. */
+  readonly accountLabel?: string;
   readonly log?: (message: string) => void;
   readonly runAuthStatus?: (input: {
     readonly binaryPath: string;
     readonly homeDir: string | undefined;
+    readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly signal: AbortSignal;
   }) => Promise<void>;
 }): ClaudeCredentialKeepaliveHandle {
@@ -151,10 +181,15 @@ export function startClaudeCredentialKeepalive(input?: {
   const env = input?.env ?? process.env;
   const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(input?.binaryPath);
   const homeDir = input?.homeDir;
+  const processEnv = input?.processEnv;
+  const logPrefix = input?.accountLabel
+    ? `[claude-keepalive:${input.accountLabel}]`
+    : "[claude-keepalive]";
   const log = input?.log ?? (() => {});
   const runAuthStatus =
     input?.runAuthStatus ??
-    ((input) => nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.signal));
+    ((input) =>
+      nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.signal, input.processEnv));
 
   // Only run when explicitly enabled. The check touches Claude Code auth data, so
   // Synara should not do it as background work merely because the app opened.
@@ -172,13 +207,18 @@ export function startClaudeCredentialKeepalive(input?: {
     if (stopped || activeTick) {
       return activeTick ?? Promise.resolve();
     }
-    activeTick = runAuthStatus({ binaryPath, homeDir, signal: abortController.signal })
+    activeTick = runAuthStatus({
+      binaryPath,
+      homeDir,
+      ...(processEnv ? { processEnv } : {}),
+      signal: abortController.signal,
+    })
       .catch((cause) => {
         if (abortController.signal.aborted) return;
         // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure
         // must never crash the server. Keep it quiet since it self-heals on the next tick.
         log(
-          `[claude-keepalive] token refresh nudge failed (non-fatal): ${
+          `${logPrefix} token refresh nudge failed (non-fatal): ${
             cause instanceof Error ? cause.message : String(cause)
           }`,
         );
@@ -197,7 +237,7 @@ export function startClaudeCredentialKeepalive(input?: {
   // Run once after opt-in so an already-stale token recovers promptly instead
   // of waiting for the first interval tick.
   void tick();
-  log(`[claude-keepalive] started (every ${intervalMs / 60_000}m, macOS)`);
+  log(`${logPrefix} started (every ${intervalMs / 60_000}m, macOS)`);
   return {
     stop: () => {
       if (stopPromise) return stopPromise;
@@ -211,6 +251,21 @@ export function startClaudeCredentialKeepalive(input?: {
   };
 }
 
+// Identity of one running keepalive: a changed binary or account environment restarts it.
+function keepaliveSignature(binaryPath: string, processEnv: NodeJS.ProcessEnv | undefined): string {
+  if (!processEnv) return JSON.stringify([binaryPath]);
+  const environment = Object.entries(processEnv).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  // Hashed: the environment can carry credentials.
+  return JSON.stringify([
+    binaryPath,
+    createHash("sha256").update(JSON.stringify(environment)).digest("hex"),
+  ]);
+}
+
+const DEFAULT_ACCOUNT_KEY = "\u0000default";
+
 export function createClaudeCredentialKeepaliveController(input?: {
   readonly platform?: NodeJS.Platform;
   readonly env?: NodeJS.ProcessEnv;
@@ -219,16 +274,19 @@ export function createClaudeCredentialKeepaliveController(input?: {
   readonly start?: typeof startClaudeCredentialKeepalive;
 }): ClaudeCredentialKeepaliveController {
   const start = input?.start ?? startClaudeCredentialKeepalive;
-  let active: {
-    readonly binaryPath: string;
-    readonly handle: ClaudeCredentialKeepaliveHandle;
-  } | null = null;
+  const active = new Map<
+    string,
+    { readonly signature: string; readonly handle: ClaudeCredentialKeepaliveHandle }
+  >();
   let transitionQueue = Promise.resolve();
 
-  const stopActive = async (): Promise<void> => {
-    const handle = active?.handle;
-    active = null;
-    await handle?.stop();
+  const stopAccounts = async (keys: ReadonlyArray<string>): Promise<void> => {
+    const handles = keys.flatMap((key) => {
+      const entry = active.get(key);
+      active.delete(key);
+      return entry ? [entry.handle] : [];
+    });
+    await Promise.all(handles.map((handle) => handle.stop()));
   };
 
   const enqueueTransition = (transition: () => Promise<void>): Promise<void> => {
@@ -243,26 +301,85 @@ export function createClaudeCredentialKeepaliveController(input?: {
   return {
     reconcile: (settings) =>
       enqueueTransition(async () => {
-        if (!settings.enabled) {
-          await stopActive();
-          return;
+        const desired = new Map<
+          string,
+          {
+            readonly binaryPath: string;
+            readonly processEnv?: NodeJS.ProcessEnv;
+            readonly accountLabel?: string;
+          }
+        >();
+        if (settings.enabled) {
+          desired.set(DEFAULT_ACCOUNT_KEY, {
+            binaryPath: resolveClaudeCredentialKeepaliveBinaryPath(settings.binaryPath),
+          });
         }
-        const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(settings.binaryPath);
-        if (active?.binaryPath === binaryPath) {
-          return;
+        for (const account of settings.accounts ?? []) {
+          desired.set(account.id, {
+            binaryPath: resolveClaudeCredentialKeepaliveBinaryPath(account.binaryPath),
+            processEnv: account.processEnv,
+            accountLabel: account.id,
+          });
         }
-        await stopActive();
-        active = {
-          binaryPath,
-          handle: start({
-            ...(input?.platform ? { platform: input.platform } : {}),
-            ...(input?.env ? { env: input.env } : {}),
-            binaryPath,
-            ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
-            ...(input?.log ? { log: input.log } : {}),
-          }),
-        };
+        const signatures = new Map(
+          [...desired].map(([key, target]) => [
+            key,
+            keepaliveSignature(target.binaryPath, target.processEnv),
+          ]),
+        );
+        await stopAccounts(
+          [...active.keys()].filter((key) => active.get(key)?.signature !== signatures.get(key)),
+        );
+        for (const [key, target] of desired) {
+          if (active.has(key)) continue;
+          active.set(key, {
+            signature: signatures.get(key)!,
+            handle: start({
+              ...(input?.platform ? { platform: input.platform } : {}),
+              ...(input?.env ? { env: input.env } : {}),
+              binaryPath: target.binaryPath,
+              ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
+              ...(target.processEnv ? { processEnv: target.processEnv } : {}),
+              ...(target.accountLabel ? { accountLabel: target.accountLabel } : {}),
+              ...(input?.log ? { log: input.log } : {}),
+            }),
+          });
+        }
       }),
-    stop: () => enqueueTransition(stopActive),
+    stop: () => enqueueTransition(() => stopAccounts([...active.keys()])),
   };
+}
+
+/**
+ * Keepalive targets for every enabled Claude account. The default account keeps
+ * the historical launch (ambient environment under `homeDir`) unless it has its
+ * own home or environment; every other account runs in the environment its
+ * runtime launches with.
+ */
+export function claudeCredentialKeepaliveTargets(
+  settings: ServerSettings,
+  paths: { readonly homeDir?: string | undefined; readonly stateDir?: string | undefined },
+): Parameters<ClaudeCredentialKeepaliveController["reconcile"]>[0] {
+  let enabled = false;
+  let binaryPath: string | undefined;
+  const accounts: ClaudeCredentialKeepaliveAccount[] = [];
+  for (const instance of deriveProviderInstances(settings)) {
+    if (instance.driver !== "claudeAgent" || !instance.enabled) continue;
+    const options = providerStartOptionsFromInstance(instance)?.claudeAgent;
+    if (instance.isDefault && !options?.homePath && options?.environment === undefined) {
+      enabled = true;
+      binaryPath = options?.binaryPath;
+      continue;
+    }
+    accounts.push({
+      id: String(instance.instanceId),
+      ...(options?.binaryPath ? { binaryPath: options.binaryPath } : {}),
+      processEnv: buildClaudeInstanceProcessEnv(options?.homePath, options?.environment, {
+        ...(paths.homeDir ? { homeDir: paths.homeDir } : {}),
+        ...(paths.stateDir ? { isolationRootDir: paths.stateDir } : {}),
+        ...(instance.isDefault ? {} : { providerInstanceId: String(instance.instanceId) }),
+      }),
+    });
+  }
+  return { enabled, ...(binaryPath ? { binaryPath } : {}), accounts };
 }

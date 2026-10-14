@@ -31,6 +31,22 @@ describe("fetchJson outbound policy", () => {
     expect(request.mock.calls[0]?.[0].policy.allowLoopbackHttp).toBeUndefined();
   });
 
+  it("opts in to the fake-ip benchmark range for pinned provider origins", async () => {
+    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue(response());
+
+    await fetchJson({
+      service: "test-provider",
+      url: "https://api.example.com/status",
+      allowedOrigins: ["https://api.example.com"],
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[0].policy).toMatchObject({
+      requirePublicAddress: true,
+      allowBenchmarkAddressRange: true,
+    });
+  });
+
   it("passes through only an explicit loopback HTTP opt-in", async () => {
     const request = vi.spyOn(outboundHttp, "request").mockResolvedValue({
       ...response(),

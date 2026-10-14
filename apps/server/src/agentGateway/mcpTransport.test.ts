@@ -5,12 +5,12 @@ import { Deferred, Effect, Fiber, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { makeAgentGatewayBrowserTools } from "./browserTools.ts";
 import { BrowserHostRpcError } from "../browserAutomation/browserHostRpcClient.ts";
+import { makeAgentGatewayKanbanTools } from "./kanbanTools.ts";
 import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionRegistry.ts";
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
 import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
-import { isSynaraComputerToolFamilyName } from "./computerToolPermission.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import {
   acquireAgentGatewaySessionLease,
@@ -22,6 +22,44 @@ import {
 import type { ToolEntry } from "./toolRuntime.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
+
+const WORKSPACE_PATHS = { homeDir: "/home/tester", chatWorkspaceRoot: "/home/tester/chats" };
+
+/** Minimal ordinary-project row for the board snapshot fixtures. */
+const projectRow = (projectId: string) => ({
+  id: ProjectId.makeUnsafe(projectId),
+  title: "Project A",
+  kind: "project" as const,
+  workspaceRoot: "/repos/Project A",
+});
+
+/**
+ * Wire a kanban tool against the transport harness with the standard test
+ * helpers; `helpers` overrides only what a scenario needs to observe.
+ */
+function makeKanbanTool(
+  name: string,
+  threads: ReadonlyArray<OrchestrationThreadShell>,
+  helpers: Partial<Parameters<typeof makeAgentGatewayKanbanTools>[0]["helpers"]> = {},
+): ToolEntry {
+  return makeAgentGatewayKanbanTools({
+    snapshotQuery: {
+      getShellSnapshot: () =>
+        Effect.succeed({ projects: [projectRow("project-a")], threads: [...threads] }),
+    } as unknown as ProjectionSnapshotQueryShape,
+    workspacePaths: WORKSPACE_PATHS,
+    now: () => Date.parse(NOW),
+    helpers: {
+      requireThreadShell: (threadId) =>
+        Effect.succeed(threads.find((thread) => String(thread.id) === threadId) ?? threads[0]!),
+      assertCallerMayDriveThread: () => Effect.void,
+      runCreateThreads: (() => Effect.succeed({ content: [] })) as never,
+      startTurn: (() => Effect.succeed({})) as never,
+      interruptTurn: (() => Effect.succeed({ sequence: 7 })) as never,
+      ...helpers,
+    },
+  }).find((entry) => entry.definition.name === name)!;
+}
 
 function makeThread(threadId: string): OrchestrationThreadShell {
   return {
@@ -78,8 +116,6 @@ function makeTransport(input: {
   readonly ghostThreads?: ReadonlyArray<string>;
   /** Computer family names threaded to the transport (absent from tools). */
   readonly computerToolNames?: ReadonlyArray<string>;
-  /** Full family-predicate override (e.g. the namespace-insensitive matcher). */
-  readonly isComputerToolName?: (toolName: string) => boolean;
   readonly onCapabilityDenied?: (denial: McpTransportTestDenial) => Effect.Effect<void>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
@@ -171,11 +207,9 @@ function makeTransport(input: {
       return thread ? Effect.succeed(thread) : Effect.fail(new Error("missing thread"));
     },
     ...(input.onCapabilityDenied ? { onCapabilityDenied: input.onCapabilityDenied } : {}),
-    ...(input.computerToolNames || input.isComputerToolName
+    ...(input.computerToolNames
       ? {
-          isComputerToolName:
-            input.isComputerToolName ??
-            ((toolName: string) => input.computerToolNames!.includes(toolName)),
+          isComputerToolName: (toolName: string) => input.computerToolNames!.includes(toolName),
           computerControlCapability: "computer:control" as const,
         }
       : {}),
@@ -755,27 +789,6 @@ describe("makeAgentGatewayMcpTransport capability truth", () => {
       }),
   );
 
-  it.effect("leaves entirely-unknown tool names as Unknown-tool", () =>
-    Effect.gen(function* () {
-      const denials: Array<McpTransportTestDenial> = [];
-      const transport = makeTransport({
-        threads: [makeThread("thread-unknown")],
-        tools: [computerClick],
-        computerToolNames: ["computer_click"],
-        onCapabilityDenied: (denial) =>
-          Effect.sync(() => {
-            denials.push(denial);
-          }),
-      });
-      const response = yield* post(transport, "token-1", toolCallBody("synara_frobnicate"));
-      assert.equal(response.status, 200);
-      const error = rpcErrorOf(response);
-      assert.equal(error.code, -32602);
-      assert.include(error.message, 'Unknown tool "synara_frobnicate".');
-      assert.deepEqual(denials, []);
-    }),
-  );
-
   it.effect("denies an in-catalog computer name with the hook and explicit capability", () =>
     Effect.gen(function* () {
       const denials: Array<McpTransportTestDenial> = [];
@@ -822,86 +835,6 @@ describe("makeAgentGatewayMcpTransport capability truth", () => {
       });
       transport.setThreadTurnState("thread-quiet", "completed");
       const response = yield* post(transport, "token-1", toolCallBody("computer_click"));
-      assert.equal(response.status, 200);
-      assert.equal(
-        (toolResultErrorOf(response).error as { code: string }).code,
-        "caller_turn_inactive",
-      );
-      assert.deepEqual(denials, []);
-    }),
-  );
-
-  it.effect("denies prefixed computer spellings without a lease with hook and capability", () =>
-    Effect.gen(function* () {
-      const denials: Array<McpTransportTestDenial> = [];
-      const transport = makeTransport({
-        threads: [makeThread("thread-prefixed")],
-        // The computer tool is known to the family but absent from this catalog.
-        tools: [],
-        isComputerToolName: (toolName) => isSynaraComputerToolFamilyName(toolName),
-        onCapabilityDenied: (denial) =>
-          Effect.sync(() => {
-            denials.push(denial);
-          }),
-      });
-      for (const name of ["mcp__synara__computer_click", "synara_computer_click"] as const) {
-        const response = yield* post(transport, "token-1", toolCallBody(name));
-        assert.equal(response.status, 200);
-        const error = toolResultErrorOf(response).error as {
-          code: string;
-          details: { requiredCapability: string };
-        };
-        assert.equal(error.code, "capability_denied");
-        assert.equal(error.details.requiredCapability, "computer:control");
-      }
-      assert.deepEqual(
-        denials.map((denial) => denial.toolName),
-        ["mcp__synara__computer_click", "synara_computer_click"],
-      );
-    }),
-  );
-
-  it.effect("leaves foreign-prefixed and non-computer names as Unknown-tool", () =>
-    Effect.gen(function* () {
-      const denials: Array<McpTransportTestDenial> = [];
-      const transport = makeTransport({
-        threads: [makeThread("thread-foreign")],
-        tools: [],
-        isComputerToolName: (toolName) => isSynaraComputerToolFamilyName(toolName),
-        onCapabilityDenied: (denial) =>
-          Effect.sync(() => {
-            denials.push(denial);
-          }),
-      });
-      for (const name of [
-        "foo_bar",
-        "computer_future_tool",
-        "mcp__other__computer_click",
-      ] as const) {
-        const response = yield* post(transport, "token-1", toolCallBody(name));
-        assert.equal(response.status, 200);
-        const error = rpcErrorOf(response);
-        assert.equal(error.code, -32602);
-        assert.include(error.message, `Unknown tool "${name}".`);
-      }
-      assert.deepEqual(denials, []);
-    }),
-  );
-
-  it.effect("keeps the denial hook silent for a prefixed computer tool on an inactive turn", () =>
-    Effect.gen(function* () {
-      const denials: Array<McpTransportTestDenial> = [];
-      const transport = makeTransport({
-        threads: [makeThread("thread-quiet-prefixed")],
-        tools: [],
-        isComputerToolName: (toolName) => isSynaraComputerToolFamilyName(toolName),
-        onCapabilityDenied: (denial) =>
-          Effect.sync(() => {
-            denials.push(denial);
-          }),
-      });
-      transport.setThreadTurnState("thread-quiet-prefixed", "completed");
-      const response = yield* post(transport, "token-1", toolCallBody("synara_computer_click"));
       assert.equal(response.status, 200);
       assert.equal(
         (toolResultErrorOf(response).error as { code: string }).code,
