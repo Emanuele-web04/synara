@@ -194,7 +194,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_create_todo",
   "synara_list_todos",
   "synara_update_todo",
-  // Inline visuals (inlineVisualTools.ts; Beta-only, absent from a Stable catalog)
+  // Inline visuals (inlineVisualTools.ts; available in Stable and Beta)
   "synara_show_visual",
   // Thread write tools (Layers/AgentGateway.ts)
   "synara_create_threads",

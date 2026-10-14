@@ -870,7 +870,7 @@ describe("OpenCode host policy delivery", () => {
             ...firstCursor,
             harnessPolicyDelivery: {
               ...firstCursor.harnessPolicyDelivery,
-              policyVersion: "2026-09-03.1",
+              policyVersion: "2026-10-12.1",
             },
           },
         });

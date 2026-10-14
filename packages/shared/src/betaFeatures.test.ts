@@ -51,8 +51,8 @@ describe("isBetaFeatureEnabled", () => {
     }
   });
 
-  it("keeps inline visuals out of Stable only", () => {
-    expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(false);
+  it("offers inline visuals in Stable and all other flavors", () => {
+    expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(true);
     for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
       expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, flavor)).toBe(true);
     }

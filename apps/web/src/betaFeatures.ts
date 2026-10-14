@@ -44,8 +44,8 @@ export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
 
 /**
- * Inline visuals are Beta-only. On Stable the transcript ignores `visual.shown`
- * activities entirely (no row, no fetch); the server also refuses the tool and read.
+ * Inline visuals are available in Stable and Beta. HTML keeps the same
+ * sandbox and desktop-only execution boundary; component specs also work on the web.
  */
 export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
 

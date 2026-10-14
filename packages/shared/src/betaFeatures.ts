@@ -34,9 +34,8 @@ export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
 /**
- * Inline visuals (Beta only): the `synara_show_visual` agent tool, its
- * transcript rows, and the `orchestration.getInlineVisual` read. Agent HTML runs
- * in the app renderer (sandboxed), so it stays out of Stable until proven there.
+ * Inline visuals (Stable and Beta): the `synara_show_visual` agent tool,
+ * component-spec and sandboxed HTML transcript rows, and the document read.
  */
 export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
 
@@ -47,10 +46,7 @@ export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
  */
 export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
-  INLINE_VISUALS_BETA_FEATURE,
-  MCP_CONNECTORS_BETA_FEATURE,
-];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [MCP_CONNECTORS_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable
