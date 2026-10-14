@@ -31,6 +31,11 @@ composer; it is not sent twice.
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
+  answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
+  place while you work through them, and read rows stay until **Clear read from Priority** in
+  the Activity options or until the view reopens. Other chats follow under Today, Yesterday,
+  and Earlier.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
@@ -504,6 +509,9 @@ scaling beyond one task.
 - `mod+\` — split the current view
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
+- `mod+alt+a` — open the next chat that needs you: one waiting on an answer first, then
+  unseen work. Repeated presses advance through that urgency order and wrap after the last
+  actionable chat, independently of Priority's held row order.
 
 Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
 the remaining chats and preserves focus on a surviving chat. Closing a forked Side

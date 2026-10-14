@@ -54,6 +54,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   lazy,
   startTransition,
@@ -271,7 +272,9 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-
 import {
   type ActivityScopeSelection,
   buildActivityViewModel,
-  hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
+  findNextThreadNeedingAttention,
+  hasActivityNeedingAttention,
+  resolveActivityPriorityTier,
 } from "./SidebarActivityView.logic";
 import {
   ActivityThreadRow,
@@ -1779,12 +1782,6 @@ export default function Sidebar() {
         ),
       [displaySidebarTreeThreads, groupProjectIdSet, summariesByProjectId],
     );
-  // Drives the unread dot on the header Activity bell.
-  const hasUnreadActivity = useMemo(
-    () =>
-      hasUnreadActivityOutsideActiveThread(visibleNonGroupSidebarThreads, activeSidebarThreadId),
-    [activeSidebarThreadId, visibleNonGroupSidebarThreads],
-  );
   // Inbox is available in both Stable and Beta.
   const inboxAvailable = INBOX_ON;
   const inboxBadge = useMemo(() => {
@@ -1869,6 +1866,22 @@ export default function Sidebar() {
           thread.session === null,
       }),
     [activeComposerSendThreadIds, dismissedThreadStatusKeyByThreadId],
+  );
+  const resolveActivityPriorityTierForSidebar = useCallback(
+    (thread: SidebarThreadSummary) =>
+      resolveActivityPriorityTier(resolveThreadStatusForSidebar(thread)),
+    [resolveThreadStatusForSidebar],
+  );
+  // Drives the dot on the header Activity bell: another chat waiting on an answer or
+  // with unseen work, by Priority's tiers.
+  const hasUnreadActivity = useMemo(
+    () =>
+      hasActivityNeedingAttention(
+        visibleNonGroupSidebarThreads,
+        activeSidebarThreadId,
+        resolveActivityPriorityTierForSidebar,
+      ),
+    [activeSidebarThreadId, resolveActivityPriorityTierForSidebar, visibleNonGroupSidebarThreads],
   );
 
   useEffect(() => {
@@ -6090,6 +6103,18 @@ export default function Sidebar() {
     };
   }, [clearSelection, selectedThreadIds.size]);
 
+  // Reads the latest threads at key time without re-subscribing the shortcut listener on
+  // every thread update. Same threads and tiers as the bell's dot, so the chord goes where
+  // the dot points.
+  const openNextThreadNeedingAttention = useEffectEvent(() => {
+    const nextThreadId = findNextThreadNeedingAttention(
+      visibleNonGroupSidebarThreads,
+      activeSidebarThreadId,
+      resolveActivityPriorityTierForSidebar,
+    );
+    if (nextThreadId) activateThreadFromSidebarIntent(nextThreadId);
+  });
+
   useEffect(() => {
     const clearThreadJumpHints = () => {
       setThreadJumpLabelByThreadId((current) =>
@@ -6222,6 +6247,12 @@ export default function Sidebar() {
         if (threadJumpTargetId) {
           activateThreadFromSidebarIntent(threadJumpTargetId);
         }
+        return;
+      }
+      if (command === "chat.attention.next") {
+        event.preventDefault();
+        event.stopPropagation();
+        openNextThreadNeedingAttention();
         return;
       }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {

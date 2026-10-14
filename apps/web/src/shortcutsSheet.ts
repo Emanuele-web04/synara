@@ -279,6 +279,12 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Cycle to the next thread that is currently visible in the sidebar.",
   },
   {
+    command: "chat.attention.next",
+    label: "Next chat needing attention",
+    description:
+      "Open the most urgent other chat: one waiting on you first, then unseen work, as Activity's Priority ranks them.",
+  },
+  {
     command: "threadTab.previous",
     label: "Previous tab",
     description: "Switch to the open thread tab on the left of the active one.",
