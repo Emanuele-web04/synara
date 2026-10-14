@@ -70,6 +70,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 // Mirror the same-thread Hand off activities in ProviderCommandReactor.ts.
 export const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
 export const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+export const PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON = "background-tasks";
 
 export interface ProviderHandoffInfo {
   status: "completed" | "failed";
@@ -84,6 +85,8 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** The failure was the source's live background tasks, which the user may stop. */
+  blockedByBackgroundTasks?: boolean;
   /** Set when that side requested fast mode but its session was not serving it. */
   sourceFastModeNotice?: FastModeNotice | null;
   targetFastModeNotice?: FastModeNotice | null;
@@ -1484,7 +1487,7 @@ function asHandoffModelSelection(
   return fallback as ModelSelection;
 }
 
-function extractProviderHandoffInfo(
+export function extractProviderHandoffInfo(
   payload: Record<string, unknown> | null,
   status: ProviderHandoffInfo["status"],
 ): ProviderHandoffInfo | null {
@@ -1511,6 +1514,9 @@ function extractProviderHandoffInfo(
     }),
     contextText: asTrimmedString(payload?.contextText),
     failureDetail: asTrimmedString(payload?.detail),
+    ...(status === "failed" && payload?.reason === PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON
+      ? { blockedByBackgroundTasks: true }
+      : {}),
   };
 }
 

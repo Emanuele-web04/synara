@@ -18739,7 +18739,65 @@ describe("ProviderCommandReactor", () => {
       expect(harness.startSession.mock.calls).toHaveLength(1);
       expect(
         thread?.activities.find((activity) => activity.kind === "provider.handoff.failed"),
-      ).toMatchObject({ payload: { detail: expect.stringMatching(/background tasks/) } });
+      ).toMatchObject({
+        payload: {
+          reason: "background-tasks",
+          detail: "Grok still has background tasks running in this thread.",
+        },
+      });
+    });
+
+    it("stops the source's background tasks when the user agrees to switch now", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          providerHandoff: true,
+          providerHandoffStopsBackgroundTasks: true,
+        }),
+      );
+
+      // Clearing the source continuation stops its runtime and the tasks in it.
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({ threadId });
+      await waitFor(async () =>
+        Boolean(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.handoff",
+          ),
+        ),
+      );
+      expect((await readHarnessThread(harness))?.modelSelection).toMatchObject({
+        provider: "claudeAgent",
+      });
+    });
+
+    it("rejects stopping background tasks outside a provider handoff", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+
+      await expect(
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-stop-tasks-without-handoff"),
+            threadId,
+            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+            providerHandoffStopsBackgroundTasks: true,
+          }),
+        ),
+      ).rejects.toThrow(/only allowed as part of a provider handoff/);
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
     });
 
     it("refuses a handoff while a turn is running", async () => {

@@ -4818,14 +4818,20 @@ describe("ChatView transcript geometry (full app)", () => {
 
     // Server reaction to a same-thread handoff: the outcome row keyed by the
     // command, plus (on success) the thread rebound to the target provider.
+    // "blocked": the source's background tasks refused it unless the user
+    // chose to stop them.
     const respondToHandoff =
-      (outcome: "completed" | "failed") =>
+      (requestedOutcome: "completed" | "failed" | "blocked") =>
       (
         command: Parameters<
           NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
         >[0],
       ) => {
         if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
+        const blocked =
+          requestedOutcome === "blocked" && command.providerHandoffStopsBackgroundTasks !== true;
+        const outcome =
+          requestedOutcome === "blocked" ? (blocked ? "failed" : "completed") : requestedOutcome;
         const { commandId, modelSelection } = command;
         const targetProvider = modelSelection?.provider ?? "claudeAgent";
         const targetModel = modelSelection?.model ?? "claude-sonnet-4-6";
@@ -4875,7 +4881,14 @@ describe("ChatView transcript geometry (full app)", () => {
                         sourceModel: thread.modelSelection.model,
                         targetProvider,
                         targetModel,
-                        ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
+                        ...(blocked
+                          ? {
+                              detail: "Codex still has background tasks running in this thread.",
+                              reason: "background-tasks",
+                            }
+                          : outcome === "failed"
+                            ? { detail: "Claude CLI is not signed in." }
+                            : {}),
                       },
                     },
                   ],
@@ -5077,6 +5090,44 @@ describe("ChatView transcript geometry (full app)", () => {
             (row.textContent ?? "").includes("Review the reconnect fix"),
           ),
         ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("explains a handoff refused by background tasks and stops them on request", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("blocked"));
+      try {
+        const composerEditor = await pickClaudeAndSend("Review the reconnect fix");
+        const notice = page.getByTestId("blocked-handoff-notice");
+        await expect.element(notice).toBeVisible();
+        await expect
+          .element(notice)
+          .toHaveTextContent(/Codex still has background tasks running in this thread/);
+        // The notice replaces the raw refusal; the message waits in the composer.
+        expect(document.body.textContent ?? "").not.toContain("could not start");
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
+        await vi.waitFor(() =>
+          expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix"),
+        );
+
+        await page.getByRole("button", { name: "Stop tasks and switch" }).click();
+        await vi.waitFor(() =>
+          expect(
+            mounted.commands.find(
+              (command) =>
+                command.type === "thread.meta.update" &&
+                command.providerHandoffStopsBackgroundTasks === true,
+            ),
+          ).toMatchObject({
+            threadId: THREAD_ID,
+            providerHandoff: true,
+            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          }),
+        );
+        await expect.element(notice).not.toBeInTheDocument();
       } finally {
         await mounted.cleanup();
       }

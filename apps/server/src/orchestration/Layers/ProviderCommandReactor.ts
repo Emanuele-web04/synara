@@ -409,6 +409,8 @@ const serverCommandId = (tag: string): CommandId =>
 const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
 const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
 const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+// Failure reason the web reads to offer "stop tasks and switch" instead of the raw error.
+const PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON = "background-tasks";
 
 // Activity payloads are plain JSON; a model selection already is, so a JSON
 // round-trip only drops absent optional fields for the payload's Json type.
@@ -6883,6 +6885,8 @@ const make = Effect.gen(function* () {
     readonly occurredAt: string;
     readonly sourceModelSelection: ModelSelection;
     readonly targetModelSelection: ModelSelection;
+    // The user chose to stop the source's background tasks to switch now.
+    readonly stopBackgroundTasks: boolean;
   }) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
@@ -6899,6 +6903,7 @@ const make = Effect.gen(function* () {
     // protected: ProviderService refuses another provider on the thread until
     // the handoff explicitly abandons it. This also stops the source runtime.
     let sourceContinuationReset = false;
+    let blockedByBackgroundTasks = false;
     const startOutcome = yield* runBoundedProviderCall({
       label: "The provider handoff",
       // Reserve the remaining command budget for the durable source restore
@@ -6918,11 +6923,14 @@ const make = Effect.gen(function* () {
           });
         }
         // A settled foreground turn may still share its runtime with background
-        // tasks. Keep that owner alive until its tasks finish or are stopped.
+        // tasks. Keep that owner alive until its tasks finish or the user agrees
+        // to stop them; the source stop below ends them with the runtime.
         if (
+          !input.stopBackgroundTasks &&
           providerService.hasLiveRuntimeTasks &&
           (yield* providerService.hasLiveRuntimeTasks({ threadId: input.threadId }))
         ) {
+          blockedByBackgroundTasks = true;
           return yield* new ProviderAdapterValidationError({
             provider: input.sourceModelSelection.provider,
             operation: "thread.meta.update",
@@ -7006,6 +7014,9 @@ const make = Effect.gen(function* () {
       freshSessionContextBootstrapThreadIds.add(input.threadId);
     }
     const detail = Cause.squash(startFailure);
+    const sourceName =
+      PROVIDER_DISPLAY_NAMES[input.sourceModelSelection.provider] ??
+      input.sourceModelSelection.provider;
     yield* Effect.logWarning("provider handoff could not start the target session", {
       threadId: input.threadId,
       cause: Cause.pretty(startFailure),
@@ -7027,7 +7038,12 @@ const make = Effect.gen(function* () {
         summary: `Handoff to ${describe(input.targetModelSelection)} failed; the thread stays on ${describe(input.sourceModelSelection)}.`,
         payload: {
           ...payload,
-          detail: detail instanceof Error ? detail.message : String(detail),
+          ...(blockedByBackgroundTasks
+            ? {
+                reason: PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON,
+                detail: `${sourceName} still has background tasks running in this thread.`,
+              }
+            : { detail: detail instanceof Error ? detail.message : String(detail) }),
         },
         turnId: null,
         createdAt,
@@ -7222,6 +7238,7 @@ const make = Effect.gen(function* () {
               occurredAt: event.occurredAt,
               sourceModelSelection: event.payload.providerHandoff.sourceModelSelection,
               targetModelSelection: event.payload.modelSelection,
+              stopBackgroundTasks: event.payload.providerHandoff.stopBackgroundTasks === true,
             });
             return;
           }

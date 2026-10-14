@@ -14948,6 +14948,284 @@ describe("Claude subagent tracking", () => {
     );
   });
 
+  for (const returnedToForeground of [false, true]) {
+    it.effect(
+      `settles a foreground task left open by a turn that hit the usage limit (returned: ${returnedToForeground})`,
+      () => {
+        const harness = makeHarness();
+        const FG = "toolu_limited_agent";
+        const BASH = "toolu_limited_bash";
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "task.completed" && payloadRecord(event).summary === "Late notice.",
+            ),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* startTrackingSession(adapter);
+
+          for (const message of [
+            rootToolUse(0, BASH, "Bash", { command: "make", description: "Build" }),
+            system("task_started", {
+              task_id: "task-limited-bash",
+              tool_use_id: BASH,
+              task_type: "local_bash",
+              is_backgrounded: false,
+              description: "Build",
+            }),
+            rootToolUse(1, FG, "Agent", { description: "Limited job", prompt: "Dig in." }),
+            system("task_started", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: false,
+              description: "Limited job",
+            }),
+            subagentAssistant(FG, [{ type: "text", text: "Digging." }]),
+            ...(returnedToForeground
+              ? [
+                  system("task_updated", {
+                    task_id: "task-limited-bash",
+                    patch: { is_backgrounded: true },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited",
+                    patch: { is_backgrounded: true },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited-bash",
+                    patch: { is_backgrounded: false },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited",
+                    patch: { is_backgrounded: false },
+                  }),
+                ]
+              : []),
+            {
+              type: "assistant",
+              session_id: SESSION,
+              uuid: nextUuid(),
+              parent_tool_use_id: null,
+              error: "rate_limit",
+              message: {
+                id: `msg-${nextUuid()}`,
+                content: [{ type: "text", text: "You've hit your limit." }],
+                usage: { input_tokens: 0, output_tokens: 0 },
+              },
+            } as unknown as SDKMessage,
+            {
+              type: "result",
+              subtype: "success",
+              is_error: true,
+              result: "You've hit your limit.",
+              errors: [],
+              session_id: SESSION,
+              uuid: nextUuid(),
+            } as unknown as SDKMessage,
+            // Zombie tail, then a real notification that arrives after all.
+            system("task_progress", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              description: "Still digging",
+              usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+            }),
+            system("task_notification", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              status: "stopped",
+              output_file: "/tmp/limited.out",
+              summary: "Late notice.",
+            }),
+          ]) {
+            harness.query.emit(message);
+          }
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          const rootTurnId = events.find(
+            (event) => event.type === "turn.started" && isRootEvent(event),
+          )?.turnId;
+          const turnCompletedIndex = events.findIndex(
+            (event) => event.type === "turn.completed" && isRootEvent(event),
+          );
+          assert.equal(payloadRecord(events[turnCompletedIndex]!).state, "failed");
+          const settled = events
+            .slice(0, turnCompletedIndex)
+            .filter((event) => isRootEvent(event) && event.type === "task.completed")
+            .map((event) => ({
+              taskId: taskIdOf(event),
+              status: payloadRecord(event).status,
+              toolUseId: payloadRecord(event).toolUseId,
+              turnId: event.turnId,
+            }));
+          assert.deepEqual(settled, [
+            {
+              taskId: "task-limited-bash",
+              status: "failed",
+              toolUseId: undefined,
+              turnId: rootTurnId,
+            },
+            { taskId: "task-limited", status: "failed", toolUseId: FG, turnId: rootTurnId },
+          ]);
+          // Late progress cannot mark the settled task live again.
+          assert.equal(
+            events
+              .slice(turnCompletedIndex)
+              .some(
+                (event) => event.type === "task.progress" && taskIdOf(event) === "task-limited",
+              ),
+            false,
+          );
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  it.effect("leaves background tasks open when the launching turn ends", () => {
+    const harness = makeHarness();
+    const BG = "toolu_bg_at_turn_end";
+    const MOVED = "toolu_moved_bash";
+    const LISTED = "toolu_listed_bash";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, BG, "Agent", {
+          description: "Background job",
+          prompt: "Take your time.",
+          run_in_background: true,
+        }),
+        system("task_started", {
+          task_id: "task-bg-open",
+          tool_use_id: BG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: true,
+          description: "Background job",
+        }),
+        userMessage(null, [trackingToolResult(BG, "Async agent launched successfully.")], {
+          status: "async_launched",
+          agentId: "task-bg-open",
+        }),
+        rootToolUse(1, MOVED, "Bash", { command: "serve", description: "Serve" }),
+        system("task_started", {
+          task_id: "task-moved",
+          tool_use_id: MOVED,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Serve",
+        }),
+        system("task_updated", { task_id: "task-moved", patch: { is_backgrounded: true } }),
+        userMessage(null, [trackingToolResult(MOVED, "Moved to background.")]),
+        rootToolUse(2, LISTED, "Bash", { command: "watch", description: "Watch" }),
+        system("task_started", {
+          task_id: "task-listed",
+          tool_use_id: LISTED,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Watch",
+        }),
+        system("background_tasks_changed", {
+          tasks: [
+            { task_id: "task-bg-open", task_type: "local_agent", description: "Background job" },
+            { task_id: "task-moved", task_type: "local_bash", description: "Serve" },
+            { task_id: "task-listed", task_type: "local_bash", description: "Watch" },
+          ],
+        }),
+        userMessage(null, [trackingToolResult(LISTED, "Moved to background.")]),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(events.filter((event) => event.type === "task.completed").map(taskIdOf), []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not repeat terminal evidence a foreground task already reported", () => {
+    const harness = makeHarness();
+    const FG = "toolu_reported_agent";
+    const BASH = "toolu_reported_bash";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, FG, "Agent", { description: "Reported job", prompt: "Report back." }),
+        system("task_started", {
+          task_id: "task-reported",
+          tool_use_id: FG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: false,
+          description: "Reported job",
+        }),
+        subagentAssistant(FG, [{ type: "text", text: "Reported." }]),
+        system("task_updated", { task_id: "task-reported", patch: { status: "completed" } }),
+        system("task_notification", {
+          task_id: "task-reported",
+          tool_use_id: FG,
+          status: "completed",
+          output_file: "/tmp/reported.out",
+          summary: "Reported.",
+        }),
+        userMessage(null, [trackingToolResult(FG, "Reported.")], {
+          status: "completed",
+          agentId: "task-reported",
+        }),
+        rootToolUse(1, BASH, "Bash", { command: "false", description: "Fail" }),
+        system("task_started", {
+          task_id: "task-reported-bash",
+          tool_use_id: BASH,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Fail",
+        }),
+        system("task_updated", {
+          task_id: "task-reported-bash",
+          patch: { status: "failed", error: "exit code 1" },
+        }),
+        userMessage(null, [trackingToolResult(BASH, "exit code 1")]),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "task.completed")
+          .map((event) => `${taskIdOf(event)}:${String(payloadRecord(event).summary)}`),
+        ["task-reported:Reported."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("tells the user when a queued steer never reached the subagent", () => {
     const harness = makeHarness();
     const STEERED = "toolu_steered_agent";

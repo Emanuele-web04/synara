@@ -17,6 +17,13 @@ import {
 import { getDefaultModel } from "@synara/shared/model";
 import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
+import {
+  extractProviderHandoffInfo,
+  PROVIDER_HANDOFF_ACTIVITY_KIND,
+  PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON,
+  PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+  type ProviderHandoffInfo,
+} from "../workLog";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
@@ -252,7 +259,11 @@ export function providerHandoffOutcomeActivityIds(commandId: string): {
 
 export type ProviderHandoffOutcome =
   | { readonly status: "completed" }
-  | { readonly status: "failed"; readonly detail: string }
+  | {
+      readonly status: "failed";
+      readonly detail: string;
+      readonly blockedByBackgroundTasks?: true;
+    }
   | { readonly status: "pending" };
 
 /**
@@ -272,15 +283,72 @@ export function resolveProviderHandoffOutcome(
     if (activity.id === ids.failed) {
       const payload =
         activity.payload && typeof activity.payload === "object"
-          ? (activity.payload as { detail?: unknown })
+          ? (activity.payload as { detail?: unknown; reason?: unknown })
           : null;
       return {
         status: "failed",
         detail: typeof payload?.detail === "string" ? payload.detail : activity.summary,
+        ...(payload?.reason === PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON
+          ? { blockedByBackgroundTasks: true as const }
+          : {}),
       };
     }
   }
   return { status: "pending" };
+}
+
+/**
+ * Thrown when the server refused a same-thread handoff because the source
+ * still runs background tasks. The composer explains it and offers to stop
+ * them, so callers skip their generic error surface.
+ */
+export class ProviderHandoffBackgroundTasksError extends Error {
+  constructor(sourceProvider: ProviderKind, targetProvider: ProviderKind) {
+    const sourceName = PROVIDER_DISPLAY_NAMES[sourceProvider] ?? sourceProvider;
+    const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+    super(
+      `${sourceName} still has background tasks running in this thread, so it cannot switch to ${targetName} yet.`,
+    );
+    this.name = "ProviderHandoffBackgroundTasksError";
+  }
+}
+
+export interface BlockedProviderHandoff {
+  readonly activityId: string;
+  readonly info: ProviderHandoffInfo;
+}
+
+/**
+ * The thread's latest same-thread handoff, when the source's background tasks
+ * refused it and nothing has moved the thread on since: no later handoff, no
+ * newer turn, and the thread still runs on that source provider.
+ */
+export function deriveBlockedProviderHandoff(
+  thread: Pick<Thread, "activities" | "latestTurn" | "modelSelection">,
+): BlockedProviderHandoff | null {
+  const activity = thread.activities.findLast(
+    (entry) =>
+      entry.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+      entry.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+  );
+  if (!activity || activity.kind !== PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+    return null;
+  }
+  const info = extractProviderHandoffInfo(
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null,
+    "failed",
+  );
+  if (
+    !info?.blockedByBackgroundTasks ||
+    info.sourceProvider !== thread.modelSelection.provider ||
+    (thread.latestTurn !== null &&
+      Date.parse(thread.latestTurn.requestedAt) > Date.parse(activity.createdAt))
+  ) {
+    return null;
+  }
+  return { activityId: activity.id, info };
 }
 
 export interface ThreadHandoffAvailability {

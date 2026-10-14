@@ -528,6 +528,15 @@ interface ClaudeSessionContext {
   // are cancelled only on this evidence (or whole-session stop), never merely
   // because their parent foreground turn completed.
   readonly terminalTaskIds: Set<string>;
+  // Root only. Main-conversation tasks registered in the foreground (task id ->
+  // the subagent's Task tool_use_id, if any) that have not published terminal
+  // evidence. A foreground task cannot outlive its turn, but an aborted or
+  // failed turn may never get a terminal task message for it; turn end
+  // publishes that evidence so the task cannot stay live forever.
+  readonly foregroundTasks: Map<string, string | undefined>;
+  // Root only. Foreground tasks settled at turn end. Late progress from the
+  // aborted task is dropped so it cannot mark the task live again.
+  readonly turnEndSettledTaskIds: Set<string>;
   // Final status per tool-use id whose task already settled (terminal
   // task_updated or task_notification). Late messages still tagged with them
   // must not resurrect a scoped run: the synthetic turn that would start on
@@ -3419,6 +3428,51 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // A foreground task blocks the main conversation's tool call, so it has
+    // ended once the main conversation's turn has. The CLI does not always say
+    // so (a turn failing on a usage limit mid-subagent sends no terminal task
+    // message), and a task left live blocks handoff and the idle stop.
+    const settleForegroundTasksAtTurnEnd = (
+      root: ClaudeSessionContext,
+      status: ProviderRuntimeTurnStatus,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turnStatus =
+          status === "completed" ? "completed" : status === "failed" ? "failed" : "stopped";
+        for (const [taskId, toolUseId] of Array.from(root.foregroundTasks)) {
+          root.foregroundTasks.delete(taskId);
+          const run = toolUseId !== undefined ? root.subagentRunHistory.get(toolUseId) : undefined;
+          // Background work settles through its own task_notification.
+          if (run?.background === true || root.knownBackgroundTaskIds.has(taskId)) {
+            continue;
+          }
+          // A subagent that already handed back keeps the outcome it settled with.
+          const settledStatus =
+            (toolUseId !== undefined ? root.settledSubagentToolUseIds.get(toolUseId) : undefined) ??
+            turnStatus;
+          root.terminalTaskIds.add(taskId);
+          root.turnEndSettledTaskIds.add(taskId);
+          yield* settlePendingHumanInteractionsForAgent(root, taskId);
+          const turnId = root.taskTurnIds.get(taskId);
+          root.taskTurnIds.delete(taskId);
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(root, {
+            type: "task.completed",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: root.session.threadId,
+            ...(turnId !== undefined ? { turnId } : {}),
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe(taskId),
+              status: settledStatus,
+              ...(toolUseId !== undefined ? { toolUseId } : {}),
+            },
+            providerRefs: nativeProviderRefs(root),
+          });
+        }
+      });
+
     const completeTurn = (
       context: ClaudeSessionContext,
       status: ProviderRuntimeTurnStatus,
@@ -3564,8 +3618,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
         }
 
+        // Auto-closing a stale synthetic turn (completed, no result) does not
+        // end the CLI's own turn, so its foreground tasks may still be running.
+        const settlesForegroundTasks =
+          context.subagentRoot === undefined && (result !== undefined || status !== "completed");
+
         const turnState = context.turnState;
         if (!turnState) {
+          if (settlesForegroundTasks) {
+            yield* settleForegroundTasksAtTurnEnd(context, status);
+          }
           if (usageSnapshot) {
             const usageStamp = yield* makeEventStamp();
             yield* offerRuntimeEvent(context, {
@@ -3682,6 +3744,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         // Clear any remaining stale entries (e.g. from interrupted content blocks)
         context.inFlightTools.clear();
+        if (settlesForegroundTasks) {
+          yield* settleForegroundTasksAtTurnEnd(context, status);
+        }
 
         for (const block of turnState.assistantTextBlockOrder) {
           yield* completeAssistantTextBlock(context, block, {
@@ -3908,6 +3973,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           knownBackgroundTaskIds: new Set(),
           taskTurnIds: new Map(),
           terminalTaskIds: new Set(),
+          foregroundTasks: new Map(),
+          turnEndSettledTaskIds: new Set(),
           settledSubagentToolUseIds: new Map(),
           subagentToolOwners: new Map(),
           subagentRunHistory: new Map(),
@@ -4558,6 +4625,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : undefined;
         if (launchStatus === "async_launched" || launchStatus === "remote_launched") {
           run.background = true;
+          if (run.taskId !== undefined) root.foregroundTasks.delete(run.taskId);
           return;
         }
         if (root.subagentRuns.get(run.toolUseId) !== run || run.background) {
@@ -5321,9 +5389,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const isTerminalStatus =
             status === "completed" || status === "failed" || status === "killed";
+          // A late non-terminal patch from a task settled at turn end would
+          // mark it live again; the task ended with its turn.
+          if (!isTerminalStatus && context.turnEndSettledTaskIds.has(message.task_id)) {
+            return;
+          }
           if (isTerminalStatus) {
             context.terminalTaskIds.add(message.task_id);
             yield* settlePendingHumanInteractionsForAgent(context, message.task_id);
+          }
+          // Terminal or backgrounded work no longer ends with its turn.
+          if (isTerminalStatus || isBackgrounded === true) {
+            context.foregroundTasks.delete(message.task_id);
           }
           // A foreground/terminal patch can safely evict an id from the last
           // background snapshot. Do not add on `true`: that patch may arrive
@@ -5339,10 +5416,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
           const run = subagentRunForTask(context, undefined, message.task_id);
-          if (run && isBackgrounded === true) {
-            run.background = true;
+          if (run && isBackgrounded !== undefined && !isTerminalStatus) {
+            run.background = isBackgrounded;
           }
           const owner = resolveTaskEventOwner(context, message.task_id);
+          // A task brought back to the foreground once again ends with its root turn.
+          if (
+            isBackgrounded === false &&
+            !context.terminalTaskIds.has(message.task_id) &&
+            owner.target === context &&
+            context.subagentRoot === undefined &&
+            context.turnState !== undefined
+          ) {
+            context.foregroundTasks.set(message.task_id, owner.run?.toolUseId);
+          }
           const error = nonEmptyTrimmed(patch?.error);
           const raw = {
             source: "claude.sdk.message" as const,
@@ -5582,6 +5669,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           case "task_started": {
             context.terminalTaskIds.delete(message.task_id);
+            context.foregroundTasks.delete(message.task_id);
+            context.turnEndSettledTaskIds.delete(message.task_id);
             if (context.turnState && !context.taskTurnIds.has(message.task_id)) {
               context.taskTurnIds.set(message.task_id, asCanonicalTurnId(context.turnState.turnId));
             }
@@ -5704,6 +5793,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               message.task_id,
               message.tool_use_id,
             );
+            // Only the main conversation's own foreground work ends with its
+            // turn; a background subagent's foreground Bash keeps running.
+            // `is_backgrounded` is set only for agents and shells: other task
+            // types (Monitor, workflows) can outlive the turn.
+            if (
+              message.is_backgrounded === false &&
+              startedOwner.target === context &&
+              startedOwner.run?.background !== true &&
+              context.subagentRoot === undefined &&
+              context.turnState !== undefined
+            ) {
+              context.foregroundTasks.set(message.task_id, startedOwner.run?.toolUseId);
+            }
             if (message.task_type === "local_workflow") {
               context.liveWorkflowTaskIds.add(message.task_id);
               context.knownWorkflowTaskIds.add(message.task_id);
@@ -5765,6 +5867,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           case "task_progress": {
+            // Zombie tail of a foreground task settled at turn end: projecting
+            // it would mark the task live again.
+            if (context.turnEndSettledTaskIds.has(message.task_id)) {
+              return;
+            }
             yield* emitTaskUsageSnapshot(context, message);
             // Workflow progress descriptions arrive as "<phase>: <label>" in agent
             // start order; the label list is what the transcript poller zips
@@ -5816,6 +5923,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           case "task_notification": {
             yield* emitTaskUsageSnapshot(context, message);
             context.terminalTaskIds.add(message.task_id);
+            context.foregroundTasks.delete(message.task_id);
+            context.turnEndSettledTaskIds.delete(message.task_id);
             yield* settlePendingHumanInteractionsForAgent(context, message.task_id);
             context.knownBackgroundTaskIds.delete(message.task_id);
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
@@ -5911,6 +6020,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.knownBackgroundTaskIds.clear();
             for (const task of tasks) {
               context.knownBackgroundTaskIds.add(task.task_id);
+              context.foregroundTasks.delete(task.task_id);
             }
             if (added.length === 0) {
               return;
@@ -6291,7 +6401,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // Retired background tasks cannot report their own SDK notification.
         // Publish terminal evidence only after the owned process has exited so
         // replaying this thread in a replacement session cannot resurrect them.
-        for (const taskId of context.knownBackgroundTaskIds) {
+        // Foreground tasks a stale synthetic turn left open retire with them.
+        for (const taskId of new Set([
+          ...context.knownBackgroundTaskIds,
+          ...context.foregroundTasks.keys(),
+        ])) {
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
             type: "task.completed",
@@ -6307,6 +6421,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
         }
         context.knownBackgroundTaskIds.clear();
+        context.foregroundTasks.clear();
+        context.turnEndSettledTaskIds.clear();
         context.taskTurnIds.clear();
 
         const updatedAt = yield* nowIso;
@@ -7317,6 +7433,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             knownBackgroundTaskIds: new Set(),
             taskTurnIds: new Map(),
             terminalTaskIds: new Set(),
+            foregroundTasks: new Map(),
+            turnEndSettledTaskIds: new Set(),
             settledSubagentToolUseIds: new Map(),
             subagentToolOwners: new Map(),
             subagentRunHistory: new Map(),
