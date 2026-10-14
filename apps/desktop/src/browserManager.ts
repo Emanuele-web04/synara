@@ -3380,8 +3380,12 @@ export class DesktopBrowserManager {
   }
 
   private destroyAllRuntimes(): void {
-    for (const runtime of this.runtimes.values()) {
+    for (const runtime of [...this.runtimes.values()]) {
       this.destroyRuntime(runtime.threadId, runtime.tabId);
+      const state = this.states.get(runtime.threadId);
+      const tab = state ? this.getTab(state, runtime.tabId) : null;
+      // Window replacement destroys the page, so its next view must restore the URL.
+      if (tab && suspendTabState(tab)) this.markThreadStateChanged(runtime.threadId);
     }
   }
 

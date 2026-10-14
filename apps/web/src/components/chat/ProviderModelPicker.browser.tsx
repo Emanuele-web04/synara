@@ -6,7 +6,7 @@ import {
 } from "@synara/contracts";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import {
@@ -15,7 +15,7 @@ import {
   type ProviderModelPickerInstance,
 } from "./ProviderModelPicker";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
-import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
+import { FAVORITE_MODEL_STORAGE_KEYS, favoriteModelStorageKey } from "../../lib/modelFavorites";
 import { appHistory } from "../../appNavigation";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
@@ -90,6 +90,55 @@ const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
   upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
   upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
 })) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const MANY_CURSOR_MODELS = Array.from({ length: 16 }, (_, index) => ({
+  slug: `cursor-model-${index + 1}` as ModelSlug,
+  name: `${index % 2 === 0 ? "GPT" : "Claude"} Cursor ${index + 1}`,
+  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
+  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
+})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const CURSOR_FAVORITE_SORT_MODELS = [
+  {
+    slug: "cursor-claude-favorite-sort" as ModelSlug,
+    name: "Claude Cursor Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "cursor-gpt-favorite-sort" as ModelSlug,
+    name: "GPT Cursor Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const PI_FAVORITE_SORT_MODELS = [
+  {
+    slug: "anthropic/claude-pi-favorite-sort" as ModelSlug,
+    name: "Claude Pi Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "openai/gpt-pi-favorite-sort" as ModelSlug,
+    name: "GPT Pi Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const LONG_CLINE_MODEL = {
+  slug: "muse-spark-contributor" as ModelSlug,
+  name: "Muse Spark 1.3 Contributor Extended Context Preview",
+};
+const MANY_CLINE_MODELS = [
+  LONG_CLINE_MODEL,
+  ...Array.from({ length: 15 }, (_, index) => ({
+    slug: `cline-model-${index}` as ModelSlug,
+    name: `Cline model ${index + 1}`,
+  })),
+];
 
 const OPENCODE_FAVORITE_SORT_MODELS = [
   {
@@ -583,6 +632,325 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it.each([
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "opencode",
+    "cline",
+    "devin",
+    "pi",
+    "antigravity",
+  ] as const)(
+    "persists and removes favourites for %s without selecting a model",
+    async (provider) => {
+      const model = MODEL_OPTIONS_BY_PROVIDER[provider][0];
+      const props = { provider, model: model.slug, lockedProvider: provider };
+      let mounted = await mountPicker(props);
+      try {
+        await page.getByRole("button").click();
+        await page
+          .getByRole("button", { name: `Add ${model.name} to favourites`, exact: true })
+          .click();
+        await expect.element(page.getByText("Favourites", { exact: true })).toBeVisible();
+        expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+        expect(
+          JSON.parse(localStorage.getItem(FAVORITE_MODEL_STORAGE_KEYS[provider]) ?? "null"),
+        ).toEqual([favoriteModelStorageKey(provider, model.slug)]);
+        await mounted.cleanup();
+        mounted = await mountPicker(props);
+        await page.getByRole("button").click();
+        const remove = page.getByRole("button", { name: /^Remove .* from favourites$/u });
+        await expect.element(remove).toHaveAttribute("aria-pressed", "true");
+        await remove.click();
+        await expect.element(page.getByText("Favourites", { exact: true })).not.toBeInTheDocument();
+        await expect.element(page.getByRole("menu")).toBeVisible();
+        expect(
+          JSON.parse(localStorage.getItem(FAVORITE_MODEL_STORAGE_KEYS[provider]) ?? "null"),
+        ).toEqual([]);
+        expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("keeps same-slug favourites independent across provider accounts", async () => {
+    const model = MODEL_OPTIONS_BY_PROVIDER.opencode[0]!;
+    const providerInstances = [
+      {
+        instanceId: "opencode",
+        provider: "opencode",
+        label: "Personal",
+        enabled: true,
+        isDefault: true,
+      },
+      {
+        instanceId: "opencode_work",
+        provider: "opencode",
+        label: "Work",
+        enabled: true,
+        isDefault: false,
+      },
+    ] satisfies ProviderModelPickerInstance[];
+    let mounted = await mountPicker({
+      provider: "opencode",
+      model: model.slug,
+      lockedProvider: "opencode",
+      providerInstances,
+      selectedProviderInstanceId: "opencode_work",
+      providers: [
+        providerStatus("opencode"),
+        providerStatus("opencode", { instanceId: "opencode_work" }),
+      ],
+    });
+    try {
+      await page.getByRole("button", { name: /Work/ }).click();
+      await page
+        .getByRole("button", { name: `Add ${model.name} to favourites`, exact: true })
+        .click();
+      expect(
+        JSON.parse(localStorage.getItem(FAVORITE_MODEL_STORAGE_KEYS.opencode) ?? "null"),
+      ).toEqual([favoriteModelStorageKey("opencode_work", model.slug)]);
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      await mounted.cleanup();
+      mounted = await mountPicker({
+        provider: "opencode",
+        model: model.slug,
+        lockedProvider: "opencode",
+        providerInstances,
+        selectedProviderInstanceId: "opencode",
+        providers: [
+          providerStatus("opencode"),
+          providerStatus("opencode", { instanceId: "opencode_work" }),
+        ],
+      });
+      await page.getByRole("button", { name: /Personal/ }).click();
+      await expect.element(page.getByText("Favourites", { exact: true })).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: `Add ${model.name} to favourites`, exact: true }))
+        .toHaveAttribute("aria-pressed", "false");
+      expect(
+        JSON.parse(localStorage.getItem(FAVORITE_MODEL_STORAGE_KEYS.opencode) ?? "null"),
+      ).toEqual([favoriteModelStorageKey("opencode_work", model.slug)]);
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("brings a searched Cline favourite to the top without duplicating the provider name", async () => {
+    const mounted = await mountPicker({
+      provider: "cline",
+      model: LONG_CLINE_MODEL.slug,
+      lockedProvider: "cline",
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, cline: MANY_CLINE_MODELS },
+    });
+    try {
+      await page.getByRole("button").click();
+      const search = page.getByRole("searchbox", { name: "Search models" });
+      await search.fill("model 15");
+      await page
+        .getByRole("button", { name: "Add Cline model 15 to favourites", exact: true })
+        .click();
+      await expect.element(search).toHaveValue("model 15");
+      await search.fill("");
+      await vi.waitFor(() => {
+        const rows = page.getByRole("menuitemradio").elements();
+        expect(rows).toHaveLength(16);
+        expect(rows[0]?.textContent).toBe("Cline model 15");
+      });
+      await expect.element(page.getByText("Favourites", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Other models", { exact: true })).toBeInTheDocument();
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      await page.getByRole("menuitemradio", { name: "Cline model 15", exact: true }).click();
+      expect(mounted.onProviderModelChange).toHaveBeenCalledExactlyOnceWith(
+        "cline",
+        "cline-model-14",
+        "cline",
+      );
+      await expect.element(search).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps Enter and Space on a favourite star from selecting its model", async () => {
+    const onSelectionCommitted = vi.fn();
+    const mounted = await mountPicker({
+      provider: "cline",
+      model: LONG_CLINE_MODEL.slug,
+      lockedProvider: "cline",
+      onSelectionCommitted,
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, cline: MANY_CLINE_MODELS },
+    });
+    try {
+      await page.getByRole("button").click();
+      const add = page.getByRole("button", {
+        name: "Add Cline model 1 to favourites",
+        exact: true,
+      });
+      // Finish the search field's scheduled autofocus before testing native Tab
+      // navigation from a different row; otherwise the setup races menu opening.
+      await expect.element(page.getByRole("searchbox", { name: "Search models" })).toHaveFocus();
+      const modelRow = page.getByRole("menuitemradio", { name: "Cline model 1", exact: true });
+      modelRow.element().focus();
+      await expect.element(modelRow).toHaveFocus();
+      await userEvent.keyboard("{Tab}");
+      await expect.element(add).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      const remove = page.getByRole("button", {
+        name: "Remove Cline model 1 from favourites",
+        exact: true,
+      });
+      await expect.element(remove).toBeVisible();
+      await expect.element(remove).toHaveFocus();
+      await userEvent.keyboard(" ");
+      await expect.element(page.getByText("Favourites", { exact: true })).not.toBeInTheDocument();
+      await expect.element(add).toHaveFocus();
+      await expect.element(page.getByRole("menu")).toBeVisible();
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      expect(onSelectionCommitted).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps keyboard focus in the menu when an unfavourited model returns to a collapsed group", async () => {
+    const models = [
+      { slug: "openai/current", name: "Current", upstreamProviderName: "OpenAI" },
+      { slug: "anthropic/favourite", name: "Favourite", upstreamProviderName: "Anthropic" },
+      { slug: "google/other", name: "Other", upstreamProviderName: "Google" },
+    ];
+    localStorage.setItem(
+      FAVORITE_MODEL_STORAGE_KEYS.opencode,
+      JSON.stringify(["anthropic/favourite"]),
+    );
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/current",
+      lockedProvider: "opencode",
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, opencode: models },
+    });
+    try {
+      await page.getByRole("button").click();
+      const remove = page.getByRole("button", {
+        name: "Remove Favourite — Anthropic from favourites",
+      });
+      await expect.element(remove).toBeVisible();
+      remove.element().focus();
+      await userEvent.keyboard("{Enter}");
+      await expect.element(page.getByRole("menu")).toHaveFocus();
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the searchable Cline submenu open for typing and keyboard selection", async () => {
+    const mounted = await mountPicker({
+      provider: "cline",
+      model: LONG_CLINE_MODEL.slug,
+      lockedProvider: null,
+      providers: [providerStatus("cline", { checkedAt: "2026-09-15T00:00:00.000Z" })],
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, cline: MANY_CLINE_MODELS },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitem", { name: "Cline", exact: true }).click();
+      const search = page.getByRole("searchbox", { name: "Search models" });
+      await search.click();
+      await userEvent.keyboard("model 15");
+      await expect.element(search).toHaveValue("model 15");
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Cline model 15", exact: true }))
+        .toBeVisible();
+      await vi.waitFor(() => {
+        expect(page.getByRole("menuitemradio").elements()).toHaveLength(1);
+      });
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      await vi.waitFor(() => {
+        expect(mounted.onProviderModelChange).toHaveBeenCalledExactlyOnceWith(
+          "cline",
+          "cline-model-14",
+          "cline",
+        );
+      });
+      await expect.element(search).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("recovers from an empty model search without changing the selected model", async () => {
+    const mounted = await mountPicker({
+      provider: "cline",
+      model: LONG_CLINE_MODEL.slug,
+      lockedProvider: "cline",
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, cline: MANY_CLINE_MODELS },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      const search = page.getByRole("searchbox", { name: "Search models" });
+      await search.fill("missing model");
+      await expect.element(page.getByRole("status")).toHaveTextContent("No matches");
+      await search.fill("");
+      await expect
+        .element(page.getByRole("menuitemradio", { name: LONG_CLINE_MODEL.name }))
+        .toHaveAttribute("aria-checked", "true");
+      expect(page.getByRole("menuitemradio").elements()).toHaveLength(16);
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(page.getByRole("button")).toHaveFocus();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps long model names and search within a narrow viewport with enlarged text", async () => {
+    const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(320, 480);
+    document.documentElement.style.setProperty("--app-font-size-ui", "20px");
+    const mounted = await mountPicker({
+      provider: "cline",
+      model: LONG_CLINE_MODEL.slug,
+      lockedProvider: "cline",
+      modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, cline: MANY_CLINE_MODELS },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      const search = page.getByRole("searchbox", { name: "Search models" });
+      await expect.element(search).toBeVisible();
+      await vi.waitFor(() => {
+        const popup = page.getByRole("menu").element();
+        const bounds = popup.getBoundingClientRect();
+        expect(bounds.left).toBeGreaterThanOrEqual(0);
+        expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+        expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+        const row = page.getByRole("menuitemradio", { name: LONG_CLINE_MODEL.name }).element();
+        expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+        expect(row.getBoundingClientRect().height).toBeGreaterThan(40);
+      });
+      // Bring the end of the long list into view without moving its search header.
+      await search.fill("model 15");
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Cline model 15", exact: true }))
+        .toBeVisible();
+      await expect.element(search).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+      document.documentElement.style.removeProperty("--app-font-size-ui");
+      await page.viewport(originalViewport.width, originalViewport.height);
+    }
+  });
+
   it("dispatches the canonical slug when a model is selected", async () => {
     const mounted = await mountPicker({
       provider: "claudeAgent",
@@ -803,6 +1171,48 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("groups upstream OpenCode models by provider label", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("OpenCode");
+        expect(text).toContain("Nemotron 3 Super Free");
+        expect(text).toContain("OpenAI");
+        expect(text).toContain("GPT-5");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows OpenCode search when the provider has at least fifteen models", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: MANY_OPENCODE_MODELS[0]!.slug,
+      lockedProvider: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: MANY_OPENCODE_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByPlaceholder("Search models")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("filters OpenCode models by upstream provider name", async () => {
     const mounted = await mountPicker({
       provider: "opencode",
@@ -816,7 +1226,7 @@ describe("ProviderModelPicker", () => {
 
     try {
       await page.getByRole("button").click();
-      await page.getByPlaceholder("Search models or providers").fill("Anthropic");
+      await page.getByPlaceholder("Search models").fill("Anthropic");
 
       await vi.waitFor(() => {
         expect(document.body.textContent ?? "").toContain("Claude 2");
@@ -895,7 +1305,7 @@ describe("ProviderModelPicker", () => {
         .element(page.getByRole("menuitemradio", { name: "DeepSeek V4 Flash — DeepSeek" }))
         .toBeInTheDocument();
       await expect
-        .element(page.getByRole("menuitemradio", { name: "DeepSeek V4 Flash — OpenCode Go" }))
+        .element(page.getByRole("menuitemradio", { name: "DeepSeek V4 Flash — Go" }))
         .toBeInTheDocument();
       await expect
         .element(
@@ -907,7 +1317,7 @@ describe("ProviderModelPicker", () => {
       await expect
         .element(
           page.getByRole("button", {
-            name: "Remove DeepSeek V4 Flash — OpenCode Go from favourites",
+            name: "Remove DeepSeek V4 Flash — Go from favourites",
           }),
         )
         .toBeInTheDocument();
@@ -915,7 +1325,121 @@ describe("ProviderModelPicker", () => {
         Array.from(document.querySelectorAll('[role="menuitemradio"]')).map(
           (element) => element.textContent,
         ),
-      ).toEqual(["DeepSeek V4 FlashDeepSeek", "DeepSeek V4 FlashOpenCode Go"]);
+      ).toEqual(["DeepSeek V4 FlashDeepSeek", "DeepSeek V4 FlashGo"]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters Cursor models by upstream provider name", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: MANY_CURSOR_MODELS[0]!.slug,
+      lockedProvider: "cursor",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        cursor: MANY_CURSOR_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByPlaceholder("Search models").fill("Anthropic");
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Claude Cursor 2");
+      });
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude Cursor 2" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited Cursor models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: "cursor-claude-favorite-sort",
+      lockedProvider: "cursor",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        cursor: CURSOR_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+
+      await page
+        .getByRole("button", { name: "Add GPT Cursor Favorite Sort to favourites" })
+        .click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeGreaterThan(
+          text.indexOf("Favourites"),
+        );
+        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor Favorite Sort — OpenAI" }))
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
+          element.textContent?.includes("GPT Cursor Favorite Sort"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited Pi models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "pi",
+      model: "anthropic/claude-pi-favorite-sort",
+      lockedProvider: "pi",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        pi: PI_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+
+      await page.getByRole("button", { name: "Add GPT Pi Favorite Sort to favourites" }).click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Pi Favorite Sort")).toBeGreaterThan(text.indexOf("Favourites"));
+        expect(text.indexOf("GPT Pi Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Pi Favorite Sort — OpenAI" }))
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
+          element.textContent?.includes("GPT Pi Favorite Sort"),
+        ),
+      ).toHaveLength(1);
     } finally {
       await mounted.cleanup();
     }
@@ -1057,3 +1581,4 @@ describe("ProviderModelPicker", () => {
     }
   });
 });
+import "../../index.css";

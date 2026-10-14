@@ -1,20 +1,30 @@
 // FILE: ProviderModelOptionGroupList.tsx
-// Purpose: Renders grouped provider model radio items with optional collapsible sections.
+// Purpose: Renders saved favourites and grouped model choices for every provider.
 // Layer: Chat composer presentation
 // Depends on: menu radio primitives, collapsible UI, and provider model grouping helpers.
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import * as Schema from "effect/Schema";
 
 import { cn } from "~/lib/utils";
 import {
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
+  displayProvenanceWithinProvider,
   providerModelCostMultiplierLabel,
   providerModelOptionProvenanceLabel,
+  groupProviderModelOptionsWithFavorites,
   type ProviderModelOption,
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
-import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
+import { type ProviderInstanceId, type ProviderKind } from "@synara/contracts";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import {
+  FAVORITE_MODEL_STORAGE_KEYS,
+  favoriteModelSlugsForInstance,
+  favoriteModelStorageKey,
+  normalizeFavoriteModelStorageKeys,
+} from "../../lib/modelFavorites";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
@@ -22,23 +32,18 @@ import {
   COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME,
   COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
 } from "./composerPickerStyles";
+
 import { ModelStarButton } from "./ModelStarButton";
 
-type FavoriteModelProvider = "cursor" | "opencode" | "pi";
+const FavoriteModelSlugs = Schema.Array(Schema.String);
+const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
 
 type ProviderModelOptionGroupListProps = {
-  groupedOptions: ReadonlyArray<ProviderModelOptionGroup>;
+  options: ReadonlyArray<ProviderModelOption>;
   provider: ProviderKind;
+  instanceId: ProviderInstanceId;
   activeModel: string;
   isSearching: boolean;
-  instanceId: ProviderInstanceId;
-  favoriteProvider: FavoriteModelProvider | null;
-  favoriteModelSlugSet: ReadonlySet<string> | undefined;
-  onToggleFavorite: (
-    provider: FavoriteModelProvider,
-    instanceId: ProviderInstanceId,
-    slug: string,
-  ) => void;
   onAfterSelection?: () => void;
 };
 
@@ -46,34 +51,27 @@ function ProviderModelRadioItem(
   props: Readonly<{
     provider: ProviderKind;
     modelOption: ProviderModelOption;
-    instanceId: ProviderInstanceId;
-    favoriteProvider: FavoriteModelProvider | null;
     isFavorite: boolean;
     showProvenance: boolean;
-    onToggleFavorite: (
-      provider: FavoriteModelProvider,
-      instanceId: ProviderInstanceId,
-      slug: string,
-    ) => void;
+    indentLabel: boolean;
+    onToggleFavorite: (slug: string, restoreFocus: boolean) => void;
     onAfterSelection?: () => void;
   }>,
 ) {
   const {
     provider,
     modelOption,
-    instanceId,
-    favoriteProvider,
     isFavorite,
     showProvenance,
+    indentLabel,
     onToggleFavorite,
     onAfterSelection,
   } = props;
-  const supportsFavorites = favoriteProvider !== null;
   const costMultiplierLabel =
     provider === "droid" ? providerModelCostMultiplierLabel(modelOption.description) : null;
-  const preserveChildLayout = supportsFavorites || costMultiplierLabel !== null;
+  const provenance = providerModelOptionProvenanceLabel({ provider, option: modelOption });
   const provenanceLabel = showProvenance
-    ? providerModelOptionProvenanceLabel({ provider, option: modelOption })
+    ? displayProvenanceWithinProvider({ provider, provenance })
     : null;
   const accessibleModelName = provenanceLabel
     ? `${modelOption.name} — ${provenanceLabel}`
@@ -83,54 +81,62 @@ function ProviderModelRadioItem(
     <MenuRadioItem
       key={`${provider}:${modelOption.slug}`}
       value={modelOption.slug}
-      {...(provenanceLabel ? { "aria-label": accessibleModelName } : {})}
-      preserveChildLayout={preserveChildLayout}
-      className={costMultiplierLabel ? "grid-cols-[minmax(0,1fr)_auto]" : undefined}
+      aria-label={
+        costMultiplierLabel && modelOption.description
+          ? `${accessibleModelName} ${modelOption.description}`
+          : accessibleModelName
+      }
+      title={accessibleModelName}
+      preserveChildLayout
+      className={cn(
+        "data-checked:bg-[var(--color-background-button-secondary)] data-checked:font-medium",
+        costMultiplierLabel !== null && "grid-cols-[minmax(0,1fr)_auto]",
+      )}
       trailing={
-        supportsFavorites ? (
+        <>
+          {costMultiplierLabel && modelOption.description ? (
+            <span
+              title={modelOption.description}
+              className="shrink-0 text-ui-xs font-medium tabular-nums text-muted-foreground/65"
+              aria-hidden="true"
+            >
+              {costMultiplierLabel}
+            </span>
+          ) : null}
           <ModelStarButton
+            modelSlug={modelOption.slug}
             starred={isFavorite}
             label={
               isFavorite
                 ? `Remove ${accessibleModelName} from favourites`
                 : `Add ${accessibleModelName} to favourites`
             }
-            onToggle={() => onToggleFavorite(favoriteProvider, instanceId, modelOption.slug)}
+            onToggle={(restoreFocus) => onToggleFavorite(modelOption.slug, restoreFocus)}
           />
-        ) : costMultiplierLabel && modelOption.description ? (
-          <span
-            title={modelOption.description}
-            className="shrink-0 text-ui-xs font-medium tabular-nums text-muted-foreground/65"
-          >
-            <span aria-hidden="true">{costMultiplierLabel}</span>
-            <span className="sr-only">{modelOption.description}</span>
-          </span>
-        ) : null
+        </>
       }
       onClick={() => {
         onAfterSelection?.();
       }}
     >
-      {preserveChildLayout ? (
-        <span
-          className={cn(
-            "flex min-w-0 flex-col",
-            supportsFavorites && COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
-          )}
-        >
-          <span className="block min-w-0 truncate">{modelOption.name}</span>
-          {provenanceLabel ? (
-            <span
-              aria-hidden="true"
-              className="block min-w-0 truncate text-ui-xs leading-tight text-muted-foreground/60"
-            >
-              {provenanceLabel}
-            </span>
-          ) : null}
+      <span
+        className={cn(
+          "flex min-w-0 flex-col gap-0.5",
+          indentLabel && COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
+        )}
+      >
+        <span className="block min-w-0 whitespace-normal break-words leading-snug">
+          {modelOption.name}
         </span>
-      ) : (
-        modelOption.name
-      )}
+        {provenanceLabel ? (
+          <span
+            aria-hidden="true"
+            className="block min-w-0 whitespace-normal break-words text-ui-xs leading-tight text-muted-foreground"
+          >
+            {provenanceLabel}
+          </span>
+        ) : null}
+      </span>
     </MenuRadioItem>
   );
 }
@@ -166,24 +172,61 @@ function CollapsibleModelGroup(
 }
 
 export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupListProps) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const pendingFavoriteFocusRef = useRef<string | null>(null);
+  const [favoriteModelSlugs, setFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS[props.provider],
+    EMPTY_FAVORITE_MODEL_SLUGS,
+    FavoriteModelSlugs,
+  );
+  const favoriteModelSlugSet = favoriteModelSlugsForInstance(
+    props.provider,
+    props.instanceId,
+    favoriteModelSlugs,
+  );
+  const groupedOptions = groupProviderModelOptionsWithFavorites({
+    options: props.options,
+    favoriteSlugs: favoriteModelSlugSet,
+  });
+  const toggleFavoriteModel = (slug: string, restoreFocus: boolean) => {
+    pendingFavoriteFocusRef.current = restoreFocus ? slug : null;
+    setFavoriteModelSlugs((current) => {
+      const normalized = normalizeFavoriteModelStorageKeys(props.provider, current);
+      const key = favoriteModelStorageKey(props.instanceId, slug);
+      return normalized.includes(key)
+        ? normalized.filter((entry) => entry !== key)
+        : [...normalized, key];
+    });
+  };
+  useLayoutEffect(() => {
+    const slug = pendingFavoriteFocusRef.current;
+    if (slug === null) return;
+    pendingFavoriteFocusRef.current = null;
+    // Moving a row between sections remounts its star. Keep keyboard focus on that action.
+    const star = listRef.current?.querySelector<HTMLButtonElement>(
+      `[data-model-favorite-slug="${CSS.escape(slug)}"]`,
+    );
+    const focusTarget = star ?? listRef.current?.closest<HTMLElement>('[role="menu"]');
+    focusTarget?.focus();
+  }, [favoriteModelSlugs]);
   const useCollapsibleGroups = shouldUseCollapsibleModelGroups(
-    props.groupedOptions.length,
+    groupedOptions.length,
     props.isSearching,
   );
 
   return (
-    <div className="flex flex-col gap-px">
-      {props.groupedOptions.map((group) => {
+    <div ref={listRef} className="flex flex-col gap-px">
+      {groupedOptions.map((group) => {
+        const isCollapsible = useCollapsibleGroups && group.key !== "__favorites__";
         const groupItems = group.options.map((modelOption) => (
           <ProviderModelRadioItem
             key={`${props.provider}:${modelOption.slug}`}
             provider={props.provider}
             modelOption={modelOption}
-            instanceId={props.instanceId}
-            favoriteProvider={props.favoriteProvider}
-            isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}
+            isFavorite={favoriteModelSlugSet.has(modelOption.slug)}
             showProvenance={group.key === "__favorites__"}
-            onToggleFavorite={props.onToggleFavorite}
+            indentLabel={isCollapsible && group.label !== null}
+            onToggleFavorite={toggleFavoriteModel}
             {...(props.onAfterSelection ? { onAfterSelection: props.onAfterSelection } : {})}
           />
         ));
@@ -199,7 +242,7 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
           );
         }
 
-        if (useCollapsibleGroups) {
+        if (isCollapsible) {
           return (
             <CollapsibleModelGroup
               key={`${props.provider}:${group.key}`}
@@ -208,7 +251,7 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
                 groupKey: group.key,
                 options: group.options,
                 activeModel: props.activeModel,
-                groupCount: props.groupedOptions.length,
+                groupCount: groupedOptions.length,
               })}
             >
               {groupItems}
@@ -218,7 +261,9 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
 
         return (
           <MenuGroup key={`${props.provider}:${group.key}`} className="flex flex-col gap-px px-0.5">
-            <MenuGroupLabel>{group.label}</MenuGroupLabel>
+            <MenuGroupLabel className="text-ui-xs text-muted-foreground">
+              {group.label}
+            </MenuGroupLabel>
             {groupItems}
           </MenuGroup>
         );

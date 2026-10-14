@@ -12,13 +12,15 @@ import { COMPOSER_PICKER_RADIUS_CLASS_NAME } from "./composerPickerStyles";
 export function ModelStarButton(props: {
   starred: boolean;
   label: string;
-  onToggle: () => void;
+  onToggle: (restoreFocus: boolean) => void;
+  modelSlug?: string;
   iconClassName?: string;
 }) {
   const Icon = props.starred ? StarFilledIcon : StarIcon;
   return (
     <button
       type="button"
+      data-model-favorite-slug={props.modelSlug}
       aria-label={props.label}
       aria-pressed={props.starred}
       className={cn(
@@ -29,10 +31,14 @@ export function ModelStarButton(props: {
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        props.onToggle();
+        props.onToggle(event.currentTarget === event.currentTarget.ownerDocument.activeElement);
       }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
+      onKeyUp={(event) => {
+        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+      }}
+      onFocus={(event) => event.stopPropagation()}
     >
       <Icon aria-hidden="true" className={props.iconClassName ?? "size-3"} />
     </button>
