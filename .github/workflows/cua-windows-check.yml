@@ -68,7 +68,9 @@ jobs:
             if ($hash -ne $patches[$name]) { throw "Patch checksum mismatch: $name" }
             $normalized = Join-Path $env:RUNNER_TEMP $name
             [System.IO.File]::WriteAllBytes($normalized, $bytes)
-            git -C $source apply $normalized
+            $patch = [System.IO.Path]::GetFullPath((Join-Path (git --exec-path) '../../../usr/bin/patch.exe'))
+            Push-Location $source
+            try { & $patch --batch --forward -p1 -i $normalized } finally { Pop-Location }
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           "CUA_NATIVE_SOURCE=$source" >> $env:GITHUB_ENV

@@ -202,9 +202,16 @@ try {
     const build = join(temporary, "build");
     await mkdir(build);
     run("tar", ["-xf", archive, "-C", build]);
-    run("git", ["apply", "--ignore-space-change", patchPath], build);
+    // Git for Windows ships GNU patch beside its MSYS utilities; that directory
+    // is not normally on a desktop build process's PATH. The base patch contains
+    // sequential deltas for the same files, which must be applied in order.
+    const patchExecutable =
+      process.platform === "win32"
+        ? resolve(output("git", ["--exec-path"]), "../../../usr/bin/patch.exe")
+        : "patch";
+    run(patchExecutable, ["--batch", "--forward", "-p1", "-i", patchPath], build);
     if (platform === "linux" || platform === "win32") {
-      run("git", ["apply", "--ignore-space-change", linuxPatchPath], build);
+      run(patchExecutable, ["--batch", "--forward", "-p1", "-i", linuxPatchPath], build);
     }
     if (platform === "win32") {
       const windowsPatch = fileURLToPath(
@@ -215,7 +222,7 @@ try {
         release.windowsInputPatchSha256
       )
         throw new Error("Cua Windows input patch checksum mismatch.");
-      run("git", ["apply", "--ignore-space-change", windowsPatch], build);
+      run(patchExecutable, ["--batch", "--forward", "-p1", "-i", windowsPatch], build);
     }
     const rust = join(build, "libs/cua-driver/rust");
     const rustcVersion = output("rustc", ["--version"], rust);

@@ -94,7 +94,7 @@ async function main() {
     );
     assert.equal(observation.driverNativeRevision, release.nativeRevision);
     assert(monitor.state.ready && globalShortcut.isRegistered("Escape"));
-    const typing = call("type_text_chars", { ...target, text: "x".repeat(300), delay_ms: 30 });
+    const typing = call("type_text", { ...target, text: "x".repeat(3000), delay_ms: 30 });
     await eventually(
       async () => ((await readState())?.text.length ?? 0) >= 3,
       "native text did not reach the target",
@@ -113,14 +113,11 @@ async function main() {
     assert.equal(paused.result?.structuredContent?.code, "computer_input_paused");
     await delay(ESCAPE_INPUT_COOLDOWN_MS + 100);
     const count = (await readState())!.text.length;
-    assert(count < 300, "Escape did not stop typing early");
+    assert(count < 3000, "Escape did not stop typing early");
     await delay(150);
     assert.equal((await readState())!.text.length, count, "input continued after Escape cleanup");
     successful(await call("get_window_state", target, true), "fresh observation after Escape");
-    successful(
-      await call("type_text_chars", { ...target, text: "fresh", delay_ms: 10 }),
-      "fresh typing",
-    );
+    successful(await call("type_text", { ...target, text: "fresh", delay_ms: 10 }), "fresh typing");
     await eventually(
       async () => !!(await readState())?.text.includes("fresh"),
       "fresh input did not reach the fixture",

@@ -80,13 +80,14 @@ function render(input: {
 }
 
 describe("ComputerSettingsPanel", () => {
-  it("labels Windows as beta and explains interruption limits without promising Mac safeguards", () => {
+  it("labels Windows as beta and describes Escape recovery without Mac permission claims", () => {
     const markup = render({
       status: status({ availability: { kind: "available", backend: "cua" } }),
       platform: "windows",
     });
     expect(markup).toContain("Computer control (Windows beta)");
-    expect(markup).toContain("stopping an action already in progress is not yet reliable");
+    expect(markup).toContain("Escape interrupts the current action");
+    expect(markup).toContain("cleanup and a fresh observation");
     expect(markup).not.toContain("shares your Mac desktop");
     expect(markup).not.toContain("Input Monitoring is granted");
   });
