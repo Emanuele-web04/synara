@@ -308,6 +308,9 @@ that lease drains. Browser actions use the same epoch gate and the existing CDP
 release protocol. Old buffered epochs stay invalid. An unconfirmed release keeps
 admission closed; killing a process is not proof that held input was released.
 Host lifetime-pipe EOF drains the native workers before daemon shutdown.
+Run Synara without elevation: this pinned driver refuses isolated browser launch
+when its own token can modify the installed browser. The Electron CI smoke uses
+a standard-user token on GitHub's elevated Windows runner.
 
 The Windows CI lane compiles the real driver, exercises a native EDIT window for
 interrupted typing, modified Escape, owned Escape passthrough, target changes,
@@ -320,8 +323,9 @@ or signed installed-app behavior.
 
 The updated upstream Cua Driver 0.35.4 at
 [`d74a9cab`](https://github.com/trycua/cua/tree/d74a9cab3fb2e80ab7f0cef47025ec828586ea75/libs/cua-driver/rust)
-was inspected on 2026-10-14. It improves Windows integrity-level checks and
-foreground typing delivery, but does not supply Synara's `interrupt_input` /
+was inspected on 2026-10-14. It improves Windows integrity-level checks,
+foreground typing delivery and standard-user browser launch from elevated drivers,
+but does not supply Synara's `interrupt_input` /
 `cancel_input` acknowledgement and epoch contract. This port therefore retains
 0.28.2 with the scoped Windows delta; a global upstream upgrade would still need
 the cancellation patch and separate macOS qualification.

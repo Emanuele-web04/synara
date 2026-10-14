@@ -143,7 +143,7 @@ jobs:
           bun build .github/scripts/cua-windows-smoke.ts --target=node --format=cjs --external=electron --outfile=apps/desktop/.smoke/cua-windows-smoke.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:CUA_WINDOWS_SMOKE_BINARY = "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/target/debug/cua-driver.exe"
-          node apps/desktop/node_modules/electron/cli.js apps/desktop/.smoke/cua-windows-smoke.cjs
+          ./.github/scripts/cua-windows-standard-user.ps1 -Executable apps/desktop/node_modules/electron/dist/electron.exe -Script apps/desktop/.smoke/cua-windows-smoke.cjs
           exit $LASTEXITCODE
 
       - name: Verify production source provisioning
@@ -158,5 +158,5 @@ jobs:
         shell: pwsh
         run: |
           $env:CUA_WINDOWS_SMOKE_BINARY = "$env:RUNNER_TEMP/cua-windows-artifact/cua-driver.exe"
-          node apps/desktop/node_modules/electron/cli.js apps/desktop/.smoke/cua-windows-smoke.cjs
+          ./.github/scripts/cua-windows-standard-user.ps1 -Executable apps/desktop/node_modules/electron/dist/electron.exe -Script apps/desktop/.smoke/cua-windows-smoke.cjs
           exit $LASTEXITCODE
