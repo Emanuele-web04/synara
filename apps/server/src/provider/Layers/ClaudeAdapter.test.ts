@@ -6634,7 +6634,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   });
 
   it.effect(
-    "suppresses thinking_tokens/task_updated telemetry and de-dupes each unknown Claude subtype once",
+    "suppresses thinking_tokens/task_updated/commands_changed telemetry and de-dupes each unknown Claude subtype once",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -6673,6 +6673,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             uuid: `task-updated-${i}`,
           } as unknown as SDKMessage);
         }
+
+        // Slash-command list pushes — discovery reads them via supportedCommands().
+        harness.query.emit({
+          type: "system",
+          subtype: "commands_changed",
+          commands: [{ name: "compact", description: "Compact", argumentHint: "" }],
+          session_id: "sdk-session-commands",
+          uuid: "commands-changed-0",
+        } as unknown as SDKMessage);
 
         for (const attempt of [1, 2]) {
           harness.query.emit({
@@ -6731,6 +6740,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           false,
         );
         assert.equal(
+          warningMessages.some((message) => message.includes("commands_changed")),
+          false,
+        );
+        assert.equal(
           warningMessages.some((message) => message.includes("future_unknown_subtype")),
           true,
         );
@@ -6744,6 +6757,73 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
     },
   );
+
+  it.effect("refreshes cached Claude commands from a session's commands_changed push", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const listCommands = adapter.listCommands;
+      if (!listCommands) {
+        assert.fail("Expected Claude adapter to support command discovery.");
+      }
+      const sentinelSeen = yield* Deferred.make<void>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          event.type === "task.progress" ? Deferred.succeed(sentinelSeen, undefined) : Effect.void,
+        ),
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      const input = { provider: "claudeAgent" as const, cwd: "/tmp/project", threadId: THREAD_ID };
+      const live = yield* listCommands(input);
+      assert.deepEqual(
+        live.commands.map((command) => command.name),
+        ["compact", "design", "slides"],
+      );
+
+      // A skill discovered mid-session: the CLI pushes the full replacement list.
+      harness.query.emit({
+        type: "system",
+        subtype: "commands_changed",
+        commands: [
+          { name: "compact", description: "Compact context", argumentHint: "" },
+          { name: "new-skill", description: "Discovered mid-session", argumentHint: "" },
+        ],
+        session_id: "sdk-session-commands",
+        uuid: "commands-changed-refresh",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-sentinel",
+        description: "sentinel",
+        usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+        session_id: "sdk-session-sentinel",
+        uuid: "task-progress-sentinel",
+      } as unknown as SDKMessage);
+      yield* Deferred.await(sentinelSeen);
+
+      yield* adapter.stopSession(THREAD_ID);
+      const cached = yield* listCommands(input);
+      assert.equal(cached.cached, true);
+      assert.deepEqual(
+        cached.commands.map((command) => command.name),
+        ["compact", "new-skill", "design", "slides"],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("maps Claude TodoWrite tool input into shared turn plan updates", () => {
     const harness = makeHarness();

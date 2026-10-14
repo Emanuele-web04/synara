@@ -6049,6 +6049,30 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }
             return;
           }
+          case "commands_changed":
+            // Pushed whenever the slash-command list changes (on startup and when
+            // skills are discovered mid-session). `supportedCommands()` already
+            // tracks the latest push for live lookups; refresh the discovery cache
+            // this session's environment feeds so lookups after it stops do not
+            // serve a list from before the change. Nothing reaches the timeline.
+            if (
+              Array.isArray(message.commands) &&
+              commandsCache?.key === context.commandDiscoveryKey &&
+              commandsCache.enableArtifacts === context.artifactsEnabled
+            ) {
+              commandsCache = {
+                ...commandsCache,
+                result: mapSupportedCommands(
+                  message.commands,
+                  resolveClaudeArtifactsState({
+                    artifactsEnabled: context.artifactsEnabled,
+                    commands: message.commands,
+                    initToolNames: context.initToolNames,
+                  }),
+                ),
+              };
+            }
+            return;
           default:
             yield* warnUnhandledSdkKind(
               context,
