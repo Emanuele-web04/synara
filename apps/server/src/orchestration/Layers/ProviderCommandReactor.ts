@@ -1559,6 +1559,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly messageId?: MessageId;
     readonly lifecycleGeneration?: string;
     readonly responseCommandId?: CommandId;
     readonly settlementStatus?: "retryable" | "uncertain";
@@ -1574,6 +1575,7 @@ const make = Effect.gen(function* () {
         summary: input.summary,
         payload: {
           detail: input.detail,
+          ...(input.messageId ? { messageId: input.messageId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
           ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
@@ -4839,15 +4841,30 @@ const make = Effect.gen(function* () {
                   failure instanceof ProviderAdapterValidationError &&
                   failure.operation === "startClaudeCompaction.cancelled";
                 const detail = Cause.pretty(cause);
+                const rejectedNativeSubagentSteer =
+                  (thread.creationSource === "provider_native" ||
+                    thread.id.startsWith("subagent:")) &&
+                  classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected";
                 if (!cancelledCompaction)
                   yield* appendProviderFailureActivity({
                     threadId: event.payload.threadId,
                     kind: "provider.turn.start.failed",
                     summary: "Provider turn start failed",
-                    detail,
+                    detail: rejectedNativeSubagentSteer
+                      ? `Your message was not sent to the subagent. ${failure instanceof Error ? failure.message : detail}`
+                      : detail,
+                    ...(rejectedNativeSubagentSteer ? { messageId: message.id } : {}),
                     turnId: null,
                     createdAt: event.payload.createdAt,
                   });
+                // A rejected attempt proves the child steer never reached the
+                // provider. The child may have completed after command admission;
+                // keep that terminal session and turn outcome intact.
+                if (rejectedNativeSubagentSteer) {
+                  if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  yield* drainQueuedTurnsForSession(event.payload.threadId);
+                  return yield* Effect.failCause(cause);
+                }
                 // Restore the runtime's state after a refused reconfiguration or
                 // cancelled native control. An optimistic starting row must not
                 // make the ordered interrupt tear down an established runtime.

@@ -204,10 +204,12 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
     readModel.threads.filter(
       (thread) => thread.latestTurn?.state === "running" && thread.session?.status === "running",
     ),
-    (thread) => snapshots.getThreadDetailById(thread.id),
+    // The stored user request can have a null turnId even after its turn starts.
+    // The detail snapshot links requests to turns through pending_message_id.
+    (thread) => snapshots.getThreadDetailSnapshotById(thread.id),
     { concurrency: 4 },
   );
-  const threads = details.flatMap((detail) => (Option.isSome(detail) ? [detail.value] : []));
+  const threads = details.flatMap((detail) => (Option.isSome(detail) ? [detail.value.thread] : []));
   const record = buildCrashResumeRecord({ readModel: { ...readModel, threads }, blocked, now });
   return record.threads.length > 0
     ? ({ kind: "record", record } as const)

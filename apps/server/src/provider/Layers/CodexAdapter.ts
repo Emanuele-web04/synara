@@ -2095,7 +2095,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         entry.lastActivityAt = Date.now();
       }
       for (const runtimeEvent of runtimeEvents) {
-        if (runtimeEvent.type === "turn.started" && runtimeEvent.turnId) {
+        if (
+          runtimeEvent.type === "turn.started" &&
+          runtimeEvent.turnId &&
+          runtimeEvent.providerRefs?.providerParentThreadId === undefined
+        ) {
           armTurnWatchdog(threadId, runtimeEvent.turnId);
         }
       }

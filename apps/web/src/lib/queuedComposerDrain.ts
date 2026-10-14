@@ -20,7 +20,8 @@ import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraft
 import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
 import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import type { SessionPhase } from "../types";
+import type { SessionPhase, Thread } from "../types";
+import { addWsTransportStateListener, readLatestWsTransportState } from "../wsTransportEvents";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
 import { newMessageId } from "./utils";
@@ -39,6 +40,20 @@ export interface QueuedComposerAutoDispatchGates {
   queuedTurnCount: number;
   /** The previous turn was stopped, failed, or hit a usage limit and the user has not resumed. */
   isQueuePaused?: boolean;
+  /** A user explicitly resumed the failed turn in a stopped provider session. */
+  canResumeClosedSession?: boolean;
+  isTransportAvailable?: boolean;
+}
+
+export function canResumeClosedQueuedComposerSession(
+  thread: Thread | undefined,
+  resumedTurnId: string | null | undefined,
+): boolean {
+  return (
+    thread?.session?.status === "closed" &&
+    resumedTurnId != null &&
+    thread.latestTurn?.turnId === resumedTurnId
+  );
 }
 
 export function shouldAutoDispatchQueuedComposerTurn(
@@ -46,7 +61,8 @@ export function shouldAutoDispatchQueuedComposerTurn(
 ): boolean {
   return !(
     gates.hasQueueableLiveTurn ||
-    gates.phase === "disconnected" ||
+    (gates.phase === "disconnected" && !gates.canResumeClosedSession) ||
+    gates.isTransportAvailable === false ||
     gates.isSendBusy ||
     gates.isConnecting ||
     gates.isAwaitingTurnStart ||
@@ -224,9 +240,13 @@ export function startQueuedComposerDrainWatcher(options?: {
       resetRetriesForRelevantThreadChanges(current, previous);
       requestQueuedComposerDrainPass();
     });
+    const unsubscribeTransport = addWsTransportStateListener(() => {
+      requestQueuedComposerDrainPass();
+    });
     stopDrainSubscriptions = () => {
       unsubscribeDrafts();
       unsubscribeStore();
+      unsubscribeTransport();
     };
     requestQueuedComposerDrainPass();
   }
@@ -442,6 +462,9 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
         stoppedTurnId: draft?.queueStoppedTurnId,
         resumedTurnId: draft?.queueResumedTurnId,
       }) !== null,
+    canResumeClosedSession: canResumeClosedQueuedComposerSession(thread, draft?.queueResumedTurnId),
+    isTransportAvailable:
+      readLatestWsTransportState() === null || readLatestWsTransportState() === "open",
   };
 }
 

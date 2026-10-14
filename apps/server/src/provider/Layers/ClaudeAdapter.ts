@@ -8293,10 +8293,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
         if (!context.subagentRuns.has(providerThreadId)) {
-          return yield* new ProviderAdapterRequestError({
+          return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
-            method: "turn/steerSubagent",
-            detail: `Subagent '${providerThreadId}' already finished; the message was not delivered.`,
+            operation: "turn/steerSubagent",
+            issue: `Subagent '${providerThreadId}' already finished; the message was not delivered.`,
           });
         }
         // The PreToolUse hook channel is text-only: project every attachment

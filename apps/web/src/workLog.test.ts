@@ -43,6 +43,34 @@ describe("deriveSubagentTaskEnds", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("keeps a rejected child message visible after the child turn completes", () => {
+    const activity = makeActivity({
+      id: "child-message-not-delivered",
+      kind: "provider.turn.start.failed",
+      tone: "error",
+      summary: "Provider turn start failed",
+      payload: { messageId: "child-message", detail: "Your message was not sent to the subagent." },
+    });
+    for (const options of [
+      { latestTurnId: TurnId.makeUnsafe("completed-child-turn") },
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("completed-child-turn")]) },
+    ]) {
+      const entries = deriveWorkLogEntries(
+        [activity],
+        "latestTurnId" in options ? options.latestTurnId : undefined,
+        "visibleTurnIds" in options ? options : {},
+      );
+      expect(entries).toEqual([
+        expect.objectContaining({
+          id: activity.id,
+          tone: "error",
+          label: "Provider turn start failed",
+          detail: "Your message was not sent to the subagent.",
+        }),
+      ]);
+    }
+  });
+
   it("pairs an answered question with its answers in one exchange row", () => {
     const questions = [
       {

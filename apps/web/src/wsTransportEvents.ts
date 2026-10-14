@@ -13,6 +13,10 @@ export const SYNARA_WS_COMPATIBILITY_ISSUE_EVENT = "synara:ws-compatibility-issu
 let latestCompatibilityIssue: WsCompatibilityError | null = null;
 let latestTransportState: WsTransportState | null = null;
 
+export function readLatestWsTransportState(): WsTransportState | null {
+  return latestTransportState;
+}
+
 const turnSettlements = new Map<symbol, ThreadId>();
 const settlementListeners = new Set<() => void>();
 let settlingThreadIds: ReadonlySet<ThreadId> = new Set();
