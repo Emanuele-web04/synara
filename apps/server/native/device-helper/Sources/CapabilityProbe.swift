@@ -65,6 +65,8 @@ enum CapabilityProbe {
     case .simulatorKitFunction:
       guard let simulatorKitHandle else { return false }
       return dlsym(simulatorKitHandle, symbol.name) != nil
+    case .processFunction:
+      return dlsym(UnsafeMutableRawPointer(bitPattern: -2), symbol.name) != nil
     case .selector(let className):
       guard let owner = NSClassFromString(className) else { return false }
       let selector = NSSelectorFromString(symbol.name)

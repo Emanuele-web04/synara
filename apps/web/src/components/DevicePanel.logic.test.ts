@@ -23,7 +23,12 @@ import {
   stepDeviceFrameGate,
   stepDeviceRecording,
   type DeviceFrameGateState,
+  type DeviceFrameGateStep,
 } from "./DevicePanel.logic";
+import {
+  recordedDeviceStreamShape,
+  type RecordedDeviceFrameShape,
+} from "./device/deviceStreamTestFixtures";
 
 const UDID = "AAAA-BBBB" as DeviceUdid;
 const OTHER_UDID = "CCCC-DDDD" as DeviceUdid;
@@ -197,6 +202,75 @@ describe("device frame gate", () => {
 
     const delta = stepDeviceFrameGate(reconfigured.state, header({ sequence: 4 }), UDID);
     expect(delta.action).toEqual({ kind: "drop", reason: "awaiting-keyframe" });
+  });
+});
+
+// Regression: the gate asked the server for a keyframe on every codec config it
+// saw while streaming. The real helper sends a config in front of every
+// keyframe, about every 2 s, and the server answers a resync by tearing down
+// and restarting the helper stream, so a healthy stream kept restarting its
+// encoder.
+describe("device frame gate on the recorded helper cadence", () => {
+  function runGate(frames: readonly RecordedDeviceFrameShape[]) {
+    let state = createDeviceFrameGateState();
+    let synced = false;
+    return frames.map((frame) => {
+      const step: DeviceFrameGateStep = stepDeviceFrameGate(state, header(frame), UDID);
+      state = step.state;
+      const afterSync = synced;
+      if (step.action.kind === "decode" && step.action.keyframe) synced = true;
+      return { frame, step, afterSync };
+    });
+  }
+
+  it("asks for no keyframes once synced to an in-order stream", () => {
+    const run = runGate(recordedDeviceStreamShape());
+
+    expect(run.some(({ afterSync }) => afterSync)).toBe(true);
+    expect(
+      run.filter(({ step }) => step.action.kind === "drop").map(({ frame }) => frame.sequence),
+    ).toEqual([]);
+    // Each periodic config is followed in order by its keyframe, so nothing in
+    // this stream needs the server to restart the helper.
+    expect(
+      run
+        .filter(({ afterSync, step }) => afterSync && step.requestKeyframe)
+        .map(({ frame }) => frame.sequence),
+    ).toEqual([]);
+  });
+
+  it("still asks for a keyframe when deltas are lost mid-GOP", () => {
+    const lost = new Set([300, 301, 302, 303, 304]);
+    const run = runGate(recordedDeviceStreamShape().filter((frame) => !lost.has(frame.sequence)));
+    const stepAt = (sequence: number) => run.find(({ frame }) => frame.sequence === sequence)!.step;
+
+    expect(stepAt(305).action).toEqual({ kind: "drop", reason: "sequence-gap" });
+    expect(stepAt(305).requestKeyframe).toBe(true);
+    expect(stepAt(366).action).toEqual({ kind: "drop", reason: "awaiting-keyframe" });
+    expect(stepAt(368).action).toEqual({ kind: "decode", keyframe: true });
+    expect(stepAt(369).action).toEqual({ kind: "decode", keyframe: false });
+  });
+
+  it("still asks for a keyframe when the server re-sends its cached config after dropping a backlog", () => {
+    // The frame transport drops a slow subscriber's backlog, re-queues the
+    // cached codec config (still stamped with its original sequence), and then
+    // withholds every delta until the encoder's next natural keyframe.
+    const frames = recordedDeviceStreamShape();
+    const run = runGate([
+      ...frames.filter((frame) => frame.sequence <= 300),
+      { sequence: 246, keyframe: false, codecConfig: true },
+      ...frames.filter((frame) => frame.sequence >= 367),
+    ]);
+    const resent = run[300]!;
+
+    expect(resent.frame).toEqual({ sequence: 246, keyframe: false, codecConfig: true });
+    expect(resent.step.action).toEqual({ kind: "configure" });
+    // Nothing else arrives until the next natural keyframe, up to ~2 s away.
+    expect(resent.step.requestKeyframe).toBe(true);
+    expect(run.find(({ frame }) => frame.sequence === 368)!.step.action).toEqual({
+      kind: "decode",
+      keyframe: true,
+    });
   });
 });
 

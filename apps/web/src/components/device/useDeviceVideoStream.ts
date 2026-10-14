@@ -76,6 +76,14 @@ function avcCodecStringFromConfig(payload: Uint8Array): string | null {
   return null;
 }
 
+function sameBytes(a: Uint8Array | null, b: Uint8Array): boolean {
+  if (a === null || a.byteLength !== b.byteLength) return false;
+  for (let index = 0; index < a.byteLength; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
 function isWebCodecsAvailable(): boolean {
   return (
     typeof globalThis.VideoDecoder === "function" &&
@@ -129,6 +137,12 @@ export function useDeviceVideoStream(input: {
     // them to the next keyframe, which is how in-band Annex-B parameter sets are
     // meant to reach the decoder.
     let pendingParameterSets: Uint8Array | null = null;
+    // The parameter sets the live decoder was configured with. The helper sends
+    // them before every keyframe; an unchanged set needs no new decoder.
+    let configuredParameterSets: Uint8Array | null = null;
+    // True while the document is hidden: the socket is closed so the server
+    // stops capturing and encoding for a window nobody can see.
+    let paused = false;
 
     setStatus({ kind: "connecting" });
 
@@ -157,6 +171,7 @@ export function useDeviceVideoStream(input: {
       // Parameter sets belong to the decoder being torn down; carrying them into
       // the next one would prepend a stale SPS/PPS to its first keyframe.
       pendingParameterSets = null;
+      configuredParameterSets = null;
       if (!decoder) return;
       const current = decoder;
       decoder = null;
@@ -175,6 +190,12 @@ export function useDeviceVideoStream(input: {
     };
 
     const configureDecoder = (frame: DeviceFrame) => {
+      // Same SPS/PPS as the running decoder: keep it. Rebuilding on every
+      // keyframe's config cost a decoder teardown every couple of seconds.
+      if (decoder?.state === "configured" && sameBytes(configuredParameterSets, frame.payload)) {
+        pendingParameterSets = frame.payload.slice();
+        return;
+      }
       const codec = avcCodecStringFromConfig(frame.payload);
       if (!codec) {
         failStream("The simulator stream sent parameters Synara could not read.");
@@ -213,6 +234,7 @@ export function useDeviceVideoStream(input: {
       // Carried, not decoded: the next keyframe is sent with these bytes in
       // front of it so the decoder sees SPS/PPS and an IDR in one chunk.
       pendingParameterSets = frame.payload.slice();
+      configuredParameterSets = frame.payload.slice();
     };
 
     const submit = (frame: DeviceFrame, keyframe: boolean) => {
@@ -243,7 +265,7 @@ export function useDeviceVideoStream(input: {
       // Any delivered frame proves the socket is healthy, so the next drop
       // starts its backoff from the beginning rather than from a long delay.
       reconnectAttempts = 0;
-      if (!isCurrent() || disposed) return;
+      if (!isCurrent() || disposed || paused) return;
       const step = stepDeviceFrameGate(gate, frame.header, udid);
       gate = step.state;
       if (step.requestKeyframe) source?.requestResync();
@@ -261,7 +283,7 @@ export function useDeviceVideoStream(input: {
     };
 
     const handleReset = (reason: DeviceFrameSourceResetReason) => {
-      if (!isCurrent() || disposed) return;
+      if (!isCurrent() || disposed || paused) return;
       teardownDecoder();
       gate = createDeviceFrameGateState();
       if (reason === "closed") {
@@ -288,11 +310,42 @@ export function useDeviceVideoStream(input: {
       });
     };
 
-    source = openFrameSource();
+    // Hidden (minimized, another Space, app in the background): drop the frame
+    // socket. The server stops the helper's capture and encode once its last
+    // viewer leaves, and the canvas keeps the last frame. On return a fresh
+    // socket brings parameter sets and a keyframe within a frame or two.
+    const pause = () => {
+      if (paused) return;
+      paused = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const current = source;
+      source = null;
+      current?.close();
+      teardownDecoder();
+      gate = createDeviceFrameGateState();
+    };
+    const resume = () => {
+      if (!paused || disposed || !isCurrent()) return;
+      paused = false;
+      reconnectAttempts = 0;
+      source = openFrameSource();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") pause();
+      else resume();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    if (document.visibilityState === "hidden") paused = true;
+    else source = openFrameSource();
 
     return () => {
       disposed = true;
       generationRef.current += 1;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
       teardownDecoder();

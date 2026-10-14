@@ -224,8 +224,41 @@ describe("accessibility tree normalization", () => {
       value: null,
       frame: { x: 0, y: 0, width: 0, height: 0 },
       activationPoint: null,
+      enabled: true,
+      // No frame at all is the shape the helper sends for a NaN frame.
+      unframed: true,
       children: [],
     });
+  });
+
+  it("keeps the identifier and state a test targets and asserts on", () => {
+    const node = normalizeUiNode({
+      role: "TextField",
+      label: "Email",
+      value: "you@example.com",
+      placeholder: "you@example.com",
+      identifier: "email-field",
+      enabled: false,
+      focused: true,
+      frame: { x: 24, y: 300, width: 345, height: 44 },
+    });
+    expect(node).toMatchObject({
+      identifier: "email-field",
+      enabled: false,
+      focused: true,
+      placeholder: "you@example.com",
+    });
+    expect(node.unframed).toBeUndefined();
+  });
+
+  it("clamps text past the contract's cap instead of failing the whole read", () => {
+    const node = normalizeUiNode({
+      role: "TextView",
+      value: "x".repeat(5_000),
+      frame: { x: 0, y: 0, width: 10, height: 10 },
+    });
+    expect(node.value).toHaveLength(1_024);
+    expect(node.value?.endsWith("…")).toBe(true);
   });
 
   it("keeps a switch's own activation point, which is not its row centre", () => {
