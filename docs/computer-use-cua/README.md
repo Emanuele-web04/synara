@@ -302,7 +302,8 @@ Stop interrupts the active action; task revocation/end remains authoritative for
 whether that task can issue another action.
 
 Native blocking workers retain their operation lease even if their caller stops
-awaiting them. Matching keyboard, mouse and synthetic-pointer releases run before
+awaiting them. Cursor animation waits also stop with the captured epoch so they
+cannot delay the input drain. Matching keyboard, mouse and synthetic-pointer releases run before
 that lease drains. Browser actions use the same epoch gate and the existing CDP
 release protocol. Old buffered epochs stay invalid. An unconfirmed release keeps
 admission closed; killing a process is not proof that held input was released.
@@ -313,13 +314,14 @@ interrupted typing, modified Escape, owned Escape passthrough, target changes,
 detached worker and drag cleanup, and runs
 the actual Electron host against a WinForms target for injected Escape, Stop,
 fresh-observation recovery, browser key releases and listener disposal. Production provisioning builds
-from the same pinned source. These checks cover a disposable Windows x64 desktop;
+from the same pinned source and reruns the host smoke against the staged executable. These checks cover a disposable Windows x64 desktop;
 they do not establish physical-human Escape, elevated applications, Windows ARM64
 or signed installed-app behavior.
 
 The updated upstream Cua Driver 0.35.4 at
 [`d74a9cab`](https://github.com/trycua/cua/tree/d74a9cab3fb2e80ab7f0cef47025ec828586ea75/libs/cua-driver/rust)
-was inspected on 2026-10-14. It does not supply Synara's `interrupt_input` /
+was inspected on 2026-10-14. It improves Windows integrity-level checks and
+foreground typing delivery, but does not supply Synara's `interrupt_input` /
 `cancel_input` acknowledgement and epoch contract. This port therefore retains
 0.28.2 with the scoped Windows delta; a global upstream upgrade would still need
 the cancellation patch and separate macOS qualification.

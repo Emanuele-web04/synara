@@ -253,10 +253,10 @@ index ecaefd8..2af7588 100644
      }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
 new file mode 100644
-index 0000000..9a1ef0a
+index 0000000..251e71a
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
-@@ -0,0 +1,355 @@
+@@ -0,0 +1,368 @@
 +//! A native worker owns its input until matching releases have completed.
 +//! The browser operation gate is shared with CDP so Stop drains both routes.
 +use cua_driver_core::browser::operation_gate::{gate, OperationLease};
@@ -352,6 +352,19 @@ index 0000000..9a1ef0a
 +            .unwrap_or(Ok(())),
 +    })
 +}
++/// Cosmetic waits also retain the operation lease. Stop must not wait for a
++/// cursor animation's original duration after the native input has drained.
++pub async fn until_interrupted<F: Future>(future: F) -> anyhow::Result<F::Output> {
++    tokio::pin!(future);
++    loop {
++        checkpoint()?;
++        tokio::select! {
++            result = &mut future => return Ok(result),
++            _ = tokio::time::sleep(Duration::from_millis(10)) => {},
++        }
++    }
++}
++
 +fn interrupted() -> Error {
 +    Error::new(HRESULT(0x800704c7u32 as i32), "Computer input interrupted")
 +}
@@ -1213,10 +1226,49 @@ index 6739207..ab742b2 100644
                  gate: worker_gate,
                  timed_out: worker_timed_out,
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 499d826..d43b97c 100644
+index 499d826..3f6e3b9 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-@@ -440,7 +440,7 @@ impl Tool for ExactPidWindowTargetGuard {
+@@ -279,13 +279,14 @@ async fn overlay_glide_to(key: &str, sx: f64, sy: f64) {
+                 end_heading_radians: std::f64::consts::FRAC_PI_4,
+             },
+         );
+-        tokio::time::sleep(std::time::Duration::from_millis(
+-            motion.glide_duration_ms as u64,
+-        ))
+-        .await;
++        let _ = crate::input::cancellation::until_interrupted(tokio::time::sleep(
++            std::time::Duration::from_millis(motion.glide_duration_ms as u64),
++        )).await;
+         return;
+     }
+-    crate::overlay::animate_cursor_to(key.to_owned(), sx, sy).await;
++    let _ = crate::input::cancellation::until_interrupted(
++        crate::overlay::animate_cursor_to(key.to_owned(), sx, sy),
++    ).await;
+ }
+ 
+ async fn track_overlay_drag(
+@@ -305,12 +306,17 @@ async fn track_overlay_drag(
+     let steps = steps.max(1);
+     let step_delay = std::time::Duration::from_millis(duration_ms / steps as u64);
+     for index in 0..=steps {
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
+         let t = index as f64 / steps as f64;
+         let x = from.0 + (to.0 - from.0) * t;
+         let y = from.1 + (to.1 - from.1) * t;
+         crate::overlay::send_command(key.clone(), cursor_overlay::track_pointer_command(x, y));
+         if index < steps && !step_delay.is_zero() {
+-            tokio::time::sleep(step_delay).await;
++            if crate::input::cancellation::until_interrupted(tokio::time::sleep(step_delay)).await.is_err() {
++                break;
++            }
+         }
+     }
+     crate::overlay::send_command(key, cursor_overlay::OverlayCommand::SetPressed(false));
+@@ -440,7 +446,7 @@ impl Tool for ExactPidWindowTargetGuard {
                          }));
                  };
                  let owner_pid =
@@ -1225,7 +1277,7 @@ index 499d826..d43b97c 100644
                          .await
                          .ok()
                          .flatten();
-@@ -684,7 +684,7 @@ impl Tool for ListAppsTool {
+@@ -684,7 +690,7 @@ impl Tool for ListAppsTool {
          //    that launch_path. Remaining installed entries are emitted with
          //    running=false, pid=0. Remaining running pids (no installed-app
          //    match) are emitted as running=true with launch_path=null.
@@ -1234,7 +1286,7 @@ index 499d826..d43b97c 100644
              use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
              use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
  
-@@ -898,7 +898,7 @@ impl Tool for ListWindowsTool {
+@@ -898,7 +904,7 @@ impl Tool for ListWindowsTool {
          use cua_driver_core::tool_args::ArgsExt;
          let filter_pid = args.opt_u64("pid").map(|v| v as u32);
          let on_screen_only = args.bool_or("on_screen_only", false);
@@ -1243,7 +1295,7 @@ index 499d826..d43b97c 100644
              let wins = crate::win32::list_windows(filter_pid);
              let procs = crate::win32::list_processes();
              let map: std::collections::HashMap<u32, String> =
-@@ -1280,12 +1280,12 @@ impl Tool for GetWindowStateTool {
+@@ -1280,12 +1286,12 @@ impl Tool for GetWindowStateTool {
              };
          // Validate window belongs to pid — Swift's hard error.
          let windows_for_pid =
@@ -1258,7 +1310,7 @@ index 499d826..d43b97c 100644
                  .await
                  .unwrap_or_default();
              if let Some(w) = all.iter().find(|w| w.hwnd == hwnd) {
-@@ -1308,7 +1308,7 @@ impl Tool for GetWindowStateTool {
+@@ -1308,7 +1314,7 @@ impl Tool for GetWindowStateTool {
              .iter()
              .find(|w| w.hwnd == hwnd)
              .map(|w| (w.title.clone(), w.x, w.y, w.width, w.height));
@@ -1267,7 +1319,7 @@ index 499d826..d43b97c 100644
              crate::win32::list_processes()
                  .into_iter()
                  .find(|p| p.pid == pid)
-@@ -1382,7 +1382,7 @@ impl Tool for GetWindowStateTool {
+@@ -1382,7 +1388,7 @@ impl Tool for GetWindowStateTool {
          let state = self.state.clone();
          let q = query.clone();
          let out_file = screenshot_out_file.clone();
@@ -1276,7 +1328,7 @@ index 499d826..d43b97c 100644
              let tree_result = if do_tree {
                  Some(crate::uia::walk_tree_bounded(
                      hwnd,
-@@ -1873,6 +1873,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+@@ -1873,6 +1879,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
          GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
      };
  
@@ -1284,7 +1336,7 @@ index 499d826..d43b97c 100644
      if prior_foreground_addr == 0 {
          tracing::trace!(
              target: "launch_app.focus_restore",
-@@ -1904,7 +1905,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+@@ -1904,7 +1911,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
          // antivirus filters tolerate better than QUERY_INFORMATION.
          // OpenProcess result is also `!Send` (HANDLE), so do the open +
          // wait + close in one blocking task.
@@ -1293,7 +1345,7 @@ index 499d826..d43b97c 100644
              if let Ok(handle) = OpenProcess(
                  PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
                  false,
-@@ -1930,6 +1931,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+@@ -1930,6 +1937,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
      // never holds an `!Send` value across an await point.
      let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
      loop {
@@ -1301,7 +1353,7 @@ index 499d826..d43b97c 100644
          if std::time::Instant::now() >= deadline {
              tracing::trace!(
                  target: "launch_app.focus_restore",
-@@ -2354,7 +2356,7 @@ impl Tool for LaunchAppTool {
+@@ -2354,7 +2362,7 @@ impl Tool for LaunchAppTool {
          let pid = if let Some(aumid) = aumid_for_uwp.clone() {
              let aumid_clone = aumid.clone();
              let args_clone = extra_joined.clone();
@@ -1310,7 +1362,7 @@ index 499d826..d43b97c 100644
                  crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
              })
              .await;
-@@ -2391,7 +2393,7 @@ impl Tool for LaunchAppTool {
+@@ -2391,7 +2399,7 @@ impl Tool for LaunchAppTool {
              // UI so that case fails fast with an error code; the timeout is the
              // backstop for any *other* blocking broker dialog (SmartScreen, an
              // elevation/consent surface) so a bad target can't hang the daemon.
@@ -1319,7 +1371,7 @@ index 499d826..d43b97c 100644
                  use windows::core::{PCWSTR, PWSTR};
                  use windows::Win32::Foundation::CloseHandle;
                  use windows::Win32::System::Threading::{
-@@ -2546,7 +2548,7 @@ impl Tool for LaunchAppTool {
+@@ -2546,7 +2554,7 @@ impl Tool for LaunchAppTool {
          if aumid_for_uwp.is_none() && restore_foreground {
              let spawned_pid_for_restore = pid;
              let target_foreground_addr = foreground_before_addr;
@@ -1328,7 +1380,7 @@ index 499d826..d43b97c 100644
                  restore_foreground_polling_best_effort(
                      target_foreground_addr,
                      spawned_pid_for_restore,
-@@ -2561,7 +2563,7 @@ impl Tool for LaunchAppTool {
+@@ -2561,7 +2569,7 @@ impl Tool for LaunchAppTool {
          if aumid_for_uwp.is_some() && !urls.is_empty() {
              let urls_clone = urls.clone();
              let n_show_for_urls = n_show;
@@ -1337,7 +1389,7 @@ index 499d826..d43b97c 100644
                  use windows::core::PCWSTR;
                  use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
                  fn to_wide(s: &str) -> Vec<u16> {
-@@ -2615,7 +2617,7 @@ impl Tool for LaunchAppTool {
+@@ -2615,7 +2623,7 @@ impl Tool for LaunchAppTool {
          if aumid_for_uwp.is_some() {
              for _ in 0..10 {
                  let host =
@@ -1346,7 +1398,7 @@ index 499d826..d43b97c 100644
                          .await
                          .unwrap_or(None);
                  if let Some(w) = host {
-@@ -2640,7 +2642,7 @@ impl Tool for LaunchAppTool {
+@@ -2640,7 +2648,7 @@ impl Tool for LaunchAppTool {
              if !windows_json.is_empty() {
                  break;
              }
@@ -1355,7 +1407,7 @@ index 499d826..d43b97c 100644
                  .await
                  .unwrap_or_default();
              if !wins.is_empty() {
-@@ -2679,7 +2681,7 @@ impl Tool for LaunchAppTool {
+@@ -2679,7 +2687,7 @@ impl Tool for LaunchAppTool {
              let max_candidate_attempts: usize = if is_slow_launcher { 30 } else { 3 };
  
              let basename_clone = basename_for_match.clone();
@@ -1364,7 +1416,7 @@ index 499d826..d43b97c 100644
                  crate::win32::related_processes(pid, &basename_clone)
              })
              .await
-@@ -2699,7 +2701,7 @@ impl Tool for LaunchAppTool {
+@@ -2699,7 +2707,7 @@ impl Tool for LaunchAppTool {
                  while let Some(candidate_pid) = candidate_queue.pop() {
                      for _ in 0..max_candidate_attempts {
                          total_attempts += 1;
@@ -1373,7 +1425,7 @@ index 499d826..d43b97c 100644
                              crate::win32::list_windows(Some(candidate_pid))
                          })
                          .await
-@@ -2729,7 +2731,7 @@ impl Tool for LaunchAppTool {
+@@ -2729,7 +2737,7 @@ impl Tool for LaunchAppTool {
                  tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                  total_attempts += 3; // count the 500ms wait as 3 attempts
                  let basename_rescan = basename_for_match.clone();
@@ -1382,7 +1434,7 @@ index 499d826..d43b97c 100644
                      crate::win32::related_processes(pid, &basename_rescan)
                  })
                  .await
-@@ -2785,7 +2787,7 @@ impl Tool for LaunchAppTool {
+@@ -2785,7 +2793,7 @@ impl Tool for LaunchAppTool {
              // poll window.
              let parent_pid = pid;
              let immediate_hwnds_for_poll = immediate_hwnds.clone();
@@ -1391,7 +1443,7 @@ index 499d826..d43b97c 100644
                  use windows::Win32::Foundation::HWND;
                  use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWMINNOACTIVE};
                  for h in immediate_hwnds {
-@@ -2834,7 +2836,7 @@ impl Tool for LaunchAppTool {
+@@ -2834,7 +2842,7 @@ impl Tool for LaunchAppTool {
                      // Build the family pid set fresh each tick — both
                      // descendant graph and name-relatives can grow as
                      // launcher-stub chains spawn deeper children.
@@ -1400,7 +1452,7 @@ index 499d826..d43b97c 100644
                          let related: std::collections::HashSet<u32> =
                              crate::win32::related_processes(parent_pid, &basename_clone)
                                  .into_iter()
-@@ -2852,7 +2854,7 @@ impl Tool for LaunchAppTool {
+@@ -2852,7 +2860,7 @@ impl Tool for LaunchAppTool {
                      .unwrap_or_default();
                      let mut tick_hits: usize = 0;
                      for cpid in family_new_pids {
@@ -1409,7 +1461,7 @@ index 499d826..d43b97c 100644
                              crate::win32::list_windows(Some(cpid))
                          })
                          .await
-@@ -2863,7 +2865,7 @@ impl Tool for LaunchAppTool {
+@@ -2863,7 +2871,7 @@ impl Tool for LaunchAppTool {
                                  hit_count_total += 1;
                              }
                              let hwnd_iso = w.hwnd as usize;
@@ -1418,7 +1470,7 @@ index 499d826..d43b97c 100644
                                  let hwnd = HWND(hwnd_iso as *mut _);
                                  if IsIconic(hwnd).as_bool() {
                                      false
-@@ -3203,7 +3205,7 @@ impl Tool for ClickTool {
+@@ -3203,7 +3211,7 @@ impl Tool for ClickTool {
              // Click the HWND that owned the pixel before the driver overlay
              // moved there. The active SendInput path performs the foreground
              // swap and UIPI checks needed for Chromium and retained-mode apps.
@@ -1427,7 +1479,7 @@ index 499d826..d43b97c 100644
                  let mod_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
                  crate::input::send_click_synthesized_active_mods(
                      hwnd_u, sx, sy, count, &button, &mod_refs,
-@@ -3314,7 +3316,7 @@ impl Tool for ClickTool {
+@@ -3314,7 +3322,7 @@ impl Tool for ClickTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1436,7 +1488,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -3413,7 +3415,7 @@ impl Tool for ClickTool {
+@@ -3413,7 +3421,7 @@ impl Tool for ClickTool {
                  };
                  let mods_owned = modifiers.clone();
                  let activate = delivery == DeliveryMode::Foreground;
@@ -1445,7 +1497,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -3430,7 +3432,7 @@ impl Tool for ClickTool {
+@@ -3430,7 +3438,7 @@ impl Tool for ClickTool {
                      }
                  })
                  .await;
@@ -1454,7 +1506,7 @@ index 499d826..d43b97c 100644
                  let half = if want_expand { "dropdown" } else { "press" };
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
-@@ -3478,7 +3480,7 @@ impl Tool for ClickTool {
+@@ -3478,7 +3486,7 @@ impl Tool for ClickTool {
              // WPF/WinUI menus and tree nodes whose visual click target is
              // transient or scroll-adjusted.
              if action_req.as_deref() == Some("expand") {
@@ -1463,7 +1515,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || -> anyhow::Result<()> {
                          let _admission = &admitted;
-@@ -3577,7 +3579,7 @@ impl Tool for ClickTool {
+@@ -3577,7 +3585,7 @@ impl Tool for ClickTool {
                  let prev_fg_addr = unsafe {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
@@ -1472,7 +1524,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -3588,7 +3590,7 @@ impl Tool for ClickTool {
+@@ -3588,7 +3596,7 @@ impl Tool for ClickTool {
                      }
                  })
                  .await;
@@ -1481,7 +1533,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
                          "✅ Performed SendInput click on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
-@@ -3627,7 +3629,7 @@ impl Tool for ClickTool {
+@@ -3627,7 +3635,7 @@ impl Tool for ClickTool {
                  && count == 1
                  && crate::input::is_chromium_target_window(hwnd)
              {
@@ -1490,7 +1542,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -3659,7 +3661,7 @@ impl Tool for ClickTool {
+@@ -3659,7 +3667,7 @@ impl Tool for ClickTool {
              //   - count > 1 (double-click semantics aren't an Invoke
              //     concept — PostMessage produces the actual WM_LBUTTONDBLCLK)
              let use_uia_invoke = (btn == "left" || btn == "middle") && count == 1;
@@ -1499,7 +1551,7 @@ index 499d826..d43b97c 100644
                  let _admission = &admitted;
                  let mut failed_calls = Vec::new();
                  // Direct Chromium UIA Invoke can return S_OK without firing a
-@@ -3816,7 +3818,7 @@ impl Tool for ClickTool {
+@@ -3816,7 +3824,7 @@ impl Tool for ClickTool {
              } else {
                  "PostMessage click"
              };
@@ -1508,7 +1560,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -3923,7 +3925,7 @@ impl Tool for ClickTool {
+@@ -3923,7 +3931,7 @@ impl Tool for ClickTool {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
                  let mods_owned = modifiers.clone();
@@ -1517,7 +1569,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -3934,7 +3936,7 @@ impl Tool for ClickTool {
+@@ -3934,7 +3942,7 @@ impl Tool for ClickTool {
                      }
                  })
                  .await;
@@ -1526,7 +1578,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => {
                          let click_word = match count {
-@@ -3973,7 +3975,7 @@ impl Tool for ClickTool {
+@@ -3973,7 +3981,7 @@ impl Tool for ClickTool {
                  && count == 1
                  && crate::input::is_chromium_target_window(hwnd)
              {
@@ -1535,7 +1587,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4002,7 +4004,7 @@ impl Tool for ClickTool {
+@@ -4002,7 +4010,7 @@ impl Tool for ClickTool {
              if delivery == DeliveryMode::Background && crate::input::is_chromium_target_window(hwnd)
              {
                  let btn2 = btn.clone();
@@ -1544,7 +1596,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4025,7 +4027,7 @@ impl Tool for ClickTool {
+@@ -4025,7 +4033,7 @@ impl Tool for ClickTool {
              }
              let use_uia = (btn == "left" || btn == "middle") && count == 1;
              if use_uia {
@@ -1553,7 +1605,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4049,7 +4051,7 @@ impl Tool for ClickTool {
+@@ -4049,7 +4057,7 @@ impl Tool for ClickTool {
                  && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
              {
                  let btn2 = btn.clone();
@@ -1562,7 +1614,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4080,7 +4082,7 @@ impl Tool for ClickTool {
+@@ -4080,7 +4088,7 @@ impl Tool for ClickTool {
  
              // bitmap pixels -> screen (DWM-frame origin + inset). Use
              // post_click_screen so we don't double-ClientToScreen.
@@ -1571,7 +1623,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -4527,7 +4529,7 @@ impl Tool for TypeTextTool {
+@@ -4527,7 +4535,7 @@ impl Tool for TypeTextTool {
                  Err(error) => return ToolResult::error(error.to_string()),
              };
              let text_len = text.chars().count();
@@ -1580,7 +1632,7 @@ index 499d826..d43b97c 100644
                  crate::input::send_text_synthesized(hwnd, &text)
              })
              .await
-@@ -4635,7 +4637,7 @@ impl Tool for TypeTextTool {
+@@ -4635,7 +4643,7 @@ impl Tool for TypeTextTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1589,7 +1641,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4729,7 +4731,7 @@ impl Tool for TypeTextTool {
+@@ -4729,7 +4737,7 @@ impl Tool for TypeTextTool {
                  None
              };
              let text_fg = text.clone();
@@ -1598,7 +1650,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -4796,7 +4798,7 @@ impl Tool for TypeTextTool {
+@@ -4796,7 +4804,7 @@ impl Tool for TypeTextTool {
          //    (most legacy Win32 EDITs consume WM_CHAR fine without focus steal).
          if let Some(idx) = elem_idx {
              let text_for_uia = text.clone();
@@ -1607,7 +1659,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -4847,7 +4849,7 @@ impl Tool for TypeTextTool {
+@@ -4847,7 +4855,7 @@ impl Tool for TypeTextTool {
                  // (works regardless of which window is foreground), proving the
                  // a11y write actually took rather than trusting SetValue's
                  // return alone.
@@ -1616,7 +1668,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -4946,7 +4948,7 @@ impl Tool for TypeTextTool {
+@@ -4946,7 +4954,7 @@ impl Tool for TypeTextTool {
          let text_for_post = text.clone();
          let verify_pid = pid;
          let verify_idx = elem_idx.map(|i| i as usize);
@@ -1625,7 +1677,7 @@ index 499d826..d43b97c 100644
              let admitted = admitted.clone();
              move || {
                  let _admission = &admitted;
-@@ -5282,7 +5284,7 @@ impl Tool for PressKeyTool {
+@@ -5282,7 +5290,7 @@ impl Tool for PressKeyTool {
                  Err(error) => return ToolResult::error(error.to_string()),
              };
              let key_display = key.clone();
@@ -1634,7 +1686,7 @@ index 499d826..d43b97c 100644
                  let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
                  crate::input::send_key_synthesized(hwnd, &key, &modifiers)
              })
-@@ -5375,7 +5377,7 @@ impl Tool for PressKeyTool {
+@@ -5375,7 +5383,7 @@ impl Tool for PressKeyTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1643,7 +1695,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -5467,7 +5469,7 @@ impl Tool for PressKeyTool {
+@@ -5467,7 +5475,7 @@ impl Tool for PressKeyTool {
                  return error;
              }
          } else if elem_idx.is_some() && delivery != DeliveryMode::Foreground {
@@ -1652,7 +1704,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -5502,7 +5504,7 @@ impl Tool for PressKeyTool {
+@@ -5502,7 +5510,7 @@ impl Tool for PressKeyTool {
                  let point = admitted.as_ref().map(|element| element.center);
                  (idx as usize, point)
              });
@@ -1661,7 +1713,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -5524,7 +5526,7 @@ impl Tool for PressKeyTool {
+@@ -5524,7 +5532,7 @@ impl Tool for PressKeyTool {
                  Err(e)     => ToolResult::error(format!("Task error: {e}")),
              };
          }
@@ -1670,7 +1722,7 @@ index 499d826..d43b97c 100644
              let admitted = admitted.clone();
              move || {
                  let _admission = &admitted;
-@@ -5662,7 +5664,7 @@ impl Tool for HotkeyTool {
+@@ -5662,7 +5670,7 @@ impl Tool for HotkeyTool {
                  Err(error) => return ToolResult::error(error.to_string()),
              };
              let key_display = full_keys.join("+");
@@ -1679,7 +1731,7 @@ index 499d826..d43b97c 100644
                  let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
                  crate::input::send_key_synthesized(hwnd, &key, &modifiers)
              })
-@@ -5746,7 +5748,7 @@ impl Tool for HotkeyTool {
+@@ -5746,7 +5754,7 @@ impl Tool for HotkeyTool {
              Some(h) => h,
              None => {
                  let pid2 = pid;
@@ -1688,7 +1740,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -5818,7 +5820,7 @@ impl Tool for HotkeyTool {
+@@ -5818,7 +5826,7 @@ impl Tool for HotkeyTool {
              // bound the call so a hung provider returns an error instead of
              // blocking the daemon indefinitely. 4 s matches the budget the
              // rest of this file uses for similar UIA scans.
@@ -1697,7 +1749,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -5913,7 +5915,7 @@ impl Tool for HotkeyTool {
+@@ -5913,7 +5921,7 @@ impl Tool for HotkeyTool {
              let point = admitted.as_ref().map(|element| element.center);
              (idx, point)
          });
@@ -1706,7 +1758,7 @@ index 499d826..d43b97c 100644
              let admitted = admitted.clone();
              move || {
                  let _admission = &admitted;
-@@ -6058,7 +6060,7 @@ impl Tool for SetValueTool {
+@@ -6058,7 +6066,7 @@ impl Tool for SetValueTool {
              );
          }
  
@@ -1715,7 +1767,7 @@ index 499d826..d43b97c 100644
              move || -> anyhow::Result<String> {
                  let _noact = _noact;
                  let ptr = admitted.as_ptr();
-@@ -6215,7 +6217,7 @@ impl Tool for ScrollTool {
+@@ -6215,7 +6223,7 @@ impl Tool for ScrollTool {
              };
              let ticks = sign * amount as i32;
              let dir_disp = direction.as_str();
@@ -1724,7 +1776,7 @@ index 499d826..d43b97c 100644
                  crate::input::send_wheel_synthesized(sx, sy, ticks, horizontal)
              })
              .await;
-@@ -6270,7 +6272,7 @@ impl Tool for ScrollTool {
+@@ -6270,7 +6278,7 @@ impl Tool for ScrollTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1733,7 +1785,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -6316,7 +6318,7 @@ impl Tool for ScrollTool {
+@@ -6316,7 +6324,7 @@ impl Tool for ScrollTool {
                  None
              };
              let direction_for_uia = direction.clone();
@@ -1742,7 +1794,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -6429,7 +6431,7 @@ impl Tool for ScrollTool {
+@@ -6429,7 +6437,7 @@ impl Tool for ScrollTool {
              let center = if let (Some(x), Some(y)) = (px, py) {
                  Some(bitmap_to_screen(hwnd, x as i32, y as i32))
              } else {
@@ -1751,7 +1803,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -6455,7 +6457,7 @@ impl Tool for ScrollTool {
+@@ -6455,7 +6463,7 @@ impl Tool for ScrollTool {
              };
              let dir_disp = direction.clone();
              let tick_disp = ticks.abs();
@@ -1760,7 +1812,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -6473,13 +6475,13 @@ impl Tool for ScrollTool {
+@@ -6473,13 +6481,13 @@ impl Tool for ScrollTool {
              };
          }
  
@@ -1776,7 +1828,7 @@ index 499d826..d43b97c 100644
                      SB_PAGELEFT, SB_PAGERIGHT, SB_PAGEUP, WM_HSCROLL, WM_VSCROLL,
                  };
  
-@@ -6498,7 +6500,7 @@ impl Tool for ScrollTool {
+@@ -6498,7 +6506,7 @@ impl Tool for ScrollTool {
                  };
                  for _ in 0..amount {
                      unsafe {
@@ -1785,7 +1837,7 @@ index 499d826..d43b97c 100644
                      }
                  }
                  Ok(())
-@@ -6561,7 +6563,7 @@ async fn chromium_click_short_circuit(
+@@ -6561,7 +6569,7 @@ async fn chromium_click_short_circuit(
      gesture: &str,
  ) -> Option<ToolResult> {
      let is_chromium =
@@ -1794,7 +1846,7 @@ index 499d826..d43b97c 100644
              .await
              .unwrap_or(false);
      if !is_chromium {
-@@ -6573,11 +6575,11 @@ async fn chromium_click_short_circuit(
+@@ -6573,11 +6581,11 @@ async fn chromium_click_short_circuit(
      let prev_fg_addr =
          unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize };
      let button_owned = button.to_string();
@@ -1808,7 +1860,7 @@ index 499d826..d43b97c 100644
      Some(match send_result {
          Ok(Ok(())) => ToolResult::text(format!(
              "✅ Sent {gesture} via SendInput to pid {pid} at screen ({sx},{sy}) (Chromium target)."
-@@ -6673,7 +6675,7 @@ async fn winui3_background_gesture(
+@@ -6673,7 +6681,7 @@ async fn winui3_background_gesture(
      count: usize,
      button: &str,
  ) -> Option<ToolResult> {
@@ -1817,7 +1869,7 @@ index 499d826..d43b97c 100644
          let admitted = admitted.clone();
          move || {
              let _admission = &admitted;
-@@ -6687,7 +6689,7 @@ async fn winui3_background_gesture(
+@@ -6687,7 +6695,7 @@ async fn winui3_background_gesture(
      }
      if count >= 2 && button == "left" {
          if let Some(idx) = idx {
@@ -1826,7 +1878,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -6809,7 +6811,7 @@ impl Tool for DoubleClickTool {
+@@ -6809,7 +6817,7 @@ impl Tool for DoubleClickTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1835,7 +1887,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -6885,7 +6887,7 @@ impl Tool for DoubleClickTool {
+@@ -6885,7 +6893,7 @@ impl Tool for DoubleClickTool {
              if delivery == DeliveryMode::Background
                  && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
              {
@@ -1844,7 +1896,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -6910,7 +6912,7 @@ impl Tool for DoubleClickTool {
+@@ -6910,7 +6918,7 @@ impl Tool for DoubleClickTool {
                  let prev_fg_addr = unsafe {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
@@ -1853,7 +1905,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -6925,7 +6927,7 @@ impl Tool for DoubleClickTool {
+@@ -6925,7 +6933,7 @@ impl Tool for DoubleClickTool {
                      }
                  })
                  .await;
@@ -1862,7 +1914,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
                          "✅ Sent double-click via SendInput on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
-@@ -6940,7 +6942,7 @@ impl Tool for DoubleClickTool {
+@@ -6940,7 +6948,7 @@ impl Tool for DoubleClickTool {
              {
                  return r;
              }
@@ -1871,7 +1923,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || -> anyhow::Result<String> {
                      let _admission = &admitted;
-@@ -7006,7 +7008,7 @@ impl Tool for DoubleClickTool {
+@@ -7006,7 +7014,7 @@ impl Tool for DoubleClickTool {
              if delivery == DeliveryMode::Background
                  && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
              {
@@ -1880,7 +1932,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7031,7 +7033,7 @@ impl Tool for DoubleClickTool {
+@@ -7031,7 +7039,7 @@ impl Tool for DoubleClickTool {
                  let prev_fg_addr = unsafe {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
@@ -1889,7 +1941,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7046,7 +7048,7 @@ impl Tool for DoubleClickTool {
+@@ -7046,7 +7054,7 @@ impl Tool for DoubleClickTool {
                      }
                  })
                  .await;
@@ -1898,7 +1950,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
                          "✅ Sent double-click via SendInput to pid {pid} at screen ({sx_i},{sy_i}) (delivery_mode:foreground)."
-@@ -7062,7 +7064,7 @@ impl Tool for DoubleClickTool {
+@@ -7062,7 +7070,7 @@ impl Tool for DoubleClickTool {
              {
                  return r;
              }
@@ -1907,7 +1959,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -7184,7 +7186,7 @@ impl Tool for RightClickTool {
+@@ -7184,7 +7192,7 @@ impl Tool for RightClickTool {
          let hwnd = match hwnd_opt {
              Some(h) => h,
              None => {
@@ -1916,7 +1968,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7255,7 +7257,7 @@ impl Tool for RightClickTool {
+@@ -7255,7 +7263,7 @@ impl Tool for RightClickTool {
              if delivery == DeliveryMode::Background
                  && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
              {
@@ -1925,7 +1977,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7279,7 +7281,7 @@ impl Tool for RightClickTool {
+@@ -7279,7 +7287,7 @@ impl Tool for RightClickTool {
                  let prev_fg_addr = unsafe {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
@@ -1934,7 +1986,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7294,7 +7296,7 @@ impl Tool for RightClickTool {
+@@ -7294,7 +7302,7 @@ impl Tool for RightClickTool {
                      }
                  })
                  .await;
@@ -1943,7 +1995,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
                          "✅ Sent right-click via SendInput on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
-@@ -7309,7 +7311,7 @@ impl Tool for RightClickTool {
+@@ -7309,7 +7317,7 @@ impl Tool for RightClickTool {
              {
                  return r;
              }
@@ -1952,7 +2004,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || -> anyhow::Result<String> {
                      let _admission = &admitted;
-@@ -7373,7 +7375,7 @@ impl Tool for RightClickTool {
+@@ -7373,7 +7381,7 @@ impl Tool for RightClickTool {
              if delivery == DeliveryMode::Background
                  && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
              {
@@ -1961,7 +2013,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7397,7 +7399,7 @@ impl Tool for RightClickTool {
+@@ -7397,7 +7405,7 @@ impl Tool for RightClickTool {
                  let prev_fg_addr = unsafe {
                      windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
                  };
@@ -1970,7 +2022,7 @@ index 499d826..d43b97c 100644
                      let admitted = admitted.clone();
                      move || {
                          let _admission = &admitted;
-@@ -7412,7 +7414,7 @@ impl Tool for RightClickTool {
+@@ -7412,7 +7420,7 @@ impl Tool for RightClickTool {
                      }
                  })
                  .await;
@@ -1979,7 +2031,7 @@ index 499d826..d43b97c 100644
                  return match send_result {
                      Ok(Ok(())) => ToolResult::text(format!(
                          "✅ Sent right-click via SendInput to pid {pid} at screen ({sx_i},{sy_i}) (delivery_mode:foreground)."
-@@ -7428,7 +7430,7 @@ impl Tool for RightClickTool {
+@@ -7428,7 +7436,7 @@ impl Tool for RightClickTool {
              {
                  return r;
              }
@@ -1988,7 +2040,7 @@ index 499d826..d43b97c 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -7513,7 +7515,7 @@ impl Tool for DragTool {
+@@ -7513,7 +7521,7 @@ impl Tool for DragTool {
                  Ok(hwnd) => hwnd,
                  Err(error) => return ToolResult::error(error.to_string()),
              };
@@ -1997,7 +2049,7 @@ index 499d826..d43b97c 100644
                  crate::input::mouse::send_drag_synthesized(
                      hwnd,
                      from_x,
-@@ -7606,7 +7608,7 @@ impl Tool for DragTool {
+@@ -7606,7 +7614,7 @@ impl Tool for DragTool {
              Some(h) => h,
              None => {
                  let windows =
@@ -2006,7 +2058,7 @@ index 499d826..d43b97c 100644
                          .await
                          .unwrap_or_default();
                  match windows.first() {
-@@ -7660,7 +7662,7 @@ impl Tool for DragTool {
+@@ -7660,7 +7668,7 @@ impl Tool for DragTool {
                      y: sy_from as f64,
                  },
              );
@@ -2015,7 +2067,7 @@ index 499d826..d43b97c 100644
                  crate::input::inject::inject_drag_screen(
                      target,
                      sx_from,
-@@ -7705,7 +7707,7 @@ impl Tool for DragTool {
+@@ -7705,7 +7713,7 @@ impl Tool for DragTool {
              let prev_fg_addr = unsafe {
                  windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
              };
@@ -2024,7 +2076,7 @@ index 499d826..d43b97c 100644
                  crate::input::mouse::send_drag_synthesized(
                      hwnd,
                      sx_from,
-@@ -7725,7 +7727,7 @@ impl Tool for DragTool {
+@@ -7725,7 +7733,7 @@ impl Tool for DragTool {
                  steps,
              );
              let (send_result, ()) = tokio::join!(send_result, visual_drag);
@@ -2033,7 +2085,7 @@ index 499d826..d43b97c 100644
              let button_suffix = if button == "left" {
                  String::new()
              } else {
-@@ -7750,7 +7752,7 @@ impl Tool for DragTool {
+@@ -7750,7 +7758,7 @@ impl Tool for DragTool {
          // structured background_unavailable error so callers escalate to
          // delivery_mode:"foreground" per the documented ladder instead of
          // trusting a drag that did nothing.
@@ -2042,7 +2094,7 @@ index 499d826..d43b97c 100644
              crate::input::mouse::non_client_move_resize_hit(hwnd, sx_from, sy_from)
          })
          .await
-@@ -7788,7 +7790,7 @@ impl Tool for DragTool {
+@@ -7788,7 +7796,7 @@ impl Tool for DragTool {
          );
  
          let button_c = button.clone();
@@ -2051,7 +2103,7 @@ index 499d826..d43b97c 100644
              // Screen-coord, deepest-child variant: routes the gesture to the
              // child control under the start point (e.g. a WinForms Panel),
              // not the top-level frame that would ignore it.
-@@ -7932,7 +7934,7 @@ impl Tool for GetDesktopStateTool {
+@@ -7932,7 +7940,7 @@ impl Tool for GetDesktopStateTool {
          // Capture the FULL display at native size — no resize. Run the
          // blocking GDI capture off the async runtime.
          let out_file = screenshot_out_file.clone();
@@ -2060,7 +2112,7 @@ index 499d826..d43b97c 100644
              move || -> anyhow::Result<(Option<String>, Option<String>, u32, u32)> {
                  use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
                  let png = crate::capture::screenshot_display_bytes()?;
-@@ -8768,7 +8770,7 @@ impl Tool for GetAccessibilityTreeTool {
+@@ -8768,7 +8776,7 @@ impl Tool for GetAccessibilityTreeTool {
          })
      }
      async fn invoke(&self, _args: Value) -> ToolResult {
@@ -2069,7 +2121,7 @@ index 499d826..d43b97c 100644
              (
                  crate::win32::list_processes(),
                  crate::win32::list_windows(None),
-@@ -8898,7 +8900,7 @@ impl Tool for ZoomTool {
+@@ -8898,7 +8906,7 @@ impl Tool for ZoomTool {
          let (nx1, ny1, nx2, ny2) = (x1 * ratio, y1 * ratio, x2 * ratio, y2 * ratio);
  
          let state = self.state.clone();
@@ -2078,7 +2130,7 @@ index 499d826..d43b97c 100644
              let png = crate::capture::screenshot_window_bytes(hwnd)?;
              cursor_overlay::capture_utils::crop_png_to_jpeg(&png, nx1, ny1, nx2, ny2, 500)
          })
-@@ -8991,7 +8993,7 @@ impl Tool for TypeTextCharsTool {
+@@ -8991,7 +8999,7 @@ impl Tool for TypeTextCharsTool {
              Some(h) => h,
              None => {
                  let windows =
@@ -2087,7 +2139,7 @@ index 499d826..d43b97c 100644
                          .await
                          .unwrap_or_default();
                  match windows.first() {
-@@ -9005,7 +9007,7 @@ impl Tool for TypeTextCharsTool {
+@@ -9005,7 +9013,7 @@ impl Tool for TypeTextCharsTool {
              }
          };
          let text_len = text.chars().count();
@@ -2096,7 +2148,7 @@ index 499d826..d43b97c 100644
              crate::input::post_type_text_with_delay(hwnd, &text, delay_ms)
          })
          .await;
-@@ -9134,7 +9136,7 @@ impl Tool for InvokeMenuTool {
+@@ -9134,7 +9142,7 @@ impl Tool for InvokeMenuTool {
              return menu_refusal("invoke_menu: window_id does not belong to pid".into());
          }
  
@@ -2105,7 +2157,7 @@ index 499d826..d43b97c 100644
              // `HWND` wraps a raw pointer and is intentionally not `Send`.
              // Move the integer handle into the blocking worker and rebuild the
              // process-local wrapper there instead of carrying it across threads.
-@@ -9258,7 +9260,7 @@ impl Tool for SetWindowFrameTool {
+@@ -9258,7 +9266,7 @@ impl Tool for SetWindowFrameTool {
                  Ok(input) => input,
                  Err(result) => return result,
              };
@@ -2114,7 +2166,7 @@ index 499d826..d43b97c 100644
              use windows::Win32::{
                  Foundation::{HWND, RECT},
                  Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
-@@ -9480,7 +9482,7 @@ impl Tool for BringToFrontTool {
+@@ -9480,7 +9488,7 @@ impl Tool for BringToFrontTool {
              Some(h) => h,
              None => {
                  let windows =
@@ -2123,7 +2175,7 @@ index 499d826..d43b97c 100644
                          .await
                          .unwrap_or_default();
                  match windows.first() {
-@@ -9499,7 +9501,7 @@ impl Tool for BringToFrontTool {
+@@ -9499,7 +9507,7 @@ impl Tool for BringToFrontTool {
          // and is validated by `flash-repro/16-edge-launch-fg.ps1` for the
          // Edge launch focus-steal recovery case.
          let outcome =
@@ -2132,7 +2184,7 @@ index 499d826..d43b97c 100644
                  use windows::Win32::Foundation::HWND;
                  use windows::Win32::Graphics::Dwm::DwmFlush;
                  use windows::Win32::UI::WindowsAndMessaging::{
-@@ -9715,7 +9717,7 @@ impl Tool for KillAppTool {
+@@ -9715,7 +9723,7 @@ impl Tool for KillAppTool {
          // Run the syscalls on a blocking thread — TerminateProcess + the
          // WaitForSingleObject confirmation are both blocking, and we don't
          // want to stall the tokio reactor.
@@ -2141,7 +2193,7 @@ index 499d826..d43b97c 100644
              use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
              use windows::Win32::System::Threading::{
                  OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-@@ -9827,7 +9829,7 @@ impl Tool for DebugWindowInfoTool {
+@@ -9827,7 +9835,7 @@ impl Tool for DebugWindowInfoTool {
              }
          };
  

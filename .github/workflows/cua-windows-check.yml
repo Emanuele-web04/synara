@@ -78,6 +78,7 @@ jobs:
           "CUA_NATIVE_SOURCE=$source" >> $env:GITHUB_ENV
 
       - name: Compile the real Windows daemon
+        id: compile
         run: cargo build --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver
 
       - name: Prove the native typing regression fails before the actuator fix
@@ -136,6 +137,7 @@ jobs:
           cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver-core --lib browser::
 
       - name: Exercise the actual Windows host, Escape and Stop
+        timeout-minutes: 4
         shell: pwsh
         run: |
           bun build .github/scripts/cua-windows-smoke.ts --target=node --format=cjs --external=electron --outfile=apps/desktop/.smoke/cua-windows-smoke.cjs
@@ -145,7 +147,16 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Verify production source provisioning
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         shell: pwsh
         run: |
           node apps/desktop/scripts/provision-cua-driver.mjs --platform win32 --arch x64 --source-checkout "$env:CUA_NATIVE_SOURCE" --destination "$env:RUNNER_TEMP/cua-windows-artifact"
+          exit $LASTEXITCODE
+
+      - name: Exercise the provisioned Windows driver
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $env:CUA_WINDOWS_SMOKE_BINARY = "$env:RUNNER_TEMP/cua-windows-artifact/cua-driver.exe"
+          node apps/desktop/node_modules/electron/cli.js apps/desktop/.smoke/cua-windows-smoke.cjs
           exit $LASTEXITCODE

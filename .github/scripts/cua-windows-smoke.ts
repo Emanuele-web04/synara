@@ -158,6 +158,13 @@ async function main() {
   assert.equal(process.platform, "win32");
   assert(process.env.CUA_WINDOWS_SMOKE_BINARY);
   await app.whenReady();
+  // A cleanup deadlock must fail this disposable CI process, not consume the
+  // entire job timeout and hide the original diagnostic from subsequent steps.
+  const watchdog = setTimeout(() => {
+    console.error("WINDOWS_HOST_SMOKE_TIMEOUT: input or teardown did not finish in 120 seconds");
+    app.exit(1);
+  }, 120_000);
+  watchdog.unref();
   const root = await mkdtemp(join(tmpdir(), "synara-windows-smoke-"));
   await mkdir(join(root, "cua-driver"));
   await copyFile(process.env.CUA_WINDOWS_SMOKE_BINARY, join(root, "cua-driver", "cua-driver.exe"));
@@ -322,7 +329,8 @@ async function main() {
       monitor.dispose();
       await writeFile(join(root, "command.txt"), "close");
       await Promise.race([fixtureExited, delay(5000).then(() => fixture.kill())]);
-      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      clearTimeout(watchdog);
     }
   }
 }
