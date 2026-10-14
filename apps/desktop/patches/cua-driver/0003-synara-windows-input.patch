@@ -2204,10 +2204,10 @@ index 499d826..3f6e3b9 100644
              use windows::Win32::System::Com::{
 diff --git a/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
 new file mode 100644
-index 0000000..9a74978
+index 0000000..8458611
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,397 @@
 +//! Requires a disposable, interactive Windows desktop. Exercises real Win32
 +//! messages and input state, not a substitute transport or a mocked injector.
 +#![cfg(target_os = "windows")]
@@ -2539,6 +2539,14 @@ index 0000000..9a74978
 +    .await;
 +    eventually(|| down(VK_SHIFT.0), "foreground click did not hold Shift").await;
 +    let other_window = Window::new();
++    // Activation crosses the fixture's UI thread. GetForegroundWindow can be
++    // NULL while Windows deactivates the old window; observe the new target
++    // before asserting that the completed cleanup preserves it.
++    eventually(
++        || unsafe { GetForegroundWindow().0 as usize == other_window.hwnd },
++        "replacement fixture did not become the foreground window",
++    )
++    .await;
 +    assert!(
 +        changed_target_click.await.unwrap().is_err(),
 +        "click continued after a foreground target change"
