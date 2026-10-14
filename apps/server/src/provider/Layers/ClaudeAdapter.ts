@@ -405,9 +405,13 @@ type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fres
 
 interface ClaudeSessionContext {
   resultUsageBaseline?: ClaudeResultUsageBaseline;
+  // Claude Code restores a resumed session's saved usage totals into the first
+  // result of a new process. Until a baseline exists, a result is not one turn.
+  resultUsageMayIncludeResumedTotals?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
+  readonly cacheProcessId: string;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
   // Spawn-fixed: the Artifact opt-in is an environment variable of this process.
@@ -3491,10 +3495,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
         }
 
-        const turnResultUsage = result
-          ? claudeTurnResultUsage(result, context.resultUsageBaseline)
-          : undefined;
-        if (result) context.resultUsageBaseline = result;
+        // The first result after a resume may carry the session's restored
+        // totals, so it only becomes the baseline; the turn keeps its main loop.
+        const resultUsageUnattributable =
+          result !== undefined &&
+          context.resultUsageBaseline === undefined &&
+          context.resultUsageMayIncludeResumedTotals === true;
+        const turnResultUsage =
+          result && !resultUsageUnattributable
+            ? claudeTurnResultUsage(result, context.resultUsageBaseline)
+            : undefined;
+        if (result) {
+          context.resultUsageBaseline = result;
+          context.resultUsageMayIncludeResumedTotals = false;
+        }
         const liveContextUsage = yield* readClaudeContextUsage(context);
         const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
         const liveRawContextWindow = positiveFiniteNumber(liveContextUsage?.rawMaxTokens);
@@ -3587,6 +3601,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.processedTokenTotal -
             (result ? context.processedTokenResultBaseline : context.processedTokenTurnBaseline),
         );
+        // A completed result settles the main loop exactly; otherwise use the
+        // cache reads of the requests observed since the last settled turn.
+        const resultCacheReadTokens = result?.usage?.cache_read_input_tokens;
+        const mainLoopCacheReadTokens = Math.min(
+          mainLoopTokens,
+          status === "completed" &&
+            accumulatedSnapshot !== undefined &&
+            typeof resultCacheReadTokens === "number" &&
+            Number.isFinite(resultCacheReadTokens)
+            ? Math.max(0, Math.round(resultCacheReadTokens))
+            : context.requestUsage.unsettledCacheReadTokens(),
+        );
         // A synthetic/background UI turn may be auto-closed before the SDK emits
         // a result. Its per-request usage is still final for this logical turn;
         // carry it into the next result baseline and quarantine late snapshots so
@@ -3669,7 +3695,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               ...(turnResultUsage ? { modelUsage: turnResultUsage.modelUsage } : {}),
               tokenAccountingVersion: 1,
               mainLoopTokens,
-              ...(typeof result?.total_cost_usd === "number"
+              mainLoopCacheReadTokens,
+              ...(typeof result?.total_cost_usd === "number" && !resultUsageUnattributable
                 ? { totalCostUsd: turnResultUsage?.totalCostUsd ?? result.total_cost_usd }
                 : {}),
               ...(errorMessage ? { errorMessage } : {}),
@@ -3853,9 +3880,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
             ...(result?.usage ? { usage: result.usage } : {}),
             ...(turnResultUsage ? { modelUsage: turnResultUsage.modelUsage } : {}),
+            claudeResultObserved: result !== undefined,
             tokenAccountingVersion: 1,
             mainLoopTokens,
-            ...(typeof result?.total_cost_usd === "number"
+            mainLoopCacheReadTokens,
+            ...(typeof result?.total_cost_usd === "number" && !resultUsageUnattributable
               ? { totalCostUsd: turnResultUsage?.totalCostUsd ?? result.total_cost_usd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
@@ -3918,6 +3947,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           query: context.query,
           artifactsEnabled: context.artifactsEnabled,
           processOwner: context.processOwner,
+          cacheProcessId: context.cacheProcessId,
           stoppedSignal: context.stoppedSignal,
           pendingCompactionPreparations: new Set(),
           streamFiber: undefined,
@@ -5041,9 +5071,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
           let addedTokens = 0;
           if (normalizedPerCallUsage) {
+            const cacheReadTokens = (perCallUsage as Record<string, unknown>)
+              .cache_read_input_tokens;
             addedTokens = context.requestUsage.add(
               messageId,
               normalizedPerCallUsage.totalProcessedTokens ?? normalizedPerCallUsage.usedTokens,
+              typeof cacheReadTokens === "number" && Number.isFinite(cacheReadTokens)
+                ? Math.max(0, cacheReadTokens)
+                : 0,
             );
             context.processedTokenTotal += addedTokens;
           }
@@ -5053,20 +5088,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           } else if (context.compactionMessageId !== messageId) {
             if (addedTokens > 0 && !context.subagentRefs) {
               context.hasObservedCacheRequest = true;
-              context.cacheObservation = claudeCacheFromRequest({
-                usage: perCallUsage as Record<string, unknown>,
-                messageId,
-                observedAt: yield* nowIso,
-                ...(context.cacheRequestStartedAt?.messageId === messageId
-                  ? { cacheReferenceAt: context.cacheRequestStartedAt.at }
-                  : {}),
-                ...(context.resumeSessionId ? { nativeSessionId: context.resumeSessionId } : {}),
-                ...(context.lifecycleGeneration
-                  ? { lifecycleGeneration: context.lifecycleGeneration }
-                  : {}),
-                ...(context.currentApiModelId ? { model: context.currentApiModelId } : {}),
-                ...(context.cacheObservation ? { previous: context.cacheObservation } : {}),
-              });
+              context.cacheObservation = {
+                ...claudeCacheFromRequest({
+                  usage: perCallUsage as Record<string, unknown>,
+                  messageId,
+                  observedAt: yield* nowIso,
+                  ...(context.cacheRequestStartedAt?.messageId === messageId
+                    ? { cacheReferenceAt: context.cacheRequestStartedAt.at }
+                    : {}),
+                  ...(context.resumeSessionId ? { nativeSessionId: context.resumeSessionId } : {}),
+                  ...(context.lifecycleGeneration
+                    ? { lifecycleGeneration: context.lifecycleGeneration }
+                    : {}),
+                  ...(context.currentApiModelId ? { model: context.currentApiModelId } : {}),
+                  ...(context.cacheObservation ? { previous: context.cacheObservation } : {}),
+                }),
+                processId: context.cacheProcessId,
+              };
             }
             yield* maybeEmitContextUsageWarning(context, perCallUsage as Record<string, unknown>);
             if (normalizedPerCallUsage) {
@@ -6225,6 +6263,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             invalidateClaudeCache(context);
             // The query survives /clear even when its cumulative counters restart.
             delete context.resultUsageBaseline;
+            context.resultUsageMayIncludeResumedTotals = false;
             context.requestUsage.reset();
             context.compactionMessageId = undefined;
             context.processedTokenTurnBaseline = context.processedTokenTotal;
@@ -6654,6 +6693,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         const startedAt = yield* nowIso;
+        // Ownership generations and native session IDs may be reused. This ID
+        // belongs only to this query and never comes from persisted resume state.
+        const cacheProcessId = crypto.randomUUID();
         const resumeState = readClaudeResumeState(input.resumeCursor);
         const threadId = input.threadId;
         const existingResumeSessionId = resumeState?.resume;
@@ -6693,13 +6735,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           if (sessionId && hookInput.session_id !== sessionId) return {};
           const current = Effect.runSync(Ref.get(contextRef));
           const previous = current ? current.cacheObservation : resumeState?.claudeCache;
-          const observation = claudeCacheFromSessionStart(
+          const nativeObservation = claudeCacheFromSessionStart(
             hookInput as unknown as Record<string, unknown>,
             new Date(cacheClock.currentTimeMillisUnsafe()).toISOString(),
             input.lifecycleGeneration,
             previous,
           );
-          if (!observation) return {};
+          if (!nativeObservation) return {};
+          const observation = { ...nativeObservation, processId: cacheProcessId };
           if (!current) startupCacheObservation = observation;
           else if (
             !current.stopped &&
@@ -7330,6 +7373,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const initialCacheObservation = cacheObservation
             ? {
                 ...cacheObservation,
+                processId: cacheProcessId,
                 ...(input.lifecycleGeneration
                   ? { lifecycleGeneration: input.lifecycleGeneration }
                   : {}),
@@ -7366,6 +7410,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           const context: ClaudeSessionContext = {
             ...(initialCacheObservation ? { cacheObservation: initialCacheObservation } : {}),
+            ...(existingResumeSessionId ? { resultUsageMayIncludeResumedTotals: true } : {}),
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             session,
             artifactsEnabled: providerOptions?.enableArtifacts === true,
@@ -7378,6 +7423,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             accountDiscoveryKey,
             messageStream,
             processOwner,
+            cacheProcessId,
             stoppedSignal: Deferred.makeUnsafe<void>(),
             pendingCompactionPreparations: new Set(),
             streamFiber: undefined,
@@ -7580,6 +7626,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             source: "local-estimate" as const,
             ...(context.resumeSessionId ? { nativeSessionId: context.resumeSessionId } : {}),
           }),
+          processId: context.cacheProcessId,
           ...(model ? { model } : {}),
           ...(context.lifecycleGeneration
             ? { lifecycleGeneration: context.lifecycleGeneration }
