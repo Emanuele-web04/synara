@@ -3,13 +3,7 @@ import { join } from "node:path";
 import { CuaDriverHost } from "./cuaDriverHost";
 import type { WindowsEscapeKillSwitchMonitor } from "./windowsEscapeKillSwitchMonitor";
 
-/**
- * Windows uses the upstream cua-driver.exe artifact.
- *
- * Unlike Linux, Windows should not be forced through the Linux admission
- * refusals by default. The upstream Windows driver is the intended native
- * route for this platform.
- */
+/** Windows native input requires the pinned, patched driver and a live Escape monitor. */
 export function createWindowsCuaDriverHost(options: {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
@@ -26,7 +20,6 @@ export function createWindowsCuaDriverHost(options: {
     bundleId: options.bundleId,
     capability: options.capability,
     ownPids: options.ownPids,
-    nativeRevision: null,
     inputMonitorState: () =>
       options.inputMonitor?.state ?? { ready: false, error: "windows_global_escape_unavailable" },
     activateInputMonitor: async () => {
@@ -34,8 +27,8 @@ export function createWindowsCuaDriverHost(options: {
     },
     onInputMonitorArmedChange: (armed) => options.inputMonitor?.setArmed(armed),
     setup: async () => {
-      // The upstream Windows driver handles its own elevation/permission needs
-      // for global input injection. Do not reuse the macOS permission guide.
+      // Windows input uses the current user desktop and integrity level.
+      // Setup does not request elevation or macOS permissions.
     },
   });
 }

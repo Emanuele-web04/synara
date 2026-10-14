@@ -16,6 +16,7 @@ const release = {
   patchSha256: "mac-base-checksum",
   linuxBrowserPatchSha256: "linux-delta-checksum",
   linuxBrowserInputControl: 1,
+  windowsInputPatchSha256: "windows-input-checksum",
   rustVersion: "1.97.1",
 };
 
@@ -83,8 +84,8 @@ describe("Cua platform and build provenance", () => {
     expect(() => validate(linuxProvenance(override))).toThrow();
   });
 
-  it("keeps unpatched Windows and old Linux artifacts explicit without input claims", () => {
-    for (const platform of ["win32", "linux"]) {
+  it("keeps old Linux artifacts explicit without input claims", () => {
+    for (const platform of ["linux"]) {
       const unpatched = provenance({ platform, patched: false, patchSha256: null });
       expect(() => validate(unpatched, platform)).not.toThrow();
       expect(() => validate({ ...unpatched, browserInputControl: 1 }, platform)).toThrow(
@@ -96,6 +97,26 @@ describe("Cua platform and build provenance", () => {
           platform,
         ),
       ).toThrow("unpatched");
+    }
+  });
+
+  it("requires the Windows release patch and cleanup capability before importing an artifact", () => {
+    const windows = provenance({
+      platform: "win32",
+      patched: true,
+      linuxBrowserPatchSha256: release.linuxBrowserPatchSha256,
+      windowsInputPatchSha256: release.windowsInputPatchSha256,
+      windowsInputControl: 1,
+    });
+    expect(() => validate(windows, "win32")).not.toThrow();
+    for (const change of [
+      { patched: false },
+      { windowsInputPatchSha256: "different" },
+      { windowsInputPatchSha256: undefined },
+      { windowsInputControl: 0 },
+      { rustcVersion: "rustc 1.96.0" },
+    ]) {
+      expect(() => validate({ ...windows, ...change }, "win32")).toThrow();
     }
   });
 

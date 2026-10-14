@@ -439,8 +439,8 @@ export function ComputerSettingsPanel({
         </p>
         {windowsBeta ? (
           <p className="px-2 text-ui-sm text-muted-foreground">
-            Windows beta: app compatibility varies. Actions may interrupt your desktop use; stopping
-            an action already in progress is not yet reliable.
+            Windows beta: app compatibility varies. Stop in the chat ends the task. Escape
+            interrupts the current action; input resumes only after cleanup and a fresh observation.
           </p>
         ) : null}
         <SettingsCard>

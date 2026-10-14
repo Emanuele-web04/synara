@@ -15,14 +15,6 @@ afterEach(async () => {
 
 type WindowsHostOptions = Parameters<typeof createWindowsCuaDriverHost>[0];
 
-function hostOptions(host: CuaDriverHost): {
-  binaryPath: string;
-  nativeRevision: number | null | undefined;
-  inputMonitorState: () => { ready: boolean; error?: string };
-} {
-  return (host as unknown as { options: ReturnType<typeof hostOptions> }).options;
-}
-
 async function fixture(isPackaged = false, inputMonitor?: WindowsHostOptions["inputMonitor"]) {
   const missingRoot = join(tmpdir(), `synara-no-driver-${randomUUID()}`);
   const ownPids = new Set([process.pid]);
@@ -40,60 +32,6 @@ async function fixture(isPackaged = false, inputMonitor?: WindowsHostOptions["in
 }
 
 describe("Windows desktop host startup", () => {
-  it.each([false, true])(
-    "points at the upstream cua-driver.exe artifact (packaged=%s)",
-    (isPackaged) => {
-      const root = join(tmpdir(), `synara-windows-driver-${randomUUID()}`);
-      const ownPids = new Set([process.pid]);
-      const host = createWindowsCuaDriverHost({
-        isPackaged,
-        resourcesPath: root,
-        appRoot: root,
-        bundleId: "test.synara.windows",
-        capability,
-        ownPids: () => ownPids,
-      });
-      hosts.push(host);
-      const expected = isPackaged
-        ? join(root, "cua-driver", "cua-driver.exe")
-        : join(root, "apps/desktop/resources/cua-driver/cua-driver.exe");
-      expect(hostOptions(host).binaryPath).toBe(expected);
-    },
-  );
-
-  it("expects a provisioned upstream driver without a Synara native revision", () => {
-    const root = join(tmpdir(), `synara-windows-driver-${randomUUID()}`);
-    const ownPids = new Set([process.pid]);
-    const host = createWindowsCuaDriverHost({
-      isPackaged: false,
-      resourcesPath: root,
-      appRoot: root,
-      bundleId: "test.synara.windows",
-      capability,
-      ownPids: () => ownPids,
-    });
-    hosts.push(host);
-    expect(hostOptions(host).nativeRevision).toBeNull();
-  });
-
-  it("falls back to windows_global_escape_unavailable without an input monitor", () => {
-    const root = join(tmpdir(), `synara-windows-driver-${randomUUID()}`);
-    const ownPids = new Set([process.pid]);
-    const host = createWindowsCuaDriverHost({
-      isPackaged: false,
-      resourcesPath: root,
-      appRoot: root,
-      bundleId: "test.synara.windows",
-      capability,
-      ownPids: () => ownPids,
-    });
-    hosts.push(host);
-    expect(hostOptions(host).inputMonitorState()).toEqual({
-      ready: false,
-      error: "windows_global_escape_unavailable",
-    });
-  });
-
   it("connects task-scoped Escape activation and releases it after the final attributed task", async () => {
     let armed = false;
     const activate = vi.fn(async () => {

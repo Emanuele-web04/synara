@@ -284,6 +284,43 @@ transcript, replay system or token-accounting source. Recording/replay, durable
 per-app grants and manual re-arm APIs remain removed; their older documents
 are historical.
 
+## Windows input lifecycle
+
+Windows uses a source-built `cua-driver.exe` with the pinned native revision and
+`synara_windows_input_control: 1`. Stock upstream binaries are rejected before
+input dispatch. Packaging applies the base patch, the shared browser cancellation
+delta, and `0003-synara-windows-input.patch`; reusable artifacts must identify all
+three hashes and the pinned Rust compiler.
+
+The Windows desktop reserves Escape while Computer tasks are active. A failed,
+lost or suspended shortcut closes input admission. Escape consumes the key and
+interrupts the current action; after cleanup, the task must obtain a fresh model
+observation before continuing. This shortcut is not a physical-input listener.
+Stop interrupts the active action; task revocation/end remains authoritative for
+whether that task can issue another action.
+
+Native blocking workers retain their operation lease even if their caller stops
+awaiting them. Matching keyboard, mouse and synthetic-pointer releases run before
+that lease drains. Browser actions use the same epoch gate and the existing CDP
+release protocol. Old buffered epochs stay invalid. An unconfirmed release keeps
+admission closed; killing a process is not proof that held input was released.
+Host lifetime-pipe EOF drains the native workers before daemon shutdown.
+
+The Windows CI lane compiles the real driver, exercises a native EDIT window for
+interrupted typing, modified click, detached worker and drag cleanup, and runs
+the actual Electron host against a WinForms target for injected Escape, Stop,
+fresh-observation recovery and shortcut disposal. Production provisioning builds
+from the same pinned source. These checks cover a disposable Windows x64 desktop;
+they do not establish physical-human Escape, elevated applications, Windows ARM64
+or signed installed-app behavior.
+
+The updated upstream Cua Driver 0.35.4 at
+[`d74a9cab`](https://github.com/trycua/cua/tree/d74a9cab3fb2e80ab7f0cef47025ec828586ea75/libs/cua-driver/rust)
+was inspected on 2026-10-14. It does not supply Synara's `interrupt_input` /
+`cancel_input` acknowledgement and epoch contract. This port therefore retains
+0.28.2 with the scoped Windows delta; a global upstream upgrade would still need
+the cancellation patch and separate macOS qualification.
+
 ## Linux and Spaces boundaries
 
 Linux packaging stages the driver outside ASAR and starts an authenticated

@@ -770,3 +770,19 @@ admission policy; 14 exact-target tests, 57 input tests and three tree tests pas
 with the clipping repair. The live serial/parallel tree comparison stays ignored.
 The overlay enumeration regression fails before filtering; all four window-list
 tests and the exact foreground-classification tests pass afterwards.
+
+## Windows cancellation delta
+
+`0003-synara-windows-input.patch` applies after the native base and Linux browser
+delta to the pinned source. Only Windows provisioning applies this third patch;
+macOS and Linux keep their existing patch sets. It adds the authenticated Windows
+named-pipe cancellation protocol and `synara_windows_input_control: 1` handshake.
+Native workers retain the shared operation lease through matching releases,
+including after a caller drops its wait. The same epoch closes native and browser
+input. EOF drains workers before shutdown; uncertain releases never reopen input.
+
+The patch includes an opt-in `synara_input_lifecycle` Windows integration test
+that sends real input to a disposable EDIT window. The `Cua Windows checks`
+workflow also uses the actual Electron host and WinForms target. See
+[Windows input lifecycle](../../../../docs/computer-use-cua/README.md#windows-input-lifecycle)
+for the verification scope and the updated-upstream evaluation.

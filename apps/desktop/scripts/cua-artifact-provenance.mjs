@@ -58,6 +58,7 @@ export function assertCuaArtifactProvenance({
   if (provenance.patched === false) {
     if (
       platform === "darwin" ||
+      platform === "win32" ||
       provenance.patchSha256 != null ||
       provenance.linuxBrowserPatchSha256 != null ||
       (provenance.browserInputControl !== undefined && provenance.browserInputControl !== 0) ||
@@ -67,9 +68,19 @@ export function assertCuaArtifactProvenance({
     }
     return;
   }
-  if (platform === "win32" || provenance.patchSha256 !== release.patchSha256) {
+  if (provenance.patchSha256 !== release.patchSha256) {
     throw new Error("Cua artifact native patch checksum mismatch.");
   }
+  if (
+    platform === "win32" &&
+    (provenance.patched !== true ||
+      provenance.windowsInputPatchSha256 !== release.windowsInputPatchSha256 ||
+      provenance.linuxBrowserPatchSha256 !== release.linuxBrowserPatchSha256 ||
+      provenance.windowsInputControl !== 1 ||
+      typeof provenance.rustcVersion !== "string" ||
+      !provenance.rustcVersion.startsWith(`rustc ${release.rustVersion} `))
+  )
+    throw new Error("Cua Windows input patch, capability or compiler provenance mismatch.");
   if (
     platform === "linux" &&
     (provenance.patched !== true ||

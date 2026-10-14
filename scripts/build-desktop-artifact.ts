@@ -1264,10 +1264,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     ),
   );
 
-  if (options.platform === "mac" || options.platform === "linux") {
+  {
     const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
     const cuaDestination = path.join(stageResourcesDir, "cua-driver");
-    const cuaPlatform = options.platform === "mac" ? "darwin" : "linux";
+    const cuaPlatform =
+      options.platform === "mac" ? "darwin" : options.platform === "win" ? "win32" : "linux";
     yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
     yield* timedBuildStage(
       "cua-provision",

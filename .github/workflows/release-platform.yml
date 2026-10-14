@@ -170,6 +170,15 @@ jobs:
           arch: ${{ inputs.arch }}
           prepared-artifact: prepared-cua-${{ inputs.platform }}-${{ inputs.arch }}
 
+      - name: Install pinned Windows Cua compiler
+        if: inputs.platform == 'win' && steps.restore_checkpoint.outcome != 'success'
+        shell: pwsh
+        run: |
+          $release = Get-Content packages/shared/src/cuaDriverRelease.json | ConvertFrom-Json
+          rustup toolchain install $release.rustVersion --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTUP_TOOLCHAIN=$($release.rustVersion)" >> $env:GITHUB_ENV
+
       - name: Restore portable outputs
         if: steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/restore-portable-build
