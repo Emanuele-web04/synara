@@ -131,6 +131,16 @@ jobs:
         with:
           bun-version-file: package.json
 
+      # Filtered installs use the package archive without restoring full modules.
+      - name: Restore Bun package cache
+        if: runner.os != 'Windows' && steps.restore_checkpoint.outcome != 'success'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-v2-
+
       - name: Install dependencies
         if: steps.restore_checkpoint.outcome != 'success'
         # Preflight validates the entire workspace. Native artifacts retain all

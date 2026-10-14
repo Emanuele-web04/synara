@@ -17,6 +17,9 @@ version, release notes and lockfile are final.
   `quality`, all `server_tests` shards and native artifact jobs. No tests are
   removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
   omit these full-suite gates.
+- Publication reuses main CI only when every required job passed for the exact
+  release commit and latest run attempt. Skipped, missing, or stale job evidence
+  runs the release gates again.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
@@ -120,7 +123,9 @@ Checklist:
 - Optional jobs stay disabled unless repository variables enable them:
   - `SYNARA_PUBLISH_CLI=1`
   - `SYNARA_FINALIZE_RELEASE=1`
-  - `SYNARA_AUTO_BETA=1` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
+- Beta cutting is on by default; set these repository variables to `0` to pause it:
+  - `SYNARA_AUTO_BETA` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
+  - `SYNARA_BETA_CADENCE` — `beta-cadence.yml` continues the beta series off `main` every six hours.
 
 ## 1) Build-only native CI validation
 

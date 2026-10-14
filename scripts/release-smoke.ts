@@ -293,11 +293,20 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   for (const platform of ["mac", "win", "linux"]) {
     for (const step of nativeSteps.slice(verifyIndex + 1, provenanceIndex + 1)) {
       const withOutcome = (outcome: string) =>
-        evaluates(step, { inputs: { platform }, steps: { restore_checkpoint: { outcome } } });
+        evaluates(step, {
+          inputs: { platform },
+          runner: { os: platform === "mac" ? "macOS" : platform === "win" ? "Windows" : "Linux" },
+          steps: { restore_checkpoint: { outcome } },
+        });
       if (withOutcome("success"))
         throw new Error(`Restored ${platform} checkpoint repeats ${step.name}.`);
       if (step.id === "build_artifact" && !withOutcome("skipped"))
         throw new Error("Checkpoint miss must build.");
+      if (
+        step.name === "Restore Bun package cache" &&
+        withOutcome("skipped") !== (platform !== "win")
+      )
+        throw new Error("Package cache restore must run on a non-Windows checkpoint miss.");
     }
   }
   const backupVerify = stepById("checkpoint_backup_verify");
@@ -818,8 +827,8 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
   assertContains(
     workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}",
-    "Expected the next-beta cut to require an opted-in stable publication.",
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA != '0' && needs.preflight.outputs.is_prerelease == 'false' }}",
+    "Expected the next-beta cut to run on stable publications unless SYNARA_AUTO_BETA=0 opts out.",
   );
   assertContains(
     nextBetaJob,
