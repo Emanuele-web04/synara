@@ -315,11 +315,17 @@ export class BetterwrightCdpTarget {
       const releases = betterwrightExpectedInputs(method, params).map((input) =>
         this.expectAgentInput?.(input),
       );
+      // This transport already binds one page. Chromium activation would only
+      // take the user's window focus; reveal/selection belongs to BrowserManager.
+      if (method === "Page.bringToFront" && !this.childSessions.has(sessionId!)) return {};
+      // Never take native focus for agent input. CDP delivers input to a native
+      // page's own widget without it, and on macOS/Linux webContents.focus()
+      // also raises Synara's window. Whatever the user was typing elsewhere
+      // then lands in the agent page and reads as a human takeover. Guests
+      // still need DOM focus, scoped below. Restore only focus owned by a
+      // still-active dispatch; teardown must never undo a later human takeover.
       const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
       try {
-        // Native focus is shared across tabs; DOM focus alone cannot route text
-        // to an offscreen preview. Keep focus and dispatch in the same lease.
-        if (nativeInput && previousFocus !== this.contents) this.contents.focus();
         const send = async () => {
           return this.send(
             method,
@@ -338,6 +344,7 @@ export class BetterwrightCdpTarget {
       } finally {
         try {
           if (
+            !this.disposed &&
             previousFocus &&
             previousFocus !== this.contents &&
             !previousFocus.isDestroyed() &&

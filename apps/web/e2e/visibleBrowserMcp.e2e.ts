@@ -653,11 +653,21 @@ test("production MCP controls one persistent Electron page across visibility cha
             "({width:innerWidth,height:innerHeight,contentWidth:document.documentElement.scrollWidth,scale:devicePixelRatio})",
           )) as { width: number; height: number; contentWidth: number; scale: number };
           expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          const previousFocus = await electronApp.evaluate(({ BrowserWindow, webContents }) => ({
+            windowFocused: BrowserWindow.getAllWindows()[0]!.isFocused(),
+            contentsId: webContents.getFocusedWebContents()?.id ?? null,
+          }));
           await run(
-            'await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
+            'await page.bringToFront(); await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
             3000,
           );
           expect(await read("document.body.dataset.agentClicks")).toBe("1");
+          expect(
+            await electronApp.evaluate(({ BrowserWindow, webContents }) => ({
+              windowFocused: BrowserWindow.getAllWindows()[0]!.isFocused(),
+              contentsId: webContents.getFocusedWebContents()?.id ?? null,
+            })),
+          ).toEqual(previousFocus);
           const proof = await mcp.call("browser_screenshot", {
             kind: "proof",
             fullPage,
@@ -735,7 +745,7 @@ test("production MCP controls one persistent Electron page across visibility cha
         BrowserWindow.getAllWindows()[0]!.webContents.focus(),
       );
       await run(
-        'await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
+        'await page.bringToFront(); await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
       );
       await expect(composer).toHaveValue("HOST_SENTINEL");
       expect(await read('document.querySelector("input").value')).toBe("guest-only");

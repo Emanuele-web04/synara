@@ -153,9 +153,29 @@ export const captureBrowserScreenshot = async (
 ): Promise<BrowserScreenshotHostOutput> =>
   withScreenshotLock(async () => {
     throwIfAborted(signal);
-    const captured = input.fullPage
-      ? await captureFullPage(runtime, signal)
-      : { ...(await captureViewport(runtime, signal)), clipped: false };
+    let subscribed = false;
+    const stopFrames = () => {
+      if (!subscribed) return;
+      subscribed = false;
+      if (!runtime.webContents.isDestroyed()) runtime.webContents.endFrameSubscription();
+    };
+    // A hidden native view needs a Viz capture consumer across CDP's temporary
+    // full-page resize; it keeps pixels flowing without revealing or focusing it.
+    if (input.fullPage && runtime.webContents.getType() !== "webview") {
+      runtime.webContents.beginFrameSubscription(true, () => {});
+      subscribed = true;
+      signal?.addEventListener("abort", stopFrames, { once: true });
+    }
+    let captured;
+    try {
+      throwIfAborted(signal);
+      captured = input.fullPage
+        ? await captureFullPage(runtime, signal)
+        : { ...(await captureViewport(runtime, signal)), clipped: false };
+    } finally {
+      signal?.removeEventListener("abort", stopFrames);
+      stopFrames();
+    }
     throwIfAborted(signal);
     const metadata = {
       mimeType: "image/png" as const,
