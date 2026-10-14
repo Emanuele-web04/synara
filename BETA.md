@@ -308,6 +308,10 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
+Connectors (`mcp-connectors`) are Beta-only: Stable refuses their RPCs, OAuth callback, and
+proxy routes, hides Settings → Connectors, and never reads the saved `mcp-connectors` secret.
+See [Connectors](docs/mcp-connectors.md).
+
 HTML visuals execute only in the Beta desktop app, where native subframe navigation is blocked.
 HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary

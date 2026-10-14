@@ -7,6 +7,7 @@ import {
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
+  extractMcpServerName,
   extractWebFetchUrl,
   isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
@@ -51,6 +52,27 @@ describe("extractWebFetchUrl", () => {
     ).toBeNull();
     expect(extractWebFetchUrl({ toolName: "WebFetch", detail: '{"prompt":"hi"}' })).toBeNull();
     expect(extractWebFetchUrl({ toolName: "WebFetch", detail: undefined })).toBeNull();
+  });
+});
+
+describe("extractMcpServerName", () => {
+  it("reads the server from Claude's mcp__server__tool names", () => {
+    expect(extractMcpServerName("mcp__superx_so_connector__get_me", null)).toBe(
+      "superx_so_connector",
+    );
+  });
+
+  it("reads Codex's nested { server, tool } pair", () => {
+    expect(
+      extractMcpServerName("get_me", {
+        data: { item: { type: "mcpToolCall", server: "stripe", tool: "list_customers" } },
+      }),
+    ).toBe("stripe");
+  });
+
+  it("is null for tools that are not MCP calls", () => {
+    expect(extractMcpServerName("Bash", { data: { item: { command: "ls" } } })).toBeNull();
+    expect(extractMcpServerName(undefined, null)).toBeNull();
   });
 });
 

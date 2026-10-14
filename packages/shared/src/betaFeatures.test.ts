@@ -6,6 +6,7 @@ import {
   GROUPS_BETA_FEATURE,
   INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  MCP_CONNECTORS_BETA_FEATURE,
 } from "./betaFeatures";
 import {
   SYNARA_BETA_BUNDLE_ID,
@@ -54,6 +55,13 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(false);
     for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
       expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, flavor)).toBe(true);
+    }
+  });
+
+  it("keeps connectors out of Stable only", () => {
+    expect(isBetaFeatureEnabled(MCP_CONNECTORS_BETA_FEATURE, "production")).toBe(false);
+    for (const flavor of ["beta", "development", "canary", "cua", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(MCP_CONNECTORS_BETA_FEATURE, flavor)).toBe(true);
     }
   });
 

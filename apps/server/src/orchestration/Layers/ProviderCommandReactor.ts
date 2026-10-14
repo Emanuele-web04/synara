@@ -1,5 +1,6 @@
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate";
+import { MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
 import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
@@ -120,6 +121,7 @@ import {
   resolveThreadMentionPromptProjection,
   threadMentionContextSuffix,
 } from "../../provider/threadMentionContext.ts";
+import { projectConnectorMentions } from "../../provider/connectorMentionContext.ts";
 import {
   TextGeneration,
   type BranchNameGenerationInput,
@@ -3078,19 +3080,30 @@ const make = Effect.gen(function* () {
     // assembled provider input rather than joining `<latest_user_message>`.
     const projectContextPrefix = projectContext.trim().length > 0 ? `${projectContext}\n\n` : "";
     const promptWithProjectContext = `${projectContextPrefix}${authoredMessageText}`;
-    const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
+    const connectorMentionProjection = projectConnectorMentions({
       mentions: input.mentions,
+      enabled: isServerBetaFeatureEnabled(MCP_CONNECTORS_BETA_FEATURE),
+    });
+    const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
+      mentions: connectorMentionProjection.otherMentions,
       snapshotQuery: projectionSnapshotQuery,
+      // The connector block is appended after the thread blocks, so it comes out of
+      // the same input budget.
       maxTotalContextChars: availableThreadMentionContextChars(
         promptWithProjectContext,
-        providerPromptOverheadChars,
+        providerPromptOverheadChars +
+          threadMentionContextSuffix(connectorMentionProjection.contextBlocks).length,
       ),
     });
+    const mentionContextBlocks = [
+      ...threadMentionProjection.contextBlocks,
+      ...connectorMentionProjection.contextBlocks,
+    ];
     const messageText = appendThreadMentionContextBlocks({
       text: promptWithProjectContext,
-      contextBlocks: threadMentionProjection.contextBlocks,
+      contextBlocks: mentionContextBlocks,
     });
-    let mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
+    let mentionContextSuffix = threadMentionContextSuffix(mentionContextBlocks);
     const providerMentions = threadMentionProjection.providerMentions;
     // Subagent threads have no provider session of their own: their messages
     // steer the running child task through the parent session (mirrors the

@@ -9,6 +9,7 @@ import {
   INBOX_BETA_FEATURE,
   INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  MCP_CONNECTORS_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -47,6 +48,12 @@ export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BE
  * activities entirely (no row, no fetch); the server also refuses the tool and read.
  */
 export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
+
+/**
+ * Connectors are Beta-only: Settings → Connectors and their `@` mentions. The
+ * server refuses the Connectors RPCs on Stable regardless.
+ */
+export const MCP_CONNECTORS_ON = isBetaFeatureOn(MCP_CONNECTORS_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

@@ -40,7 +40,17 @@ export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
  */
 export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [INLINE_VISUALS_BETA_FEATURE];
+/**
+ * Connectors (Beta only): remote MCP servers (Supabase, Linear, ...) the user
+ * signs in to from Settings, proxied to provider sessions through the agent
+ * gateway. Stable refuses the RPCs, the OAuth callback, and the proxy routes.
+ */
+export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  INLINE_VISUALS_BETA_FEATURE,
+  MCP_CONNECTORS_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable
