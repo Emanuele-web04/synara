@@ -6,7 +6,6 @@ import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { createWindowsCuaDriverHost } from "./windowsCuaDriverHost";
-import { WindowsEscapeKillSwitchMonitor } from "./windowsEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
@@ -3890,7 +3889,7 @@ const audioLevelSubscribers = new Map<
   { readonly contents: Electron.WebContents; readonly release: () => void }
 >();
 let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
-let windowsEscapeKillSwitchMonitor: WindowsEscapeKillSwitchMonitor | undefined;
+let windowsEscapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
 
 function stopComputerInputFromEscape(): void {
   // Native interruption owns the drain. The backend notice only relays the
@@ -3939,8 +3938,10 @@ async function startCuaHost(): Promise<void> {
         }),
       );
     } else {
-      windowsEscapeKillSwitchMonitor ??= new WindowsEscapeKillSwitchMonitor({
-        shortcutRegistry: globalShortcut,
+      windowsEscapeKillSwitchMonitor ??= new EscapeKillSwitchMonitor({
+        helperPath: app.isPackaged
+          ? Path.join(process.resourcesPath, "cua-driver", "cua-driver.exe")
+          : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver.exe"),
         onEscape: stopComputerInputFromEscape,
         onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
         onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),

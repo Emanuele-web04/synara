@@ -17,7 +17,7 @@ export interface ComputerInputMonitorState {
 export interface EscapeKillSwitchMonitorOptions {
   helperPath: string;
   /**
-   * Called for every physical, unmodified Escape the armed helper observed.
+   * Called for every Escape the armed platform helper observed.
    * The callback owns all kill semantics — this class only transports the
    * event and tracks which side of the arm gate the helper is on.
    */
@@ -32,8 +32,9 @@ export interface EscapeKillSwitchMonitorOptions {
 /**
  * Owns the dedicated `--escape-monitor` helper process for the desktop.
  *
- * The helper's listen-only event tap observes physical Escape keypresses and
- * reports them without consuming them. It only reports while armed, so this
+ * The macOS helper observes physical Escape without consuming it. Windows uses
+ * a low-level Escape hook, consumes external Escape with any modifiers, and
+ * passes the driver's tagged synthetic Escape through to its target. It only reports while armed, so this
  * class forwards `setArmed` (driven by the computer host's live driver
  * generation) as `arm`/`disarm` stdin lines. An unexpected helper exit is
  * retried with exponential backoff; the armed flag is replayed after every
@@ -146,6 +147,7 @@ export class EscapeKillSwitchMonitor {
     this.#setState({ ready: false, error: "input_monitor_starting" });
     const child = this.#spawn(this.#options.helperPath, ["--escape-monitor"], {
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     this.#child = child;
 

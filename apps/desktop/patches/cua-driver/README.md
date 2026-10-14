@@ -777,7 +777,9 @@ tests and the exact foreground-classification tests pass afterwards.
 delta to the pinned source. Only Windows provisioning applies this third patch;
 macOS and Linux keep their existing patch sets. It adds the authenticated Windows
 named-pipe cancellation protocol and `synara_windows_input_control: 1` handshake.
-Native workers retain the shared operation lease through matching releases,
+The same executable supplies `--escape-monitor` for the existing desktop helper
+lifecycle. Its task-scoped Windows hook sees Escape with modifiers held and
+passes through the driver's tagged synthetic Escape. Native workers retain the shared operation lease through matching releases,
 including after a caller drops its wait. The same epoch closes native and browser
 input. EOF drains workers before shutdown; uncertain releases never reopen input.
 

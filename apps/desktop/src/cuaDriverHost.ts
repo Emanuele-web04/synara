@@ -1972,6 +1972,7 @@ export class CuaDriverHost {
         ],
         {
           stdio: ["pipe", "ignore", "pipe"],
+          windowsHide: true,
           env: {
             ...process.env,
             CUA_DRIVER_EMBEDDED: "1",

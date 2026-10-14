@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { CuaDriverHost } from "./cuaDriverHost";
-import type { WindowsEscapeKillSwitchMonitor } from "./windowsEscapeKillSwitchMonitor";
+import type { EscapeKillSwitchMonitor } from "./escapeKillSwitchMonitor";
 
 /** Windows native input requires the pinned, patched driver and a live Escape monitor. */
 export function createWindowsCuaDriverHost(options: {
@@ -11,7 +11,7 @@ export function createWindowsCuaDriverHost(options: {
   readonly bundleId: string;
   readonly capability: string;
   readonly ownPids: () => ReadonlySet<number>;
-  readonly inputMonitor?: Pick<WindowsEscapeKillSwitchMonitor, "state" | "activate" | "setArmed">;
+  readonly inputMonitor?: Pick<EscapeKillSwitchMonitor, "state" | "activate" | "setArmed">;
 }): CuaDriverHost {
   return new CuaDriverHost({
     binaryPath: options.isPackaged

@@ -1,5 +1,58 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+index f7b2684..6269ba3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+@@ -713,17 +713,23 @@ impl BrowserEngine {
+     /// Test-only: register a driver-owned lifecycle entry backed by a real,
+     /// harmless child process so the Drop reap path runs for real and the
+     /// session-end ownership check has something to prove against.
+-    #[cfg(all(test, unix))]
++    #[cfg(test)]
+     pub(crate) fn register_test_managed_browser(&self, pid: i64, session: &str, headless: bool) {
+-        use std::os::unix::process::CommandExt;
+-        let child = Command::new("sleep")
+-            .arg("600")
+-            .process_group(0)
+-            .stdin(Stdio::null())
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::null())
+-            .spawn()
+-            .expect("spawn a harmless test-browser stand-in");
++        #[cfg(unix)]
++        let mut command = {
++            use std::os::unix::process::CommandExt;
++            let mut command = Command::new("sleep");
++            command.arg("600").process_group(0);
++            command
++        };
++        #[cfg(windows)]
++        let mut command = {
++            let mut command = Command::new("powershell.exe");
++            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 600"]);
++            command
++        };
++        let child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
++            .spawn().expect("spawn a harmless test-browser stand-in");
+         self.managed_browsers.lock().unwrap().push(ManagedBrowser {
+             child,
+             owned_pid: pid,
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+index e772dda..afacc28 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+@@ -888,6 +888,10 @@ fn main() {
+ 
+ #[cfg(not(target_os = "macos"))]
+ fn main() -> anyhow::Result<()> {
++    #[cfg(target_os = "windows")]
++    if std::env::args().nth(1).as_deref() == Some("--escape-monitor") {
++        return platform_windows::input::escape_monitor::run();
++    }
+     if let Some(code) = history_runtime::run_offline_purge_if_requested() {
+         std::process::exit(code);
+     }
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-index 08d3db5..0fa4eb9 100644
+index 08d3db5..202c7b8 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 @@ -12,7 +12,7 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
@@ -52,13 +105,14 @@ index 08d3db5..0fa4eb9 100644
          let result = invocation.await;
          let result = result.map_err(|error| {
              if let Some((session, marker, previous)) = ending_tombstone {
-@@ -485,13 +487,19 @@ impl SdkAdapter {
+@@ -485,13 +487,20 @@ impl SdkAdapter {
              }
              format!("{name} returned invalid SDK result JSON: {error}")
          })?;
 +        #[cfg(target_os = "windows")]
 +        if linux_input.as_ref().is_some_and(|operation| cua_driver_core::browser::operation_gate::gate().checkpoint(operation.epoch()).is_err()) {
 +            value["isError"] = json!(true);
++            if !value.get("structuredContent").is_some_and(Value::is_object) { value["structuredContent"] = json!({}); }
 +            value["structuredContent"]["effect"] = json!("partial");
 +            value["structuredContent"]["code"] = json!("input_interrupted");
 +        }
@@ -199,10 +253,10 @@ index ecaefd8..2af7588 100644
      }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
 new file mode 100644
-index 0000000..9a97758
+index 0000000..356631f
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,354 @@
 +//! A native worker owns its input until matching releases have completed.
 +//! The browser operation gate is shared with CDP so Stop drains both routes.
 +use cua_driver_core::browser::operation_gate::{gate, OperationLease};
@@ -441,7 +495,11 @@ index 0000000..9a97758
 +        if !is_up && checkpoint().is_err() {
 +            break;
 +        }
-+        if SendInput(&[*event], size) != 1 {
++        let mut tagged = *event;
++        if tagged.r#type == INPUT_KEYBOARD {
++            tagged.Anonymous.ki.dwExtraInfo = super::escape_monitor::OWN_INPUT_TAG;
++        }
++        if SendInput(&[tagged], size) != 1 {
 +            if is_up {
 +                gate().mark_unconfirmed_release();
 +            }
@@ -553,8 +611,151 @@ index 0000000..9a97758
 +    });
 +    windows::Win32::UI::Controls::DestroySyntheticPointerDevice(device);
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs
+new file mode 100644
+index 0000000..72dc5c7
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs
+@@ -0,0 +1,137 @@
++//! Task-scoped Escape listener used by the desktop's existing helper transport.
++//! No text, key inventory or pointer events are retained. Unlike RegisterHotKey,
++//! a low-level hook observes Escape with any currently held modifier.
++use std::{
++    io::{BufRead, Write},
++    sync::{
++        atomic::{AtomicBool, Ordering},
++        mpsc::{sync_channel, SyncSender},
++        OnceLock,
++    },
++};
++use windows::Win32::{
++    Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM},
++    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
++    UI::{Input::KeyboardAndMouse::VK_ESCAPE, WindowsAndMessaging::*},
++};
++
++// Native input authored by this driver must reach the app, including Escape.
++// External injected events still travel through the real hook in disposable CI.
++pub const OWN_INPUT_TAG: usize = 0x53594e41;
++const ARM: u32 = WM_APP + 1;
++const DISARM: u32 = WM_APP + 2;
++static OUTPUT: OnceLock<SyncSender<&'static str>> = OnceLock::new();
++static ESCAPE_DOWN: AtomicBool = AtomicBool::new(false);
++
++fn emit(message: &'static str) {
++    if let Some(output) = OUTPUT.get() {
++        let _ = output.try_send(message);
++    }
++}
++unsafe extern "system" fn on_keyboard(code: i32, kind: WPARAM, data: LPARAM) -> LRESULT {
++    if code >= 0 {
++        let key = &*(data.0 as *const KBDLLHOOKSTRUCT);
++        if key.vkCode == u32::from(VK_ESCAPE.0) && key.dwExtraInfo != OWN_INPUT_TAG {
++            match kind.0 as u32 {
++                WM_KEYDOWN | WM_SYSKEYDOWN => {
++                    if !ESCAPE_DOWN.swap(true, Ordering::SeqCst) {
++                        emit(r#"{"type":"escape"}"#);
++                    }
++                    return LRESULT(1);
++                }
++                WM_KEYUP | WM_SYSKEYUP => {
++                    ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                    return LRESULT(1);
++                }
++                _ => {}
++            }
++        }
++    }
++    CallNextHookEx(None, code, kind, data)
++}
++
++pub fn run() -> anyhow::Result<()> {
++    let (output, messages) = sync_channel::<&'static str>(32);
++    OUTPUT
++        .set(output)
++        .map_err(|_| anyhow::anyhow!("Escape monitor already started"))?;
++    std::thread::spawn(move || {
++        let stdout = std::io::stdout();
++        let mut stdout = stdout.lock();
++        for message in messages {
++            if writeln!(stdout, "{message}")
++                .and_then(|_| stdout.flush())
++                .is_err()
++            {
++                break;
++            }
++        }
++    });
++    let thread = unsafe { GetCurrentThreadId() };
++    // Create the message queue before the stdin reader can send commands.
++    unsafe {
++        let _ = PeekMessageW(&mut MSG::default(), None, 0, 0, PM_NOREMOVE);
++    }
++    std::thread::spawn(move || {
++        for command in std::io::stdin().lock().lines() {
++            let message = match command.as_deref() {
++                Ok("arm") => ARM,
++                Ok("disarm") => DISARM,
++                Ok(_) => continue,
++                Err(_) => break,
++            };
++            if unsafe { PostThreadMessageW(thread, message, WPARAM(0), LPARAM(0)) }.is_err() {
++                return;
++            }
++        }
++        unsafe {
++            let _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0));
++        }
++    });
++    let mut hook = None;
++    unsafe {
++        let mut message = MSG::default();
++        while GetMessageW(&mut message, None, 0, 0).0 > 0 {
++            match message.message {
++                ARM => {
++                    if hook.is_none() {
++                        let module = GetModuleHandleW(None)?;
++                        match SetWindowsHookExW(
++                            WH_KEYBOARD_LL,
++                            Some(on_keyboard),
++                            HINSTANCE(module.0),
++                            0,
++                        ) {
++                            Ok(installed) => {
++                                hook = Some(installed);
++                                ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                            }
++                            Err(_) => {
++                                emit(
++                                    r#"{"type":"error","code":"event_tap_unavailable","message":"Windows could not install the Escape listener."}"#,
++                                );
++                                continue;
++                            }
++                        }
++                    }
++                    emit(r#"{"type":"ready"}"#);
++                }
++                DISARM => {
++                    if let Some(installed) = hook.take() {
++                        UnhookWindowsHookEx(installed)?;
++                    }
++                    ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                    emit(r#"{"type":"escape-monitor-state","armed":false}"#);
++                }
++                _ => {
++                    let _ = TranslateMessage(&message);
++                    DispatchMessageW(&message);
++                }
++            }
++        }
++        if let Some(installed) = hook {
++            UnhookWindowsHookEx(installed)?;
++        }
++    }
++    Ok(())
++}
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
-index 649f198..5c91219 100644
+index 649f198..6970965 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
 @@ -30,20 +30,20 @@
@@ -581,7 +782,7 @@ index 649f198..5c91219 100644
      POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
  };
  use windows::Win32::UI::WindowsAndMessaging::{
-@@ -271,18 +271,18 @@ fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
+@@ -271,9 +271,9 @@ fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
          let mut result: Result<()> = Ok(());
          let n = count.max(1);
          for i in 0..n {
@@ -591,11 +792,9 @@ index 649f198..5c91219 100644
 -            let r2 = InjectSyntheticPointerInput(dev, &[up]);
 +            let r2 = crate::input::cancellation::inject_pointer(dev, &[up]);
              if let Err(e) = r1.and(r2) {
--                result = Err(anyhow::anyhow!("InjectSyntheticPointerInput(pen): {e}"));
-+                result = Err(anyhow::anyhow!("crate::input::cancellation::inject_pointer(pen): {e}"));
+                 result = Err(anyhow::anyhow!("InjectSyntheticPointerInput(pen): {e}"));
                  break;
-             }
-             if i + 1 < n {
+@@ -282,7 +282,7 @@ fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
                  sleep(Duration::from_millis(70));
              }
          }
@@ -614,11 +813,11 @@ index 649f198..5c91219 100644
          // motion (rather than a single down→up) see a continuous stroke.
          let steps = steps.max(1);
          for i in 1..=steps {
-+        if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() { break; }
              sleep(Duration::from_millis(8));
              let t = i as f64 / steps as f64;
              let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-@@ -575,14 +576,14 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+@@ -575,13 +576,13 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
                  x,
                  y,
              );
@@ -630,13 +829,11 @@ index 649f198..5c91219 100644
          let up = mk(POINTER_FLAG_UP, sx1, sy1);
 -        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
 -        let _ = DestroySyntheticPointerDevice(dev);
--        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(pen drag): {e}"))?;
 +        res = res.and(crate::input::cancellation::inject_pointer(dev, &[up]));
 +        let _ = crate::input::cancellation::destroy_pointer(dev);
-+        res.map_err(|e| anyhow::anyhow!("crate::input::cancellation::inject_pointer(pen drag): {e}"))?;
+         res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(pen drag): {e}"))?;
      }
      Ok(())
- }
 @@ -666,9 +667,10 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
              sx0,
              sy0,
@@ -645,7 +842,7 @@ index 649f198..5c91219 100644
 +        let mut res = crate::input::cancellation::inject_pointer(dev, &[down]);
          let steps = steps.clamp(1, 3);
          for i in 1..=steps {
-+        if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() { break; }
              sleep(Duration::from_millis(2));
              let t = i as f64 / steps as f64;
              let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
@@ -663,15 +860,6 @@ index 649f198..5c91219 100644
          // Snap the cursor back to where the user left it. The OS processes the
          // promoted mouse messages slightly after injection, so a single restore
          // right after the `up` can be overrun by that late move — settle briefly,
-@@ -694,7 +696,7 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
-             let _ = SetCursorPos(cpos.x, cpos.y);
-         }
-         // device intentionally NOT destroyed — see TOUCH_DEV.
--        res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(touch drag): {e}"))?;
-+        res.map_err(|e| anyhow::anyhow!("crate::input::cancellation::inject_pointer(touch drag): {e}"))?;
-     }
-     Ok(())
- }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
 index 1a1d2e5..3fff9e7 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
@@ -797,19 +985,21 @@ index 1a1d2e5..3fff9e7 100644
      })();
  
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
-index 970660c..fd7bf98 100644
+index 970660c..b082903 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
-@@ -9,6 +9,7 @@
+@@ -9,7 +9,9 @@
  //! For clicks, coordinates are window-client-relative (ScreenToClient applied
  //! if screen coords are given). We pack with MAKELPARAM(x,y).
  
 +pub mod cancellation;
  pub mod delivery;
++pub mod escape_monitor;
  pub mod inject;
  pub mod keyboard;
+ pub mod mouse;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
-index 30c9c92..c70b9b3 100644
+index 30c9c92..40e8043 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
 @@ -5,19 +5,19 @@
@@ -861,7 +1051,7 @@ index 30c9c92..c70b9b3 100644
      sleep(Duration::from_millis(CLICK_DELAY_MS));
  
      for i in 1..=steps {
-+        if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() { break; }
          let t = i as f64 / steps as f64;
          let ix = from_x + ((to_x - from_x) as f64 * t).round() as i32;
          let iy = from_y + ((to_y - from_y) as f64 * t).round() as i32;
@@ -896,7 +1086,7 @@ index 30c9c92..c70b9b3 100644
      }
      sleep(Duration::from_millis(CLICK_DELAY_MS));
      for i in 1..=steps {
-+        if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() { break; }
          let t = i as f64 / steps as f64;
          let ix = c_from.x + ((c_to.x - c_from.x) as f64 * t).round() as i32;
          let iy = c_from.y + ((c_to.y - c_from.y) as f64 * t).round() as i32;
@@ -968,7 +1158,7 @@ index 30c9c92..c70b9b3 100644
          //    same path — WPF's drag-handler watches GetKeyState during each
          //    move event.
          for i in 1..=steps {
-+        if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() { break; }
              let t = i as f64 / steps as f64;
              let x = sx_from + ((sx_to - sx_from) as f64 * t).round() as i32;
              let y = sy_from + ((sy_to - sy_from) as f64 * t).round() as i32;
@@ -1012,7 +1202,7 @@ index 6739207..ab742b2 100644
                  gate: worker_gate,
                  timed_out: worker_timed_out,
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 499d826..51e8b81 100644
+index 499d826..d43b97c 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 @@ -440,7 +440,7 @@ impl Tool for ExactPidWindowTargetGuard {
@@ -1559,7 +1749,7 @@ index 499d826..51e8b81 100644
                  let admitted = admitted.clone();
                  move || {
                      let _admission = &admitted;
-@@ -6473,7 +6475,7 @@ impl Tool for ScrollTool {
+@@ -6473,13 +6475,13 @@ impl Tool for ScrollTool {
              };
          }
  
@@ -1568,6 +1758,13 @@ index 499d826..51e8b81 100644
              let admitted = admitted.clone();
              move || -> anyhow::Result<()> {
                  let _admission = &admitted;
+                 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+                 use windows::Win32::UI::WindowsAndMessaging::{
+-                    PostMessageW, SB_LINEDOWN, SB_LINELEFT, SB_LINERIGHT, SB_LINEUP, SB_PAGEDOWN,
++                    SB_LINEDOWN, SB_LINELEFT, SB_LINERIGHT, SB_LINEUP, SB_PAGEDOWN,
+                     SB_PAGELEFT, SB_PAGERIGHT, SB_PAGEUP, WM_HSCROLL, WM_VSCROLL,
+                 };
+ 
 @@ -6498,7 +6500,7 @@ impl Tool for ScrollTool {
                  };
                  for _ in 0..amount {
@@ -1944,15 +2141,17 @@ index 499d826..51e8b81 100644
              use windows::Win32::System::Com::{
 diff --git a/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
 new file mode 100644
-index 0000000..849e216
+index 0000000..ab6cd46
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,326 @@
 +//! Requires a disposable, interactive Windows desktop. Exercises real Win32
 +//! messages and input state, not a substitute transport or a mocked injector.
 +#![cfg(target_os = "windows")]
 +use cua_driver_core::browser::operation_gate::gate;
 +use platform_windows::input::{cancellation, keyboard, mouse};
++use std::io::{BufRead, Write};
++use std::process::{Child, Command, Stdio};
 +use std::{
 +    sync::{mpsc, Arc},
 +    time::{Duration, Instant},
@@ -1962,11 +2161,80 @@ index 0000000..849e216
 +    Win32::{
 +        Foundation::{HWND, LPARAM, WPARAM},
 +        UI::{
-+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_SHIFT},
++            Input::KeyboardAndMouse::{
++                GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
++                KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, VK_LBUTTON, VK_SHIFT,
++            },
 +            WindowsAndMessaging::*,
 +        },
 +    },
 +};
++
++struct EscapeMonitor {
++    child: Child,
++    events: mpsc::Receiver<String>,
++}
++impl EscapeMonitor {
++    fn new() -> Self {
++        let mut child =
++            Command::new(std::env::var("SYNARA_CUA_DRIVER_TEST_BINARY").expect("real driver path"))
++                .arg("--escape-monitor")
++                .stdin(Stdio::piped())
++                .stdout(Stdio::piped())
++                .stderr(Stdio::inherit())
++                .spawn()
++                .unwrap();
++        let (tx, events) = mpsc::channel();
++        let output = child.stdout.take().unwrap();
++        std::thread::spawn(move || {
++            for line in std::io::BufReader::new(output).lines() {
++                if tx.send(line.unwrap()).is_err() {
++                    break;
++                }
++            }
++        });
++        writeln!(child.stdin.as_mut().unwrap(), "arm").unwrap();
++        let monitor = Self { child, events };
++        assert_eq!(
++            monitor.events.recv_timeout(Duration::from_secs(5)).unwrap(),
++            r#"{"type":"ready"}"#
++        );
++        monitor
++    }
++    fn external_escape(&self) {
++        let events = [KEYBD_EVENT_FLAGS(0), KEYEVENTF_KEYUP].map(|flags| INPUT {
++            r#type: INPUT_KEYBOARD,
++            Anonymous: INPUT_0 {
++                ki: KEYBDINPUT {
++                    wVk: VK_ESCAPE,
++                    dwFlags: flags,
++                    ..Default::default()
++                },
++            },
++        });
++        assert_eq!(
++            unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) },
++            2
++        );
++        assert_eq!(
++            self.events.recv_timeout(Duration::from_secs(5)).unwrap(),
++            r#"{"type":"escape"}"#
++        );
++    }
++}
++impl Drop for EscapeMonitor {
++    fn drop(&mut self) {
++        self.child.stdin.take();
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while self.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
++            std::thread::sleep(Duration::from_millis(10));
++        }
++        if self.child.try_wait().unwrap().is_none() {
++            let _ = self.child.kill();
++        }
++        let _ = self.child.wait();
++    }
++}
 +
 +struct Window {
 +    hwnd: usize,
@@ -2083,6 +2351,7 @@ index 0000000..849e216
 +        std::env::var("SYNARA_CUA_WINDOWS_LIVE_TEST").as_deref(),
 +        Ok("1")
 +    );
++    let monitor = EscapeMonitor::new();
 +    let window = Window::new();
 +    let hwnd = window.hwnd as u64;
 +    let typing =
@@ -2107,6 +2376,19 @@ index 0000000..849e216
 +        "buffered pre-Escape requests must stay stale"
 +    );
 +
++    start(move || keyboard::send_key_synthesized(hwnd, "escape", &[]))
++        .await
++        .await
++        .unwrap()
++        .unwrap();
++    assert!(
++        matches!(
++            monitor.events.recv_timeout(Duration::from_millis(150)),
++            Err(mpsc::RecvTimeoutError::Timeout)
++        ),
++        "the driver's own Escape must reach the target without stopping the task"
++    );
++
 +    let modified_click =
 +        start(move || mouse::send_click_synthesized_mods(hwnd, 200, 200, 100, "left", &["shift"]))
 +            .await;
@@ -2115,6 +2397,7 @@ index 0000000..849e216
 +        "modified click must actually hold Shift",
 +    )
 +    .await;
++    monitor.external_escape();
 +    // Dropping a JoinHandle must not drop the worker's operation lease.
 +    drop(modified_click);
 +    interrupt().await;
@@ -2123,6 +2406,28 @@ index 0000000..849e216
 +        "interrupted click left a held input",
 +    )
 +    .await;
++
++    let changed_target_click = start(move || {
++        mouse::send_click_synthesized_active_mods(hwnd, 200, 200, 100, "left", &["shift"])
++    })
++    .await;
++    eventually(|| down(VK_SHIFT.0), "foreground click did not hold Shift").await;
++    let other_window = Window::new();
++    assert!(
++        changed_target_click.await.unwrap().is_err(),
++        "click continued after a foreground target change"
++    );
++    eventually(
++        || !down(VK_SHIFT.0) && !down(VK_LBUTTON.0),
++        "target change left a held input",
++    )
++    .await;
++    assert_eq!(
++        unsafe { GetForegroundWindow().0 as usize },
++        other_window.hwnd,
++        "cleanup stole the user's new foreground"
++    );
++    drop(other_window);
 +
 +    let drag =
 +        start(move || mouse::send_drag_synthesized(hwnd, 200, 200, 400, 250, 5000, 500, "left"))
@@ -2164,5 +2469,5 @@ index 0000000..849e216
 +        gate().admit(None).is_err(),
 +        "retirement must never reopen this generation"
 +    );
-+    eprintln!("WINDOWS_NATIVE_INPUT_OK typing=interrupted modified_click=released detached_worker=drained drag=released stale_epoch=refused fresh_input=observed stop=retired");
++    eprintln!("WINDOWS_NATIVE_INPUT_OK typing=interrupted modified_click=released modified_escape=observed own_escape=passed target_change=released detached_worker=drained drag=released stale_epoch=refused fresh_input=observed stop=retired");
 +}
