@@ -1,7 +1,52 @@
-import { Effect, Scope } from "effect";
-import { describe, expect, it } from "vitest";
+import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@synara/contracts";
+import { Effect, PubSub, Scope, Stream } from "effect";
+import { describe, expect, it, vi } from "vitest";
 
-import { closeServerRuntimePipeline, startServerRuntimePipeline } from "./effectServer.ts";
+import {
+  closeServerRuntimePipeline,
+  startProviderRuntimeIdleStopSettings,
+  startServerRuntimePipeline,
+} from "./effectServer.ts";
+
+it("keeps live idle-stop settings subscribed after startup and preserves inherited defaults", async () => {
+  const configured: Array<number | undefined> = [];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const changes = yield* PubSub.unbounded<ServerSettings>();
+      yield* startProviderRuntimeIdleStopSettings({
+        providerService: {
+          configureRuntimeIdleStopMs: (value) => void configured.push(value),
+        },
+        serverSettings: {
+          subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
+          getSettings: Effect.gen(function* () {
+            // This update races the startup snapshot and must already have a subscriber.
+            yield* PubSub.publish(changes, {
+              ...DEFAULT_SERVER_SETTINGS,
+              providerRuntimeIdleStopMinutes: 0,
+            });
+            return DEFAULT_SERVER_SETTINGS;
+          }),
+        },
+      });
+      yield* Effect.promise(() => vi.waitFor(() => expect(configured).toEqual([undefined, 0])));
+      yield* PubSub.publish(changes, {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerRuntimeIdleStopMinutes: 5,
+      });
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(configured).toEqual([undefined, 0, 300_000])),
+      );
+      yield* PubSub.publish(changes, {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerRuntimeIdleStopMinutes: null,
+      });
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(configured).toEqual([undefined, 0, 300_000, undefined])),
+      );
+    }).pipe(Effect.scoped),
+  );
+});
 
 describe("server runtime pipeline shutdown", () => {
   it("persists accepted provider terminal work before the engine stops", async () => {

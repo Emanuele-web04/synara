@@ -40,6 +40,49 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
+  it("inherits an absent idle-stop timeout and validates explicit minute values", () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({})).not.toHaveProperty(
+      "providerRuntimeIdleStopMinutes",
+    );
+    for (const minutes of [null, 0, 10, 1_440]) {
+      expect(
+        Schema.decodeSync(ServerSettingsPatchSchema)({ providerRuntimeIdleStopMinutes: minutes }),
+      ).toEqual({ providerRuntimeIdleStopMinutes: minutes });
+    }
+    for (const minutes of [-1, 1.5, 1_441]) {
+      expect(() =>
+        Schema.decodeSync(ServerSettingsPatchSchema)({ providerRuntimeIdleStopMinutes: minutes }),
+      ).toThrow();
+    }
+  });
+
+  it("persists idle-stop opt-out and reset across restart", async () => {
+    const settings = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        yield* service.updateSettings({ providerRuntimeIdleStopMinutes: 0 });
+        const disabled = JSON.parse(yield* fs.readFileString(config.settingsPath)) as unknown;
+        expect(disabled).toMatchObject({ settings: { providerRuntimeIdleStopMinutes: 0 } });
+        yield* service.updateSettings({ providerRuntimeIdleStopMinutes: null });
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettingsView;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(settings.providerRuntimeIdleStopMinutes).toBeNull();
+  });
+
   it("defaults keep awake to off", () => {
     expect(Schema.decodeSync(ServerSettingsSchema)({}).keepAwakeMode).toBe("off");
   });
