@@ -96,6 +96,30 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("marks connector references as connector mentions, including quoted names", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        'Ask @Supabase and @"Hugging Face" now',
+        [],
+        [
+          { name: "Supabase", path: "connector://supabase_connector" },
+          { name: "Hugging Face", path: "connector://huggingface_connector" },
+        ],
+      ),
+    ).toEqual([
+      { type: "text", text: "Ask " },
+      { type: "mention", path: "Supabase", kind: "connector", tokenLength: "@Supabase".length },
+      { type: "text", text: " and " },
+      {
+        type: "mention",
+        path: "Hugging Face",
+        kind: "connector",
+        tokenLength: '@"Hugging Face"'.length,
+      },
+      { type: "text", text: " now" },
+    ]);
+  });
+
   it("does not convert an incomplete trailing mention token", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md")).toEqual([
       { type: "text", text: "Inspect @AGENTS.md" },

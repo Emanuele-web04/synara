@@ -82,6 +82,8 @@ type SyntheticCodexRequest = {
 };
 
 function createSyntheticCodexAppServer(options?: {
+  readonly mcpServers?: Record<string, unknown>;
+  readonly projectMcpServers?: Record<string, unknown>;
   readonly forceFullHistoryResponse?: boolean;
   readonly gatewayRenewal?:
     | "supported"
@@ -234,6 +236,15 @@ function createSyntheticCodexAppServer(options?: {
             historicalResponses.push(result);
             respond(result);
           }
+        } else if (request.method === "config/read") {
+          respond({
+            config: {
+              mcp_servers: {
+                ...options?.mcpServers,
+                ...(typeof request.params?.cwd === "string" ? options?.projectMcpServers : {}),
+              },
+            },
+          });
         } else if (request.method === "thread/start") {
           respond({ thread: { id: "fresh-provider-thread" } });
         } else if (request.method === "turn/start") {
@@ -343,6 +354,57 @@ const fullAccessTurnOverrides = {
   approvalsReviewer: "user",
   sandboxPolicy: { type: "dangerFullAccess" },
 } as const;
+
+it.each(["global", "project"] as const)(
+  "does not overlay a connector onto the user's same-named Codex MCP server (%s)",
+  async (layer) => {
+    const servers = { supabase_connector: { command: "user-mcp", args: ["serve"] } };
+    const fake = createSyntheticCodexAppServer({
+      ...(layer === "global" ? { mcpServers: servers } : { projectMcpServers: servers }),
+    });
+    const endpoint = "http://127.0.0.1:48123/mcp";
+    const { manager } = createSyntheticCodexManager(fake, undefined, {
+      endpointUrl: () => endpoint,
+      acquireSessionLease: (threadId, input) =>
+        acquireAgentGatewaySessionLease(
+          {
+            connectionForThread: () => ({
+              url: endpoint,
+              bearerToken: "lease",
+              connectors: [
+                { name: "supabase_connector", url: `${endpoint}/connectors/supabase` },
+                { name: "linear_connector", url: `${endpoint}/connectors/linear` },
+              ],
+            }),
+            revokeSessionToken: () => {},
+          },
+          threadId,
+          "codex",
+          input ?? AGENT_GATEWAY_NO_CAPABILITIES,
+        )!,
+    });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-connector-collision-"));
+    try {
+      await manager.startSession({
+        threadId: asThreadId("connector-collision"),
+        provider: "codex",
+        cwd,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      const start = fake.requests.find((request) => request.method === "thread/start");
+      const config = start?.params?.config as { mcp_servers: Record<string, unknown> };
+      expect(config.mcp_servers.supabase_connector).toBeUndefined();
+      expect(config.mcp_servers.linear_connector).toMatchObject({
+        url: `${endpoint}/connectors/linear`,
+      });
+      expect(config.mcp_servers.synara).toBeDefined();
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);
 
 it.each([
   "supported",
@@ -1284,6 +1346,20 @@ describe("classifyCodexStderrLine", () => {
     const line =
       "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)";
     expect(classifyCodexStderrLine(line)).toBeNull();
+  });
+
+  it("hides OAuth failures of MCP servers from the user's own Codex config", () => {
+    for (const server of ["stripe", "polar"]) {
+      const line = `\u001b[2m2026-10-14T10:40:19.340108Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mcodex_rmcp_client::oauth::refresh_transaction\u001b[0m: error=failed to refresh OAuth tokens for server ${server}: OAuth refresh token was rejected: Server returned error response: invalid_grant`;
+      expect(classifyCodexStderrLine(line)).toBeNull();
+    }
+  });
+
+  it("keeps MCP OAuth failures that concern Synara's own servers", () => {
+    for (const server of ["synara", "supabase_connector"]) {
+      const line = `2026-10-14T10:40:19.340108Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=failed to refresh OAuth tokens for server ${server}: invalid_grant`;
+      expect(classifyCodexStderrLine(line)).toEqual({ message: line });
+    }
   });
 
   it("keeps unknown structured errors", () => {

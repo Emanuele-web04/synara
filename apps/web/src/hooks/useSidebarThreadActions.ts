@@ -176,11 +176,11 @@ export function useSidebarThreadActions(input: {
   const pinnedThreadIds = useMemo(
     () =>
       derivePinnedThreadIdsForSidebar({
-        threads: sidebarTreeThreads,
+        threads: sidebarThreads,
         persistedPinnedThreadIds,
         optimisticPinnedStateByThreadId,
       }),
-    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
 

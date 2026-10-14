@@ -22,6 +22,84 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.4",
+    date: "Oct 13",
+    features: [
+      {
+        id: "computer-paste",
+        title: "Paste images and files with Computer Use",
+        description:
+          "On macOS, agents can paste workspace images and files into native apps, alongside text.",
+        details:
+          "Paste preserves supported clipboard contents and reports whether they were restored, without overwriting a newer copy you made. Files must belong to the task workspace. The agent still needs an authorized target and must verify that the app actually uploaded or saved the result.",
+      },
+      {
+        id: "long-chats",
+        title: "Open long chats faster and keep your place",
+        description:
+          "Long conversations open and switch more quickly, with fewer jumps while you read older messages.",
+        details:
+          "Content-aware row heights, bounded estimates and reusable measurements reduce layout work. Startup avoids a duplicate conversation subscription, and process cleanup no longer blocks the server with synchronous process scans. Full saved history remains available; scrolling away from the bottom keeps you in control.",
+      },
+      {
+        id: "browser-continuity",
+        title: "Switch browser tabs without losing the page",
+        description:
+          "Inactive browser tabs stay loaded longer, preserving page state, forms and scroll position through ordinary switches.",
+        details:
+          "A bounded runtime budget suspends older hidden pages when needed. Suspended agent tabs and tabs whose desktop window was replaced restore their saved URL when reopened. Tab switches also avoid a frame with both pages hidden.",
+      },
+      {
+        id: "session-recovery",
+        title: "Safer recovery for interrupted work",
+        description:
+          "Active sessions are better protected from delayed events, server stalls and idle cleanup. Eligible chats continue after an unexpected shutdown.",
+        details:
+          "Recovery asks the agent to check existing work before repeating it. Pending approvals and questions, subagents, delegated tasks, goals, Hubs and scheduled work keep their own recovery paths. Late Codex completion events cannot finish a newer turn, and provider cleanup rechecks live activity before stopping a session.",
+      },
+      {
+        id: "sidebar-order",
+        title: "A steadier sidebar, with ordering you control",
+        description:
+          "Chat rows hold their position while you point or click, including when you open a subagent.",
+        details:
+          "Turn Working and unread on top off in Settings to keep Recently active order strictly chronological. The Automations badge now counts configured automations, matching the All tab, instead of unresolved runs.",
+      },
+      {
+        id: "hub-access",
+        title: "Hubs keep the access mode you chose",
+        description:
+          "Coordinator check-ins use the coordinator chat’s current permissions, and new workers inherit a compatible access mode.",
+        details:
+          "If a worker’s provider cannot use inherited Auto mode, it starts in Ask for approval. Verified Claude Auto support stays tied to the same model and account; Devin also recognizes Ask Everytime where its catalog offers it.",
+      },
+      {
+        id: "computer-recovery",
+        title: "More reliable Computer Use recovery",
+        description:
+          "Expired foreground requests can be requested again, stalled input listeners restart, and verified progress no longer triggers false repetition blocks.",
+        details:
+          "Native targeting excludes unowned or parked document trees and the driver’s cursor overlay. Text results keep uncertain delivery explicit instead of inventing a character count. Successful tool dispatch still requires a check of the app’s actual result.",
+      },
+      {
+        id: "provider-fixes",
+        title: "Clearer provider setup and effort choices",
+        description:
+          "Pi correctly reports an unconfigured installation, and Grok 4.7 Build Fast offers Extra High effort.",
+        details:
+          "Pi keeps SDK-only setups available when credentials exist, without loading native modules during health checks. Provider preparation is bounded while process retirement retains its ownership safeguards.",
+      },
+      {
+        id: "everyday-fixes",
+        title: "Small fixes throughout the workspace",
+        description:
+          "The context meter’s progress ring is back, file reads use a book icon, and background completions keep an active response together.",
+        details:
+          "Chat and worktree names remain tied to the first message during queued replay, without overwriting a manual title. Hubs has a proper empty page, Skip setup has usable spacing and keyboard focus, and opening a named pipe in the workspace no longer blocks unrelated file requests on macOS or Linux.",
+      },
+    ],
+  },
+  {
     version: "1.0.3",
     date: "Oct 11",
     features: [

@@ -130,6 +130,9 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
+import { MCP_CONNECTORS_ON } from "../betaFeatures";
+import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
+import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
 import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
@@ -191,6 +194,8 @@ import {
 import {
   canCreateThreadHandoff,
   canContinueThreadHandoff,
+  deriveBlockedProviderHandoff,
+  ProviderHandoffBackgroundTasksError,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   type ThreadHandoffTarget,
@@ -298,6 +303,7 @@ import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerBranchMismatchBanner } from "./chat/ComposerBranchMismatchBanner";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
+import { ComposerBlockedHandoffNotice } from "./chat/ComposerBlockedHandoffNotice";
 import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputNotice";
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
@@ -2023,6 +2029,27 @@ export default function ChatView({
       hasPendingUserInput: pendingUserInputs.length > 0,
     })
   );
+  // A handoff the source's background tasks refused stays explained above the
+  // composer until the thread moves on or the user dismisses it.
+  const activeThreadActivities = activeThread?.activities;
+  const activeThreadLatestTurn = activeThread?.latestTurn;
+  const activeThreadModelSelection = activeThread?.modelSelection;
+  const blockedProviderHandoff = useMemo(
+    () =>
+      activeThreadActivities && activeThreadLatestTurn !== undefined && activeThreadModelSelection
+        ? deriveBlockedProviderHandoff({
+            activities: activeThreadActivities,
+            latestTurn: activeThreadLatestTurn,
+            modelSelection: activeThreadModelSelection,
+          })
+        : null,
+    [activeThreadActivities, activeThreadLatestTurn, activeThreadModelSelection],
+  );
+  const [dismissedBlockedHandoffId, setDismissedBlockedHandoffId] = useState<string | null>(null);
+  const visibleBlockedProviderHandoff =
+    blockedProviderHandoff && blockedProviderHandoff.activityId !== dismissedBlockedHandoffId
+      ? blockedProviderHandoff
+      : null;
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -2464,6 +2491,20 @@ export default function ChatView({
     isServerThread &&
     activeThread !== undefined &&
     threadExportBlockedReason(activeThread) === null;
+  // Connectors (Beta) are mentionable only where the session receives them.
+  const connectorsMentionable =
+    MCP_CONNECTORS_ON && providerSupportsMcpConnectors(selectedProvider);
+  const connectorsQuery = useQuery({
+    ...mcpConnectorsQueryOptions(),
+    enabled: connectorsMentionable,
+  });
+  const mentionableConnectors = useMemo(
+    () =>
+      connectorsMentionable
+        ? (connectorsQuery.data ?? []).filter((connector) => connector.status === "connected")
+        : [],
+    [connectorsMentionable, connectorsQuery.data],
+  );
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -2489,6 +2530,7 @@ export default function ChatView({
       projects: composerThreadProjects,
       currentThreadId: threadId,
     },
+    connectors: mentionableConnectors,
   });
   const composerMenuItems = useMemo(() => {
     if (composerCommandPicker === "fork-target") {
@@ -4305,6 +4347,30 @@ export default function ChatView({
 
     try {
       await continueThreadHandoff(activeThread, target.provider, target.instanceId);
+    } catch (error) {
+      // The composer notice explains this refusal and offers to stop the tasks.
+      if (error instanceof ProviderHandoffBackgroundTasksError) return;
+      toastManager.add({
+        type: "error",
+        title: "Could not hand off this thread",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while handing off the thread.",
+      });
+    }
+  });
+
+  const onStopTasksAndSwitchProvider = useStableCallback(async () => {
+    if (!activeThread || !blockedProviderHandoff) {
+      return;
+    }
+    const target = blockedProviderHandoff.info.targetModelSelection;
+    try {
+      await continueThreadHandoff(activeThread, target.provider, target.instanceId, target, {
+        stopBackgroundTasks: true,
+      });
+      scheduleComposerFocus();
     } catch (error) {
       toastManager.add({
         type: "error",
@@ -6172,6 +6238,16 @@ export default function ChatView({
                   onRespond={onRespondToClaudeCacheReview}
                 />
               </div>
+            ) : null}
+            {visibleBlockedProviderHandoff ? (
+              <ComposerBlockedHandoffNotice
+                key={visibleBlockedProviderHandoff.activityId}
+                blocked={visibleBlockedProviderHandoff}
+                onStopTasksAndSwitch={onStopTasksAndSwitchProvider}
+                onDismiss={() =>
+                  setDismissedBlockedHandoffId(visibleBlockedProviderHandoff.activityId)
+                }
+              />
             ) : null}
             {expiredQuestionDrafts[0] &&
             pendingUserInputs.length === 0 &&

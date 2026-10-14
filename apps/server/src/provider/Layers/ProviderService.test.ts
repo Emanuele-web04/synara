@@ -2038,6 +2038,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("resumes a stopped Claude thread after behavior-only launch options change", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-claude-stopped-behavior-options");
+      const homePath = "/tmp/claude-stopped-behavior-options";
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        providerOptions: {
+          claudeAgent: { binaryPath: "claude", homePath, enableArtifacts: false },
+        },
+        runtimeMode: "full-access",
+      });
+      assert.ok(initial.resumeCursor);
+      yield* provider.stopRuntimeSession!({ threadId });
+      routing.claude.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        providerOptions: {
+          claudeAgent: {
+            binaryPath: "claude",
+            homePath,
+            enableArtifacts: true,
+            maxThinkingTokens: 4096,
+            permissionMode: "acceptEdits",
+          },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(routing.claude.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.claude.startSession.mock.calls[0]?.[0] as
+        | { resumeCursor?: unknown }
+        | undefined;
+      assert.deepEqual(resumedStartInput?.resumeCursor, initial.resumeCursor);
+    }),
+  );
+
   it.effect("skips a native fork through an earlier turn the provider cannot cut at", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

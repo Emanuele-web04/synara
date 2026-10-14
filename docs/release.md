@@ -272,6 +272,15 @@ submitting changed bytes. Recovery checks Apple's status and retains signature,
 stapling, Gatekeeper and final update-ZIP validation. Startup smoke and release
 provenance checks must still pass before publication.
 
+Ticket stapling and validation retry only the observed Apple transport failure:
+exit 68 accompanied by `NSURLErrorDomain Code=-1005` (connection lost). The same
+command and payload are attempted at most four times, with waits of 5, 15 and
+30 seconds. This applies during app/DMG finalization and provenance validation.
+Every attempt retains its diagnostics. Exhausted retries, other validation errors,
+signals and process-launch errors still fail the job; notarization is not
+resubmitted and no signature, Gatekeeper or startup check is skipped. The bounded
+backoff follows [Apple's guidance for CloudKit network failures](https://developer.apple.com/documentation/cloudkit/ckerror/code/networkfailure).
+
 ### macOS release toolchains
 
 Both native macOS release runners use macOS 15. Native helpers and the pinned

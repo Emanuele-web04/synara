@@ -1677,6 +1677,13 @@ async function waitForLayout(): Promise<void> {
   await nextFrame();
 }
 
+// Fixture subagents are titled "Subagent …" or "<nickname> task"; neither may reach the sidebar.
+function sidebarSubagentRows(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-thread-item]")].filter((row) =>
+    /Subagent|Atlas|Nova/.test(row.textContent ?? ""),
+  );
+}
+
 async function waitForTranscriptLayoutToSettle(container: HTMLElement): Promise<void> {
   let lastTop = container.scrollTop;
   let lastHeight = container.scrollHeight;
@@ -2646,12 +2653,8 @@ describe("ChatView transcript geometry (full app)", () => {
             const hints = [...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd"]')].filter(
               (hint) => hint.closest("[data-thread-item]"),
             );
-            expect(hints.length).toBe(activityViewEnabled ? 5 : 7);
-            if (!activityViewEnabled) {
-              expect(sidebar.textContent).toContain("Atlas");
-              // The open subagent reveals its own child as well as its ancestors.
-              expect(sidebar.textContent).toContain("Nova");
-            }
+            expect(hints.length).toBe(5);
+            expect(sidebarSubagentRows()).toHaveLength(0);
             if (customShortcut) expect(hints[0]!.textContent).toContain("Ctrl+Alt+Shift+Meta");
             for (const hint of hints) {
               const row = hint.closest<HTMLElement>("[data-thread-item]")!;
@@ -2786,13 +2789,12 @@ describe("ChatView transcript geometry (full app)", () => {
   );
 
   it.each([
-    { childCount: 4, activation: "click", scrollTakeover: false },
-    { childCount: 24, activation: "click", scrollTakeover: false },
-    { childCount: 4, activation: "keyboard", scrollTakeover: false },
-    { childCount: 4, activation: "click", scrollTakeover: true },
+    { activation: "click", scrollTakeover: false },
+    { activation: "keyboard", scrollTakeover: false },
+    { activation: "click", scrollTakeover: true },
   ])(
-    "anchors sidebar navigation ($childCount children, $activation, scroll takeover: $scrollTakeover)",
-    async ({ childCount, activation, scrollTakeover }) => {
+    "keeps subagents out of the sidebar while navigating ($activation, scroll takeover: $scrollTakeover)",
+    async ({ activation, scrollTakeover }) => {
       const base = createSnapshotForTargetUser({
         targetMessageId: MessageId.makeUnsafe("subagent-navigation-anchor"),
         targetText: "Review the sidebar navigation",
@@ -2819,7 +2821,7 @@ describe("ChatView transcript geometry (full app)", () => {
         };
       });
       const children = [THREAD_ID, OTHER_THREAD_ID].flatMap((parentThreadId, parentIndex) =>
-        Array.from({ length: parentIndex === 0 ? childCount : 4 }, (_, index) => {
+        Array.from({ length: parentIndex === 0 ? 24 : 4 }, (_, index) => {
           const id = ThreadId.makeUnsafe(`anchor-child-${parentIndex}-${index}`);
           return {
             ...roots[parentIndex === 0 ? 20 : 21]!,
@@ -2871,12 +2873,8 @@ describe("ChatView transcript geometry (full app)", () => {
           (path) => path === `/${OTHER_THREAD_ID}`,
           "The destination did not open.",
         );
-        await vi.waitFor(() =>
-          expect(
-            document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]'),
-          ).toHaveLength(4),
-        );
         await waitForLayout();
+        expect(sidebarSubagentRows()).toHaveLength(0);
         const afterBounds = row.getBoundingClientRect();
         expect(afterBounds.top).toBeGreaterThanOrEqual(viewportBounds.top);
         expect(afterBounds.bottom).toBeLessThanOrEqual(viewportBounds.bottom);
@@ -2926,8 +2924,6 @@ describe("ChatView transcript geometry (full app)", () => {
       snapshot: { ...base, threads: [parent, ...subagents, other] },
     });
     try {
-      const subagentDots = () =>
-        document.querySelectorAll('[data-testid="sidebar-subagent-status-dot"]').length;
       const otherRowButton = await waitForElement(
         () =>
           [...document.querySelectorAll<HTMLElement>("[data-thread-item]")]
@@ -2935,17 +2931,16 @@ describe("ChatView transcript geometry (full app)", () => {
             ?.querySelector<HTMLElement>('[role="button"]') ?? null,
         "Unable to find the other thread's sidebar row.",
       );
-      await vi.waitFor(() => expect(subagentDots()).toBe(2));
+      expect(sidebarSubagentRows()).toHaveLength(0);
       const pressedTop = otherRowButton.getBoundingClientRect().top;
 
-      // The press highlights the row at once, but the open thread's subagent rows
-      // stay until the route changes, so the release lands on the same row.
+      // The press highlights the row at once without moving it, so the release
+      // lands on the same row.
       otherRowButton.dispatchEvent(
         new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }),
       );
       await waitForLayout();
       expect(otherRowButton.getAttribute("data-active")).toBe("true");
-      expect(subagentDots()).toBe(2);
       expect(Math.abs(otherRowButton.getBoundingClientRect().top - pressedTop)).toBeLessThanOrEqual(
         1,
       );
@@ -2957,7 +2952,7 @@ describe("ChatView transcript geometry (full app)", () => {
         (pathname) => pathname === `/${OTHER_THREAD_ID}`,
         "The pressed sidebar row did not open its thread.",
       );
-      await vi.waitFor(() => expect(subagentDots()).toBe(0));
+      expect(sidebarSubagentRows()).toHaveLength(0);
     } finally {
       await mounted.cleanup();
     }
@@ -4818,14 +4813,20 @@ describe("ChatView transcript geometry (full app)", () => {
 
     // Server reaction to a same-thread handoff: the outcome row keyed by the
     // command, plus (on success) the thread rebound to the target provider.
+    // "blocked": the source's background tasks refused it unless the user
+    // chose to stop them.
     const respondToHandoff =
-      (outcome: "completed" | "failed") =>
+      (requestedOutcome: "completed" | "failed" | "blocked") =>
       (
         command: Parameters<
           NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
         >[0],
       ) => {
         if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
+        const blocked =
+          requestedOutcome === "blocked" && command.providerHandoffStopsBackgroundTasks !== true;
+        const outcome =
+          requestedOutcome === "blocked" ? (blocked ? "failed" : "completed") : requestedOutcome;
         const { commandId, modelSelection } = command;
         const targetProvider = modelSelection?.provider ?? "claudeAgent";
         const targetModel = modelSelection?.model ?? "claude-sonnet-4-6";
@@ -4875,7 +4876,14 @@ describe("ChatView transcript geometry (full app)", () => {
                         sourceModel: thread.modelSelection.model,
                         targetProvider,
                         targetModel,
-                        ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
+                        ...(blocked
+                          ? {
+                              detail: "Codex still has background tasks running in this thread.",
+                              reason: "background-tasks",
+                            }
+                          : outcome === "failed"
+                            ? { detail: "Claude CLI is not signed in." }
+                            : {}),
                       },
                     },
                   ],
@@ -5077,6 +5085,44 @@ describe("ChatView transcript geometry (full app)", () => {
             (row.textContent ?? "").includes("Review the reconnect fix"),
           ),
         ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("explains a handoff refused by background tasks and stops them on request", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("blocked"));
+      try {
+        const composerEditor = await pickClaudeAndSend("Review the reconnect fix");
+        const notice = page.getByTestId("blocked-handoff-notice");
+        await expect.element(notice).toBeVisible();
+        await expect
+          .element(notice)
+          .toHaveTextContent(/Codex still has background tasks running in this thread/);
+        // The notice replaces the raw refusal; the message waits in the composer.
+        expect(document.body.textContent ?? "").not.toContain("could not start");
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
+        await vi.waitFor(() =>
+          expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix"),
+        );
+
+        await page.getByRole("button", { name: "Stop tasks and switch" }).click();
+        await vi.waitFor(() =>
+          expect(
+            mounted.commands.find(
+              (command) =>
+                command.type === "thread.meta.update" &&
+                command.providerHandoffStopsBackgroundTasks === true,
+            ),
+          ).toMatchObject({
+            threadId: THREAD_ID,
+            providerHandoff: true,
+            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          }),
+        );
+        await expect.element(notice).not.toBeInTheDocument();
       } finally {
         await mounted.cleanup();
       }
@@ -7054,6 +7100,24 @@ describe("ChatView transcript geometry (full app)", () => {
         grow();
         await waitForLayout();
       }
+      // Eight delivered chunks exceed the reveal hook's one-second throughput.
+      // Check the actual final text and settled layout, not a transient line
+      // growth while smooth reveal is still draining the delivered buffer.
+      const expectedText = snapshot.threads
+        .find((thread) => thread.id === THREAD_ID)!
+        .messages.find((message) => message.id === messageId)!.text;
+      await vi.waitFor(
+        () => {
+          const paragraphs = container
+            .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
+            ?.querySelectorAll("p");
+          expect(
+            Array.from(paragraphs ?? [], (paragraph) => paragraph.textContent?.trim()),
+          ).toEqual(expectedText.split("\n\n").map((paragraph) => paragraph.trim()));
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      await waitForTranscriptLayoutToSettle(container);
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
@@ -11367,6 +11431,17 @@ describe("ChatView transcript geometry (full app)", () => {
         updatedAt: "2026-03-01T00:00:00.000Z",
         latestUserMessageAt: "2026-03-01T00:00:00.000Z",
       };
+      const childId = ThreadId.makeUnsafe("snapshot-project-hidden-child");
+      const child = {
+        ...newest,
+        id: childId,
+        parentThreadId: newestId,
+        title: "Newest hidden subagent",
+        session: { ...neutral.session!, threadId: childId },
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+        latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+      };
       localStorage.setItem(
         "synara:app-settings:v1",
         JSON.stringify({
@@ -11376,7 +11451,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
-        snapshot: { ...base, threads: [neutral, reminder, newest] },
+        snapshot: { ...base, threads: [neutral, reminder, newest, child] },
       });
       try {
         if (reminderSeen)
@@ -11401,6 +11476,7 @@ describe("ChatView transcript geometry (full app)", () => {
                 },
               },
               newest,
+              child,
             ],
           });
         }

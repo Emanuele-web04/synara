@@ -1636,7 +1636,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...kanbanTools,
     // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.
     ...(isServerBetaFeatureEnabled("tasks") ? todoTools : []),
-    // Beta only: a Stable server neither offers nor accepts inline visuals.
+    // Shared policy enables inline visuals in both Stable and Beta.
     ...(isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE) ? inlineVisualTools : []),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({

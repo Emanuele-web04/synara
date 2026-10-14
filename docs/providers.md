@@ -323,8 +323,8 @@ each invocation's status, elapsed time, current step and short result. Their com
 visible after the parent turn ends, including while background children continue working. A running card outside the viewport
 gets a floating chip that brings it back into view. Stop all stays visible on a live header;
 expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
-subagents separately; their rows start collapsed. The sidebar shows the same source-thread
-tree under the open parent, with neutral names and status dots. Child threads link back to
+subagents separately; their rows start collapsed. The sidebar lists top-level threads only;
+child threads are reached from the card, Environment and the Subagents dock. Child threads link back to
 their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
