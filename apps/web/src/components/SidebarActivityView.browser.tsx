@@ -83,6 +83,7 @@ function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
+  visualActiveThreadId?: ThreadId | null;
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
@@ -114,6 +115,9 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
       activeThreadId={input.activeThreadId ?? null}
+      {...(input.visualActiveThreadId === undefined
+        ? {}
+        : { visualActiveThreadId: input.visualActiveThreadId })}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated={input.threadsHydrated ?? true}
@@ -149,6 +153,32 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it.each([false, true])(
+    "selects a hidden child's root without marking that root read (child open: %s)",
+    async (childOpen) => {
+      const root = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+      const mounted = await render(
+        renderActivity({
+          threads: [root],
+          activeThreadId: childOpen ? ThreadId.makeUnsafe("open-subagent") : root.id,
+          visualActiveThreadId: root.id,
+          resolveThreadStatus: () => ({
+            label: "Completed",
+            colorClass: "text-emerald-600",
+            dotClass: "bg-emerald-500",
+            pulse: false,
+          }),
+        }),
+      );
+      const row = mounted.getByTestId(`activity-thread-${root.id}`).element();
+      expect(row.getAttribute("aria-current")).toBe("page");
+      const unreadDot = row.parentElement?.querySelector('[aria-label="Unread completion"]');
+      if (childOpen) expect(unreadDot).not.toBeNull();
+      else expect(unreadDot).toBeNull();
+      await mounted.unmount();
+    },
+  );
 
   it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
     const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });

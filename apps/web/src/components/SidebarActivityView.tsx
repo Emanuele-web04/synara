@@ -117,6 +117,7 @@ export function ActivityThreadRow({
   thread,
   project,
   isActive,
+  isOpen = isActive,
   isSettled,
   isPinned,
   hasPendingDraft,
@@ -138,6 +139,7 @@ export function ActivityThreadRow({
   thread: SidebarThreadSummary;
   project: Project | undefined;
   isActive: boolean;
+  isOpen?: boolean;
   isSettled: boolean;
   isPinned: boolean;
   hasPendingDraft: boolean;
@@ -173,7 +175,7 @@ export function ActivityThreadRow({
   // else — same rule and same glyphs the classic thread/project rows use.
   const trailingStatus = resolveThreadStatusTrailingIndicator({
     status,
-    isActive,
+    isActive: isOpen,
     slotOccupied: Boolean(threadJumpLabel),
   });
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
@@ -557,6 +559,7 @@ export function SidebarActivityView({
   threads,
   projectById,
   activeThreadId,
+  visualActiveThreadId = activeThreadId,
   pinnedThreadIdSet,
   settledOverrideByThreadId,
   threadsHydrated,
@@ -584,6 +587,8 @@ export function SidebarActivityView({
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
   activeThreadId: ThreadId | null;
+  /** A hidden child can select its root row while the real chat still owns unread/draft state. */
+  visualActiveThreadId?: ThreadId | null;
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
@@ -725,7 +730,7 @@ export function SidebarActivityView({
       threads: resolveActivitySectionRows(group.threads, {
         open: true,
         previewLimit: paging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }).visible,
     };
   });
@@ -734,27 +739,27 @@ export function SidebarActivityView({
       resolveActivitySectionRows(scopedPinnedThreads, {
         open: pinnedOpen,
         previewLimit: scopedPinnedThreads.length,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, pinnedOpen, scopedPinnedThreads],
+    [visualActiveThreadId, pinnedOpen, scopedPinnedThreads],
   );
   const earlierRows = useMemo(
     () =>
       resolveActivitySectionRows(dateBuckets.earlier, {
         open: earlierOpen,
         previewLimit: earlierPaging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
+    [visualActiveThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
   );
   const settledRows = useMemo(
     () =>
       resolveActivitySectionRows(model.settled, {
         open: settledOpen,
         previewLimit: settledPaging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, model.settled, settledOpen, settledPaging.previewLimit],
+    [visualActiveThreadId, model.settled, settledOpen, settledPaging.previewLimit],
   );
   // The open thread stays on screen even when its section is collapsed.
   const revealedThreads = useMemo(
@@ -805,8 +810,8 @@ export function SidebarActivityView({
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const lastActiveRevealKeyRef = useRef<string | null>(null);
   const activeRevealKey =
-    activeThreadId !== null && visibleThreadIds.includes(activeThreadId)
-      ? `${activeThreadId}:${groupMode}:${activeScope ?? "all"}`
+    visualActiveThreadId !== null && visibleThreadIds.includes(visualActiveThreadId)
+      ? `${visualActiveThreadId}:${groupMode}:${activeScope ?? "all"}`
       : null;
   useEffect(() => {
     if (activeRevealKey === null) {
@@ -860,7 +865,8 @@ export function SidebarActivityView({
       key={thread.id}
       thread={thread}
       project={projectById.get(thread.projectId)}
-      isActive={activeThreadId === thread.id}
+      isActive={visualActiveThreadId === thread.id}
+      isOpen={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
       hasPendingDraft={draftThreadIdSet.has(thread.id)}
@@ -892,7 +898,7 @@ export function SidebarActivityView({
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
-      {...(registerActiveRow && activeThreadId === thread.id ? { rowRef: activeRowRef } : {})}
+      {...(registerActiveRow && visualActiveThreadId === thread.id ? { rowRef: activeRowRef } : {})}
     />
   );
   const renderActiveRow = (thread: SidebarThreadSummary) =>
