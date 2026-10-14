@@ -4643,6 +4643,7 @@ export default function ChatView({
     onSubmitPlanFollowUp,
     onContinueFailedTurn,
     onEditUserMessage,
+    onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
@@ -4670,6 +4671,9 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
+    // Existing thread snapshots cannot prove original per-turn model identity
+    // or reserve a verified recovery baseline. Keep the draft action unavailable.
+    retryTarget: null,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
@@ -4704,6 +4708,31 @@ export default function ChatView({
     [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const retryEffortContext = useMemo(() => {
+    if (!activeThread || !isServerThread) return null;
+    return {
+      threadId: activeThread.id,
+      messages: activeThread.messages,
+      runtimeMode,
+      retryTarget: null,
+      activeTurnId:
+        activeThread.session?.orchestrationStatus === "running"
+          ? (activeThread.session.activeTurnId ?? null)
+          : null,
+      isBusy: isRevertingCheckpoint || isSendBusy || isConnecting,
+      onRetryWithEffort: (assistantMessageId: MessageId, effort: string) => {
+        void onRetryAssistantWithDifferentEffort(assistantMessageId, effort);
+      },
+    };
+  }, [
+    activeThread,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    isServerThread,
+    onRetryAssistantWithDifferentEffort,
+    runtimeMode,
+  ]);
   const composerTraitSelection = getComposerTraitSelection(
     selectedProvider,
     selectedModel,
@@ -6874,6 +6903,7 @@ export default function ChatView({
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
                     {...(threadDetailSyncState === "cached" ? {} : { onRespondToAsyncUserInput })}
+                    retryEffortContext={retryEffortContext}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
