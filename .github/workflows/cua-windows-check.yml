@@ -8,9 +8,11 @@ on:
       - "apps/desktop/patches/cua-driver/**"
       - "apps/desktop/scripts/*cua*"
       - "apps/desktop/src/cuaDriverHost*"
+      - "apps/desktop/src/main.ts"
       - "apps/desktop/src/windowsCua*"
       - "apps/desktop/src/escapeKillSwitchMonitor*"
       - "packages/shared/src/cuaDriver*"
+      - "scripts/build-desktop-artifact.ts"
   push:
     branches: ["codex/cua-windows-verify-*"]
   workflow_dispatch:
@@ -98,6 +100,28 @@ jobs:
             }
           } finally {
             [System.IO.File]::WriteAllBytes($keyboard, $patched)
+          }
+          exit 0
+
+      - name: Prove untagged Escape cleanup fails at the target window
+        shell: pwsh
+        env:
+          SYNARA_CUA_WINDOWS_LIVE_TEST: "1"
+          SYNARA_CUA_DRIVER_TEST_BINARY: ${{ runner.temp }}/cua-windows-source/libs/cua-driver/rust/target/debug/cua-driver.exe
+        run: |
+          $path = Join-Path $env:CUA_NATIVE_SOURCE 'libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs'
+          $patched = [System.IO.File]::ReadAllText($path)
+          $log = Join-Path $env:RUNNER_TEMP 'windows-escape-release-before.log'
+          try {
+            [System.IO.File]::WriteAllText($path, $patched.Replace('let release = system_release(&tagged);', 'let release = system_release(event);'))
+            cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-windows --test synara_input_lifecycle -- --ignored --nocapture --test-threads=1 *> $log
+            $regressionExit = $LASTEXITCODE
+            Get-Content $log
+            if ($regressionExit -eq 0 -or !(Select-String -Path $log -SimpleMatch 'cleanup Escape key-up did not reach the target')) {
+              throw 'The untagged release did not fail at the expected target delivery boundary'
+            }
+          } finally {
+            [System.IO.File]::WriteAllText($path, $patched)
           }
           exit 0
 

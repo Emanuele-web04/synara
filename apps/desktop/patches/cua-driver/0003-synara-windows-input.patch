@@ -253,10 +253,10 @@ index ecaefd8..2af7588 100644
      }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
 new file mode 100644
-index 0000000..356631f
+index 0000000..9a1ef0a
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,355 @@
 +//! A native worker owns its input until matching releases have completed.
 +//! The browser operation gate is shared with CDP so Stop drains both routes.
 +use cua_driver_core::browser::operation_gate::{gate, OperationLease};
@@ -490,14 +490,15 @@ index 0000000..356631f
 +    }
 +    let mut sent = 0;
 +    for event in events {
-+        let release = system_release(event);
-+        let is_up = release.as_ref().is_some_and(|(_, up, _)| *up);
-+        if !is_up && checkpoint().is_err() {
-+            break;
-+        }
 +        let mut tagged = *event;
 +        if tagged.r#type == INPUT_KEYBOARD {
 +            tagged.Anonymous.ki.dwExtraInfo = super::escape_monitor::OWN_INPUT_TAG;
++        }
++        // The fallback key-up must carry the same ownership as its key-down.
++        let release = system_release(&tagged);
++        let is_up = release.as_ref().is_some_and(|(_, up, _)| *up);
++        if !is_up && checkpoint().is_err() {
++            break;
 +        }
 +        if SendInput(&[tagged], size) != 1 {
 +            if is_up {
@@ -755,7 +756,7 @@ index 0000000..72dc5c7
 +    Ok(())
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
-index 649f198..6970965 100644
+index 649f198..a595a8e 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
 @@ -30,20 +30,20 @@
@@ -803,7 +804,7 @@ index 649f198..6970965 100644
          result?;
      }
      Ok(())
-@@ -561,11 +561,12 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+@@ -561,11 +561,14 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
              sx0,
              sy0,
          );
@@ -813,11 +814,13 @@ index 649f198..6970965 100644
          // motion (rather than a single down→up) see a continuous stroke.
          let steps = steps.max(1);
          for i in 1..=steps {
-+            if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
              sleep(Duration::from_millis(8));
              let t = i as f64 / steps as f64;
              let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-@@ -575,13 +576,13 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+@@ -575,13 +578,13 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
                  x,
                  y,
              );
@@ -834,7 +837,7 @@ index 649f198..6970965 100644
          res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(pen drag): {e}"))?;
      }
      Ok(())
-@@ -666,9 +667,10 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
+@@ -666,9 +669,12 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
              sx0,
              sy0,
          );
@@ -842,11 +845,13 @@ index 649f198..6970965 100644
 +        let mut res = crate::input::cancellation::inject_pointer(dev, &[down]);
          let steps = steps.clamp(1, 3);
          for i in 1..=steps {
-+            if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
              sleep(Duration::from_millis(2));
              let t = i as f64 / steps as f64;
              let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
-@@ -678,11 +680,11 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
+@@ -678,11 +684,11 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
                  x,
                  y,
              );
@@ -999,7 +1004,7 @@ index 970660c..b082903 100644
  pub mod keyboard;
  pub mod mouse;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
-index 30c9c92..40e8043 100644
+index 30c9c92..a745af2 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
 @@ -5,19 +5,19 @@
@@ -1041,7 +1046,7 @@ index 30c9c92..40e8043 100644
          }
          if i + 1 < count {
              sleep(Duration::from_millis(80));
-@@ -191,16 +191,17 @@ pub fn post_drag(
+@@ -191,16 +191,19 @@ pub fn post_drag(
      };
  
      unsafe {
@@ -1051,7 +1056,9 @@ index 30c9c92..40e8043 100644
      sleep(Duration::from_millis(CLICK_DELAY_MS));
  
      for i in 1..=steps {
-+            if crate::input::cancellation::checkpoint().is_err() { break; }
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
          let t = i as f64 / steps as f64;
          let ix = from_x + ((to_x - from_x) as f64 * t).round() as i32;
          let iy = from_y + ((to_y - from_y) as f64 * t).round() as i32;
@@ -1061,7 +1068,7 @@ index 30c9c92..40e8043 100644
          }
          if step_delay_ms > 0 {
              sleep(Duration::from_millis(step_delay_ms));
-@@ -208,7 +209,7 @@ pub fn post_drag(
+@@ -208,7 +211,7 @@ pub fn post_drag(
      }
  
      unsafe {
@@ -1070,7 +1077,7 @@ index 30c9c92..40e8043 100644
      }
      Ok(())
  }
-@@ -262,28 +263,29 @@ pub fn post_drag_screen(
+@@ -262,28 +265,31 @@ pub fn post_drag_screen(
      };
      unsafe {
          // Pre-drag MOUSEMOVE (wParam=0, no buttons down yet) then DOWN at from.
@@ -1086,7 +1093,9 @@ index 30c9c92..40e8043 100644
      }
      sleep(Duration::from_millis(CLICK_DELAY_MS));
      for i in 1..=steps {
-+            if crate::input::cancellation::checkpoint().is_err() { break; }
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
          let t = i as f64 / steps as f64;
          let ix = c_from.x + ((c_to.x - c_from.x) as f64 * t).round() as i32;
          let iy = c_from.y + ((c_to.y - c_from.y) as f64 * t).round() as i32;
@@ -1104,7 +1113,7 @@ index 30c9c92..40e8043 100644
      }
      Ok(())
  }
-@@ -597,6 +599,8 @@ fn send_click_synthesized_mods_impl(
+@@ -597,6 +603,8 @@ fn send_click_synthesized_mods_impl(
          } else {
              None
          };
@@ -1113,7 +1122,7 @@ index 30c9c92..40e8043 100644
          let noactivate = (!activate).then(|| crate::input::NoActivateGuard::arm(target));
          if !activate {
              let _ = SetWindowPos(
-@@ -622,7 +626,7 @@ fn send_click_synthesized_mods_impl(
+@@ -622,7 +630,7 @@ fn send_click_synthesized_mods_impl(
          let (mod_downs, mod_ups) = crate::input::keyboard::modifier_hold_inputs(modifiers);
          let mut sent_ok = true;
          if !mod_downs.is_empty() {
@@ -1122,7 +1131,7 @@ index 30c9c92..40e8043 100644
              sent_ok = sent as usize == mod_downs.len();
              sleep(Duration::from_millis(5));
          }
-@@ -636,7 +640,7 @@ fn send_click_synthesized_mods_impl(
+@@ -636,7 +644,7 @@ fn send_click_synthesized_mods_impl(
              // records act at the current pointer position; adding ABSOLUTE to
              // them can prevent retained-mode controls from seeing the press.
              let events = [move_input, down_input, up_input];
@@ -1131,7 +1140,7 @@ index 30c9c92..40e8043 100644
              if sent as usize != events.len() {
                  sent_ok = false;
                  break;
-@@ -648,11 +652,11 @@ fn send_click_synthesized_mods_impl(
+@@ -648,11 +656,11 @@ fn send_click_synthesized_mods_impl(
  
          // Release any held modifiers (reverse order) before restoring z-order.
          if !mod_ups.is_empty() {
@@ -1145,7 +1154,7 @@ index 30c9c92..40e8043 100644
                  sent_ok = false;
              }
          }
-@@ -820,7 +824,7 @@ pub fn send_drag_synthesized(
+@@ -820,7 +828,7 @@ pub fn send_drag_synthesized(
              make_input(nfx, nfy, MOUSEEVENTF_MOVE),
              make_input(nfx, nfy, down_flag),
          ];
@@ -1154,11 +1163,13 @@ index 30c9c92..40e8043 100644
          if sent as usize != prelude.len() {
              if !was_topmost {
                  let _ = SetWindowPos(
-@@ -856,13 +860,14 @@ pub fn send_drag_synthesized(
+@@ -856,13 +864,16 @@ pub fn send_drag_synthesized(
          //    same path — WPF's drag-handler watches GetKeyState during each
          //    move event.
          for i in 1..=steps {
-+            if crate::input::cancellation::checkpoint().is_err() { break; }
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
              let t = i as f64 / steps as f64;
              let x = sx_from + ((sx_to - sx_from) as f64 * t).round() as i32;
              let y = sy_from + ((sy_to - sy_from) as f64 * t).round() as i32;
@@ -1170,7 +1181,7 @@ index 30c9c92..40e8043 100644
              if step_delay_ms > 0 {
                  sleep(Duration::from_millis(step_delay_ms));
              }
-@@ -871,7 +876,7 @@ pub fn send_drag_synthesized(
+@@ -871,7 +882,7 @@ pub fn send_drag_synthesized(
          // 3. Release at the end.
          let (ntx, nty) = norm(sx_to, sy_to);
          let release = [make_input(ntx, nty, up_flag)];
@@ -1179,7 +1190,7 @@ index 30c9c92..40e8043 100644
  
          // Brief settle, then restore z-order (demote target, restack user's
          // window — no activation) and the cursor.
-@@ -964,7 +969,7 @@ pub fn send_wheel_synthesized(sx: i32, sy: i32, ticks: i32, horizontal: bool) ->
+@@ -964,7 +975,7 @@ pub fn send_wheel_synthesized(sx: i32, sy: i32, ticks: i32, horizontal: bool) ->
          let _ = SetCursorPos(sx, sy);
  
          let events = [wheel_input];
@@ -2141,10 +2152,10 @@ index 499d826..d43b97c 100644
              use windows::Win32::System::Com::{
 diff --git a/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
 new file mode 100644
-index 0000000..ab6cd46
+index 0000000..9a74978
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,389 @@
 +//! Requires a disposable, interactive Windows desktop. Exercises real Win32
 +//! messages and input state, not a substitute transport or a mocked injector.
 +#![cfg(target_os = "windows")]
@@ -2153,7 +2164,10 @@ index 0000000..ab6cd46
 +use std::io::{BufRead, Write};
 +use std::process::{Child, Command, Stdio};
 +use std::{
-+    sync::{mpsc, Arc},
++    sync::{
++        atomic::{AtomicUsize, Ordering},
++        mpsc, Arc,
++    },
 +    time::{Duration, Instant},
 +};
 +use windows::{
@@ -2239,10 +2253,16 @@ index 0000000..ab6cd46
 +struct Window {
 +    hwnd: usize,
 +    thread: Option<std::thread::JoinHandle<()>>,
++    escape_downs: Arc<AtomicUsize>,
++    escape_ups: Arc<AtomicUsize>,
 +}
 +impl Window {
 +    fn new() -> Self {
 +        let (tx, rx) = mpsc::channel();
++        let escape_downs = Arc::new(AtomicUsize::new(0));
++        let escape_ups = Arc::new(AtomicUsize::new(0));
++        let observed_downs = escape_downs.clone();
++        let observed_ups = escape_ups.clone();
 +        let thread = std::thread::spawn(move || unsafe {
 +            let hwnd = CreateWindowExW(
 +                WINDOW_EX_STYLE::default(),
@@ -2266,6 +2286,17 @@ index 0000000..ab6cd46
 +                if message.message == WM_APP {
 +                    break;
 +                }
++                if message.wParam.0 == VK_ESCAPE.0 as usize {
++                    match message.message {
++                        WM_KEYDOWN | WM_SYSKEYDOWN => {
++                            observed_downs.fetch_add(1, Ordering::SeqCst);
++                        }
++                        WM_KEYUP | WM_SYSKEYUP => {
++                            observed_ups.fetch_add(1, Ordering::SeqCst);
++                        }
++                        _ => {}
++                    }
++                }
 +                let _ = TranslateMessage(&message);
 +                DispatchMessageW(&message);
 +            }
@@ -2274,6 +2305,8 @@ index 0000000..ab6cd46
 +        Self {
 +            hwnd: rx.recv_timeout(Duration::from_secs(10)).unwrap(),
 +            thread: Some(thread),
++            escape_downs,
++            escape_ups,
 +        }
 +    }
 +    fn text(&self) -> String {
@@ -2389,6 +2422,47 @@ index 0000000..ab6cd46
 +        "the driver's own Escape must reach the target without stopping the task"
 +    );
 +
++    eventually(
++        || {
++            window.escape_downs.load(Ordering::SeqCst) == 1
++                && window.escape_ups.load(Ordering::SeqCst) == 1
++        },
++        "the target must receive both halves of the driver's Escape",
++    )
++    .await;
++    // Cancel while the driver's own Escape is held: the worker's fallback
++    // release must reach this actual window, even while the hook is armed.
++    let held_escape = start(move || unsafe {
++        let event = INPUT {
++            r#type: INPUT_KEYBOARD,
++            Anonymous: INPUT_0 {
++                ki: KEYBDINPUT {
++                    wVk: VK_ESCAPE,
++                    ..Default::default()
++                },
++            },
++        };
++        assert_eq!(
++            cancellation::send_input(&[event], std::mem::size_of::<INPUT>() as i32),
++            1
++        );
++        cancellation::sleep(Duration::from_secs(5));
++    })
++    .await;
++    eventually(
++        || window.escape_downs.load(Ordering::SeqCst) == 2,
++        "held Escape did not reach the target",
++    )
++    .await;
++    interrupt().await;
++    held_escape.await.unwrap();
++    eventually(
++        || window.escape_ups.load(Ordering::SeqCst) == 2,
++        "cleanup Escape key-up did not reach the target",
++    )
++    .await;
++    assert!(!down(VK_ESCAPE.0), "cleanup left Escape held");
++
 +    let modified_click =
 +        start(move || mouse::send_click_synthesized_mods(hwnd, 200, 200, 100, "left", &["shift"]))
 +            .await;
@@ -2469,5 +2543,5 @@ index 0000000..ab6cd46
 +        gate().admit(None).is_err(),
 +        "retirement must never reopen this generation"
 +    );
-+    eprintln!("WINDOWS_NATIVE_INPUT_OK typing=interrupted modified_click=released modified_escape=observed own_escape=passed target_change=released detached_worker=drained drag=released stale_epoch=refused fresh_input=observed stop=retired");
++    eprintln!("WINDOWS_NATIVE_INPUT_OK typing=interrupted modified_click=released modified_escape=observed own_escape=passed cleanup_escape=received target_change=released detached_worker=drained drag=released stale_epoch=refused fresh_input=observed stop=retired");
 +}

@@ -24,7 +24,13 @@ async function eventually(check: () => Promise<boolean> | boolean, description: 
   }
 }
 function successful(reply: CuaReply, name: string) {
-  assert(reply.ok && !reply.result?.isError, name + ": " + JSON.stringify(reply));
+  assert(
+    reply.ok &&
+      !reply.result?.isError &&
+      reply.result?.structuredContent?.status !== "refused" &&
+      reply.result?.structuredContent?.effect !== "refused",
+    name + ": " + JSON.stringify(reply),
+  );
   return reply;
 }
 function findRef(value: unknown, name: string): string | undefined {
@@ -86,6 +92,10 @@ async function browserSmoke(
     const tabs = bound.tabs as Array<{ tab_id: string }>;
     assert(tabs?.[0]?.tab_id);
     const target = { target_id: bound.target_id, tab_id: tabs[0].tab_id };
+    successful(
+      await call("get_browser_state", { ...target, snapshot_format: "semantic_v2" }, true),
+      "observe prepared browser before navigation",
+    );
     successful(
       await call("browser_navigate", { ...target, url: `http://127.0.0.1:${address.port}/` }),
       "navigate fixture",
@@ -174,7 +184,7 @@ async function main() {
     return state;
   };
   const capability = randomUUID() + randomUUID();
-  const task = { threadId: "windows-smoke", turnId: "one" };
+  let task = { threadId: "windows-smoke", turnId: "one" };
   let escaped = 0;
   const monitor = new EscapeKillSwitchMonitor({
     helperPath: join(root, "cua-driver", "cua-driver.exe"),
@@ -259,6 +269,9 @@ async function main() {
       const value = await readState();
       return !!value && !value.left && !value.shift;
     }, "Stop left mouse or modifier held");
+    const revoked = await call("type_text", { ...target, text: "must not arrive" });
+    assert(!revoked.ok && revoked.effect === "not-dispatched", "Stop did not revoke the turn");
+    task = { ...task, turnId: "browser" };
     await browserSmoke(call, () => writeFile(join(root, "command.txt"), "escape"));
     await cuaRequest(endpoint, { method: "end_task", task, capability });
     await eventually(() => !monitor.state.ready, "task end did not release Escape");
@@ -299,6 +312,9 @@ async function main() {
           taskReleasedEscape: true,
         }),
     );
+  } catch (error) {
+    console.error("WINDOWS_HOST_SMOKE_FAILURE", error);
+    throw error;
   } finally {
     try {
       await host.dispose();
@@ -306,7 +322,7 @@ async function main() {
       monitor.dispose();
       await writeFile(join(root, "command.txt"), "close");
       await Promise.race([fixtureExited, delay(5000).then(() => fixture.kill())]);
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   }
 }
