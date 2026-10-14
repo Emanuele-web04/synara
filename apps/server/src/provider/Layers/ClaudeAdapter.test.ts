@@ -1678,6 +1678,9 @@ describe("ClaudeAdapterLive", () => {
 
   it.effect("treats ultrathink as a prompt keyword instead of a session effort", () => {
     const harness = makeHarness();
+    const discover = vi
+      .spyOn(harness.query, "supportedModels")
+      .mockRejectedValue(new Error("discovery unavailable"));
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       const session = yield* adapter.startSession({
@@ -1708,6 +1711,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.effort, undefined);
+      assert.equal(discover.mock.calls.length, 0);
       const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
       assert.equal(promptText, "Ultrathink:\nInvestigate the edge cases");
     }).pipe(
@@ -6433,19 +6437,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   it.effect("discovers Claude model capabilities before a session starts", () => {
     const query = new FakeClaudeQuery();
     let createQueryCalls = 0;
-    (
-      query as unknown as {
-        supportedModels: () => Promise<
-          Array<{
-            value: string;
-            resolvedModel: string;
-            displayName: string;
-            description: string;
-            supportsAutoMode: boolean;
-          }>
-        >;
-      }
-    ).supportedModels = async () => {
+    (query as { supportedModels: () => Promise<Array<ModelInfo>> }).supportedModels = async () => {
       assert.ok(query.iteratorNextCalls > 0, "model discovery must drive the SDK handshake");
       return [
         {
@@ -6454,6 +6446,39 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           displayName: "Fable",
           description: "Claude Fable 5",
           supportsAutoMode: true,
+        },
+        {
+          value: "haiku",
+          resolvedModel: "claude-haiku-5-5",
+          displayName: "Haiku 5.5",
+          description: "Claude Haiku 5.5",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+          supportsAdaptiveThinking: true,
+          supportsAutoMode: false,
+        },
+        {
+          value: "opus-no-effort",
+          resolvedModel: "claude-opus-5",
+          displayName: "Opus without effort",
+          description: "SDK disables effort",
+          supportsEffort: false,
+        },
+        {
+          value: "opus-limited-effort",
+          resolvedModel: "claude-opus-5",
+          displayName: "Opus with limited effort",
+          description: "SDK excludes xhigh",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high"],
+        },
+        {
+          value: "opus-full-effort",
+          resolvedModel: "claude-opus-5",
+          displayName: "Opus with full effort",
+          description: "SDK supports xhigh",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
         },
       ];
     };
@@ -6480,7 +6505,44 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       assert.equal(discovered.source, "sdk");
       assert.equal(discovered.cached, false);
-      assert.lengthOf(discovered.models, 1);
+      assert.lengthOf(discovered.models, 5);
+      const noEffort = discovered.models[2]!;
+      assert.deepEqual(noEffort.supportedReasoningEfforts, []);
+      assert.isUndefined(noEffort.optionDescriptors?.find((option) => option.id === "effort"));
+      for (const [index, expected] of [
+        [3, ["low", "medium", "high"]],
+        [4, ["low", "medium", "high", "xhigh", "max", "ultracode"]],
+      ] as const) {
+        const descriptor = discovered.models[index]!.optionDescriptors?.find(
+          (option) => option.id === "effort",
+        );
+        assert.deepEqual(
+          discovered.models[index]!.supportedReasoningEfforts?.map(({ value }) => value),
+          [...expected],
+        );
+        assert.equal(descriptor?.type, "select");
+        if (descriptor?.type === "select") {
+          assert.deepEqual(
+            descriptor.options.map((option) => option.id),
+            [...expected],
+          );
+        }
+      }
+      const haiku = discovered.models[1]!;
+      assert.deepEqual(
+        haiku.supportedReasoningEfforts?.map((effort) => effort.value),
+        ["low", "medium", "high", "xhigh", "max"],
+      );
+      assert.equal(haiku.defaultReasoningEffort, "medium");
+      const effort = haiku.optionDescriptors?.find((option) => option.id === "effort");
+      assert.equal(effort?.type, "select");
+      if (effort?.type === "select") {
+        assert.equal(effort.currentValue, "medium");
+        assert.deepEqual(
+          effort.options.map((option) => option.id),
+          ["low", "medium", "high", "xhigh", "max"],
+        );
+      }
       const { optionDescriptors, ...model } = discovered.models[0]!;
       assert.deepEqual(model, {
         slug: "claude-fable-5[1m]",
@@ -6634,7 +6696,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   });
 
   it.effect(
-    "suppresses thinking_tokens/task_updated telemetry and de-dupes each unknown Claude subtype once",
+    "suppresses thinking_tokens/task_updated/permission_check_status telemetry and de-dupes each unknown Claude subtype once",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -6661,6 +6723,18 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             estimated_tokens_delta: 50,
             session_id: "sdk-session-thinking",
             uuid: `thinking-${i}`,
+          } as unknown as SDKMessage);
+        }
+
+        // Private auto-mode permission-check bookends are not transcript events.
+        for (const status of ["checking", "done"]) {
+          harness.query.emit({
+            type: "system",
+            subtype: "permission_check_status",
+            tool_use_id: "tool-permission-check",
+            status,
+            session_id: "sdk-session-permission-check",
+            uuid: `permission-check-${status}`,
           } as unknown as SDKMessage);
         }
 
@@ -6728,6 +6802,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         );
         assert.equal(
           warningMessages.some((message) => message.includes("task_updated")),
+          false,
+        );
+        assert.equal(
+          warningMessages.some((message) => message.includes("permission_check_status")),
           false,
         );
         assert.equal(
@@ -15905,4 +15983,462 @@ describe("Claude subagent tracking", () => {
       Effect.provide(harness.layer),
     );
   });
+});
+
+it.effect("rejects startup effort excluded by Claude SDK discovery", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    {
+      value: "claude-opus-5",
+      displayName: "Opus",
+      description: "Limited runtime",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    },
+  ]);
+  const discoveredModels = harness.query.supportedModels;
+  vi.spyOn(harness.query, "supportedModels").mockImplementation(async () => {
+    assert.ok(harness.query.iteratorNextCalls > 0, "effort discovery must drive the SDK handshake");
+    return discoveredModels();
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const result = yield* adapter
+      .startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-5",
+          options: { effort: "xhigh" },
+        },
+      })
+      .pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure")
+      assert.include(providerValidationIssue(result.failure), 'does not support effort "xhigh"');
+    if (result._tag === "Failure" && result.failure instanceof ProviderAdapterValidationError)
+      assert.equal(result.failure.operation, "startSession");
+    assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    assert.equal(harness.query.closeCalls, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+it.effect(
+  "rejects an unsupported live effort before dispatch and preserves the usable session",
+  () => {
+    const harness = makeHarness();
+    setSupportedModels(harness.query, [
+      {
+        value: "claude-opus-5",
+        displayName: "Opus",
+        description: "Limited runtime",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high"],
+      },
+    ]);
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-5" },
+      });
+      const result = yield* adapter
+        .sendTurn({
+          threadId: THREAD_ID,
+          input: "do not dispatch",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-opus-5",
+            options: { effort: "xhigh" },
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure")
+        assert.include(providerValidationIssue(result.failure), 'does not support effort "xhigh"');
+      if (result._tag === "Failure" && result.failure instanceof ProviderAdapterValidationError)
+        assert.equal(result.failure.operation, "session/reconfigure");
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, []);
+      assert.deepEqual(harness.query.setModelCalls, []);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "supported effort",
+        attachments: [],
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-5",
+          options: { effort: "high" },
+        },
+      });
+      assert.include(
+        harness.query.applyFlagSettingsCalls.map((value) => value.effortLevel),
+        "high",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("applies resolved SDK alias capabilities at startup and live dispatch", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    {
+      value: "opus-full-effort",
+      resolvedModel: "claude-opus-5",
+      displayName: "SDK Opus",
+      description: "SDK alias",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    },
+  ]);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "xhigh", fastMode: true },
+      },
+    });
+    assert.include(
+      harness.query.applyFlagSettingsCalls.map((value) => value.effortLevel),
+      "xhigh",
+    );
+    assert.include(
+      harness.query.applyFlagSettingsCalls.map((value) => value.fastMode),
+      true,
+    );
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "use live capabilities",
+      attachments: [],
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "high", fastMode: false },
+      },
+    });
+    assert.include(
+      harness.query.applyFlagSettingsCalls.map((value) => value.effortLevel),
+      "high",
+    );
+    assert.include(
+      harness.query.applyFlagSettingsCalls.map((value) => value.fastMode),
+      null,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("restarts runtime aliases for max effort and explicit compaction windows", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    {
+      value: "opus-full-effort",
+      resolvedModel: "claude-opus-5",
+      displayName: "SDK Opus",
+      description: "Alias",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    },
+  ]);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "high" },
+      },
+    });
+    assert.equal(
+      yield* adapter.requiresModelSelectionRestart!(THREAD_ID, {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "max" },
+      }),
+      true,
+    );
+    assert.equal(
+      yield* adapter.requiresModelSelectionRestart!(THREAD_ID, {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "high", autoCompactWindow: "1m" },
+      }),
+      true,
+    );
+    assert.equal(
+      yield* adapter.requiresModelSelectionRestart!(THREAD_ID, {
+        provider: "claudeAgent",
+        model: "opus-full-effort",
+        options: { effort: "xhigh" },
+      }),
+      false,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("selects the resolved extended-context API id before an alias's first prompt", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    {
+      value: "opus-full-effort",
+      resolvedModel: "claude-opus-5",
+      displayName: "Opus",
+      description: "Alias",
+      supportsEffort: true,
+      supportedEffortLevels: ["high", "xhigh", "max"],
+    },
+  ]);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const selection = {
+      provider: "claudeAgent" as const,
+      model: "opus-full-effort",
+      options: { autoCompactWindow: "1m" },
+    };
+    const session = yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: selection,
+    });
+    assert.deepEqual(harness.query.setModelCalls, ["claude-opus-5[1m]"]);
+    assert.equal(session.model, "opus-full-effort");
+    assert.equal(yield* adapter.requiresModelSelectionRestart!(THREAD_ID, selection), false);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "extended",
+      attachments: [],
+      modelSelection: selection,
+    });
+    assert.deepEqual(harness.query.setModelCalls, ["claude-opus-5[1m]"]);
+  }).pipe(Effect.provide(harness.layer));
+});
+it.effect("switches known Claude models without depending on discovery", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-5" },
+    });
+    const discover = vi
+      .spyOn(harness.query, "supportedModels")
+      .mockRejectedValue(new Error("discovery unavailable"));
+    const selection = { provider: "claudeAgent" as const, model: "claude-sonnet-5" };
+    assert.equal(yield* adapter.requiresModelSelectionRestart!(THREAD_ID, selection), false);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "switch",
+      attachments: [],
+      modelSelection: selection,
+    });
+    assert.deepEqual(harness.query.setModelCalls, ["claude-sonnet-5"]);
+    assert.equal(discover.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("reuses discovered capabilities for unchanged explicit effort", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    {
+      value: "opus-full-effort",
+      resolvedModel: "claude-opus-5",
+      displayName: "Opus",
+      description: "Alias",
+      supportsEffort: true,
+      supportedEffortLevels: ["high", "xhigh", "max"],
+    },
+  ]);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const selection = {
+      provider: "claudeAgent" as const,
+      model: "opus-full-effort",
+      options: { effort: "high" as const },
+    };
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: selection,
+    });
+    const discover = vi
+      .spyOn(harness.query, "supportedModels")
+      .mockRejectedValue(new Error("discovery unavailable"));
+    assert.equal(yield* adapter.requiresModelSelectionRestart!(THREAD_ID, selection), false);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "follow-up",
+      attachments: [],
+      modelSelection: selection,
+    });
+    assert.equal(discover.mock.calls.length, 0);
+    const unsupported = yield* Effect.result(
+      adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "unsupported",
+        attachments: [],
+        modelSelection: { ...selection, options: { effort: "low" } },
+      }),
+    );
+    assert.equal(unsupported._tag, "Failure");
+    assert.equal(discover.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("reuses model-switch discovery during dispatch", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-5" },
+    });
+    const discover = vi
+      .spyOn(harness.query, "supportedModels")
+      .mockResolvedValueOnce([
+        {
+          value: "claude-sonnet-5",
+          displayName: "Sonnet",
+          description: "Sonnet",
+          supportsEffort: true,
+          supportedEffortLevels: ["high"],
+        },
+      ])
+      .mockRejectedValue(new Error("second discovery unavailable"));
+    const selection = {
+      provider: "claudeAgent" as const,
+      model: "claude-sonnet-5",
+      options: { effort: "high" as const },
+    };
+    assert.equal(yield* adapter.requiresModelSelectionRestart!(THREAD_ID, selection), false);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "switch",
+      attachments: [],
+      modelSelection: selection,
+    });
+    assert.equal(discover.mock.calls.length, 1);
+    assert.deepEqual(harness.query.setModelCalls, ["claude-sonnet-5"]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "discovers an SDK-added effort on a statically known model before its first prompt",
+  () => {
+    const harness = makeHarness();
+    setSupportedModels(harness.query, [
+      {
+        value: "claude-opus-4-5",
+        displayName: "Opus",
+        description: "Legacy",
+        supportsEffort: true,
+        supportedEffortLevels: ["xhigh"],
+      },
+    ]);
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-5",
+          options: { effort: "xhigh" },
+        },
+      });
+      assert.equal(effortLevelFromOptions(harness.getLastCreateQueryInput()?.options), "xhigh");
+      assert.include(
+        harness.query.applyFlagSettingsCalls.map((flags) => flags.effortLevel),
+        "xhigh",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+it.effect("does not retain untagged legacy efforts when the SDK disables them", () => {
+  const harness = makeHarness();
+  setSupportedModels(harness.query, [
+    { value: "claude-opus-4-5", displayName: "Opus", description: "Legacy", supportsEffort: false },
+  ]);
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const result = yield* adapter.listModels!({ provider: "claudeAgent", cwd: "/tmp/project" });
+    assert.deepEqual(result.models[0]?.supportedReasoningEfforts, []);
+    assert.isUndefined(
+      result.models[0]?.optionDescriptors?.find((option) => option.id === "effort"),
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("reuses verified extended-context alias capabilities through the send wrapper", () => {
+  const harness = makeHarness();
+  setSupportedModels(
+    harness.query,
+    ["opus-one", "opus-two"].map((value) => ({
+      value,
+      resolvedModel: "claude-opus-5",
+      displayName: "Opus",
+      description: "Alias",
+      supportsEffort: true,
+      supportedEffortLevels: ["high"],
+    })),
+  );
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: "claudeAgent",
+      runtimeMode: "full-access",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "opus-one",
+        options: { autoCompactWindow: "1m" },
+      },
+    });
+    const discovery = vi.spyOn(harness.query, "supportedModels");
+    const selection = {
+      provider: "claudeAgent" as const,
+      model: "opus-two",
+      options: { autoCompactWindow: "1m" },
+    };
+    assert.equal(yield* adapter.requiresModelSelectionRestart!(THREAD_ID, selection), false);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "switch",
+      attachments: [],
+      modelSelection: selection,
+    });
+    // The picker normalizes an SDK alias to its canonical resolved model ID.
+    // Cached capability metadata must match either form so sendTurn does not
+    // repeat the SDK discovery behind its five-second timeout.
+    const canonicalSelection = {
+      provider: "claudeAgent" as const,
+      model: "claude-opus-5",
+      options: { autoCompactWindow: "1m" },
+    };
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "canonical switch",
+      attachments: [],
+      modelSelection: canonicalSelection,
+    });
+    assert.equal(discovery.mock.calls.length, 1);
+    assert.deepEqual(harness.query.setModelCalls, ["claude-opus-5[1m]"]);
+  }).pipe(Effect.provide(harness.layer));
 });

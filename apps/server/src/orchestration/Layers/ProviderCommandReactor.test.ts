@@ -3316,10 +3316,11 @@ describe("ProviderCommandReactor", () => {
     });
 
     it("keeps an operator retried slow cache response alive beyond the command deadline", async () => {
+      const commandDeadline = Duration.seconds(1);
       const { harness, startClaudeCompaction } = await createCompactionHarness(
         undefined,
         false,
-        Duration.millis(100),
+        commandDeadline,
       );
       const review = await sendHeldMessage(harness);
       startClaudeCompaction.mockImplementationOnce(() =>
@@ -3351,7 +3352,7 @@ describe("ProviderCommandReactor", () => {
       );
       try {
         await waitFor(() => startClaudeCompaction.mock.calls.length === 2);
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, Duration.toMillis(commandDeadline) * 2));
         expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
         const threadId = ThreadId.makeUnsafe("thread-during-retried-compaction");
         await Effect.runPromise(
@@ -3388,10 +3389,11 @@ describe("ProviderCommandReactor", () => {
     it.each(["compaction", "follow-up", "cancel-follow-up"] as const)(
       "keeps slow %s alive beyond the command deadline while another chat sends",
       async (phase) => {
+        const commandDeadline = Duration.seconds(1);
         const { harness, startClaudeCompaction, setObservation } = await createCompactionHarness(
           undefined,
           false,
-          Duration.millis(100),
+          commandDeadline,
         );
         const review = await sendHeldMessage(harness);
         const releaseDispatch = Deferred.makeUnsafe<void>();
@@ -3433,7 +3435,9 @@ describe("ProviderCommandReactor", () => {
             );
             await waitFor(() => harness.sendTurn.mock.calls.length === 1);
           }
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await new Promise((resolve) =>
+            setTimeout(resolve, Duration.toMillis(commandDeadline) * 2),
+          );
           const expectedStatus = phase === "compaction" ? "compacting" : "responding";
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe(
             expectedStatus,
@@ -5189,7 +5193,9 @@ describe("ProviderCommandReactor", () => {
           Array.from(laterEvents).filter(
             (event) =>
               (event.type === "thread.claude-cache-set" && event.payload.review !== null) ||
-              (event.type === "thread.session-set" && event.payload.session.status === "ready"),
+              (event.type === "thread.session-set" &&
+                event.payload.session.status === "ready" &&
+                event.payload.session.lastError === null),
           ),
         ).toEqual([]);
         expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -7703,6 +7709,13 @@ describe("ProviderCommandReactor", () => {
         expect(
           harness.sendTurn.mock.calls.filter(([request]) => request.threadId === threadId),
         ).toHaveLength(0);
+        await waitFor(async () =>
+          Boolean(
+            (await readHarnessThread(harness))?.session?.lastError?.includes(
+              PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            ),
+          ),
+        );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
         );
@@ -16149,7 +16162,8 @@ describe("ProviderCommandReactor", () => {
 
   it("releases a timed-out promoted turn when its live provider turn settles", async () => {
     const harness = await createHarness({
-      commandEventTimeout: Duration.millis(25),
+      // Admission must finish before the deliberately non-returning provider call times out.
+      commandEventTimeout: Duration.seconds(1),
     });
     await seedQueuedTurnBehindLiveTurn(harness, {
       liveTurnId: asTurnId("turn-running-timeout"),
@@ -18687,7 +18701,8 @@ describe("ProviderCommandReactor", () => {
     it("settles a timed-out target start and keeps the thread usable", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
-        commandEventTimeout: Duration.millis(300),
+        // Handoff consumes 90% of this budget; leave time for durable recovery writes.
+        commandEventTimeout: Duration.seconds(2),
       });
       await runFirstGrokTurn(harness);
       harness.startSession.mockImplementationOnce(() => Effect.never);

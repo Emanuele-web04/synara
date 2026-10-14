@@ -1,3 +1,4 @@
+import type { Thread } from "../types";
 import {
   CheckpointRef,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -39,6 +40,7 @@ import {
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   resolveWorkingLabel,
+  isFirstSessionConnect,
   deriveComposerSendState,
   deriveComposerVoiceState,
   editAndResendDispatchFields,
@@ -2369,6 +2371,44 @@ describe("hasLiveTurnTakenOver", () => {
 });
 
 describe("resolveWorkingLabel", () => {
+  it("distinguishes a real first start from a returning provider session", () => {
+    expect(
+      isFirstSessionConnect({
+        messages: [{ role: "user" }],
+        latestTurn: null,
+      }),
+    ).toBe(true);
+    expect(
+      isFirstSessionConnect({
+        messages: [{ role: "user" }, { role: "assistant" }],
+        latestTurn: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: true,
+        isConnecting: true,
+        isFirstConnect: false,
+        providerName: "Devin",
+      }),
+    ).toBe("Reconnecting to Devin…");
+  });
+  it("keeps first-turn reconnect editable and ignores imported assistant history", () => {
+    expect(
+      isFirstSessionConnect({
+        messages: [{ role: "user" }],
+        latestTurn: {
+          startedAt: "2026-10-12T00:00:00Z",
+          completedAt: null,
+        } as Thread["latestTurn"],
+      }),
+    ).toBe(false);
+    for (const source of ["fork-import", "handoff-import"] as const)
+      expect(
+        isFirstSessionConnect({ messages: [{ role: "assistant", source }], latestTurn: null }),
+      ).toBe(true);
+  });
   it("shows Loading only while an unacknowledged send is still local", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");

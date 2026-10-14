@@ -937,3 +937,24 @@ describe("getComposerProviderState", () => {
     });
   });
 });
+
+it("drops a persisted Claude effort excluded by runtime discovery before dispatch", () => {
+  const state = getComposerProviderState({
+    provider: "claudeAgent",
+    model: "claude-opus-5",
+    runtimeModel: {
+      slug: "claude-opus-5",
+      name: "Opus",
+      supportedReasoningEfforts: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+      ],
+      defaultReasoningEffort: "high",
+    },
+    prompt: "",
+    modelOptions: { claudeAgent: { effort: "xhigh" } },
+  });
+  expect(state.promptEffort).toBe("high");
+  expect(state.modelOptionsForDispatch).toBeUndefined();
+});

@@ -96,6 +96,11 @@ export interface ProviderServiceShape {
   readonly cancelClaudeCompactionDiscovery?: (
     threadId: ThreadId,
   ) => Effect.Effect<void, ProviderServiceError>;
+  readonly requiresModelSelectionRestart?: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection,
+  ) => Effect.Effect<boolean | undefined, ProviderServiceError>;
+
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;
@@ -216,10 +221,13 @@ export interface ProviderServiceShape {
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
-  /**
-   * Stop only the live adapter process/session while preserving the persisted
-   * provider binding and resume cursor for a subsequent restart.
-   */
+  /** Restore missing routing only while the adapter owns the expected running turn. */
+  readonly restoreSessionBinding?: (input: {
+    readonly threadId: ThreadId;
+    readonly expectedTurnId: string;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
+
+  /** Stop the runtime while preserving its durable binding and resume cursor. */
   readonly stopRuntimeSession?: (input: {
     readonly threadId: ThreadId;
     /** Idle reapers must revalidate activity and live ownership under the lifecycle lock. */

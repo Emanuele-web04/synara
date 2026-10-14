@@ -386,6 +386,7 @@ function makeHarnessLayer(
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
     readonly hubCoordinator?: boolean;
     readonly dispatch?: (typeof OrchestrationEngineService)["Service"]["dispatch"];
+    readonly readThreadEvents?: (typeof OrchestrationEventStore)["Service"]["readThreadEvents"];
     readonly commandReceipts?: (typeof OrchestrationCommandReceiptRepository)["Service"];
     readonly failDispatch?: (command: OrchestrationCommand) => boolean;
     readonly dispatchDelayMs?: number;
@@ -644,26 +645,29 @@ function makeHarnessLayer(
         ),
       ),
     getThreadTitleHighWaterSequence: () => Effect.succeed(0),
-    readThreadEvents: (input: {
-      threadId: string;
-      throughSequenceInclusive: number;
-      beforeSequenceExclusive?: number;
-      limit: number;
-      eventTypes?: ReadonlyArray<string>;
-    }) =>
-      Effect.succeed(
-        (options.diagnosticEvents ?? [])
-          .filter((event) => event.aggregateId === input.threadId)
-          .filter((event) => event.sequence <= input.throughSequenceInclusive)
-          .filter(
-            (event) => event.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER),
-          )
-          .filter(
-            (event) => input.eventTypes === undefined || input.eventTypes.includes(event.type),
-          )
-          .toSorted((left, right) => right.sequence - left.sequence)
-          .slice(0, input.limit),
-      ),
+    readThreadEvents:
+      options.readThreadEvents ??
+      ((input: {
+        threadId: string;
+        throughSequenceInclusive: number;
+        beforeSequenceExclusive?: number;
+        limit: number;
+        eventTypes?: ReadonlyArray<string>;
+      }) =>
+        Effect.succeed(
+          (options.diagnosticEvents ?? [])
+            .filter((event) => event.aggregateId === input.threadId)
+            .filter((event) => event.sequence <= input.throughSequenceInclusive)
+            .filter(
+              (event) =>
+                event.sequence < (input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER),
+            )
+            .filter(
+              (event) => input.eventTypes === undefined || input.eventTypes.includes(event.type),
+            )
+            .toSorted((left, right) => right.sequence - left.sequence)
+            .slice(0, input.limit),
+        )),
     readThreadEventsFromSequence: (
       threadId: string,
       sequenceExclusive: number,
@@ -5109,108 +5113,149 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect(
-    "dates coordinator sends at dispatch and replays accepted ordinary turns without hiding collisions",
-    () => {
-      const sourceId = MessageId.makeUnsafe("old-human-context");
-      const caller = makeThreadDetail(makeThreadShell("thread-parent"));
-      const target = makeThreadDetail(makeThreadShell("thread-child"));
-      const source = {
-        id: sourceId,
-        role: "user" as const,
-        text: "Original constraints",
-        attachments: [],
-        turnId: null,
-        streaming: false,
-        source: "native" as const,
-        createdAt: NOW,
-        updatedAt: NOW,
-      };
-      const engineLayer = OrchestrationEngineLive.pipe(
-        Layer.provide(OrchestrationProjectionPipelineLive),
-        Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
-        Layer.provide(OrchestrationEventStoreLive),
-        Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
-        Layer.provide(SqlitePersistenceMemory),
-        Layer.provide(ServerSettingsService.layerTest()),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
-        Layer.provide(NodeServices.layer),
-      );
-      return Effect.gen(function* () {
-        const engine = yield* OrchestrationEngineService;
-        const receipts = yield* OrchestrationCommandReceiptRepository;
-        const snapshots = yield* ProjectionSnapshotQuery;
-        yield* engine.dispatch({
-          type: "project.create",
-          commandId: CommandId.makeUnsafe("setup-project"),
-          projectId: PROJECT_ID,
-          title: "Demo",
-          workspaceRoot: "/tmp/demo",
-          defaultModelSelection: null,
+  for (const mode of ["queue", "steer"] as const) {
+    it.effect(
+      `dates coordinator sends at dispatch and replays accepted ${mode} turns without hiding collisions`,
+      () => {
+        const sourceId = MessageId.makeUnsafe("old-human-context");
+        const caller = makeThreadDetail(makeThreadShell("thread-parent"));
+        let target = makeThreadDetail(
+          makeThreadShell("thread-child", {
+            modelSelection: { provider: "grok", model: "grok-code-fast-1" },
+          }),
+        );
+        const source = {
+          id: sourceId,
+          role: "user" as const,
+          text: "Original constraints",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          source: "native" as const,
           createdAt: NOW,
-        });
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("setup-thread"),
-          threadId: target.id,
-          projectId: PROJECT_ID,
-          title: target.title,
-          modelSelection: target.modelSelection,
-          runtimeMode: target.runtimeMode,
-          interactionMode: target.interactionMode,
-          branch: null,
-          worktreePath: null,
-          createdAt: NOW,
-        });
-        const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
-          hubCoordinator: true,
-          dispatch: engine.dispatch,
-          commandReceipts: receipts,
-          // Hold the gateway's read snapshot behind the real engine's committed projection.
-          threadDetails: new Map([[caller.id, { ...caller, messages: [source] }]]),
-        });
-        yield* Effect.gen(function* () {
-          const harness = yield* makeHarness;
-          const before = Date.now();
-          const input = {
-            token: "token-parent",
-            name: "synara_send_message",
-            args: {
+          updatedAt: NOW,
+        };
+        const engineLayer = OrchestrationEngineLive.pipe(
+          Layer.provide(OrchestrationProjectionPipelineLive),
+          Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+          Layer.provideMerge(OrchestrationEventStoreLive),
+          Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+          Layer.provide(SqlitePersistenceMemory),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
+          Layer.provide(NodeServices.layer),
+        );
+        return Effect.gen(function* () {
+          const engine = yield* OrchestrationEngineService;
+          const receipts = yield* OrchestrationCommandReceiptRepository;
+          const eventStore = yield* OrchestrationEventStore;
+          const snapshots = yield* ProjectionSnapshotQuery;
+          yield* engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("setup-project"),
+            projectId: PROJECT_ID,
+            title: "Demo",
+            workspaceRoot: "/tmp/demo",
+            defaultModelSelection: null,
+            createdAt: NOW,
+          });
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("setup-thread"),
+            threadId: target.id,
+            projectId: PROJECT_ID,
+            title: target.title,
+            modelSelection: target.modelSelection,
+            runtimeMode: target.runtimeMode,
+            interactionMode: target.interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdAt: NOW,
+          });
+          if (mode === "steer") {
+            const session: NonNullable<OrchestrationThread["session"]> = {
               threadId: target.id,
-              message: "Continue this task",
-              contextMessageIds: [sourceId],
-            },
-          };
-          const response = yield* harness.callTool(input);
-          assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-          const turn = harness.dispatched[0]!;
-          if (turn.type !== "thread.turn.start") throw new Error("Expected dispatched turn");
-          assert.isAtLeast(Date.parse(turn.createdAt), before);
-          assert.isAtMost(Date.parse(turn.createdAt), Date.now());
-          assert.include(turn.message.text, NOW);
-          // Cross a real timestamp tick before replaying against the stale read snapshot.
-          yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 5)));
-          const replay = yield* harness.callTool(input);
-          assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));
-          const accepted = yield* snapshots.getThreadDetailById(target.id);
-          assert.isTrue(Option.isSome(accepted));
-          if (Option.isNone(accepted)) throw new Error("Missing accepted thread");
-          assert.lengthOf(accepted.value.messages, 1);
-          assert.equal(accepted.value.messages[0]?.createdAt, turn.createdAt);
-          // A changed target interaction mode must still fail the complete command fingerprint.
-          harness.setThreadDetail({ ...target, interactionMode: "plan" });
-          const collision = yield* harness.callTool(input);
-          assert.isTrue(isToolError(collision.result));
-          assert.include(toolErrorText(collision.result), "different command content");
-          harness.setThreadDetail(accepted.value);
-          const dispatchCount = harness.dispatched.length;
-          const projectedReplay = yield* harness.callTool(input);
-          assert.equal(toolResultJson(projectedReplay.result).replayed, true);
-          assert.equal(harness.dispatched.length, dispatchCount);
-        }).pipe(Effect.provide(gatewayLayer));
-      }).pipe(Effect.provide(engineLayer));
-    },
-  );
+              status: "running",
+              providerName: "grok",
+              runtimeMode: target.runtimeMode,
+              activeTurnId: TurnId.makeUnsafe("live-target-turn"),
+              lastError: null,
+              updatedAt: NOW,
+            };
+            yield* engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.makeUnsafe("setup-running-session"),
+              threadId: target.id,
+              session,
+              createdAt: NOW,
+            });
+          }
+          const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+            hubCoordinator: true,
+            dispatch: engine.dispatch,
+            commandReceipts: receipts,
+            readThreadEvents: eventStore.readThreadEvents,
+            // Hold the gateway's read snapshot behind the real engine's committed projection.
+            threadDetails: new Map([
+              [caller.id, { ...caller, messages: [source] }],
+              [target.id, target],
+            ]),
+          });
+          yield* Effect.gen(function* () {
+            const harness = yield* makeHarness;
+            const before = Date.now();
+            const input = {
+              token: "token-parent",
+              name: "synara_send_message",
+              args: {
+                threadId: target.id,
+                message: "Continue this task",
+                contextMessageIds: [sourceId],
+                mode,
+              },
+            };
+            const response = yield* harness.callTool(input);
+            assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+            const turn = harness.dispatched[0]!;
+            if (turn.type !== "thread.turn.start") throw new Error("Expected dispatched turn");
+            assert.isAtLeast(Date.parse(turn.createdAt), before);
+            assert.isAtMost(Date.parse(turn.createdAt), Date.now());
+            assert.include(turn.message.text, NOW);
+            if (mode === "steer") {
+              const receipt = Option.getOrThrow(
+                yield* receipts.getByCommandId({ commandId: turn.commandId }),
+              );
+              const tail = yield* eventStore.readThreadEvents({
+                threadId: target.id,
+                throughSequenceInclusive: receipt.resultSequence,
+                limit: 1,
+              });
+              assert.equal(tail[0]?.type, "thread.turn-interrupt-requested");
+            }
+            // Cross a real timestamp tick before replaying against the stale read snapshot.
+            yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 5)));
+            const replay = yield* harness.callTool(input);
+            assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));
+            const accepted = yield* snapshots.getThreadDetailById(target.id);
+            assert.isTrue(Option.isSome(accepted));
+            if (Option.isNone(accepted)) throw new Error("Missing accepted thread");
+            assert.lengthOf(accepted.value.messages, 1);
+            assert.equal(accepted.value.messages[0]?.createdAt, turn.createdAt);
+            // A changed target interaction mode must still fail the complete command fingerprint.
+            harness.setThreadDetail({ ...target, interactionMode: "plan" });
+            const collision = yield* harness.callTool(input);
+            assert.isTrue(isToolError(collision.result));
+            assert.include(toolErrorText(collision.result), "different command content");
+            harness.setThreadDetail(accepted.value);
+            const dispatchCount = harness.dispatched.length;
+            const projectedReplay = yield* harness.callTool(input);
+            assert.equal(toolResultJson(projectedReplay.result).replayed, true);
+            assert.equal(harness.dispatched.length, dispatchCount);
+          }).pipe(Effect.provide(gatewayLayer));
+        }).pipe(Effect.provide(engineLayer));
+      },
+    );
+  }
 
   it.effect("passes an idle steer through so the reactor's live-state guard decides", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);

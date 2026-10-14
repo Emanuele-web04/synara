@@ -65,14 +65,17 @@ import {
   type ProviderListSkillsResult,
   type ProviderListAgentsResult,
   type ProviderListModelsResult,
+  type ModelSelection,
   getAgentMentionAliases,
 } from "@synara/contracts";
 import {
   applyClaudePromptEffortPrefix,
   getClaudeContextWindowSuffix,
+  getDefaultEffort,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
+  EMPTY_MODEL_CAPABILITIES,
   getProviderOptionDescriptors,
   hasEffortLevel,
   normalizeClaudeModelOptions,
@@ -469,6 +472,9 @@ interface ClaudeSessionContext {
   currentAutoCompactWindow: number | undefined;
   currentAlwaysThinkingEnabled: boolean | undefined;
   currentEffort: ClaudeApiEffort | null;
+  modelCapabilities: ReturnType<typeof getModelCapabilities>;
+  currentModelInfo: ModelInfo | undefined;
+  verifiedModelInfo?: ModelInfo | undefined;
   currentUltracode: boolean;
   currentFastMode: boolean;
   lastKnownAutoCompactThreshold: number | undefined;
@@ -629,7 +635,7 @@ function cancellableClaudeMessageStream(
   // generator: its `return()` queues behind the pending `next()`, which never settles
   // while Claude sits idle. Cancellation must win that race, or stopping an idle session
   // hangs before the process tree is torn down, and quit leaves Claude running.
-  // SDK discovery (Auto mode) waits for a handshake that only starts on the first
+  // SDK capability discovery waits for a handshake that only starts on the first
   // iterator read, so `prestart` issues that read now and keeps it for the consumer.
   const iterator = queryRuntime[Symbol.asyncIterator]();
   let firstResult = options.prestart ? iterator.next() : undefined;
@@ -1172,15 +1178,108 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
   }
 }
 
+function claudeModelInfoCapabilities(model: ModelInfo) {
+  const staticCapabilities = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
+  // The SDK knows about new model releases ahead of Synara's static catalog.
+  // Explicit no-effort support and an advertised effort ladder are authoritative;
+  // only missing SDK metadata falls back to the curated static capabilities.
+  const sdkEfforts =
+    model.supportsEffort === false
+      ? []
+      : Array.isArray(model.supportedEffortLevels)
+        ? [...new Set(model.supportedEffortLevels)].filter(
+            (level) =>
+              level === "low" ||
+              level === "medium" ||
+              level === "high" ||
+              level === "xhigh" ||
+              level === "max",
+          )
+        : undefined;
+  const staticDefault = getDefaultEffort(staticCapabilities);
+  const sdkOptions = sdkEfforts?.map((value) => {
+    const known = staticCapabilities.reasoningEffortLevels.find((option) => option.value === value);
+    return {
+      value,
+      label:
+        known?.label ??
+        (value === "xhigh" ? "Extra High" : value[0]!.toUpperCase() + value.slice(1)),
+      controlSource: "api-effort" as const,
+      ...(value === staticDefault ? { isDefault: true as const } : {}),
+    };
+  });
+  const capabilities =
+    sdkOptions === undefined
+      ? staticCapabilities
+      : {
+          ...staticCapabilities,
+          reasoningEffortLevels: [
+            ...sdkOptions,
+            // Synara-only modes (e.g. Ultracode) are not SDK API effort values.
+            ...staticCapabilities.reasoningEffortLevels.filter(
+              (option) =>
+                (option.controlSource === "provider-setting" ||
+                  option.controlSource === "prompt-prefix") &&
+                (option.apiEffortValue === undefined ||
+                  sdkEfforts?.some((effort) => effort === option.apiEffortValue)),
+            ),
+          ],
+        };
+  return capabilities;
+}
+
+function claudeContextModelInfo(
+  context: Pick<ClaudeSessionContext, "currentModelInfo" | "verifiedModelInfo">,
+  model: string | undefined,
+): ModelInfo | undefined {
+  return [context.currentModelInfo, context.verifiedModelInfo].find(
+    (candidate) => candidate?.value === model || candidate?.resolvedModel === model,
+  );
+}
+
+function resolveClaudeRuntimeApiModelId(
+  selection: ModelSelection,
+  model: ModelInfo | undefined,
+): string {
+  if (
+    selection.provider === PROVIDER &&
+    model?.resolvedModel &&
+    normalizeClaudeModelOptions(
+      model.resolvedModel,
+      selection.options,
+      claudeModelInfoCapabilities(model),
+    )?.autoCompactWindow === "1m"
+  ) {
+    return resolveApiModelId({ ...selection, model: model.resolvedModel });
+  }
+  return resolveApiModelId(selection);
+}
+
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+  const capabilities = claudeModelInfoCapabilities(model);
+  const staticDefault = getDefaultEffort(capabilities);
+  const hasSdkEfforts =
+    model.supportsEffort === false || Array.isArray(model.supportedEffortLevels);
   const optionDescriptors = getProviderOptionDescriptors({
     provider: PROVIDER,
-    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+    caps: capabilities,
   });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
+    ...(hasSdkEfforts
+      ? {
+          supportedReasoningEfforts: capabilities.reasoningEffortLevels.map(({ value, label }) => ({
+            value,
+            label,
+          })),
+          ...(staticDefault &&
+          capabilities.reasoningEffortLevels.some((effort) => effort.value === staticDefault)
+            ? { defaultReasoningEffort: staticDefault }
+            : {}),
+        }
+      : {}),
     ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
@@ -1588,6 +1687,7 @@ function isClaudeNativeSlashCommand(
 function buildPromptText(
   input: ProviderSendTurnInput,
   nativeCommandNames?: ReadonlySet<string>,
+  modelCapabilities?: ReturnType<typeof getModelCapabilities>,
 ): string {
   // Native slash commands (`/compact`, `/design`, plugin commands) must start
   // the payload, including in Plan mode or with a prompt-based effort option.
@@ -1599,7 +1699,7 @@ function buildPromptText(
   const requestedEffort = trimOrNull(rawEffort);
   const claudeModel =
     input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.model : undefined;
-  const caps = getModelCapabilities("claudeAgent", claudeModel);
+  const caps = modelCapabilities ?? getModelCapabilities("claudeAgent", claudeModel);
   const promptEffort =
     requestedEffort === "ultrathink" && caps.promptInjectedEffortLevels.includes("ultrathink")
       ? "ultrathink"
@@ -1646,10 +1746,15 @@ function buildUserMessageEffect(
     readonly fileSystem: FileSystem.FileSystem;
     readonly attachmentsDir: string;
     readonly nativeCommandNames?: ReadonlySet<string> | undefined;
+    readonly modelCapabilities?: ReturnType<typeof getModelCapabilities>;
   },
 ): Effect.Effect<SDKUserMessage, ProviderAdapterRequestError> {
   return Effect.gen(function* () {
-    const text = buildPromptText(input, dependencies.nativeCommandNames);
+    const text = buildPromptText(
+      input,
+      dependencies.nativeCommandNames,
+      dependencies.modelCapabilities,
+    );
     const sdkContent: Array<Record<string, unknown>> = [];
 
     if (text.length > 0) {
@@ -1851,6 +1956,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude returned a server error. Retry in a moment.";
     case "max_output_tokens":
       return "Claude reached the maximum output length before completing the turn.";
+    case "cloud_credential_error":
+      return "Claude could not load its cloud provider credentials. Check or refresh them, then retry.";
     case "unknown":
       return "Claude failed to complete the turn.";
     case "cloud_credential_error":
@@ -2387,12 +2494,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
     const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     const cachedAgentsByKey = new Map<string, ProviderListAgentsResult>();
-    const verifyClaudeAutoModelSupport = (input: {
+    const verifyClaudeModelSupport = (input: {
       readonly queryRuntime: ClaudeQueryRuntime;
       readonly discoveryKey: string;
       readonly selectedModel: string | undefined;
       readonly apiModelId: string | undefined;
       readonly operation: "startSession" | "sendTurn";
+      readonly requireAuto: boolean;
+      readonly effort: ClaudeApiEffort | null;
     }) =>
       Effect.gen(function* () {
         const requestedModel = input.selectedModel ?? input.apiModelId ?? "selected model";
@@ -2401,7 +2510,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           catch: (cause) =>
             new ProviderAdapterValidationError({
               provider: PROVIDER,
-              operation: input.operation,
+              operation: input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
               issue:
                 `Claude model capability discovery failed while verifying Auto mode support for "${requestedModel}": ` +
                 toMessage(cause, "unknown discovery error"),
@@ -2416,7 +2525,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               ? cause
               : new ProviderAdapterValidationError({
                   provider: PROVIDER,
-                  operation: input.operation,
+                  operation:
+                    input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
                   issue: `Could not verify that Claude model "${requestedModel}" supports Auto mode before the model discovery timeout.`,
                 }),
           ),
@@ -2427,27 +2537,41 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ),
         );
         const resolution = resolveClaudeAutoModeModel(discoveredModels, requestedModels);
+        if (resolution.status !== "matched" && !input.requireAuto) return undefined;
         if (resolution.status === "absent") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
-            operation: input.operation,
+            operation: input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
             issue: `Claude model "${requestedModel}" was not returned by Claude model discovery, so Auto mode support cannot be verified.`,
           });
         }
         if (resolution.status === "conflicting") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
-            operation: input.operation,
+            operation: input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
             issue: `Claude model "${requestedModel}" has conflicting Auto mode capability metadata across context-window variants.`,
           });
         }
-        if (resolution.model.supportsAutoMode !== true) {
+        if (
+          input.effort &&
+          (resolution.model.supportsEffort === false ||
+            (Array.isArray(resolution.model.supportedEffortLevels) &&
+              !resolution.model.supportedEffortLevels.includes(input.effort)))
+        ) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
-            operation: input.operation,
+            operation: input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
+            issue: `Claude model "${requestedModel}" does not support effort "${input.effort}" in this runtime.`,
+          });
+        }
+        if (input.requireAuto && resolution.model.supportsAutoMode !== true) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: input.operation === "sendTurn" ? "session/reconfigure" : input.operation,
             issue: `Claude model "${resolution.model.displayName}" does not support Auto mode.`,
           });
         }
+        return resolution.model;
       });
     const runtimeEventQueue = yield* Queue.bounded<ProviderRuntimeEvent>(
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
@@ -3974,6 +4098,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           currentAutoCompactWindow: context.currentAutoCompactWindow,
           currentAlwaysThinkingEnabled: undefined,
           currentEffort: context.currentEffort,
+          modelCapabilities: context.modelCapabilities,
+          currentModelInfo: context.currentModelInfo,
           currentUltracode: context.currentUltracode,
           currentFastMode: context.currentFastMode,
           lastKnownAutoCompactThreshold: context.lastKnownAutoCompactThreshold,
@@ -5412,6 +5538,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             !findInFlightTool(context, message.tool_use_id)
           )
             return;
+        }
+
+        // Internal auto-mode permission bookends belong to the CLI, not the
+        // transcript. The SDK's public types do not include this subtype yet.
+        if (sdkMessageSubtype(message) === "permission_check_status") {
+          return;
         }
 
         // `task_updated` is an incremental task patch. Status transitions surface as
@@ -7165,21 +7297,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           modelSelection?.options,
         )?.autoCompactWindow;
         const effectiveClaudeModel = modelSelection?.model ?? getDefaultModel("claudeAgent");
-        const caps = getModelCapabilities("claudeAgent", effectiveClaudeModel);
-        const requestedAutoCompactWindowTokens = resolveSelectedClaudeAutoCompactWindow(
+        let caps = getModelCapabilities("claudeAgent", effectiveClaudeModel);
+        const requestedEffortIsPromptInjected =
+          requestedEffort !== null && caps.promptInjectedEffortLevels.includes(requestedEffort);
+        const needsSdkCapabilities =
+          caps === EMPTY_MODEL_CAPABILITIES ||
+          (requestedEffort !== null && !requestedEffortIsPromptInjected);
+        let requestedAutoCompactWindowTokens = resolveSelectedClaudeAutoCompactWindow(
           effectiveClaudeModel,
           requestedAutoCompactWindow,
         );
-        const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
-        const effort =
-          requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
-        const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
-        const thinking = resolveSelectedClaudeThinkingToggle(
+        let discoveredModelInfo: ModelInfo | undefined;
+        let apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+        let effort =
+          requestedEffort && (hasEffortLevel(caps, requestedEffort) || needsSdkCapabilities)
+            ? requestedEffort
+            : null;
+        let fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
+        let thinking = resolveSelectedClaudeThinkingToggle(
           effectiveClaudeModel,
           modelSelection?.options?.thinking,
         );
-        const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
-        const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
+        let effectiveEffort = getEffectiveClaudeCodeEffort(effort);
+        let ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
           input.runtimeMode === "auto"
             ? "auto"
@@ -7326,21 +7466,72 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ),
         );
         const messageStream = cancellableClaudeMessageStream(queryRuntime, {
-          prestart: input.runtimeMode === "auto",
+          prestart:
+            input.runtimeMode === "auto" || effectiveEffort !== null || needsSdkCapabilities,
         });
 
         let installationContext: ClaudeSessionContext | undefined;
         let installationComplete = false;
 
         return yield* Effect.gen(function* () {
-          if (input.runtimeMode === "auto") {
-            yield* verifyClaudeAutoModelSupport({
+          if (input.runtimeMode === "auto" || effectiveEffort || needsSdkCapabilities) {
+            const discoveredModel = yield* verifyClaudeModelSupport({
+              requireAuto: input.runtimeMode === "auto",
+              effort: effectiveEffort,
               queryRuntime,
               discoveryKey: accountDiscoveryKey,
               selectedModel: effectiveClaudeModel,
               apiModelId,
               operation: "startSession",
             });
+            if (discoveredModel) {
+              discoveredModelInfo = discoveredModel;
+              caps = claudeModelInfoCapabilities(discoveredModel);
+              if (modelSelection) {
+                const resolvedApiModelId = resolveClaudeRuntimeApiModelId(
+                  modelSelection,
+                  discoveredModel,
+                );
+                if (resolvedApiModelId !== apiModelId) {
+                  yield* Effect.tryPromise({
+                    try: () => queryRuntime.setModel(resolvedApiModelId),
+                    catch: (cause) => toRequestError(threadId, "session/reconfigure", cause),
+                  });
+                  apiModelId = resolvedApiModelId;
+                }
+              }
+              effort =
+                requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+              effectiveEffort = getEffectiveClaudeCodeEffort(effort);
+              fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
+              thinking = caps.supportsThinkingToggle
+                ? modelSelection?.options?.thinking
+                : undefined;
+              ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
+              const resolvedModel = discoveredModel.resolvedModel ?? discoveredModel.value;
+              requestedAutoCompactWindowTokens = resolveSelectedClaudeAutoCompactWindow(
+                resolvedModel,
+                normalizeClaudeModelOptions(resolvedModel, modelSelection?.options, caps)
+                  ?.autoCompactWindow,
+              );
+              if (needsSdkCapabilities) {
+                yield* Effect.tryPromise({
+                  try: () =>
+                    queryRuntime.applyFlagSettings({
+                      ...(effectiveEffort && effectiveEffort !== "max"
+                        ? { effortLevel: effectiveEffort }
+                        : {}),
+                      ...(fastMode ? { fastMode: true } : {}),
+                      ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
+                      ...(ultracode ? { ultracode: true } : {}),
+                      ...(requestedAutoCompactWindowTokens !== undefined
+                        ? { autoCompactWindow: requestedAutoCompactWindowTokens }
+                        : {}),
+                    }),
+                  catch: (cause) => toRequestError(threadId, "session/reconfigure", cause),
+                });
+              }
+            }
           }
 
           // Populate agent cache in background from first session
@@ -7452,6 +7643,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             currentAutoCompactWindow: requestedAutoCompactWindowTokens,
             currentAlwaysThinkingEnabled: thinking,
             currentEffort: effectiveEffort,
+            modelCapabilities: caps,
+            currentModelInfo: discoveredModelInfo,
             currentUltracode: ultracode,
             currentFastMode: fastMode,
             lastKnownAutoCompactThreshold: requestedAutoCompactWindowTokens,
@@ -7600,6 +7793,53 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const startSession: ClaudeAdapterShape["startSession"] = (input) =>
       withSessionLifecycleLock(input.threadId, startSessionUnlocked(input));
+
+    const requiresModelSelectionRestart: NonNullable<
+      ClaudeAdapterShape["requiresModelSelectionRestart"]
+    > = (threadId, selection) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (selection.provider !== PROVIDER) return true;
+        const verifiedModelInfo = claudeContextModelInfo(context, selection.model);
+        const sameModel =
+          selection.model === context.currentModelInfo?.value ||
+          resolveClaudeRuntimeApiModelId(selection, verifiedModelInfo) ===
+            context.currentApiModelId;
+        let caps = verifiedModelInfo
+          ? claudeModelInfoCapabilities(verifiedModelInfo)
+          : sameModel
+            ? context.modelCapabilities
+            : getModelCapabilities(PROVIDER, selection.model);
+        const apiEffort = getEffectiveClaudeCodeEffort(trimOrNull(selection.options?.effort));
+        if (
+          caps === EMPTY_MODEL_CAPABILITIES ||
+          (!verifiedModelInfo &&
+            (apiEffort || (context.session.runtimeMode === "auto" && !sameModel)))
+        ) {
+          const model = yield* verifyClaudeModelSupport({
+            queryRuntime: context.query,
+            discoveryKey: context.accountDiscoveryKey,
+            selectedModel: selection.model,
+            apiModelId: resolveApiModelId(selection),
+            operation: "sendTurn",
+            requireAuto: context.session.runtimeMode === "auto",
+            effort: apiEffort,
+          });
+          caps = model ? claudeModelInfoCapabilities(model) : caps;
+          if (model) context.verifiedModelInfo = model;
+        }
+        const effort = trimOrNull(selection.options?.effort);
+        const maxEffort = effort === "max" && hasEffortLevel(caps, "max");
+        const window = resolveSelectedClaudeAutoCompactWindow(
+          selection.model,
+          normalizeClaudeModelOptions(selection.model, selection.options, caps)?.autoCompactWindow,
+          caps,
+        );
+        return (
+          (context.currentEffort === "max") !== maxEffort ||
+          context.currentAutoCompactWindow !== window
+        );
+      });
 
     const getClaudeCacheObservation: NonNullable<
       ClaudeAdapterShape["getClaudeCacheObservation"]
@@ -7782,11 +8022,73 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           !isCompaction && input.modelSelection?.provider === "claudeAgent"
             ? input.modelSelection
             : undefined;
+        let discoveredModelInfo = modelSelection
+          ? claudeContextModelInfo(context, modelSelection.model)
+          : undefined;
+        let turnCaps = modelSelection
+          ? discoveredModelInfo
+            ? claudeModelInfoCapabilities(discoveredModelInfo)
+            : getModelCapabilities(PROVIDER, modelSelection.model)
+          : context.modelCapabilities;
+        let resolvedModel = discoveredModelInfo?.resolvedModel ?? modelSelection?.model;
+        const requestedApiEffort = getEffectiveClaudeCodeEffort(
+          trimOrNull(modelSelection?.options?.effort),
+        );
+        if (
+          requestedApiEffort &&
+          discoveredModelInfo &&
+          (discoveredModelInfo.supportsEffort === false ||
+            (Array.isArray(discoveredModelInfo.supportedEffortLevels) &&
+              !discoveredModelInfo.supportedEffortLevels.includes(requestedApiEffort)))
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/reconfigure",
+            issue: `Claude model "${modelSelection?.model}" does not support effort "${requestedApiEffort}" in this runtime.`,
+          });
+        }
+        if (
+          modelSelection &&
+          (turnCaps === EMPTY_MODEL_CAPABILITIES ||
+            (!discoveredModelInfo &&
+              (requestedApiEffort || context.session.runtimeMode === "auto")))
+        ) {
+          const discoveredModel = yield* verifyClaudeModelSupport({
+            queryRuntime: context.query,
+            discoveryKey: context.accountDiscoveryKey,
+            selectedModel: modelSelection.model,
+            apiModelId: resolveApiModelId(modelSelection),
+            operation: "sendTurn",
+            requireAuto: context.session.runtimeMode === "auto",
+            effort: requestedApiEffort,
+          });
+          if (discoveredModel) {
+            discoveredModelInfo = discoveredModel;
+            turnCaps = claudeModelInfoCapabilities(discoveredModel);
+            resolvedModel = discoveredModel.resolvedModel ?? discoveredModel.value;
+          }
+        }
         const requestedAutoCompactWindow = resolveSelectedClaudeAutoCompactWindow(
-          modelSelection?.model,
-          normalizeClaudeModelOptions(modelSelection?.model, modelSelection?.options)
+          resolvedModel,
+          normalizeClaudeModelOptions(resolvedModel, modelSelection?.options, turnCaps)
             ?.autoCompactWindow,
         );
+        const requestedMax =
+          trimOrNull(modelSelection?.options?.effort) === "max" && hasEffortLevel(turnCaps, "max");
+        if (
+          modelSelection &&
+          (requestedAutoCompactWindow !== context.currentAutoCompactWindow ||
+            requestedMax !== (context.currentEffort === "max"))
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/reconfigure",
+            issue:
+              requestedAutoCompactWindow !== context.currentAutoCompactWindow
+                ? "Claude's auto-compact setting requires an idle session restart with resume before sending."
+                : "Claude's max effort requires an idle session restart with resume before sending.",
+          });
+        }
 
         if (context.turnState) {
           // Auto-close a stale synthetic turn (from background agent responses
@@ -7801,18 +8103,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         let apiModelChanged = false;
         if (modelSelection?.model) {
-          const apiModelId = resolveApiModelId(modelSelection);
+          const apiModelId = resolveClaudeRuntimeApiModelId(modelSelection, discoveredModelInfo);
           if (apiModelId !== context.currentApiModelId) {
             apiModelChanged = true;
-            if (context.session.runtimeMode === "auto") {
-              yield* verifyClaudeAutoModelSupport({
-                queryRuntime: context.query,
-                discoveryKey: context.accountDiscoveryKey,
-                selectedModel: modelSelection.model,
-                apiModelId,
-                operation: "sendTurn",
-              });
-            }
             yield* Effect.tryPromise({
               try: () => context.query.setModel(apiModelId),
               catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
@@ -7854,10 +8147,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // The thinking toggle mirrors the spawn-time `alwaysThinkingEnabled`
         // setting; flipping it live avoids a restart-and-resume replay.
-        const requestedThinking = resolveSelectedClaudeThinkingToggle(
-          modelSelection?.model,
-          modelSelection?.options?.thinking,
-        );
+        const requestedThinking = turnCaps.supportsThinkingToggle
+          ? modelSelection?.options?.thinking
+          : undefined;
         if (modelSelection && requestedThinking !== context.currentAlwaysThinkingEnabled) {
           yield* Effect.tryPromise({
             try: () =>
@@ -7874,7 +8166,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // `max` effort has no Settings equivalent; transitions involving it
         // restart upstream (claudeSelectionRequiresRestart) before this runs.
         if (modelSelection) {
-          const turnCaps = getModelCapabilities("claudeAgent", modelSelection.model);
+          context.modelCapabilities = turnCaps;
+          context.currentModelInfo = discoveredModelInfo;
           const requestedEffortOption = trimOrNull(modelSelection.options?.effort ?? null);
           const validEffort =
             requestedEffortOption && hasEffortLevel(turnCaps, requestedEffortOption)
@@ -8025,6 +8318,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const message = yield* buildUserMessageEffect(input, {
           fileSystem,
           attachmentsDir: serverConfig.attachmentsDir,
+          modelCapabilities: context.modelCapabilities,
           // Compaction already validated these commands before turn admission.
           nativeCommandNames:
             nativeCommandNames ?? (yield* resolveNativeCommandNames(context, input.input)),
@@ -8086,19 +8380,26 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context = yield* requireSession(input.threadId);
         }
         const selection = isClaudeCompactionCommand(input.input) ? undefined : input.modelSelection;
-        if (
-          selection?.provider === "claudeAgent" &&
-          resolveSelectedClaudeAutoCompactWindow(
-            selection.model,
-            normalizeClaudeModelOptions(selection.model, selection.options)?.autoCompactWindow,
-          ) !== context.currentAutoCompactWindow
-        ) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "session/reconfigure",
-            issue:
-              "Claude's auto-compact setting requires an idle session restart with resume before sending.",
-          });
+        if (selection?.provider === "claudeAgent") {
+          const modelInfo = claudeContextModelInfo(context, selection.model);
+          const caps = modelInfo
+            ? claudeModelInfoCapabilities(modelInfo)
+            : getModelCapabilities(PROVIDER, selection.model);
+          if (
+            resolveSelectedClaudeAutoCompactWindow(
+              selection.model,
+              normalizeClaudeModelOptions(selection.model, selection.options, caps)
+                ?.autoCompactWindow,
+              caps,
+            ) !== context.currentAutoCompactWindow
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "session/reconfigure",
+              issue:
+                "Claude's auto-compact setting requires an idle session restart with resume before sending.",
+            });
+          }
         }
         const cancelled = isClaudeCompactionCommand(input.input)
           ? (cancellation ?? (yield* Deferred.make<void>()))
@@ -8190,6 +8491,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const message = yield* buildUserMessageEffect(input, {
             fileSystem,
             attachmentsDir: serverConfig.attachmentsDir,
+            modelCapabilities: context.modelCapabilities,
             nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
           });
           yield* Queue.offer(context.promptQueue, {
@@ -8985,6 +9287,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       didResumeSession,
       prepareSessionReplacement,
       getClaudeCacheObservation,
+      requiresModelSelectionRestart,
       startClaudeCompaction,
       cancelClaudeCompactionDiscovery,
       sendTurn,

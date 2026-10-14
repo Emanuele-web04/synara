@@ -42,6 +42,7 @@ const CHECKPOINT_RUNTIME_RETENTION_DELETE_LIMIT = 1024;
 const ProviderRuntimeEventJson = Schema.fromJsonString(ProviderRuntimeEvent);
 const encodeEvent = Schema.encodeEffect(ProviderRuntimeEventJson);
 const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEventJson);
+const normalizeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);
 
 const StoredRowSchema = Schema.Struct({
   sequence: NonNegativeInt,
@@ -97,12 +98,21 @@ export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
     event = stripDiagnosticImages(event) as ProviderRuntimeEvent;
-    const eventJson = yield* encodeEvent(event).pipe(
+    const normalized = yield* normalizeEvent(event).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalize")),
+    );
+    const eventJson = yield* encodeEvent(normalized).pipe(
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
+    );
+    // Decode the serialized representation before indexing it. Encoders may
+    // normalize branded strings; indexing the pre-encode object can make the
+    // event ID and turn lookup disagree with event_json.
+    const canonicalEvent = yield* decodeEvent(eventJson).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalize")),
     );
     const originalBytes = Buffer.byteLength(eventJson, "utf8");
     if (originalBytes <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-      return { event, eventJson };
+      return { event: canonicalEvent, eventJson };
     }
 
     // Shrink oversized string leaves so one huge tool output no longer strands
@@ -110,15 +120,17 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
     // marker (its own copy of the tool output would otherwise re-blow the
     // budget), while source/method/messageType survive for diagnostics.
     const compactedEvent = {
-      ...event,
-      payload: shrinkRuntimeEventStrings(event.payload),
-      ...(event.raw !== undefined
+      ...canonicalEvent,
+      payload: shrinkRuntimeEventStrings(canonicalEvent.payload),
+      ...(canonicalEvent.raw !== undefined
         ? {
             raw: {
-              source: event.raw.source,
-              ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
-              ...(event.raw.messageType !== undefined
-                ? { messageType: event.raw.messageType }
+              source: canonicalEvent.raw.source,
+              ...(canonicalEvent.raw.method !== undefined
+                ? { method: canonicalEvent.raw.method }
+                : {}),
+              ...(canonicalEvent.raw.messageType !== undefined
+                ? { messageType: canonicalEvent.raw.messageType }
                 : {}),
               payload: {
                 synaraTruncated: true,
@@ -133,7 +145,10 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
     );
     if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-      return { event: compactedEvent, eventJson: compactedJson };
+      const normalizedCompactedEvent = yield* decodeEvent(compactedJson).pipe(
+        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalizeCompacted")),
+      );
+      return { event: normalizedCompactedEvent, eventJson: compactedJson };
     }
 
     return yield* new PersistenceDecodeError({
@@ -160,9 +175,9 @@ const make = Effect.gen(function* () {
               event_id, thread_id, turn_id, lifecycle_generation, event_type,
               event_json, persisted_at
             ) VALUES (
-              ${event.eventId}, ${event.threadId}, ${event.turnId ?? null},
-              ${event.lifecycleGeneration ?? null},
-              ${event.type}, ${eventJson}, ${new Date().toISOString()}
+              ${persistedEvent.eventId}, ${persistedEvent.threadId}, ${persistedEvent.turnId ?? null},
+              ${persistedEvent.lifecycleGeneration ?? null},
+              ${persistedEvent.type}, ${eventJson}, ${new Date().toISOString()}
             )
             ON CONFLICT(event_id) DO NOTHING
             RETURNING sequence
@@ -174,7 +189,7 @@ const make = Effect.gen(function* () {
             const existing = yield* sql<Record<string, unknown>>`
               SELECT sequence, event_json AS "eventJson"
               FROM provider_runtime_events
-              WHERE event_id = ${event.eventId}
+              WHERE event_id = ${persistedEvent.eventId}
           `;
             return { inserted: false as const, row: existing[0] };
           }),
@@ -191,7 +206,7 @@ const make = Effect.gen(function* () {
       if (persisted.eventJson !== eventJson) {
         return yield* new PersistenceDecodeError({
           operation: "ProviderRuntimeEvent.append",
-          issue: `Provider event '${event.eventId}' was reused with different content.`,
+          issue: `Provider event '${persistedEvent.eventId}' was reused with different content.`,
         });
       }
       return {

@@ -177,8 +177,8 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
 export function resolveSelectedClaudeAutoCompactWindow(
   model: string | null | undefined,
   selectedAutoCompactWindow: string | null | undefined,
+  caps = getModelCapabilities("claudeAgent", model),
 ): number | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
   const selected = trimOrNull(selectedAutoCompactWindow);
   // Only an explicit override is pinned; the model-native window is left to
   // Claude Code's own resolution (server tuning, settings.json, env override).

@@ -54,6 +54,23 @@ function makeClock(start = 1_000_000) {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe("makeProviderModelDiscoveryCache", () => {
+  it("refreshes a provider catalog when its runtime version changes", async () => {
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
+    let requests = 0;
+    const discover = Effect.sync(() => ({
+      ...CATALOG,
+      models: [{ slug: String(++requests), name: "Runtime model" }],
+    }));
+    const versionedKey = { ...KEY, runtimeVersion: "1.0.0" };
+    const previous = await Effect.runPromise(cache.lookup(versionedKey, discover));
+    const same = await Effect.runPromise(cache.lookup(versionedKey, discover));
+    const updated = await Effect.runPromise(
+      cache.lookup({ ...versionedKey, runtimeVersion: "1.1.0" }, discover),
+    );
+    expect(previous.models).toEqual(same.models);
+    expect(updated.models).not.toEqual(previous.models);
+    expect(requests).toBe(2);
+  });
   it("serves a fresh catalog without re-running discovery", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({

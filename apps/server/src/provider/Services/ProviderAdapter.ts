@@ -8,6 +8,7 @@
  * @module ProviderAdapter
  */
 import type {
+  ModelSelection,
   ApprovalRequestId,
   ClaudeCacheObservation,
   ProviderComposerCapabilities,
@@ -332,6 +333,11 @@ export interface ProviderAdapterShape<TError> {
   readonly cancelClaudeCompactionDiscovery?: (threadId: ThreadId) => Effect.Effect<void>;
 
   /** Read bounded native/local cache evidence without delivering a model prompt. */
+  readonly requiresModelSelectionRestart?: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection,
+  ) => Effect.Effect<boolean, TError>;
+
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, TError>;

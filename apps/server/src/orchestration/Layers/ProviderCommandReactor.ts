@@ -1696,7 +1696,7 @@ const make = Effect.gen(function* () {
       providerInstanceId: resolveModelSelectionInstanceId(projectedModelSelection),
       requestedRuntimeMode:
         input.thread.session?.runtimeMode ?? input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-      requestedAt: input.createdAt,
+      observedAt: new Date().toISOString(),
       sessionProviderEstablished,
     });
     if (projectedSession !== null) {
@@ -2455,10 +2455,16 @@ const make = Effect.gen(function* () {
       // session was actually spawned from so spawn-fixed changes still restart.
       const shouldRestartForModelSelectionChange =
         currentProvider === "claudeAgent"
-          ? claudeSelectionRequiresRestart(
+          ? ((providerService.requiresModelSelectionRestart
+              ? yield* providerService.requiresModelSelectionRestart(
+                  threadId,
+                  desiredModelSelection,
+                )
+              : undefined) ??
+            claudeSelectionRequiresRestart(
               previousModelSelection ?? thread.modelSelection,
               desiredModelSelection,
-            )
+            ))
           : (currentProvider === "droid" ||
               currentProvider === "grok" ||
               currentProvider === "devin") &&
@@ -2472,10 +2478,11 @@ const make = Effect.gen(function* () {
       // restart here would tear down each legacy-started session on its first
       // web turn.
       const previousComputerControl =
-        Option.isSome(gatewaySessions) &&
-        gatewaySessions.value.computerControlProvisioned &&
-        currentProvider !== undefined
-          ? gatewaySessions.value.computerControlProvisioned(threadId, currentProvider)
+        Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(
+              threadId,
+              currentProvider ?? desiredProvider,
+            )
           : (threadSessionComputerControl.get(threadId) ?? false);
       const computerControlChanged =
         requestedComputerControl !== undefined &&
@@ -4749,7 +4756,7 @@ const make = Effect.gen(function* () {
           thread.modelSelection.instanceId ??
           providerName,
         requestedRuntimeMode: event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-        requestedAt: event.payload.createdAt,
+        observedAt: new Date().toISOString(),
         sessionProviderEstablished,
       });
       if (turnStartSession !== null) {
@@ -4861,11 +4868,10 @@ const make = Effect.gen(function* () {
                   const runtime = (yield* providerService.listSessions()).find(
                     (session) => session.threadId === event.payload.threadId,
                   );
-                  if (
-                    optimisticSession?.status === "starting" &&
-                    runtime &&
-                    runtime.activeTurnId == null
-                  ) {
+                  const shouldRestoreRejectedSession =
+                    optimisticSession?.status === "starting" ||
+                    (turnStartSession === null && optimisticSession?.status === "ready");
+                  if (shouldRestoreRejectedSession && runtime && runtime.activeTurnId == null) {
                     yield* setThreadSession({
                       threadId: event.payload.threadId,
                       session: {
@@ -5823,7 +5829,7 @@ const make = Effect.gen(function* () {
           providerInstanceId:
             thread.session?.providerInstanceId ?? thread.modelSelection.instanceId ?? providerName,
           requestedRuntimeMode: thread.runtimeMode,
-          requestedAt: createdAt,
+          observedAt: new Date().toISOString(),
         });
         if (turnStartSession !== null) {
           yield* setThreadSession({

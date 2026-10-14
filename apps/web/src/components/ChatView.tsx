@@ -35,6 +35,7 @@ import {
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
+import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -275,6 +276,7 @@ import {
   resolveThreadArtifactWorkspaceRoot,
   resolveThreadDetailHydration,
   resolveWorkingLabel,
+  isFirstSessionConnect,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
@@ -1505,6 +1507,14 @@ export default function ChatView({
 
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = phase === "connecting";
+  const isFirstConnect = isFirstSessionConnect({
+    messages: activeThread?.messages ?? [],
+    latestTurn: activeThread?.latestTurn ?? null,
+  });
+  // A brief internal ready → connecting → running cycle should not flicker
+  // the UI. Command admission still observes the immediate real phase.
+  const [settledIsConnecting] = useDebouncedValue(isConnecting, { wait: 400 });
+  const isConnectingForUi = isConnecting && settledIsConnecting;
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
@@ -1836,7 +1846,9 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  // A transient reconnection should never freeze typing in an existing thread.
+  const isComposerEditorDisabled =
+    (isConnecting && isFirstConnect) || isComposerApprovalState || isSidechatExpired;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -6857,7 +6869,8 @@ export default function ChatView({
                       isSettlingTurnDispatch,
                       isSendBusy,
                       turnTakenOver,
-                      isConnecting,
+                      isConnecting: isConnectingForUi,
+                      isFirstConnect,
                       providerName: providerDisplayName,
                     })}
                     worktreeSetup={activeWorktreeSetup}

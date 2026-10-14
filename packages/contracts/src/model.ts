@@ -535,6 +535,26 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   contextWindowTokens: 1_000_000,
 };
 
+// Haiku 5.5 has adaptive thinking and five native API effort levels. Keep
+// provider-specific workflow modes out of its SDK effort menu.
+const CLAUDE_HAIKU_5_5_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    claudeApiEffortOption("low", "Low"),
+    claudeApiEffortOption("medium", "Medium", { isDefault: true }),
+    claudeApiEffortOption("high", "High"),
+    claudeApiEffortOption("xhigh", "Extra High"),
+    claudeApiEffortOption("max", "Max"),
+  ],
+  supportsFastMode: false,
+  // Claude Code exposes adaptive reasoning via effort. An unconditional Off
+  // control would be rejected by the Haiku API at xhigh and max.
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+  autoCompactWindowOptions: CLAUDE_AUTO_COMPACT_WINDOWS,
+  contextWindowTokens: 1_000_000,
+};
+
 // Fable 5 and 5.1 share the ladder: thinking is always on (no toggle, no
 // ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
@@ -544,6 +564,17 @@ const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABI
 const CLAUDE_OPUS_5_CAPABILITIES: ModelCapabilities = {
   ...CLAUDE_NO_FAST_XHIGH_CAPABILITIES,
   supportsFastMode: true,
+};
+
+// Opus 5.5 defaults to medium; Opus 5 defaults to high.
+const CLAUDE_OPUS_5_5_CAPABILITIES: ModelCapabilities = {
+  ...CLAUDE_OPUS_5_CAPABILITIES,
+  reasoningEffortLevels: CLAUDE_OPUS_5_CAPABILITIES.reasoningEffortLevels.map(
+    ({ isDefault: _isDefault, ...option }) => ({
+      ...option,
+      ...(option.value === "medium" ? { isDefault: true as const } : {}),
+    }),
+  ),
 };
 
 // Full reasoning ladder: xhigh + ultracode + ultrathink (Opus 4.7/4.8).
@@ -669,7 +700,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "claude-opus-5-5",
       name: "Claude Opus 5.5",
-      capabilities: CLAUDE_OPUS_5_CAPABILITIES,
+      capabilities: CLAUDE_OPUS_5_5_CAPABILITIES,
     },
     {
       slug: "claude-opus-5",
@@ -708,6 +739,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
+      slug: "claude-sonnet-5-5",
+      name: "Claude Sonnet 5.5",
+      capabilities: CLAUDE_SONNET_5_CAPABILITIES,
+    },
+    {
       slug: "claude-sonnet-5",
       name: "Claude Sonnet 5",
       capabilities: CLAUDE_SONNET_5_CAPABILITIES,
@@ -716,6 +752,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       capabilities: { ...CLAUDE_EXTENDED_THINKING_CAPABILITIES, supportsFastMode: false },
+    },
+    {
+      slug: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      capabilities: CLAUDE_HAIKU_5_5_CAPABILITIES,
     },
     {
       slug: "claude-haiku-4-5",

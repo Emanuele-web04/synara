@@ -173,16 +173,17 @@ export const takeDevinSynaraHarnessPolicyTextPart = (
 
 const DEVIN_RESUME_VERSION = 1 as const;
 
+const DEFAULT_DEVIN_TURN_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
-  defaultMs: 30 * 60 * 1000,
+  defaultMs: DEFAULT_DEVIN_TURN_IDLE_TIMEOUT_MS,
 });
 
 // Wedge recovery: the devin child can deadlock while staying alive (observed
 // twice in its exec session_manager: a hung sandbox_manager lock acquisition,
 // and a PTY spawn that never reached "waiting for shell ready"). A wedged
 // child emits no ACP events, so the idle budgets alone leave the turn hanging
-// for up to an hour; the child announces both shapes on its mirrored stderr.
+// for hours; the child announces both shapes on its mirrored stderr.
 const DEVIN_STALL_WATCH_LOG_PATTERN = "affogato::stall_watch";
 const DEVIN_SPAWN_START_LOG_PATTERN = /session_id=([0-9a-f]+) \[create_session\] starting/;
 const DEVIN_SPAWN_READY_LOG_PATTERN =
@@ -352,7 +353,7 @@ export function resolveDevinAdapterTimeouts(
   return {
     turnIdleMs: resolveAcpTurnIdleTimeoutMs({
       envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
-      defaultMs: 30 * 60 * 1000,
+      defaultMs: DEFAULT_DEVIN_TURN_IDLE_TIMEOUT_MS,
       env,
     }),
     toolIdleMs: resolveAcpTurnIdleTimeoutMs({

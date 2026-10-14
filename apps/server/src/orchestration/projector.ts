@@ -978,7 +978,7 @@ export function projectEvent(
               thread.session?.providerInstanceId ??
               projectedModelSelection.provider,
             requestedRuntimeMode: payload.runtimeMode,
-            requestedAt: payload.createdAt,
+            observedAt: event.occurredAt,
           });
           return {
             ...nextBase,
@@ -988,7 +988,7 @@ export function projectEvent(
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
               ...(isSidechatThread(thread) ? { sidechatLastActivityAt: payload.createdAt } : {}),
-              updatedAt: payload.createdAt,
+              updatedAt: event.occurredAt,
             }),
           };
         }),

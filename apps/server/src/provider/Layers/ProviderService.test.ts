@@ -3170,13 +3170,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
         yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+        const lifecycleGeneration = binding?.lifecycleGeneration;
         assert.equal(typeof activeTurnId, "string");
 
         // A dying runtime cancels its outstanding user-input request during
         // teardown, after the generation has already rotated. That resolution is
         // the only signal that can settle the durable pending row, so it must
-        // pass the stale-generation gate like a terminal event does. Ordinary
-        // stale stream events stay dropped.
+        // pass the stale-generation gate like a terminal event does. Turn-local
+        // output remains valid only while the binding owns the same turn.
         staleSettlementRouting.codex.emit({
           type: "user-input.resolved",
           eventId: asEventId("stale-user-input-resolved-matching-turn"),
@@ -3220,11 +3221,86 @@ routing.layer("ProviderServiceLive routing", (it) => {
           staleSettlementPersistedEvents.get("stale-user-input-resolved-matching-turn")?.type,
           "user-input.resolved",
         );
-        assert.equal(staleSettlementPersistedEvents.has("stale-delta-matching-turn"), false);
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-delta-matching-turn"),
+          500,
+          10,
+          "matching stale turn progress to be persisted",
+        );
         assert.equal(
           staleSettlementPersistedEvents.has("stale-user-input-resolved-other-turn"),
           false,
         );
+
+        for (const type of [
+          "turn.tasks.updated",
+          "task.started",
+          "task.progress",
+          "task.updated",
+          "task.completed",
+        ] as const) {
+          for (const matching of [true, false]) {
+            const eventId = `stale-${type}-${matching}`;
+            const matchingTaskListCursor = { opaque: "stale-turn-task-list-cursor" };
+            const otherTaskListCursor = { opaque: "stale-other-turn-task-list-cursor" };
+            if (type === "turn.tasks.updated") {
+              staleSettlementRouting.codex.updateSession(threadId, (session) => ({
+                ...session,
+                resumeCursor: matching ? matchingTaskListCursor : otherTaskListCursor,
+              }));
+            }
+            staleSettlementRouting.codex.emit({
+              type,
+              eventId: asEventId(eventId),
+              provider: "codex",
+              threadId,
+              turnId: TurnId.makeUnsafe(matching ? String(activeTurnId) : "other-turn"),
+              createdAt: "2026-07-14T14:00:03.000Z",
+              lifecycleGeneration: "old-generation",
+              payload:
+                type === "turn.tasks.updated"
+                  ? {
+                      tasks: [
+                        {
+                          task: "progress",
+                          status: "completed",
+                        },
+                      ],
+                    }
+                  : {
+                      taskId: RuntimeTaskId.makeUnsafe("stale-task"),
+                      description: "progress",
+                      status: "completed",
+                    },
+            });
+            if (matching) {
+              yield* waitUntil(() => staleSettlementPersistedEvents.has(eventId), 500, 10, eventId);
+              if (type === "turn.tasks.updated") {
+                yield* waitUntilEffect(
+                  () =>
+                    directory
+                      .getBinding(threadId)
+                      .pipe(
+                        Effect.map(
+                          (currentBinding) =>
+                            JSON.stringify(Option.getOrUndefined(currentBinding)?.resumeCursor) ===
+                            JSON.stringify(matchingTaskListCursor),
+                        ),
+                      ),
+                  500,
+                  10,
+                  "matching stale task-list resume cursor to be persisted",
+                );
+              }
+            } else {
+              assert.equal(staleSettlementPersistedEvents.has(eventId), false);
+              if (type === "turn.tasks.updated") {
+                const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+                assert.deepEqual(binding?.resumeCursor, matchingTaskListCursor);
+              }
+            }
+          }
+        }
 
         // Accepting a resolution must not settle the turn: it is not a terminal
         // event, so the binding keeps running the turn it still owns.
@@ -3234,6 +3310,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           activeTurnId,
         );
         assert.equal(bindingAfter?.status, "running");
+        assert.equal(bindingAfter?.lifecycleGeneration, lifecycleGeneration);
       }),
     );
 
@@ -9505,6 +9582,45 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+const orphanRecovery = makeProviderServiceLayer();
+orphanRecovery.layer("live orphan recovery", (it) => {
+  it.effect("restores the exact live turn under the lifecycle boundary", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("live-orphan-recovery");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: "codex",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({ threadId, input: "keep running", attachments: [] });
+      orphanRecovery.codex.updateSession(threadId, (session) => ({
+        ...session,
+        status: "running",
+        activeTurnId: turn.turnId,
+      }));
+      yield* directory.remove(threadId);
+      assert.equal(
+        yield* provider.restoreSessionBinding!({ threadId, expectedTurnId: "different-turn" }),
+        false,
+      );
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+      assert.equal(
+        yield* provider.restoreSessionBinding!({ threadId, expectedTurnId: turn.turnId }),
+        true,
+      );
+      const restored = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(restored.status, "running");
+      assert.equal(asRuntimePayloadRecord(restored.runtimePayload).activeTurnId, turn.turnId);
+      assert.equal(
+        yield* provider.restoreSessionBinding!({ threadId, expectedTurnId: turn.turnId }),
+        false,
+      );
     }),
   );
 });

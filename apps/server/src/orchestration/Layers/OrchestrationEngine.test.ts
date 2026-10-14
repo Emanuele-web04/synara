@@ -3700,3 +3700,96 @@ describe("OrchestrationEngine", () => {
     }
   });
 });
+
+it("fences handoff and relocation after accepting a ready-session follow-up before provider dispatch", async () => {
+  const system = await createOrchestrationSystem();
+  const { engine } = system;
+  const projectId = ProjectId.makeUnsafe("pending-follow-up-project");
+  const threadId = ThreadId.makeUnsafe("pending-follow-up-thread");
+  const createdAt = now();
+  try {
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("pending-project"),
+        projectId,
+        title: "Pending",
+        workspaceRoot: "/tmp/synara-pending-follow-up",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("pending-thread"),
+        threadId,
+        projectId,
+        title: "Pending",
+        modelSelection: { provider: "codex", model: "gpt-5.4" },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("pending-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("pending-start"),
+        threadId,
+        message: {
+          messageId: MessageId.makeUnsafe("pending-message"),
+          role: "user",
+          text: "Follow up",
+          attachments: [],
+        },
+        dispatchMode: "queue",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt,
+      }),
+    );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("pending-handoff"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          providerHandoff: true,
+        }),
+      ),
+    ).rejects.toThrow("running turn");
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("pending-relocate"),
+          projectId,
+          workspaceRoot: "/tmp/synara-pending-relocated",
+        }),
+      ),
+    ).rejects.toThrow("Stop active turns");
+  } finally {
+    await system.dispose();
+  }
+});

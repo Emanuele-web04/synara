@@ -834,6 +834,36 @@ function isStaleSettlingRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return isTerminalRuntimeEvent(event) || isInteractionResolutionRuntimeEvent(event);
 }
 
+/** Preserve turn-local output after an epoch rotates only when the durable
+ * binding still owns the exact turn. Never adopt old lifecycle/account events.
+ */
+function isStaleTurnProgressRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "content.delta":
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+    case "turn.proposed.delta":
+    case "turn.proposed.completed":
+    case "turn.diff.updated":
+    case "turn.tasks.updated":
+    case "turn.steered":
+    case "tool.progress":
+    case "tool.summary":
+    case "hook.started":
+    case "hook.progress":
+    case "hook.completed":
+    case "task.started":
+    case "task.progress":
+    case "task.updated":
+    case "task.completed":
+    case "files.persisted":
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Subagent-scoped events name the parent thread but belong to a child thread
 // (the child identity rides in providerRefs).
 function isSubagentChildRuntimeEvent(event: ProviderRuntimeEvent): boolean {
@@ -1986,7 +2016,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 (lifecycle.currentGeneration(event.threadId) === undefined ||
                   binding.lifecycleGeneration === event.lifecycleGeneration ||
                   (event.turnId !== undefined && boundActiveTurnId === String(event.turnId)));
-              if (!staleTerminalSettlesThread) {
+              // Task-list snapshots are turn progress rather than lifecycle
+              // transitions. Retain their resume cursor only while the exact
+              // turn still owns this binding; never adopt the stale generation.
+              const staleTaskListUpdatesOwnedTurn =
+                event.type === "turn.tasks.updated" &&
+                event.turnId !== undefined &&
+                boundActiveTurnId === String(event.turnId);
+              if (!staleTerminalSettlesThread && !staleTaskListUpdatesOwnedTurn) {
                 return;
               }
             }
@@ -2213,7 +2250,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 currentLifecycleGeneration: currentGeneration,
               }).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
             }
-            if (!staleEventIsSettling) {
+            const staleTurnProgress =
+              event.turnId !== undefined && isStaleTurnProgressRuntimeEvent(event);
+            if (!staleEventIsSettling && !staleTurnProgress) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
               // nothing, and the runtime reconciler later settles the turn as
@@ -2226,7 +2265,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 currentLifecycleGeneration: currentGeneration,
               });
             }
-            if (currentGeneration !== undefined) {
+            if (currentGeneration !== undefined || staleTurnProgress) {
               // Terminal events may still own the persisted generation even
               // after the lifecycle rotates. Other settling events must name
               // the binding's active turn. An idle replacement is newer state
@@ -2252,7 +2291,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     });
                   }
                   return Effect.logInfo(
-                    "provider.session.stale_generation_terminal_event_accepted",
+                    staleTurnProgress
+                      ? "provider.session.stale_generation_turn_progress_accepted"
+                      : "provider.session.stale_generation_terminal_event_accepted",
                     {
                       threadId: event.threadId,
                       provider: event.provider,
@@ -2677,6 +2718,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
         return matches.find((match) => match !== null) ?? null;
       });
+
+    const restoreSessionBinding: NonNullable<ProviderServiceShape["restoreSessionBinding"]> = (
+      input,
+    ) =>
+      lifecycle.runCurrent(input.threadId, (generation) =>
+        withBindingWriteLock(
+          input.threadId,
+          Effect.gen(function* () {
+            if (Option.isSome(yield* directory.getBinding(input.threadId))) return false;
+            const live = yield* findLiveSession(input.threadId);
+            if (
+              !live ||
+              live.session.status !== "running" ||
+              live.session.activeTurnId !== input.expectedTurnId
+            )
+              return false;
+            yield* upsertSessionBinding(live.session, input.threadId, {
+              ...(generation !== undefined ? { lifecycleGeneration: generation } : {}),
+              launchOptionsAuthoritative: false,
+            });
+            return true;
+          }),
+        ),
+      );
 
     const stopStaleSessionsForThread = (input: {
       readonly threadId: ThreadId;
@@ -5012,6 +5077,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ),
         );
 
+    const requiresModelSelectionRestart: NonNullable<
+      ProviderServiceShape["requiresModelSelectionRestart"]
+    > = (threadId, selection) =>
+      lifecycle.runCurrent(threadId, () =>
+        Effect.gen(function* () {
+          const routed = yield* resolveRoutableSession({
+            threadId,
+            operation: "ProviderService.requiresModelSelectionRestart",
+            allowRecovery: false,
+          });
+          return routed.adapter.requiresModelSelectionRestart
+            ? yield* routed.adapter.requiresModelSelectionRestart(threadId, selection)
+            : undefined;
+        }),
+      );
+
     const getClaudeCacheObservation: NonNullable<
       ProviderServiceShape["getClaudeCacheObservation"]
     > = (threadId) =>
@@ -5254,11 +5335,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       respondToUserInput,
       stopSession,
       stopRuntimeSession,
+      restoreSessionBinding,
       hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,
       getClaudeCacheObservation,
+      requiresModelSelectionRestart,
       startClaudeCompaction,
       cancelClaudeCompactionDiscovery,
       rollbackConversation,

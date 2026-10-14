@@ -438,6 +438,72 @@ describe("orchestration projector", () => {
     });
   });
 
+  it("keeps future client turn timestamps out of the pending-start recovery fence", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const observedAt = "2026-02-23T08:00:05.000Z";
+    const clientCreatedAt = "2026-02-24T08:00:05.000Z";
+    const recoveryCutoff = "2026-02-23T08:00:06.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.turn-start-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: observedAt,
+          commandId: "cmd-turn-start",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: clientCreatedAt,
+          },
+        }),
+      ),
+    );
+
+    // The stale-start query compares the maximum of these row timestamps with
+    // its cutoff. A future client clock must not keep this pending start out of range.
+    expect(next.threads[0]?.updatedAt).toBe(observedAt);
+    expect(next.threads[0]?.session?.updatedAt).toBe(observedAt);
+    expect(Date.parse(next.threads[0]!.updatedAt)).toBeLessThan(Date.parse(clientCreatedAt));
+    const reconciliationObservedAt = Math.max(
+      Date.parse(next.threads[0]!.updatedAt),
+      Date.parse(next.threads[0]!.session!.updatedAt),
+    );
+    expect(reconciliationObservedAt).toBeLessThanOrEqual(Date.parse(recoveryCutoff));
+  });
+
   it("lets empty threads adopt the requested first-turn provider", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const turnRequestedAt = "2026-02-23T08:00:05.000Z";

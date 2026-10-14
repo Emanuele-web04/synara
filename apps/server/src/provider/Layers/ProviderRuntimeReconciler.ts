@@ -112,6 +112,15 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       readonly now: string;
     }) {
       const { plan, thread, now } = input;
+      if (plan.action === "restore-running-binding") {
+        if (providerService.restoreSessionBinding) {
+          yield* providerService.restoreSessionBinding({
+            threadId: plan.threadId,
+            expectedTurnId: plan.runtimeTurnId,
+          });
+        }
+        return;
+      }
       const runtimeMode = thread.session?.runtimeMode ?? thread.runtimeMode;
       const session: OrchestrationSession = {
         threadId: plan.threadId,

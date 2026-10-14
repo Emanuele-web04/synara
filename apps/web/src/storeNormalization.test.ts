@@ -185,7 +185,11 @@ describe("durable task activity retention", () => {
       activity("turn.tasks.updated", { tasks: [{ task: "Finish work", status: "inProgress" }] }),
     ];
     const appendNoise = () => {
-      for (let index = 0; index < 2001; index += 1) {
+      retained = capThreadActivities([
+        ...retained,
+        ...Array.from({ length: 2000 }, () => activity("tool.started", {})),
+      ]);
+      for (let index = 0; index < 3; index += 1) {
         retained = capThreadActivities([...retained, activity("tool.started", {})]);
       }
     };

@@ -310,6 +310,9 @@ function makeWedgeTestLayer(factory: ReturnType<typeof makeWedgeRuntimeFactory>)
 }
 
 describe("resolveDevinAdapterTimeouts", () => {
+  it("uses the shared six-hour default for the real turn watchdog", () => {
+    expect(resolveDevinAdapterTimeouts({}).turnIdleMs).toBe(6 * 60 * 60 * 1000);
+  });
   it("uses valid environment overrides", () => {
     expect(
       resolveDevinAdapterTimeouts({

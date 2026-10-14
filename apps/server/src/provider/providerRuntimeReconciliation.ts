@@ -22,13 +22,10 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
 /**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. Reconciliation loads
- * `thread.updatedAt` with the latest message activity for the projected
- * in-flight turn, so a legitimately long-running turn keeps resetting this
- * clock and is never affected by unrelated concurrent messages.
+ * Maximum age before recovering a stale projection with no identifiable live
+ * turn. A concrete live turn always wins; missing bindings are restored first.
+ * This bound is for abandoned starts and missing or
+ * otherwise unidentifiable runtime turns.
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
@@ -44,7 +41,7 @@ export const RUNTIME_RECONCILIATION_MAX_STALLED_START_AGE_MS = 10 * 60_000;
 
 export type ProviderRuntimeReconciliationPlan =
   | {
-      readonly action: "align-running-turn";
+      readonly action: "align-running-turn" | "restore-running-binding";
       readonly threadId: ThreadId;
       readonly provider: ProviderRuntimeBinding["provider"];
       readonly projectedTurnId: TurnId | null;
@@ -250,12 +247,31 @@ export function planProviderRuntimeReconciliation(input: {
     // Native child threads share a parent session and intentionally have no
     // directory binding of their own; their parent's terminal events settle
     // them. Only step in once the turn is abandoned outright.
+    if (
+      !binding &&
+      liveSession?.status === "running" &&
+      turnIdOrNull(liveSession.activeTurnId) !== null
+    ) {
+      plans.push({
+        action: "restore-running-binding",
+        threadId: thread.id,
+        provider: liveSession.provider,
+        projectedTurnId: projectedInFlightTurnId(thread),
+        runtimeTurnId: TurnId.makeUnsafe(liveSession.activeTurnId!),
+        reason: "A live turn has lost its durable provider routing binding.",
+      });
+      continue;
+    }
     if (!binding && !abandoned) continue;
 
     const projectedTurnId = projectedInFlightTurnId(thread);
     const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
-    if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
+    // A bound live provider turn is the strongest evidence available, even when the
+    // event stream has been silent for hours. Never abandon work the runtime
+    // still reports as active; the age fuse is only for sessions with no
+    // identifiable live turn.
+    if (binding && liveSession?.status === "running" && liveTurnId !== null) {
       if (liveTurnId === projectedTurnId) continue;
       plans.push({
         action: "align-running-turn",

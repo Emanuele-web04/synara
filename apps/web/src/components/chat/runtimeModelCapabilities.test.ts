@@ -3,9 +3,38 @@ import { describe, expect, it } from "vitest";
 
 import { providerModelSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { mergeDynamicModelOptions } from "../../providerModelOptions";
-import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
+import {
+  getRuntimeAwareModelCapabilities,
+  resolveRuntimeModelDescriptor,
+} from "./runtimeModelCapabilities";
 
 describe("resolveRuntimeModelDescriptor", () => {
+  it("uses Claude's discovered efforts and respects explicit unsupported values", () => {
+    const runtimeModel: ProviderModelDescriptor = {
+      slug: "claude-haiku-5-5",
+      name: "Haiku 5.5",
+      supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
+      defaultReasoningEffort: "medium",
+    };
+    const caps = getRuntimeAwareModelCapabilities({
+      provider: "claudeAgent",
+      model: runtimeModel.slug,
+      runtimeModel,
+    });
+    expect(caps.reasoningEffortLevels.map((level) => level.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(caps.reasoningEffortLevels.find((level) => level.isDefault)?.value).toBe("medium");
+
+    const unsupported = getRuntimeAwareModelCapabilities({
+      provider: "claudeAgent",
+      model: runtimeModel.slug,
+      runtimeModel: { ...runtimeModel, supportedReasoningEfforts: [] },
+    });
+    expect(unsupported.reasoningEffortLevels).toEqual([]);
+  });
   it("matches a Claude model by its resolved canonical id", () => {
     const runtimeModels: ReadonlyArray<ProviderModelDescriptor> = [
       {

@@ -28,6 +28,15 @@ describe("Claude explicit compact overrides", () => {
       expect(getModelCapabilities("claudeAgent", model).contextWindowTokens).toBe(1_000_000);
     },
   );
+  it("supports Haiku 5.5's 1M auto-compact override", () => {
+    const model = "claude-haiku-5-5";
+    const options = normalizeClaudeModelOptions(model, { autoCompactWindow: "1m" });
+    expect(resolveSelectedClaudeAutoCompactWindow(model, options?.autoCompactWindow)).toBe(
+      1_000_000,
+    );
+    expect(getModelCapabilities("claudeAgent", model).contextWindowTokens).toBe(1_000_000);
+  });
+
   it.each(["claude-opus-4-6", "claude-sonnet-4-6"])(
     "opts %s into extended context when 1M is requested",
     (model) => {

@@ -41,6 +41,38 @@ const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => (
   },
 });
 
+it.effect("indexes the same canonical event identity that the journal serializes", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const persisted = yield* repository.append(runtimeEvent("index-canonical-1", "Hello"));
+    const rows = yield* sql<{
+      eventId: string;
+      threadId: string;
+      turnId: string;
+      eventType: string;
+      eventJson: string;
+    }>`
+      SELECT event_id AS "eventId", thread_id AS "threadId",
+        turn_id AS "turnId", event_type AS "eventType", event_json AS "eventJson"
+      FROM provider_runtime_events
+      WHERE sequence = ${persisted.sequence}
+    `;
+    assert.lengthOf(rows, 1);
+    const row = rows[0]!;
+    const stored = JSON.parse(row.eventJson);
+    assert.deepEqual(
+      [row.eventId, row.threadId, row.turnId, row.eventType],
+      [stored.eventId, stored.threadId, stored.turnId, stored.type],
+    );
+    assert.strictEqual(row.eventId, persisted.event.eventId);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
 const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -423,6 +455,39 @@ it.effect("journals image metadata and replays it without the model image body",
       ],
     });
     assert.equal(image.data, data);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+it.effect("canonicalizes provider whitespace before strict journal encoding", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const event: ProviderRuntimeEvent = {
+      type: "event.unmapped",
+      eventId: EventId.makeUnsafe("whitespace-detail"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("normalize-thread"),
+      createdAt: "2026-10-10T00:00:00Z",
+      payload: { nativeType: "item/future/outputDelta", detail: "  provider output\n" },
+    };
+    const stored = yield* repository.append(event);
+    const rows = yield* repository.readAfter({
+      sequenceExclusive: 0,
+      throughSequenceInclusive: stored.sequence,
+      limit: 10,
+    });
+    assert.deepStrictEqual(rows[0]?.event.payload, {
+      nativeType: "item/future/outputDelta",
+      detail: "provider output",
+    });
+    const duplicate = yield* repository.append({
+      ...event,
+      payload: { nativeType: "item/future/outputDelta", detail: "provider output" },
+    });
+    assert.equal(duplicate.sequence, stored.sequence);
   }).pipe(
     Effect.provide(
       ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),

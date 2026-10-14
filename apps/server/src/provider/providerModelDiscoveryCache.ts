@@ -51,7 +51,7 @@ export interface ProviderModelDiscoveryCacheKey {
   readonly experimentalWebSockets: boolean;
   readonly environmentKey: string | null;
   readonly cwd: string | null;
-  /** Claude catalogs depend on the installed CLI version, even at the same path. */
+  /** Catalogs depend on the installed runtime version, even at the same path. */
   readonly runtimeVersion?: string | null;
 }
 

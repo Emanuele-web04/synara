@@ -887,7 +887,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(isSidechatThread(existingRow.value)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
-            updatedAt: event.payload.createdAt,
+            updatedAt: event.occurredAt,
           });
           return;
         }
@@ -1383,13 +1383,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               null,
             ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
-            requestedAt: event.payload.createdAt,
+            observedAt: event.occurredAt,
           });
           if (turnStartSession !== null) {
             yield* projectionThreadSessionRepository.upsert({
               ...turnStartSession,
-              lastActivityAt: event.payload.createdAt,
-              lastProgressAt: event.payload.createdAt,
+              lastActivityAt: event.occurredAt,
+              lastProgressAt: event.occurredAt,
               providerInstanceId: turnStartSession.providerInstanceId ?? null,
             });
           }

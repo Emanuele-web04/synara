@@ -1921,6 +1921,135 @@ it.effect("restores a sessionless imported thread's routed model selection after
   ),
 );
 
+it.effect("reconciles a pending start despite a future client clock", () =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const projectionLayer = Layer.mergeAll(
+      OrchestrationProjectionPipelineLive,
+      OrchestrationProjectionSnapshotQueryLive,
+    ).pipe(
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(persistenceLayer),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    const result = yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.makeUnsafe("project-future-clock-start");
+      const threadId = ThreadId.makeUnsafe("thread-future-clock-start");
+      const serverObservedAt = "2026-02-23T08:00:05.000Z";
+      const clientCreatedAt = "2026-02-24T08:00:05.000Z";
+
+      const appendAndProject = (event: Parameters<OrchestrationEventStoreShape["append"]>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-future-clock-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: "2026-02-23T08:00:00.000Z",
+        commandId: CommandId.makeUnsafe("cmd-future-clock-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-future-clock-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Future clock recovery",
+          workspaceRoot: "/tmp/project-future-clock-start",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-02-23T08:00:00.000Z",
+          updatedAt: "2026-02-23T08:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-future-clock-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-02-23T08:00:00.000Z",
+        commandId: CommandId.makeUnsafe("cmd-future-clock-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-future-clock-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Pending start",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-02-23T08:00:00.000Z",
+          updatedAt: "2026-02-23T08:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-future-clock-start"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: serverObservedAt,
+        commandId: CommandId.makeUnsafe("cmd-future-clock-start"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-future-clock-start"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-future-clock-start"),
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: clientCreatedAt,
+        },
+      });
+
+      const persistedTimestamps = yield* sql<{
+        readonly threadUpdatedAt: string;
+        readonly sessionUpdatedAt: string;
+      }>`
+        SELECT
+          threads.updated_at AS "threadUpdatedAt",
+          sessions.updated_at AS "sessionUpdatedAt"
+        FROM projection_threads AS threads
+        JOIN projection_thread_sessions AS sessions USING (thread_id)
+        WHERE threads.thread_id = ${threadId}
+      `;
+      const staleCandidates = yield* snapshotQuery.listStaleInFlightThreadIds({
+        updatedBefore: "2026-02-23T08:10:05.000Z",
+        limit: 10,
+      });
+
+      return { persistedTimestamps, staleCandidates, threadId, serverObservedAt };
+    }).pipe(Effect.provide(projectionLayer));
+
+    assert.deepEqual(result.persistedTimestamps, [
+      {
+        threadUpdatedAt: result.serverObservedAt,
+        sessionUpdatedAt: result.serverObservedAt,
+      },
+    ]);
+    assert.deepEqual(result.staleCandidates, [result.threadId]);
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-future-clock-start-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
+
 it.effect("fast-forwards lagging hot projector cursors before restart replay", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
