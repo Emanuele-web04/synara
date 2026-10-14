@@ -150,7 +150,11 @@ async function browserSmoke(
     );
     return prepared.prepared_pid;
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    // The driver-owned browser remains alive for the host teardown exercise.
+    // Close its fixture keep-alive/preconnect sockets before awaiting the server.
+    server.closeAllConnections();
+    await closed;
   }
 }
 

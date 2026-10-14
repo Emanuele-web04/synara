@@ -78,7 +78,6 @@ jobs:
           "CUA_NATIVE_SOURCE=$source" >> $env:GITHUB_ENV
 
       - name: Compile the real Windows daemon
-        id: compile
         run: cargo build --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver
 
       - name: Prove the native typing regression fails before the actuator fix
@@ -147,7 +146,6 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Verify production source provisioning
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         shell: pwsh
         run: |
           node apps/desktop/scripts/provision-cua-driver.mjs --platform win32 --arch x64 --source-checkout "$env:CUA_NATIVE_SOURCE" --destination "$env:RUNNER_TEMP/cua-windows-artifact"
