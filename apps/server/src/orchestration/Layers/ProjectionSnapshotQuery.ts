@@ -2053,6 +2053,45 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 AND turn_id IS NOT cutoff_turn_id
             ) AS has_newer_turn
           FROM cutoff_turn
+        ),
+        -- Resolve the newest task state and the newest value of each task
+        -- patch field in one pass. Per-row NOT EXISTS lookups re-scanned the
+        -- whole thread for every task row and stalled long-lived threads.
+        task_activities AS MATERIALIZED (
+          SELECT
+            ranked.activity_id,
+            ranked.activity_rank,
+            activity.kind,
+            activity.payload_json,
+            json_extract(activity.payload_json, '$.taskId') AS task_id
+          FROM ranked
+          JOIN projection_thread_activities AS activity USING (thread_id, activity_id)
+          WHERE activity.kind IN ('task.updated', 'task.progress', 'task.completed')
+        ),
+        latest_task_states AS MATERIALIZED (
+          SELECT activity_id
+          FROM (
+            SELECT
+              activity_id,
+              activity_rank,
+              MIN(activity_rank) OVER (PARTITION BY task_id) AS newest_rank
+            FROM task_activities
+            WHERE kind IN ('task.updated', 'task.completed') AND task_id IS NOT NULL
+          )
+          WHERE activity_rank = newest_rank
+        ),
+        latest_task_patches AS MATERIALIZED (
+          SELECT DISTINCT activity_id
+          FROM (
+            SELECT
+              task.activity_id,
+              task.activity_rank,
+              patch.key,
+              MIN(task.activity_rank) OVER (PARTITION BY task.task_id, patch.key) AS newest_rank
+            FROM task_activities AS task, json_each(task.payload_json) AS patch
+            WHERE task.task_id IS NOT NULL
+          )
+          WHERE key != 'taskId' AND activity_rank = newest_rank
         )
         SELECT
           activity_id AS "activityId",
@@ -2123,30 +2162,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             -- displaced by earlier updates with lexically larger random IDs.
             OR (activity.kind = 'task.started' AND json_type(activity.payload_json, '$.taskId') = 'text')
             OR (activity.kind IN ('task.updated', 'task.completed')
-              AND json_type(activity.payload_json, '$.taskId') = 'text' AND NOT EXISTS (
-              SELECT 1 FROM ranked AS later_ranked
-              JOIN projection_thread_activities AS later USING (thread_id, activity_id)
-              WHERE later.thread_id = activity.thread_id
-                AND later.kind IN ('task.updated', 'task.completed')
-                AND json_extract(later.payload_json, '$.taskId') = json_extract(activity.payload_json, '$.taskId')
-                AND later_ranked.activity_rank < ranked.activity_rank
-            ))
+              AND json_type(activity.payload_json, '$.taskId') = 'text'
+              AND ranked.activity_id IN (SELECT activity_id FROM latest_task_states))
             OR (activity.kind IN ('task.updated', 'task.progress')
-              AND json_type(activity.payload_json, '$.taskId') = 'text' AND EXISTS (
-              SELECT 1 FROM json_each(activity.payload_json) patch
-              WHERE patch.key != 'taskId' AND NOT EXISTS (
-                SELECT 1 FROM ranked AS later_ranked
-                JOIN projection_thread_activities AS later USING (thread_id, activity_id)
-                WHERE later.thread_id = activity.thread_id
-                  AND later.kind IN ('task.updated', 'task.progress', 'task.completed')
-                  AND json_extract(later.payload_json, '$.taskId') = json_extract(activity.payload_json, '$.taskId')
-                  AND EXISTS (
-                    SELECT 1 FROM json_each(later.payload_json) newer_patch
-                    WHERE newer_patch.key = patch.key
-                  )
-                  AND later_ranked.activity_rank < ranked.activity_rank
-              )
-            ))
+              AND json_type(activity.payload_json, '$.taskId') = 'text'
+              AND ranked.activity_id IN (SELECT activity_id FROM latest_task_patches))
             OR (activity.kind = 'turn.tasks.updated' AND NOT EXISTS (
               SELECT 1 FROM ranked AS later_ranked
               JOIN projection_thread_activities AS later USING (thread_id, activity_id)
