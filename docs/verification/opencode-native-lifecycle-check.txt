@@ -1,0 +1,10 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/OpenCodeAdapter.live.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1808/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  21:25:53
+   Duration  41.85s (transform 977ms, setup 0ms, import 1.53s, tests 40.12s, environment 0ms)
+

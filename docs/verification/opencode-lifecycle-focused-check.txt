@@ -1,0 +1,10 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/OpenCodeAdapter.test.ts src/provider/Layers/CodexAdapter.test.ts src/provider/testSupport/adapterLifecycleConformance.test.ts src/provider/providerAdapterConformance.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1808/apps/server
+
+
+ Test Files  4 passed (4)
+      Tests  181 passed (181)
+   Start at  21:30:59
+   Duration  5.77s (transform 1.35s, setup 0ms, import 2.87s, tests 2.31s, environment 0ms)
+

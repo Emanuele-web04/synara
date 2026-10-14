@@ -1,3 +1,4 @@
+import nativeLateRoleTrace from "../testSupport/opencode-native-late-role-trace.json";
 import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
@@ -10,6 +11,11 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import {
+  assertAdapterCleanupConformance,
+  assertTerminalOutcomeConformance,
+  assertSessionTeardownConformance,
+} from "../testSupport/adapterLifecycleConformance.ts";
 import { describe, it, expect, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
@@ -170,6 +176,7 @@ function createMockOpenCodeRuntime(options?: {
   readonly serverExit?: Effect.Effect<number>;
   readonly serverPassword?: string;
   readonly sessionCreateError?: Error;
+  readonly sessionCreateIds?: ReadonlyArray<string>;
   readonly sessionUpdate?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly scopeCloseDefect?: boolean;
   readonly connectBarrier?: Effect.Effect<void>;
@@ -212,7 +219,9 @@ function createMockOpenCodeRuntime(options?: {
       create: async (input: Record<string, unknown>) => {
         createCalls.push(input);
         if (options?.sessionCreateError) throw options.sessionCreateError;
-        return { data: { id: "opencode-session-1" } };
+        return {
+          data: { id: options?.sessionCreateIds?.[createCalls.length - 1] ?? "opencode-session-1" },
+        };
       },
       update: async (input: Record<string, unknown>) => {
         updateCalls.push(input);
@@ -1923,6 +1932,37 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.abortCalls).toHaveLength(1);
   });
 
+  it("satisfies shared adapter cleanup conformance", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      sessionCreateIds: ["conformance-native-first", "conformance-native-second"],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* assertAdapterCleanupConformance(adapter, {
+          provider: "opencode",
+          runtimeMode: "full-access",
+          cwd: "/repo",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.abortCalls).toEqual([
+      { sessionID: "conformance-native-first" },
+      { sessionID: "conformance-native-second" },
+    ]);
+  });
+
   it("does not touch an external OpenCode MCP registry when its setup hook would fail", async () => {
     let activeSetupAttempts = 0;
     const runtime = createMockOpenCodeRuntime({
@@ -2759,9 +2799,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents,
+            (event) =>
+              event.type === "session.exited" && event.threadId === asThreadId("teardown-fence"),
+          ),
+        ).pipe(Effect.forkChild);
 
         yield* adapter.startSession({
           provider: "opencode",
@@ -2788,6 +2832,17 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         yield* adapter.interruptTurn(asThreadId("thread-1"));
 
         const [readySession] = yield* adapter.listSessions();
+        yield* adapter.interruptTurn(asThreadId("thread-1"));
+        yield* adapter.stopSession(asThreadId("thread-1"));
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("teardown-fence"),
+          lifecycleGeneration: "generation-opencode-a",
+          runtimeMode: "full-access",
+        });
+        // Await the replacement context finalizers before ending observation.
+        yield* adapter.stopSession(asThreadId("teardown-fence"));
+        yield* adapter.stopAll();
         const events = Array.from(yield* Fiber.join(eventsFiber));
 
         return { events, readySession, runningSession };
@@ -2818,6 +2873,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
     expect(runtime.abortCalls.length).toBeGreaterThanOrEqual(1);
     expect(runtime.abortCalls[0]).toEqual({ sessionID: "opencode-session-1" });
+    assertTerminalOutcomeConformance(result.events);
+    // Ordinary CI observes through the replacement teardown barrier. The live
+    // test separately observes native output through replacement completion.
+    assertSessionTeardownConformance(result.events, asThreadId("thread-1"));
     expect(result.runningSession?.status).toBe("running");
     expect(result.runningSession?.activeTurnId).toBeDefined();
     expect(result.readySession).toMatchObject({
@@ -2831,6 +2890,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "thread.started",
       "turn.started",
       "turn.aborted",
+      "session.exited",
+      "session.started",
+      "thread.started",
+      "session.exited",
     ]);
     expect(
       result.events.every((event) => event.lifecycleGeneration === "generation-opencode-a"),
@@ -3036,6 +3099,81 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       payload: {
         itemType: "assistant_message",
         detail: "Hello",
+      },
+    });
+  });
+
+  it("replays the captured native late-role trace without duplicating cumulative text", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    const sdk = client as unknown as { session: { create: () => Promise<unknown> } };
+    sdk.session.create = async () => ({
+      data: { id: nativeLateRoleTrace[0]!.properties.sessionID },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "turn.completed"),
+        ).pipe(Effect.forkChild);
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-ordered-events"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-ordered-events"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        for (const event of nativeLateRoleTrace) eventQueue.push(event);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+
+        return { events, turn };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.turn.turnId).toBeDefined();
+    expect(result.events.find((event) => event.type === "content.delta")).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "NATIVE_PARALLEL_OK",
+      },
+    });
+    expect(result.events.find((event) => event.type === "item.completed")).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "assistant_message",
+        detail: "NATIVE_PARALLEL_OK",
       },
     });
   });

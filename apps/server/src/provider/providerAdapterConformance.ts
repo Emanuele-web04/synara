@@ -18,7 +18,8 @@ type OptionalAdapterMethod =
   | "listCommands"
   | "listPlugins"
   | "readPlugin"
-  | "listModels";
+  | "listModels"
+  | "forkThread";
 
 type RequiredAdapterMethod =
   | "startSession"
@@ -66,6 +67,7 @@ const CAPABILITY_METHOD_REQUIREMENTS: ReadonlyArray<{
   { capability: "supportsNativeSlashCommandDiscovery", methods: ["listCommands"] },
   { capability: "supportsPluginDiscovery", methods: ["listPlugins", "readPlugin"] },
   { capability: "supportsRuntimeModelList", methods: ["listModels"] },
+  { capability: "supportsForkThroughTurn", methods: ["forkThread"] },
 ];
 
 export function providerAdapterConformanceIssues(
@@ -77,6 +79,15 @@ export function providerAdapterConformanceIssues(
       issues.push({ missingMethod: method });
     }
   }
+  issues.push(...providerAdapterCapabilityConformanceIssues(adapter));
+  return issues;
+}
+
+export function providerAdapterCapabilityConformanceIssues(
+  adapter: Pick<ProviderAdapterShape<unknown>, "capabilities"> &
+    Partial<ProviderAdapterShape<unknown>>,
+): ProviderAdapterConformanceIssue[] {
+  const issues: ProviderAdapterConformanceIssue[] = [];
   for (const requirement of CAPABILITY_METHOD_REQUIREMENTS) {
     if (adapter.capabilities[requirement.capability] !== true) {
       continue;
@@ -91,6 +102,17 @@ export function providerAdapterConformanceIssues(
     }
   }
   return issues;
+}
+
+export function assertAdapterCapabilityConformance(
+  adapter: Pick<ProviderAdapterShape<unknown>, "capabilities"> &
+    Partial<ProviderAdapterShape<unknown>>,
+): void {
+  const issues = providerAdapterCapabilityConformanceIssues(adapter);
+  if (issues.length)
+    throw new Error(
+      issues.map((issue) => `${issue.capability} requires ${issue.missingMethod}`).join(", "),
+    );
 }
 
 export function providerAdapterRegistrationIssues(

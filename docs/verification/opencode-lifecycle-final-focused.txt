@@ -1,0 +1,20 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/OpenCodeAdapter.test.ts src/provider/openCodeMessageState.test.ts src/provider/testSupport/adapterLifecycleConformance.test.ts src/provider/providerAdapterConformance.test.ts src/provider/Layers/ClaudeAgentAdapter.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1808/apps/server
+
+
+ Test Files  4 passed (4)
+      Tests  128 passed (128)
+   Start at  22:18:18
+   Duration  6.16s (transform 1.40s, setup 0ms, import 2.62s, tests 2.82s, environment 0ms)
+
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/CodexAdapter.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1808/apps/server
+
+
+ Test Files  1 passed (1)
+      Tests  59 passed (59)
+   Start at  22:18:59
+   Duration  4.68s (transform 2.83s, setup 0ms, import 3.91s, tests 507ms, environment 0ms)
+

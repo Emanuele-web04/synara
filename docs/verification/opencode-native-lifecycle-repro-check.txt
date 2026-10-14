@@ -1,0 +1,12 @@
+$ vitest run --maxWorkers=1 --no-file-parallelism src/provider/Layers/OpenCodeAdapter.live.test.ts
+
+ RUN  v4.1.10 /workspace/scratch/a47932516920/pr-1808/apps/server
+
+ ✓ src/provider/Layers/OpenCodeAdapter.live.test.ts (1 test) 18943ms
+     ✓ isolates real native sessions and observes cancellation through replacement completion  18942ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  01:01:58
+   Duration  20.40s (transform 851ms, setup 0ms, import 1.32s, tests 18.94s, environment 0ms)
+

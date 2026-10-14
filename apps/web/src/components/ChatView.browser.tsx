@@ -2226,6 +2226,9 @@ async function mountChatView(options: {
     }),
   );
 
+  // Load the code-split route before measuring fixture RPC/hydration.
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
