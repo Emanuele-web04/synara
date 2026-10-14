@@ -30,6 +30,7 @@ export interface BetterwrightRunOptions {
   readonly vault?: CredentialVault;
   readonly uploadFiles?: readonly string[];
   readonly expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"];
+  readonly retainFocusAfterInput?: BrowserAutomationVisibleRuntime["retainFocusAfterInput"];
 }
 
 /** The caller must hold Synara's tab, human-control and download-denial leases. */
@@ -53,6 +54,7 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
   const hostTarget = synaraHostTarget(options.contents, {
     uploadFiles: options.uploadFiles,
     expectAgentInput: options.expectAgentInput,
+    retainFocusAfterInput: options.retainFocusAfterInput,
     signal: options.signal,
   });
   let onAbortRace: (() => void) | undefined;
