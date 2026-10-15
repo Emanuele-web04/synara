@@ -11,20 +11,24 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           ref: 7fb4a362e1224898f0d35493949690320a306696
           persist-credentials: false
-      - name: Archive pinned tracked source only
+      - uses: ./.github/actions/setup-workspace
+      - name: Archive pinned validation tools without credentials
         run: |
-          mkdir -p "$RUNNER_TEMP/notion-ux-workspace"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/notion-ux-workspace/source.tar.gz"
+          mkdir -p "$RUNNER_TEMP/notion-ux-workspace/bin"
+          cp "$(command -v bun)" "$RUNNER_TEMP/notion-ux-workspace/bin/bun"
+          cp "$(command -v node)" "$RUNNER_TEMP/notion-ux-workspace/bin/node"
+          tar -czf "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules
           git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-workspace/source-commit.txt"
       - uses: actions/upload-artifact@v7
         with:
-          name: notion-ux-pinned-workspace
+          name: notion-ux-validation-tools
           path: ${{ runner.temp }}/notion-ux-workspace
           retention-days: 2
+          compression-level: 0
           if-no-files-found: error
