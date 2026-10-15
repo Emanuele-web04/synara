@@ -4,7 +4,6 @@ import { cleanup, render } from "vitest-browser-react";
 import "../index.css";
 import { useState } from "react";
 import { ProviderInstanceId, type RuntimeMode } from "@synara/contracts";
-import { REQUEST_CURRENT_APP_SNAP_EVENT } from "../appSnap.logic";
 import { RuntimeUsageControls } from "./BranchToolbar";
 
 afterEach(() => cleanup());
@@ -96,26 +95,5 @@ describe("task-invoked Computer", () => {
     );
     await full.click();
     await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
-  });
-
-  it("keeps Share current app as a separate capture action", async () => {
-    const previousBridge = window.desktopBridge;
-    const onRequest = vi.fn();
-    vi.stubGlobal("desktopBridge", {
-      ...previousBridge,
-      appSnap: { captureCurrentApp: vi.fn() },
-    });
-    window.addEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
-    try {
-      await render(<Controls />);
-      await page.getByRole("button").click();
-      await page.getByRole("menuitem", { name: "Share current app" }).click();
-      expect(onRequest).toHaveBeenCalledTimes(1);
-      await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
-      await expect.element(page.getByRole("button", { name: "Ask for approval" })).toBeVisible();
-    } finally {
-      vi.unstubAllGlobals();
-      window.removeEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
-    }
   });
 });

@@ -1862,6 +1862,12 @@ async function waitForURL(
   return pathname;
 }
 
+function queryComposerShell(): HTMLElement {
+  return document.querySelector<HTMLElement>(
+    'form[data-chat-composer-form="true"] .chat-composer-shell',
+  )!;
+}
+
 async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
     () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
@@ -2210,6 +2216,7 @@ async function mountChatView(options: {
   configureFixture?: (fixture: TestFixture) => void;
   initialEntry?: string;
   onRender?: ProfilerOnRenderCallback;
+  strictMode?: boolean;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -2233,9 +2240,12 @@ async function mountChatView(options: {
   ) : (
     <RouterProvider router={router} />
   );
-  const screen = await render(content, {
-    container: host,
-  });
+  const screen = await render(
+    options.strictMode ? <React.StrictMode>{content}</React.StrictMode> : content,
+    {
+      container: host,
+    },
+  );
 
   try {
     await waitForMountedChatReady({
@@ -5035,12 +5045,13 @@ describe("ChatView transcript geometry (full app)", () => {
           provider: "codex",
           model: "gpt-5.5",
         });
+        // The composer trigger shows the model without its family prefix ("5.5").
         await vi.waitFor(() =>
           expect(
-            [...document.querySelectorAll("button")].some((button) =>
-              (button.textContent ?? "").includes("GPT-5.5"),
-            ),
-          ).toBe(true),
+            document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Change model and reasoning"]',
+            )?.textContent ?? "",
+          ).toContain("5.5"),
         );
         releaseUpload();
         await vi.waitFor(() =>
@@ -8665,6 +8676,138 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(
         page.getByRole("dialog", { name: "Model effort", exact: true }).elements(),
       ).toHaveLength(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a started thread's composer on one row until the draft needs more", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-single-row-composer"),
+        targetText: "Single row composer",
+      }),
+    });
+    try {
+      const editor = await waitForComposerEditor();
+      const shell = queryComposerShell;
+      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBe("row"));
+      // Permission, model and context sit in the row under the composer, not in the pill.
+      const statusRow = document.querySelector<HTMLElement>("[data-chat-composer-status-row]");
+      expect(statusRow).not.toBeNull();
+      expect(shell().contains(statusRow)).toBe(false);
+
+      await userEvent.click(editor);
+      // Short enough to fit the row's editor slot at any column width.
+      await userEvent.keyboard("ok");
+      expect(shell().dataset.composerLayout).toBe("row");
+
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
+      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBeUndefined());
+      expect(document.activeElement).toBe(editor);
+
+      await userEvent.clear(editor);
+      await userEvent.keyboard("ok");
+      await vi.waitFor(() => expect(shell().dataset.composerLayout).toBe("row"));
+      expect(document.activeElement).toBe(editor);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps long branch controls separate from the model in a narrow editor chat", async () => {
+    const longBranch =
+      "feature/verify-the-composer-in-a-very-narrow-editor-sidebar-with-a-long-branch-name";
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("msg-narrow-composer-branch"),
+      targetText: "Narrow editor composer",
+    });
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 1280, height: 720 },
+      strictMode: true,
+      snapshot: {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => ({
+          ...thread,
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            options: { effort: "high" },
+          },
+          session: { ...thread.session!, providerName: "claudeAgent" },
+        })),
+      },
+      initialEntry: `/${THREAD_ID}?view=editor`,
+      configureFixture: (state) => {
+        state.gitBranchByCwd["/repo/project"] = longBranch;
+      },
+    });
+    try {
+      await waitForComposerEditor();
+      const row = document.querySelector<HTMLElement>("[data-chat-composer-status-row]")!;
+      const branch = row.querySelector<HTMLElement>('[data-slot="combobox-trigger"]')!;
+      const model = page
+        .getByRole("button", { name: "Change model and reasoning", exact: true })
+        .element();
+      await vi.waitFor(() => expect(branch.textContent).toContain(longBranch));
+      const branchRect = branch.getBoundingClientRect();
+      const modelRect = model.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      expect(branchRect.width).toBeGreaterThan(48);
+      expect(branch.scrollWidth).toBeLessThanOrEqual(branch.clientWidth + 1);
+      expect(branchRect.left).toBeGreaterThanOrEqual(rowRect.left);
+      expect(branchRect.right).toBeLessThanOrEqual(rowRect.right);
+      expect(modelRect.right).toBeLessThanOrEqual(rowRect.right);
+      expect(branchRect.right <= modelRect.left || branchRect.bottom <= modelRect.top).toBe(true);
+      await userEvent.fill(page.getByTestId("composer-editor"), "Bozza breve");
+      await page.getByRole("button", { name: "Composer extras", exact: true }).click();
+      await expect
+        .element(page.getByRole("option", { name: "Files and folders", exact: true }))
+        .toBeVisible();
+      await page.getByRole("option", { name: "Plan mode Turn plan mode on", exact: true }).click();
+      await expect.element(page.getByRole("button", { name: "Plan", exact: true })).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the row under the composer aligned while the Environment card is docked", async () => {
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-status-row-inset"),
+        targetText: "Status row inset",
+      }),
+    });
+    try {
+      await waitForComposerEditor();
+      const shell = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] .chat-composer-shell',
+      )!;
+      const statusRow = document.querySelector<HTMLElement>("[data-chat-composer-status-row]")!;
+      const expectRowUnderComposer = () => {
+        const shellRect = shell.getBoundingClientRect();
+        const rowRect = statusRow.getBoundingClientRect();
+        expect(Math.abs(rowRect.left - shellRect.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(rowRect.right - shellRect.right)).toBeLessThanOrEqual(1);
+      };
+      expectRowUnderComposer();
+      const shellRightBefore = shell.getBoundingClientRect().right;
+
+      // Toggling docks or undocks the card (its open state may carry over from earlier
+      // tests); either way one of the two states carries the inset, and the row must
+      // match the composer in both.
+      await page.getByRole("button", { name: "Toggle environment panel", exact: true }).click();
+      await vi.waitFor(
+        () => {
+          expect(Math.abs(shell.getBoundingClientRect().right - shellRightBefore)).toBeGreaterThan(
+            20,
+          );
+          expectRowUnderComposer();
+        },
+        { timeout: 4_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }
@@ -14748,6 +14891,8 @@ describe("ChatView transcript geometry (full app)", () => {
 
       try {
         if (entryPoint === "edit button") {
+          // The goal capsule opens its panel; Edit lives there.
+          await page.getByTestId("composer-goal-header").click();
           await page.getByRole("button", { name: "Edit goal" }).click();
         } else {
           useComposerDraftStore.getState().setPrompt(THREAD_ID, "clear");
@@ -14919,7 +15064,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps the final transcript row clear of a tall composer panel stack", async () => {
+  it("keeps the final transcript row clear of the composer capsules", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithTallComposerStack(),
@@ -14928,13 +15073,20 @@ describe("ChatView transcript geometry (full app)", () => {
     const maxFixedClearancePx = 128;
 
     try {
-      await vi.waitFor(
-        () => {
-          expect(document.body.textContent).toContain("2 files changed");
-          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
-        },
-        { timeout: 8_000, interval: 16 },
+      const changesCapsule = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="composer-live-changes"]'),
+        "Unable to find the live changes capsule.",
       );
+      const taskCapsule = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="active-task-list-capsule"]'),
+        "Unable to find the task-list capsule.",
+      );
+      expect(changesCapsule.title).toContain("2 files changed");
+      expect(taskCapsule.textContent).toContain("1/3 tasks");
+      // Activity collapses into capsules in one capsule row instead of a stack of panels.
+      const capsuleRow = taskCapsule.closest("[data-composer-capsule-row]");
+      expect(capsuleRow).not.toBeNull();
+      expect(changesCapsule.closest("[data-composer-capsule-row]")).toBe(capsuleRow);
 
       const scrollContainer = await waitForElement(
         () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
@@ -14944,7 +15096,7 @@ describe("ChatView transcript geometry (full app)", () => {
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
 
-      const readStackLayout = () => {
+      const readCapsuleLayout = () => {
         const renderedRows = Array.from(
           document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]"),
         );
@@ -14954,34 +15106,25 @@ describe("ChatView transcript geometry (full app)", () => {
             ? row
             : latest;
         }, null);
-        const taskListCard = document.querySelector<HTMLElement>(
-          '[data-testid="active-task-list-card"]',
-        );
-        const stackedPanels = taskListCard?.parentElement ?? null;
-
+        const capsuleRow = taskCapsule.closest<HTMLElement>("[data-composer-capsule-row]");
         expect(
           finalTranscriptRow,
           "Unable to find the final rendered transcript row.",
         ).toBeTruthy();
-        expect(taskListCard, "Unable to find the active task-list card.").toBeTruthy();
-        expect(stackedPanels, "Unable to find the stacked composer-panel wrapper.").toBeTruthy();
-
-        const finalRowRect = finalTranscriptRow!.getBoundingClientRect();
-        const taskCardRect = taskListCard!.getBoundingClientRect();
-        const stackRect = stackedPanels!.getBoundingClientRect();
+        expect(capsuleRow, "Unable to find the composer capsule row.").toBeTruthy();
         return {
-          gapPx: stackRect.top - finalRowRect.bottom,
-          stackHeightPx: stackRect.height,
-          taskCardHeightPx: taskCardRect.height,
+          gapPx:
+            capsuleRow!.getBoundingClientRect().top -
+            finalTranscriptRow!.getBoundingClientRect().bottom,
           distanceFromBottomPx: getScrollContainerDistanceFromBottom(scrollContainer),
         };
       };
 
       const waitForBoundedGap = async (phase: string) => {
-        let measured = readStackLayout();
+        let measured = readCapsuleLayout();
         await vi.waitFor(
           () => {
-            measured = readStackLayout();
+            measured = readCapsuleLayout();
             expect(
               measured.distanceFromBottomPx,
               `${phase}: transcript must stay at the end`,
@@ -15000,90 +15143,47 @@ describe("ChatView transcript geometry (full app)", () => {
         return measured;
       };
 
-      const expanded = await waitForBoundedGap("expanded");
-      expect(expanded.stackHeightPx).toBeGreaterThan(maxFixedClearancePx);
+      const closed = await waitForBoundedGap("capsules");
+      const scrollTopBeforeOpen = scrollContainer.scrollTop;
 
-      const collapseButton = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
-        "Unable to find the task-banner collapse button.",
+      // The full task list opens in a popover over the transcript, so it never moves the reader.
+      taskCapsule.click();
+      await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="active-task-list-card"]'),
+        "Unable to find the task-list popover.",
       );
-      collapseButton.click();
-      await vi.waitFor(() => {
-        expect(
-          document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
-        ).not.toBeNull();
-      });
-      const collapsed = await waitForBoundedGap("collapsed");
-      expect(collapsed.taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
-      expect(Math.abs(collapsed.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
-
-      const expandButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
-        "Unable to find the task-banner expand button.",
-      );
-      expandButton.click();
-      await vi.waitFor(() => {
-        expect(
-          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
-        ).not.toBeNull();
-      });
-      const reexpanded = await waitForBoundedGap("re-expanded");
-      expect(reexpanded.taskCardHeightPx).toBeGreaterThan(collapsed.taskCardHeightPx + 20);
-      expect(Math.abs(reexpanded.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
-
-      const finalCollapseButton = await waitForElement(
-        () =>
-          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
-        "Unable to find the task-banner collapse button before the away-from-end check.",
-      );
-      finalCollapseButton.click();
-      const finalExpandButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
-        "Unable to find the task-banner expand button before the away-from-end check.",
-      );
-      await vi.waitFor(() => {
-        expect(readStackLayout().taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
-      });
-
-      scrollContainer.scrollTop = 0;
-      scrollContainer.dispatchEvent(new Event("scroll"));
-      await vi.waitFor(() => {
-        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
-          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
-        );
-      });
-      const scrollTopBeforeExpansion = scrollContainer.scrollTop;
-
-      finalExpandButton.click();
-      await vi.waitFor(
-        () => {
-          const awayFromEnd = readStackLayout();
-          expect(awayFromEnd.taskCardHeightPx).toBeGreaterThan(expanded.taskCardHeightPx - 2);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
-      await waitForLayout();
-      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
-        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
-      );
-      await waitForLayout();
-      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
-        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
-      );
-      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeExpansion)).toBeLessThanOrEqual(1);
+      expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+      const opened = await waitForBoundedGap("task list open");
+      expect(Math.abs(opened.gapPx - closed.gapPx)).toBeLessThanOrEqual(1);
+      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeOpen)).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("shows the skinny inline plan card for active turn plans", async () => {
+  it("shows active turn plans as a task capsule that opens the full list", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithActiveInlinePlan(),
     });
 
     try {
+      const taskCapsule = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="active-task-list-capsule"]'),
+        "Unable to find the task-list capsule.",
+      );
+      expect(taskCapsule.textContent).toContain("1/3 tasks");
+      const composerShell = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] .chat-composer-shell',
+      );
+      expect(composerShell).not.toBeNull();
+      // A compact capsule floating above the input, not a w-14/15 rail fused onto it.
+      const taskRect = taskCapsule.getBoundingClientRect();
+      const composerRect = composerShell!.getBoundingClientRect();
+      expect(taskRect.bottom).toBeLessThanOrEqual(composerRect.top);
+      expect(taskRect.width).toBeLessThan(composerRect.width);
+
+      taskCapsule.click();
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("1 out of 3 tasks completed");
@@ -15094,32 +15194,9 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      const transcriptPane = document.querySelector<HTMLElement>("[data-chat-transcript-pane]");
-      const taskListCard = document.querySelector<HTMLElement>(
-        '[data-testid="active-task-list-card"]',
-      );
-      const composerShell = document.querySelector<HTMLElement>(
-        'form[data-chat-composer-form="true"] .chat-composer-shell',
-      );
-      expect(transcriptPane).not.toBeNull();
-      expect(taskListCard).not.toBeNull();
-      expect(composerShell).not.toBeNull();
-      expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
-        taskListCard!.getBoundingClientRect().top + 1,
-      );
-      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
-      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
-      const taskRect = taskListCard!.getBoundingClientRect();
-      const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
-      expect(
-        Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
-      ).toBeLessThanOrEqual(1);
-      expect(parseFloat(getComputedStyle(composerShell!).borderTopLeftRadius)).toBeGreaterThan(0);
-
       const openPlanButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[title="Open tasks sidebar"]'),
-        "Unable to find inline active plan sidebar button.",
+        "Unable to find the task popover sidebar button.",
       );
       openPlanButton.click();
 
@@ -15139,8 +15216,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
-          expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
-          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
+          expect(document.querySelector('[data-testid="active-task-list-capsule"]')).toBeNull();
           expect(document.body.textContent).not.toContain("1 background agent");
         },
         { timeout: 8_000, interval: 16 },

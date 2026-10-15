@@ -2924,6 +2924,14 @@ diffs-container {
   border-radius: var(--composer-radius);
 }
 
+/* Single-row composer (started threads, one-line draft): a true pill. Squircle smoothing at a
+   full radius pulls the ends toward a box, so this layout keeps round corners. */
+.chat-composer-shell[data-composer-layout="row"],
+.chat-composer-shell[data-composer-layout="row"] .chat-composer-surface {
+  --composer-radius: 9999px;
+  corner-shape: round;
+}
+
 /* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
    Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
 :root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
@@ -3225,16 +3233,6 @@ diffs-container {
   border-top-right-radius: calc(var(--composer-radius) - 1px);
 }
 
-/* A stacked panel marked attachedToPrevious merges into the panel above it:
-   drop its top radius so the seam reads as one continuous, inline surface
-   instead of a separate rounded card. The panel above has border-b-0, so this
-   panel's own top border becomes the full-width 1px divider between the fused
-   sections — the same hairline the queued follow-up rows use. */
-.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
 /* Composer glass — the same material as the floating menus/pickers
    (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
 
@@ -3275,11 +3273,13 @@ diffs-container {
 }
 
 .chat-composer-surface,
+.chat-composer-menu-surface,
 .chat-composer-stacked-top {
   position: relative;
 }
 
 .chat-composer-surface::before,
+.chat-composer-menu-surface::before,
 .chat-composer-stacked-top::before {
   content: "";
   position: absolute;
@@ -3301,7 +3301,10 @@ diffs-container {
   );
 }
 
-.chat-composer-surface {
+/* The composer's menus (/, @, +) wear the input's own glass, so the two read as one
+   material in every window-glass mode below. */
+.chat-composer-surface,
+.chat-composer-menu-surface {
   background: color-mix(
     in srgb,
     var(--composer-glass-surface) var(--composer-glass-opacity),
@@ -3328,7 +3331,7 @@ diffs-container {
 :root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
 :root[data-window-translucency="window"]
   :is([data-chat-composer-slot], [data-glass-cutout])
-  .chat-composer-surface {
+  :is(.chat-composer-surface, .chat-composer-menu-surface) {
   background: var(--app-glass-raised-surface);
 }
 
@@ -3338,18 +3341,23 @@ diffs-container {
    (`data-chat-composer-slot`, where the transcript dissolves at its top edge, see
    `.scroll-edge-fade` below) and a slot whose content is cut out from under it
    (`data-glass-cutout`, see glassOverlayCutout.ts). */
-:root[data-window-translucency="window"] .chat-composer-surface {
+:root[data-window-translucency="window"] :is(.chat-composer-surface, .chat-composer-menu-surface) {
   background: color-mix(in srgb, var(--popover) 96%, transparent);
 }
 
 :root[data-window-translucency="window"]
-  :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
+  :is(
+    .chat-composer-surface,
+    .chat-composer-menu-surface,
+    .chat-raised-panel-surface,
+    .app-glass-raised
+  ) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
 :root[data-window-translucency="window"]
-  :is(.chat-composer-surface, .chat-composer-stacked-top)::before {
+  :is(.chat-composer-surface, .chat-composer-menu-surface, .chat-composer-stacked-top)::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -3416,13 +3424,19 @@ diffs-container {
 
 /* A composer portaled next to the app root (the selection composer) is cut out like any
    other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
-:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
+:root[data-window-material="translucent"]
+  body
+  > :not(#root)
+  :is(.chat-composer-surface, .chat-composer-menu-surface) {
   background:
     linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
     var(--app-overlay-backing, transparent);
 }
 
-:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
+:root[data-window-material="translucent"]
+  body
+  > :not(#root)
+  :is(.chat-composer-surface, .chat-composer-menu-surface)::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

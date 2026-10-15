@@ -6087,6 +6087,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }
             return;
           }
+          case "commands_changed":
+            // The full slash-command list after a mid-session change (skills found as the
+            // agent works in a subdirectory). The SDK already serves it from
+            // `supportedCommands()`, which `listCommands` reads for a live session, and Claude
+            // Code shows nothing for it: bookkeeping for the `/` menu, not transcript content.
+            return;
           default:
             yield* warnUnhandledSdkKind(
               context,
@@ -7180,11 +7186,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         );
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
+        // "Ask for approval" pins `default`: with the option omitted, Claude Code starts in
+        // the settings' `permissions.defaultMode` (or `auto` where that is the default), so
+        // a user/project setting could silently stop the prompts this mode promises.
         const permissionMode =
           input.runtimeMode === "auto"
             ? "auto"
             : (toPermissionMode(providerOptions?.permissionMode) ??
-              (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
+              (input.runtimeMode === "full-access"
+                ? "bypassPermissions"
+                : input.runtimeMode === "approval-required"
+                  ? "default"
+                  : undefined));
         const settings = {
           // Pin only explicit non-native overrides. Otherwise Claude Code owns
           // resolution via server tuning, settings.json, and
@@ -7429,8 +7442,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             streamFiber: undefined,
             startedAt,
             basePermissionMode: permissionMode,
-            // A fresh CLI starts in `permissionMode` when queryOptions provides
-            // one, otherwise the SDK's "default" mode (queryOptions omits it).
+            // A fresh CLI starts in `permissionMode` when queryOptions provides one.
+            // Only an unset runtime mode omits it; that spawn mode is then the CLI's own
+            // choice, tracked as "default" so the first plan turn still sends its switch.
             spawnPermissionMode: permissionMode ?? "default",
             firstTurnSpawnModeAuthoritative: true,
             lastInteractionMode: undefined,

@@ -1347,7 +1347,8 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
-      assert.equal(createInput?.options.permissionMode, undefined);
+      // Pinned, so a settings `permissions.defaultMode` cannot silently stop the prompts.
+      assert.equal(createInput?.options.permissionMode, "default");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
       const systemPrompt = createInput?.options.systemPrompt;
       if (
@@ -6664,6 +6665,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
+        // Slash-command list refresh: menu bookkeeping, never a transcript warning.
+        harness.query.emit({
+          type: "system",
+          subtype: "commands_changed",
+          commands: [{ name: "review", description: "Review changes", argumentHint: "" }],
+          session_id: "sdk-session-commands",
+          uuid: "00000000-0000-4000-8000-000000000001",
+        } as SDKMessage);
+
         // Incremental task patches we intentionally drop — must not warn either.
         for (let i = 0; i < 3; i += 1) {
           harness.query.emit({
@@ -6728,6 +6738,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         );
         assert.equal(
           warningMessages.some((message) => message.includes("task_updated")),
+          false,
+        );
+        assert.equal(
+          warningMessages.some((message) => message.includes("commands_changed")),
           false,
         );
         assert.equal(
