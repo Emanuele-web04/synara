@@ -1,3 +1,4 @@
+import { NativeFileEvents } from "./fileEventAdapter.mjs";
 import { createWriteStream } from "node:fs";
 import { NativeExtensionContributions } from "./contributionAdapter.mjs";
 import { NativeExtensionDebugAdapter } from "./debugAdapter.mjs";
@@ -37,6 +38,7 @@ let token;
 let host;
 let rpc;
 let initialization;
+let fileEvents;
 let nextRequest = 1;
 const pending = new Map();
 const providers = new Map();
@@ -200,6 +202,20 @@ function installMainThreadActors() {
       providers.set(handle, { handle, kind, selector, metadata });
       event("providers", [...providers.values()]);
     };
+  // Code-OSS emits invalidations by event handle, not provider handle. Replaying
+  // registrations makes Monaco recompute without exposing a second event bus.
+  const refreshLanguage = (kind, eventHandle) => {
+    if (
+      [...providers.values()].some(
+        (provider) => provider.kind === kind && provider.metadata[1] === eventHandle,
+      )
+    ) {
+      event("providers", [...providers.values()]);
+    }
+  };
+  language.$emitInlayHintsEvent = (handle) => refreshLanguage("inlayHints", handle);
+  language.$emitDocumentSemanticTokensEvent = (handle) => refreshLanguage("semanticTokens", handle);
+  language.$emitFoldingRangeEvent = (handle) => refreshLanguage("folding", handle);
   const handlers = {
     MainThreadLanguageFeatures: language,
     // Capability announcements do not authorize terminal/task execution or
@@ -425,10 +441,16 @@ function installMainThreadActors() {
     },
     MainThreadFileSystem: nativeFileSystem(() => initialization, parent),
     MainThreadFileSystemEventService: {
-      $watch(extensionId, session, resource, options) {
-        event("watch.add", { extensionId, session, resource, options });
+      async $watch(extensionId, session, resource, options) {
+        try {
+          await fileEvents.watch(session, resource, options);
+          event("watch.add", { extensionId, session, resource, options });
+        } catch (error) {
+          event("error", "Extension watcher is unavailable: " + error.message);
+        }
       },
       $unwatch(session) {
+        fileEvents?.unwatch(session);
         event("watch.remove", { session });
       },
     },
@@ -501,6 +523,12 @@ function installMainThreadActors() {
 async function boot(params) {
   if (host) throw new Error("Extension host is already initialized.");
   initialization = params;
+  fileEvents = new NativeFileEvents(
+    params.workspace,
+    (events) => actor("ExtHostFileSystemEventService").$onFileEvent(events),
+    (message) => event("error", message),
+    params.configuration?.["files.watcherExclude"] ?? {},
+  );
   const workspace = URI.file(params.workspace);
   const fromExtension = new Emitter();
   const fromMain = new Emitter();
@@ -603,6 +631,9 @@ async function boot(params) {
     true,
   );
   await host._extensionService.getExtensionRegistry();
+  await fileEvents
+    .start()
+    .catch((error) => event("error", "Extension file watching is unavailable: " + error.message));
   for (const document of params.documents ?? []) await syncDocument(document);
   return {
     apiVersion: "1.138.0",
@@ -753,6 +784,7 @@ async function dispatch(message) {
         diagnostics: [...diagnostics],
       };
     case "shutdown":
+      fileEvents?.dispose();
       await extensionDebug.shutdown();
       host.terminate("Synara requested shutdown");
       return true;
@@ -805,3 +837,5 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", () => (host ? host.terminate("Synara disconnected") : process.exit(0)));
 process.on("SIGTERM", () => (host ? host.terminate("Synara terminated host") : process.exit(0)));
+
+process.once("exit", () => fileEvents?.dispose());

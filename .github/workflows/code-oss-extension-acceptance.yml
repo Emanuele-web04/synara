@@ -54,10 +54,13 @@ jobs:
         env:
           SYNARA_TEST_CODE_OSS_HOST: ${{ github.workspace }}/apps/server/dist/code-oss/extension-host.mjs
           SYNARA_TEST_EXTENSION_SANDBOX: "1"
-        run: bun run --cwd apps/server test src/extensions/realRuntime.test.ts src/extensions/realLanguageServer.test.ts src/extensions/realDebuggerExtension.test.ts src/extensions/realLinterExtension.test.ts src/platform/extensionHostSandbox.integration.test.ts
+        run: bun run --cwd apps/server test src/extensions/realLanguageFeatures.test.ts src/extensions/realRuntime.test.ts src/extensions/realLanguageServer.test.ts src/extensions/realDebuggerExtension.test.ts src/extensions/realLinterExtension.test.ts src/platform/extensionHostSandbox.integration.test.ts
       - name: Install browser
         if: ${{ !cancelled() }}
         run: bun run --cwd apps/web test:browser:install
+      - name: Native extension language adapters
+        if: ${{ !cancelled() }}
+        run: bun run --cwd apps/web test:browser:ci -- --project=components src/components/codeEditor/extensionRichLanguage.browser.tsx src/components/codeEditor/editorExtensionBridge.browser.tsx src/components/codeEditor/extensionContributions.browser.tsx
       - name: Real native extension journeys
         if: ${{ !cancelled() }}
         env:
