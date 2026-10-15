@@ -37,6 +37,8 @@ import {
   ApprovalRequestId,
   type CanonicalItemType,
   type ClaudeApiEffort,
+  type ModelCapabilities,
+  type EffortOption,
   ClaudeCacheObservation,
   type CanonicalRequestType,
   EventId,
@@ -1130,13 +1132,12 @@ const WORKFLOW_AGENTS_PROGRESS_DESCRIPTION = "Workflow agents";
 function resolveSelectedClaudeThinkingToggle(
   model: string | null | undefined,
   selectedThinking: boolean | null | undefined,
+  caps: ModelCapabilities = getModelCapabilities("claudeAgent", model),
 ): boolean | undefined {
   if (typeof selectedThinking !== "boolean") {
     return undefined;
   }
-  return getModelCapabilities("claudeAgent", model).supportsThinkingToggle
-    ? selectedThinking
-    : undefined;
+  return caps.supportsThinkingToggle ? selectedThinking : undefined;
 }
 
 function asCanonicalTurnId(value: TurnId): TurnId {
@@ -1172,16 +1173,81 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
   }
 }
 
+// CLI metadata is authoritative. Keep legacy fallbacks only for fields older CLIs omit.
+function claudeModelCapabilities(model: ModelInfo): ModelCapabilities {
+  const base = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
+  const apiEfforts = model.supportsEffort === false ? [] : model.supportedEffortLevels;
+  const nativeEfforts: EffortOption[] | undefined = apiEfforts?.map((value) => ({
+    value,
+    label:
+      base.reasoningEffortLevels.find((level) => level.value === value)?.label ??
+      (value === "xhigh" ? "Extra High" : value.charAt(0).toUpperCase() + value.slice(1)),
+    controlSource: "api-effort",
+  }));
+  const modes = nativeEfforts?.length
+    ? base.reasoningEffortLevels.filter((level) =>
+        level.controlSource === "provider-setting"
+          ? level.apiEffortValue !== undefined &&
+            apiEfforts?.some((value) => value === level.apiEffortValue)
+          : level.controlSource === "prompt-prefix" && model.supportsAdaptiveThinking !== true,
+      )
+    : [];
+  return {
+    ...base,
+    ...(nativeEfforts !== undefined
+      ? {
+          reasoningEffortLevels:
+            nativeEfforts.length > 0
+              ? [
+                  { value: "default", label: "Default (CLI)", isDefault: true },
+                  ...nativeEfforts,
+                  ...modes,
+                ]
+              : [],
+          promptInjectedEffortLevels: modes
+            .filter((level) => level.controlSource === "prompt-prefix")
+            .map((level) => level.value),
+        }
+      : {}),
+    ...(typeof model.supportsFastMode === "boolean"
+      ? { supportsFastMode: model.supportsFastMode }
+      : {}),
+    ...(model.supportsAdaptiveThinking === true ? { supportsThinkingToggle: false } : {}),
+  };
+}
+
+function discoveredClaudeModelCapabilities(
+  model: string,
+  models: ReadonlyArray<ModelInfo> | undefined,
+): ModelCapabilities | undefined {
+  if (!models) return undefined;
+  const resolved = resolveClaudeAutoModeModel(models, new Set([model]));
+  return resolved.status === "matched" ? claudeModelCapabilities(resolved.model) : undefined;
+}
+
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
-  const optionDescriptors = getProviderOptionDescriptors({
-    provider: PROVIDER,
-    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
-  });
+  const caps = claudeModelCapabilities(model);
+  const optionDescriptors = getProviderOptionDescriptors({ provider: PROVIDER, caps });
+  const hasNativeEfforts =
+    model.supportsEffort === false || model.supportedEffortLevels !== undefined;
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
     ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
+    ...(hasNativeEfforts
+      ? {
+          supportedReasoningEfforts: caps.reasoningEffortLevels.map(({ value, label }) => ({
+            value,
+            label,
+          })),
+          defaultReasoningEffort: "default",
+        }
+      : {}),
+    ...(typeof model.supportsFastMode === "boolean"
+      ? { supportsFastMode: model.supportsFastMode }
+      : {}),
+    ...(model.supportsAdaptiveThinking === true ? { supportsThinkingToggle: false } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
       : {}),
@@ -2387,6 +2453,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
     const sessionLifecycleLock = makeKeyedLock<ThreadId>();
     const cachedAgentsByKey = new Map<string, ProviderListAgentsResult>();
+    // Latest native catalog observed by discovery, isolated by CLI/account identity.
+    const discoveredModelsByKey = new Map<string, ReadonlyArray<ModelInfo>>();
     const verifyClaudeAutoModelSupport = (input: {
       readonly queryRuntime: ClaudeQueryRuntime;
       readonly discoveryKey: string;
@@ -7175,18 +7243,27 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           modelSelection?.options,
         )?.autoCompactWindow;
         const effectiveClaudeModel = modelSelection?.model ?? getDefaultModel("claudeAgent");
-        const caps = getModelCapabilities("claudeAgent", effectiveClaudeModel);
+        const runtimeCaps = discoveredClaudeModelCapabilities(
+          effectiveClaudeModel,
+          discoveredModelsByKey.get(accountDiscoveryKey),
+        );
+        const caps = runtimeCaps ?? getModelCapabilities("claudeAgent", effectiveClaudeModel);
         const requestedAutoCompactWindowTokens = resolveSelectedClaudeAutoCompactWindow(
           effectiveClaudeModel,
           requestedAutoCompactWindow,
         );
         const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
         const effort =
-          requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+          requestedEffort &&
+          (hasEffortLevel(caps, requestedEffort) ||
+            (requestedEffort === "max" && runtimeCaps === undefined))
+            ? requestedEffort
+            : null;
         const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
         const thinking = resolveSelectedClaudeThinkingToggle(
           effectiveClaudeModel,
           modelSelection?.options?.thinking,
+          caps,
         );
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
@@ -7870,11 +7947,31 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
         }
 
+        const turnModels = modelSelection
+          ? yield* Effect.tryPromise(() => context.query.supportedModels()).pipe(
+              Effect.timeoutOption(Duration.seconds(5)),
+              Effect.catch(() => Effect.succeed(Option.none<ReadonlyArray<ModelInfo>>())),
+              Effect.map((models) =>
+                Option.isSome(models)
+                  ? models.value
+                  : discoveredModelsByKey.get(context.accountDiscoveryKey),
+              ),
+            )
+          : undefined;
+        const turnModelResolution =
+          modelSelection && turnModels
+            ? resolveClaudeAutoModeModel(turnModels, new Set([modelSelection.model]))
+            : undefined;
+        const nativeTurnModel =
+          turnModelResolution?.status === "matched" ? turnModelResolution.model : undefined;
+        const turnCaps = nativeTurnModel ? claudeModelCapabilities(nativeTurnModel) : undefined;
+
         // The thinking toggle mirrors the spawn-time `alwaysThinkingEnabled`
         // setting; flipping it live avoids a restart-and-resume replay.
         const requestedThinking = resolveSelectedClaudeThinkingToggle(
           modelSelection?.model,
           modelSelection?.options?.thinking,
+          turnCaps,
         );
         if (modelSelection && requestedThinking !== context.currentAlwaysThinkingEnabled) {
           yield* Effect.tryPromise({
@@ -7892,17 +7989,31 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // `max` effort has no Settings equivalent; transitions involving it
         // restart upstream (claudeSelectionRequiresRestart) before this runs.
         if (modelSelection) {
-          const turnCaps = getModelCapabilities("claudeAgent", modelSelection.model);
+          const selectedCaps =
+            turnCaps ?? getModelCapabilities("claudeAgent", modelSelection.model);
           const requestedEffortOption = trimOrNull(modelSelection.options?.effort ?? null);
           const validEffort =
-            requestedEffortOption && hasEffortLevel(turnCaps, requestedEffortOption)
+            requestedEffortOption && hasEffortLevel(selectedCaps, requestedEffortOption)
               ? requestedEffortOption
               : null;
+          if (
+            requestedEffortOption &&
+            validEffort === null &&
+            nativeTurnModel &&
+            (nativeTurnModel.supportsEffort === false ||
+              nativeTurnModel.supportedEffortLevels !== undefined)
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: `The Claude CLI does not support effort "${requestedEffortOption}" for model "${modelSelection.model}". Refresh the model list and select a supported level.`,
+            });
+          }
           const requestedEffort = getEffectiveClaudeCodeEffort(validEffort);
           const requestedUltracode =
-            validEffort === "ultracode" && hasEffortLevel(turnCaps, "xhigh");
+            validEffort === "ultracode" && hasEffortLevel(selectedCaps, "xhigh");
           const requestedFastMode =
-            modelSelection.options?.fastMode === true && turnCaps.supportsFastMode;
+            modelSelection.options?.fastMode === true && selectedCaps.supportsFastMode;
           const effortChanged =
             requestedEffort !== context.currentEffort &&
             requestedEffort !== "max" &&
@@ -8746,12 +8857,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       cwd: string,
       env: NodeJS.ProcessEnv,
       binaryPath: string,
+      discoveryKey: string,
     ): Promise<ProviderListModelsResult> =>
-      discoverViaTemporaryProcess(cwd, env, binaryPath, async (queryRuntime) => ({
-        models: (await queryRuntime.supportedModels()).map(mapClaudeModelInfo),
-        source: "sdk",
-        cached: false,
-      }));
+      discoverViaTemporaryProcess(cwd, env, binaryPath, async (queryRuntime) => {
+        const models = await queryRuntime.supportedModels();
+        discoveredModelsByKey.set(discoveryKey, models);
+        return { models: models.map(mapClaudeModelInfo), source: "sdk", cached: false };
+      });
 
     const listCommands: NonNullable<ClaudeAdapterShape["listCommands"]> = (
       input: ProviderListCommandsInput,
@@ -8932,6 +9044,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               input.cwd ?? serverConfig.cwd,
               claudeSdkEnv,
               input.binaryPath ?? "claude",
+              claudeDiscoveryKey({ ...input, includeCwd: false }),
             ),
           catch: (cause) =>
             new ProviderAdapterProcessError({
