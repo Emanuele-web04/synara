@@ -27,7 +27,13 @@ import {
   applyNativeExtensionDiagnostics,
 } from "./extensionLanguageProviders";
 
-type Provider = { handle: number; kind: string; selector: unknown; label: string };
+type Provider = {
+  handle: number;
+  kind: string;
+  selector: unknown;
+  label: string;
+  metadata: readonly unknown[];
+};
 export type ExtensionInteraction = {
   id: number;
   method: "ui.message" | "ui.input" | "ui.quickPick";
@@ -252,6 +258,7 @@ export class EditorExtensionBridge {
             handle: integer(provider.handle),
             kind: text(provider.kind),
             selector: provider.selector,
+            metadata,
             label:
               typeof metadata.at(-1) === "string" ? String(metadata.at(-1)) : "Extension formatter",
           });

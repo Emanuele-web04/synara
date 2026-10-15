@@ -8,7 +8,8 @@ export async function requestSemanticTokens(target, handle, resource, cancellati
   if (!encoded) return null;
   const result = decodeSemanticTokensDto(encoded);
   try {
-    if (result.type !== "full") throw new Error("Expected a full extension semantic-token snapshot.");
+    if (result.type !== "full")
+      throw new Error("Expected a full extension semantic-token snapshot.");
     if (result.data.length > 250_000 || result.data.length % 5 !== 0) {
       throw new Error("Extension semantic tokens exceed their size or tuple boundary.");
     }

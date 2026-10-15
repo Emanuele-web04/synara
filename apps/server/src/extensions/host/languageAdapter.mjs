@@ -6,6 +6,7 @@ import {
 } from "@code-oss/vs/workbench/api/common/extHost.protocol.js";
 import { CancellationToken } from "@code-oss/vs/base/common/cancellation.js";
 import { URI } from "@code-oss/vs/base/common/uri.js";
+import { requestSemanticTokens } from "./semanticTokenAdapter.mjs";
 import { snapshotWorkspaceEdit } from "./workspaceEditAdapter.mjs";
 import { score } from "@code-oss/vs/editor/common/languageSelector.js";
 
@@ -164,6 +165,8 @@ export async function requestLanguageProvider(
       );
     case "folding":
       return target.$provideFoldingRanges(handle, resource, {}, cancellation);
+    case "semanticTokens":
+      return requestSemanticTokens(target, handle, resource, cancellation);
     case "inlayHints": {
       const result = await target.$provideInlayHints(handle, resource, range, cancellation);
       if (!result) return null;
