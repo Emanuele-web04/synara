@@ -3,7 +3,6 @@
 // Layer: Web transport tests
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
-import { ServerBusyController } from "./serverBusyState";
 import { Cause, Effect, Exit, Stream } from "effect";
 import { RpcClientError } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
@@ -3369,116 +3368,81 @@ describe("WsTransport", () => {
   });
 });
 
-it("tracks the real unary wait while keeping the heartbeat out of pending counts", async () => {
+it("times out a stuck unary request with the default deadline and retry guidance", async () => {
   vi.useFakeTimers();
   bindWindowTimersToCurrentGlobals();
   const { transport, internals } = makeBareTransport();
-  const serverBusy = new ServerBusyController();
-  const client = {
-    [WS_METHODS.serverGetRuntimeStatus]: () =>
-      Effect.succeed({
-        available: false,
-        sampleWindowMs: 0,
-        sampleCount: 0,
-        delayP50Ms: 0,
-        delayP99Ms: 0,
-        delayMaxMs: 0,
-        utilization: 0,
-        stallWindowCount: 0,
-        maxStallMs: 0,
-        lastStall: null,
-      }),
-    [WS_METHODS.gitStatus]: () => Effect.never,
-  };
   Object.assign(internals, {
-    serverBusy,
-    state: "connecting",
-    stateListeners: new Set(),
-    compatibility: { ...NEGOTIATION_RESULT, capabilities: [WS_SERVER_RUNTIME_STATUS_CAPABILITY] },
-    getClient: async () => client,
+    getClient: async () => ({ [WS_METHODS.gitStatus]: () => Effect.never }),
     getClientRuntime: () => ({ runPromise: Effect.runPromise }),
   });
-  (transport as unknown as { setState(state: string): void }).setState("open");
-  const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
-  await vi.advanceTimersByTimeAsync(15000);
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 1,
-    slowRequests: 1,
-  });
-  await vi.advanceTimersByTimeAsync(45000);
-  expect(await verdict).toMatchObject({
-    message: expect.stringContaining("Try again when the server responds"),
-  });
-  expect(serverBusy.getSnapshot()).toMatchObject({
-    reason: null,
-    pendingRequests: 0,
-    slowRequests: 0,
-  });
-  serverBusy.dispose();
-  vi.useRealTimers();
-});
-
-it("uses the caller's long-operation budget for providerCompactThread", async () => {
-  vi.useFakeTimers();
-  bindWindowTimersToCurrentGlobals();
-  const { transport, internals } = makeBareTransport();
-  const serverBusy = new ServerBusyController();
-  const caller = new AbortController();
-  Object.assign(internals, {
-    serverBusy,
-    getClient: async () => ({ [WS_METHODS.providerCompactThread]: () => Effect.never }),
-    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
-  });
-  const pending = transport
-    .request(
-      WS_METHODS.providerCompactThread,
-      {},
-      {
-        timeoutMs: null,
-        signal: caller.signal,
-      },
-    )
-    .catch((error) => error);
   try {
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(serverBusy.getSnapshot()).toMatchObject({ pendingRequests: 1, slowRequests: 0 });
-    await vi.advanceTimersByTimeAsync(105_000);
-    expect(serverBusy.getSnapshot().slowRequests).toBe(1);
-    caller.abort();
-    expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
-    expect(serverBusy.getSnapshot().pendingRequests).toBe(0);
+    const verdict = transport.request(WS_METHODS.gitStatus).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await verdict).toMatchObject({
+      code: "WS_REQUEST_TIMEOUT",
+      message: expect.stringContaining("Try again when the server responds"),
+    });
   } finally {
-    caller.abort();
-    serverBusy.dispose();
     vi.useRealTimers();
   }
 });
 
-it.each([true, false])(
-  "uses busy liveness only when the optional capability is present (%s)",
-  async (supported) => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    const { transport, internals } = makeBareTransport();
-    const serverBusy = new ServerBusyController();
-    Object.assign(internals, {
-      serverBusy,
-      state: "connecting",
-      stateListeners: new Set(),
-      compatibility: {
-        ...NEGOTIATION_RESULT,
-        capabilities: supported ? [WS_SERVER_RUNTIME_STATUS_CAPABILITY] : [],
-      },
-      getClient: async () => ({ [WS_METHODS.serverGetRuntimeStatus]: () => Effect.never }),
-      getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+it("lets providerCompactThread outlive the default deadline until its caller cancels", async () => {
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const { transport, internals } = makeBareTransport();
+  const caller = new AbortController();
+  Object.assign(internals, {
+    getClient: async () => ({ [WS_METHODS.providerCompactThread]: () => Effect.never }),
+    getClientRuntime: () => ({ runPromise: Effect.runPromise }),
+  });
+  let settled = false;
+  const pending = transport
+    .request(WS_METHODS.providerCompactThread, {}, { timeoutMs: null, signal: caller.signal })
+    .catch((error) => error)
+    .finally(() => {
+      settled = true;
     });
-    (transport as unknown as { setState(state: string): void }).setState("open");
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(serverBusy.getSnapshot().reason).toBe(supported ? "unresponsive" : null);
-    (transport as unknown as { setState(state: string): void }).setState("connecting");
-    expect(serverBusy.getSnapshot().reason).toBe(null);
-    serverBusy.dispose();
+  try {
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(settled).toBe(false);
+    caller.abort();
+    expect(await pending).toMatchObject({ code: "WS_REQUEST_ABORTED" });
+  } finally {
+    caller.abort();
     vi.useRealTimers();
-  },
-);
+  }
+});
+
+it("does not poll server runtime status on an open socket that advertises it", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(200, {
+          ...NEGOTIATION_RESULT,
+          capabilities: [...NEGOTIATION_RESULT.capabilities, WS_SERVER_RUNTIME_STATUS_CAPABILITY],
+        }),
+      ),
+    ),
+  );
+  vi.useFakeTimers();
+  bindWindowTimersToCurrentGlobals();
+  const transport = new WsTransport("ws://localhost:3020");
+  try {
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0]!;
+    socket.serveVoidRpc();
+    await vi.waitFor(() => expect(transport.getState()).toBe("open"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    const requestedTags = socket.sent
+      .map((data) => JSON.parse(String(data)) as { _tag?: string; tag?: string })
+      .filter((frame) => frame._tag === "Request")
+      .map((frame) => frame.tag);
+    expect(requestedTags).not.toContain(WS_METHODS.serverGetRuntimeStatus);
+  } finally {
+    await transport.dispose();
+    vi.useRealTimers();
+  }
+});
