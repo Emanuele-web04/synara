@@ -1,0 +1,24 @@
+// Temporary bounded documentation/CI synchronization; omitted from publication.
+import { readFile, writeFile } from "node:fs/promises";
+const workflow = ".github/workflows/code-oss-extension-acceptance.yml";
+let source = await readFile(workflow, "utf8");
+const testAnchor = "src/extensions/realRuntime.test.ts src/extensions/realLanguageServer.test.ts";
+if (source.split(testAnchor).length !== 2) throw new Error("Extension acceptance test anchor changed.");
+source = source.replace(testAnchor, "src/extensions/realLanguageFeatures.test.ts " + testAnchor);
+const uiAnchor = "      - name: Real native extension journeys";
+if (source.split(uiAnchor).length !== 2) throw new Error("Extension acceptance UI anchor changed.");
+source = source.replace(uiAnchor, "      - name: Native extension language adapters\n        if: ${{ !cancelled() }}\n        run: bun run --cwd apps/web test:browser:ci -- --project=components src/components/codeEditor/extensionRichLanguage.browser.tsx src/components/codeEditor/editorExtensionBridge.browser.tsx src/components/codeEditor/extensionContributions.browser.tsx\n" + uiAnchor);
+await writeFile(workflow, source);
+const docs = "docs/editor/extensions.md";
+let text = await readFile(docs, "utf8");
+const lines = text.split("\n");
+const semantic = lines.findIndex((line) => line.includes("| Semantic tokens and inlay hints from extensions"));
+const filesystem = lines.findIndex((line) => line.includes("| Filesystem APIs"));
+if (semantic < 0 || filesystem < 0) throw new Error("Compatibility matrix anchors changed.");
+lines[semantic] = "| Semantic tokens and inlay hints from extensions | Partial | Full semantic snapshots and legends are validated before native rendering. Display-only hints, provider invalidation and upstream cache release are implemented. Deferred hint resolution, clickable hint commands, hint edits and RelativePattern selectors remain unsupported. |";
+lines[filesystem] = "| Filesystem APIs | Partial | Bounded reads and brokered native text writes. External create/change/delete events use sandbox-local, non-recursive directory watches with explicit traversal; symlinks are skipped. Out-of-workspace roots and network-filesystem guarantees are unsupported. |";
+text = lines.join("\n");
+text = text.replace("external file watching, complete extension token/hint translation", "extended watcher coverage, deferred extension hint resolution and edits");
+text += "\n## Native language snapshots and external file events\n\n`extensionRichLanguage.browser.tsx` protects legend/tuple bounds, UTF-16 positions, hint rendering, untrusted Markdown and workspace-scoped registrations. `realLanguageFeatures.test.ts` installs an executable test VSIX through the actual upload/approval path and runs it in the real Code-OSS host and production sandbox. This fixture checks full semantic snapshots, inlay hints, provider invalidation, external file events and preservation of unsaved document snapshots; it is a purpose-built API-contract extension, not another marketplace compatibility claim. Read the corresponding CI result before treating any new check as passed.\n\nFile watching is event-driven rather than a whole-workspace polling loop. The shared default watch excludes `.git` and `node_modules`, plus configured `files.watcherExclude` patterns. Explicit in-workspace watches can cover otherwise excluded directories. A host permits at most 16 watch groups, 512 watched directories and 20,000 retained entries. Exceeding a limit or losing OS watch support reports a visible error instead of falling back to unrestricted watching. Extension editing remains available if the default watch cannot start. No watcher writes files, reloads a native editor buffer, traverses symlinks or opens the Synara control-plane directory.\n";
+await writeFile(docs, text);
+console.log("Synchronized compatibility limits and permanent acceptance coverage without declaring unexecuted tests successful.");
