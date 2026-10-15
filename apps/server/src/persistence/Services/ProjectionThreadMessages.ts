@@ -80,6 +80,14 @@ export const GetProjectionThreadMessageInput = Schema.Struct({
 });
 export type GetProjectionThreadMessageInput = typeof GetProjectionThreadMessageInput.Type;
 
+export const GetNewestProjectionThreadMessageIdByTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  role: OrchestrationMessageRole,
+});
+export type GetNewestProjectionThreadMessageIdByTurnInput =
+  typeof GetNewestProjectionThreadMessageIdByTurnInput.Type;
+
 export const DeleteProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -104,6 +112,15 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly getByThreadAndMessageId: (
     input: GetProjectionThreadMessageInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
+
+  /**
+   * Read the id of a turn's newest message with the given role, in the same
+   * causal order as `listByThreadId` (reversed). Reads one index range instead
+   * of hydrating the thread's message window.
+   */
+  readonly getNewestIdByThreadTurnRole: (
+    input: GetNewestProjectionThreadMessageIdByTurnInput,
+  ) => Effect.Effect<Option.Option<MessageId>, ProjectionRepositoryError>;
 
   /**
    * List projected thread messages for a thread.

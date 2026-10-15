@@ -30,6 +30,7 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
+  RuntimeItemId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -1575,6 +1576,108 @@ describe("ProviderCommandReactor", () => {
           } as ProviderRuntimeEvent),
     );
   }
+
+  // #1900: a full thread detail read (every message plus the whole activity
+  // timeline) once ran 18+ times per turn and took seconds on long threads.
+  // Drive one scripted turn through command dispatch and runtime ingestion and
+  // count the detail reads, so the next hot-path caller that regresses fails here.
+  it("drives a scripted turn without full thread detail reads", async () => {
+    const harness = await createHarness({ ingestRuntimeEvents: true });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const detailReads = vi.spyOn(harness.projectionSnapshotQuery, "getThreadDetailById");
+    const activityFreeDetailReads = vi.spyOn(
+      harness.projectionSnapshotQuery,
+      "getThreadDetailWithoutActivitiesById",
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "scripted-turn-message",
+      text: "Refactor the session store",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+
+    const turnId = asTurnId("scripted-turn");
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: turnId,
+    });
+    const eventBase = (eventId: string) =>
+      ({
+        eventId: asEventId(`scripted-turn-${eventId}`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        providerRefs: {},
+      }) as const;
+    await harness.emitRuntimeEvent({ ...eventBase("started"), type: "turn.started", payload: {} });
+    const assistantItems = 5;
+    for (let index = 0; index < assistantItems; index += 1) {
+      const itemId = RuntimeItemId.makeUnsafe(`scripted-assistant-${index}`);
+      await harness.emitRuntimeEvent({
+        ...eventBase(`assistant-delta-${index}`),
+        type: "content.delta",
+        itemId,
+        payload: { streamKind: "assistant_text", delta: `Step ${index}.` },
+      });
+      await harness.emitRuntimeEvent({
+        ...eventBase(`assistant-completed-${index}`),
+        type: "item.completed",
+        itemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      });
+    }
+    // Codex emits a turn diff after every patch, so each file change gets one.
+    // Several diff events keep a diff-path regression above the bound below.
+    for (let index = 0; index < 3; index += 1) {
+      await harness.emitRuntimeEvent({
+        ...eventBase(`file-change-${index}`),
+        type: "item.completed",
+        itemId: RuntimeItemId.makeUnsafe(`scripted-file-change-${index}`),
+        payload: {
+          itemType: "file_change",
+          status: "completed",
+          title: "Edited file",
+          detail: `src/file-${index}.ts`,
+          data: { changes: [{ path: `src/file-${index}.ts`, kind: "update" }] },
+        },
+      });
+      await harness.emitRuntimeEvent({
+        ...eventBase(`diff-${index}`),
+        type: "turn.diff.updated",
+        payload: {
+          unifiedDiff: [
+            `diff --git a/src/file-${index}.ts b/src/file-${index}.ts`,
+            `--- a/src/file-${index}.ts`,
+            `+++ b/src/file-${index}.ts`,
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "",
+          ].join("\n"),
+        },
+      });
+    }
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      ...eventBase("completed"),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    await waitFor(
+      async () => (await readHarnessThread(harness))?.latestTurn?.state === "completed",
+    );
+    await harness.drain();
+
+    expect(detailReads).not.toHaveBeenCalled();
+    // Turn dispatch builds its bootstrap from messages (1); ingestion reads
+    // messages for each assistant completion (K) and the terminal event (1).
+    // No slack: one more read per diff event or file change must fail here.
+    expect(activityFreeDetailReads.mock.calls.length).toBeGreaterThan(0);
+    expect(activityFreeDetailReads.mock.calls.length).toBeLessThanOrEqual(assistantItems + 2);
+  });
 
   describe("Claude cache review", () => {
     function expiredCacheObservation(): ClaudeCacheObservation {
@@ -15766,9 +15869,16 @@ describe("ProviderCommandReactor", () => {
       await harness.startReactor();
       await harness.drain();
       expect(harness.sendTurn).toHaveBeenCalled();
-      if (manualTitle !== null || extraMessages > 0) {
+      if (manualTitle !== null) {
         expect(harness.generateThreadTitle).not.toHaveBeenCalled();
-        expect((await readHarnessThread(harness))?.title).toBe(manualTitle ?? "New thread");
+        expect((await readHarnessThread(harness))?.title).toBe(manualTitle);
+      } else if (extraMessages > 0) {
+        // Turn start reads the sent message by id (#1900), not from the newest
+        // 2000-message detail window, so the replayed first send still starts
+        // its turn and owns naming. The later prompt never does.
+        await waitFor(async () => (await readHarnessThread(harness))?.title === "Server recovery");
+        expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+        expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(firstPrompt);
       } else {
         await waitFor(async () => (await readHarnessThread(harness))?.title === "Server recovery");
         expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);

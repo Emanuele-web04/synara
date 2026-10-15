@@ -22,7 +22,6 @@ import {
   seedActiveThreads,
 } from "./keepAwake";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
-import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ServerSettingsService } from "./serverSettings";
 
 const NOW = "2026-09-03T10:00:00.000Z";
@@ -146,6 +145,7 @@ function makeHarness(input: {
   readonly initialThreads?: ReadonlyArray<{ id: string; activeTurnId: string | null }>;
 }) {
   const spawned: FakeChild[] = [];
+  const callOrder: Array<"subscribeDomainEvents" | "getReadModel"> = [];
   const runtime: KeepAwakeRuntime = {
     platform: input.platform ?? "darwin",
     isBinaryAvailable: Effect.succeed(input.binaryAvailable ?? true),
@@ -173,22 +173,28 @@ function makeHarness(input: {
   const layer = Effect.gen(function* () {
     const eventsPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
     const engine = {
-      subscribeDomainEvents: PubSub.subscribe(eventsPubSub).pipe(
+      subscribeDomainEvents: Effect.sync(() => {
+        callOrder.push("subscribeDomainEvents");
+      }).pipe(
+        Effect.andThen(PubSub.subscribe(eventsPubSub)),
         Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
       ),
+      getReadModel: () =>
+        Effect.sync(() => {
+          callOrder.push("getReadModel");
+          return readModel;
+        }),
     } as unknown as (typeof OrchestrationEngineService)["Service"];
-    const snapshotQuery = {
-      getSnapshot: () => Effect.succeed(readModel),
-    } as unknown as (typeof ProjectionSnapshotQuery)["Service"];
+    // No ProjectionSnapshotQuery is provided: the seed must not read the
+    // whole-database projection snapshot.
     const keepAwakeLayer = Layer.effect(KeepAwakeService, makeKeepAwake(runtime)).pipe(
       Layer.provideMerge(ServerSettingsService.layerTest({ keepAwakeMode: input.mode })),
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, engine)),
-      Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
     );
     return { eventsPubSub, keepAwakeLayer };
   });
 
-  return { spawned, layer };
+  return { spawned, callOrder, layer };
 }
 
 const waitFor = <A, E, R>(
@@ -294,7 +300,7 @@ describe("KeepAwakeService", () => {
     },
   );
 
-  it("mode agent seeds from the projection snapshot", async () => {
+  it("mode agent seeds from the engine read model after subscribing", async () => {
     const harness = makeHarness({
       mode: "agent",
       initialThreads: [{ id: "t1", activeTurnId: "turn-1" }],
@@ -303,6 +309,9 @@ describe("KeepAwakeService", () => {
       waitFor(keepAwake.getState, (state) => state.active),
     );
     expect(harness.spawned).toHaveLength(1);
+    // Subscribing first means no session transition can fall between the seed
+    // and the live stream.
+    expect(harness.callOrder).toEqual(["subscribeDomainEvents", "getReadModel"]);
   });
 
   it("restarts after unexpected exits and gives up after the retry cap", async () => {
