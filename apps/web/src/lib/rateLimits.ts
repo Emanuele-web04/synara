@@ -106,8 +106,9 @@ export function normalizeRateLimitLabel(
     .toLowerCase()
     .replace(/[_\s-]+/g, "_");
   // Named pools can share the same duration as standard limits. Keep the pool prefix so
-  // `Core 5h` and `5h` render as separate meters instead of collapsing into one row.
-  if (normalized.startsWith("core_")) {
+  // `Core 5h` (Droid) or `Claude 5h` (Antigravity) and `5h` render as separate meters
+  // instead of collapsing into one row.
+  if (normalized.startsWith("core_") || normalized.startsWith("claude_")) {
     return humanizeLabel(label);
   }
   // Claude Code calls `seven_day_overage_included` the Fable limit. It is a model

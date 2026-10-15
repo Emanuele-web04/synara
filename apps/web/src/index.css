@@ -3273,13 +3273,11 @@ diffs-container {
 }
 
 .chat-composer-surface,
-.chat-composer-menu-surface,
 .chat-composer-stacked-top {
   position: relative;
 }
 
 .chat-composer-surface::before,
-.chat-composer-menu-surface::before,
 .chat-composer-stacked-top::before {
   content: "";
   position: absolute;
@@ -3301,10 +3299,7 @@ diffs-container {
   );
 }
 
-/* The composer's menus (/, @, +) wear the input's own glass, so the two read as one
-   material in every window-glass mode below. */
-.chat-composer-surface,
-.chat-composer-menu-surface {
+.chat-composer-surface {
   background: color-mix(
     in srgb,
     var(--composer-glass-surface) var(--composer-glass-opacity),
@@ -3331,7 +3326,7 @@ diffs-container {
 :root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
 :root[data-window-translucency="window"]
   :is([data-chat-composer-slot], [data-glass-cutout])
-  :is(.chat-composer-surface, .chat-composer-menu-surface) {
+  .chat-composer-surface {
   background: var(--app-glass-raised-surface);
 }
 
@@ -3341,23 +3336,18 @@ diffs-container {
    (`data-chat-composer-slot`, where the transcript dissolves at its top edge, see
    `.scroll-edge-fade` below) and a slot whose content is cut out from under it
    (`data-glass-cutout`, see glassOverlayCutout.ts). */
-:root[data-window-translucency="window"] :is(.chat-composer-surface, .chat-composer-menu-surface) {
+:root[data-window-translucency="window"] .chat-composer-surface {
   background: color-mix(in srgb, var(--popover) 96%, transparent);
 }
 
 :root[data-window-translucency="window"]
-  :is(
-    .chat-composer-surface,
-    .chat-composer-menu-surface,
-    .chat-raised-panel-surface,
-    .app-glass-raised
-  ) {
+  :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
 :root[data-window-translucency="window"]
-  :is(.chat-composer-surface, .chat-composer-menu-surface, .chat-composer-stacked-top)::before {
+  :is(.chat-composer-surface, .chat-composer-stacked-top)::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -3424,19 +3414,13 @@ diffs-container {
 
 /* A composer portaled next to the app root (the selection composer) is cut out like any
    other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
-:root[data-window-material="translucent"]
-  body
-  > :not(#root)
-  :is(.chat-composer-surface, .chat-composer-menu-surface) {
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
   background:
     linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
     var(--app-overlay-backing, transparent);
 }
 
-:root[data-window-material="translucent"]
-  body
-  > :not(#root)
-  :is(.chat-composer-surface, .chat-composer-menu-surface)::before {
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

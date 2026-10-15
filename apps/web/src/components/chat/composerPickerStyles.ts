@@ -211,11 +211,11 @@ export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_
 /** Same chrome as picker menus, for composer-attached tooltips. */
 export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME} font-normal text-[var(--color-text-foreground)]`;
 
-/** Floating panel for the slash/mention command menu, the + panel and the @local browser.
- *  Wears the composer's own glass and border (`.chat-composer-menu-surface` shares
- *  `.chat-composer-surface`'s fill and blur in index.css): the 40px blur turns the transcript
- *  behind it into a wash, exactly as it does behind the input. */
-export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `chat-composer-menu-surface relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} text-popover-foreground`;
+/** Opaque floating panel for the slash/mention command menu, the + panel and the @local
+ *  browser. A solid fill in every window mode: the menu floats over the live transcript,
+ *  above the edge where it dissolves, so the composer's glass (sheer and unblurred on a
+ *  whole-window glass shell) would leave the transcript text readable through the rows. */
+export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Environment panel card. Opaque for the same reason as the command menu (it overlays the
  *  transcript), except on a whole-window glass shell, where it takes the shared raised
