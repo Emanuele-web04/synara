@@ -49,6 +49,7 @@ import {
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldClearThreadSelectionOnMouseDown,
+  selectSidebarArchivedThreads,
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
@@ -2420,5 +2421,62 @@ describe("sortProjectsForSidebar", () => {
       ProjectId.makeUnsafe("project-2"),
       ProjectId.makeUnsafe("project-1"),
     ]);
+  });
+});
+
+describe("selectSidebarArchivedThreads", () => {
+  it("keeps only archived threads, newest archive first", () => {
+    const threads = [
+      makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("live") }),
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe("older"),
+        archivedAt: "2026-03-09T10:00:00.000Z",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe("newer"),
+        archivedAt: "2026-03-09T12:00:00.000Z",
+      }),
+    ];
+
+    expect(selectSidebarArchivedThreads(threads).map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("newer"),
+      ThreadId.makeUnsafe("older"),
+    ]);
+  });
+
+  it("falls back to thread recency, then id, when archive times tie", () => {
+    const archivedAt = "2026-03-09T10:00:00.000Z";
+    const threads = [
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe("thread-b"),
+        archivedAt,
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe("thread-a"),
+        archivedAt,
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe("thread-stale"),
+        archivedAt,
+        updatedAt: "2026-03-09T09:00:00.000Z",
+      }),
+    ];
+
+    expect(selectSidebarArchivedThreads(threads).map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-a"),
+      ThreadId.makeUnsafe("thread-b"),
+      ThreadId.makeUnsafe("thread-stale"),
+    ]);
+  });
+
+  it("treats a missing archive timestamp as a live thread", () => {
+    const threads = [
+      makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("never-archived"), archivedAt: null }),
+      makeSidebarThreadSummary({ id: ThreadId.makeUnsafe("undefined-archive") }),
+    ];
+
+    expect(selectSidebarArchivedThreads(threads)).toEqual([]);
   });
 });
