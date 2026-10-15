@@ -1,5 +1,6 @@
 import { expect, type Page } from "playwright/test";
 
+/** Open a fresh test page against either a new or previously configured test installation. */
 export async function openEditorAcceptanceApp(page: Page): Promise<void> {
   await page.goto("/");
   // Fail at bootstrap rather than sending a command into a disconnected transport.
@@ -33,6 +34,12 @@ export async function openEditorAcceptanceApp(page: Page): Promise<void> {
     const skipTour = welcome.getByRole("button", { name: "Skip setup", exact: true });
     await expect(skipTour).toBeVisible();
     await skipTour.click();
+  } else {
+    // The import announcement is per browser/installation. A fresh context on
+    // an already configured server sees this sheet instead of the welcome tour.
+    const announcement = page.getByRole("dialog", { name: "Import projects", exact: true });
+    await expect(announcement).toBeVisible();
+    await announcement.getByRole("button", { name: "Not now", exact: true }).click();
   }
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
