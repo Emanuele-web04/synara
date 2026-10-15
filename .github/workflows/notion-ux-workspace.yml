@@ -24,11 +24,34 @@ jobs:
           cp "$(command -v bun)" "$RUNNER_TEMP/notion-ux-workspace/bin/bun"
           cp "$(command -v node)" "$RUNNER_TEMP/notion-ux-workspace/bin/node"
           tar -czf "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules
-          git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-workspace/source-commit.txt"
+          split -b 350M -d "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" "$RUNNER_TEMP/notion-ux-workspace/dependencies.part"
+          sha256sum "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" > "$RUNNER_TEMP/notion-ux-workspace/bin/dependencies.sha256"
+          git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-workspace/bin/source-commit.txt"
       - uses: actions/upload-artifact@v7
         with:
-          name: notion-ux-validation-tools
-          path: ${{ runner.temp }}/notion-ux-workspace
+          name: notion-ux-tools-binaries
+          path: ${{ runner.temp }}/notion-ux-workspace/bin
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notion-ux-tools-part00
+          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part00
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notion-ux-tools-part01
+          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part01
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notion-ux-tools-part02
+          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part02
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
