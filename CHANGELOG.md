@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.5 — 2026-10-15
+
+**Interactive visuals, a compact composer, clearer Activity and stronger simulator and session behavior.**
+
+This Stable release audits all **14 commits** from `v1.0.4` through feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`. Inline visuals were promoted by #1932 before release preparation. Connectors and diagnostics remain Beta-only; no additional feature or provider is promoted here. Stable and Beta retain separate identities, data homes and update feeds.
+
+### Added
+
+- **Interactive visuals inside your conversations.** Agents can now show charts, tables, comparisons, checklists and calculators directly in Stable chats. Native components follow your theme and font size. Desktop apps also support isolated, self-contained HTML views; browser-hosted clients show native components only. Visuals stay with their chat in the current app’s data home.
+- **A compact composer with room for your work.** Short drafts fit into a single row that expands for longer messages. Goals, tasks and changes sit in floating capsules above it. Open a capsule for details or use the + menu for extras. Plans remain accessible, queued drafts survive layout changes, and narrow editor panes keep branch and model controls readable. Notices and task controls use the same compact layout.
+- **Find the chats that need you next.** Activity’s Priority section puts approvals, questions and ready plans ahead of unseen results and running work. Rows hold their place while you work through them; Clear read refreshes the list. Use mod+alt+a to cycle through chats waiting on you and unseen work. Native subagent chats stay in their parent’s cards and roster instead of filling the sidebar.
+- **More capable iOS simulator tools.** Agents can launch and inspect apps, wait for screens, read bounded logs and configure test conditions, with repaired input on Xcode 27. Actions return screen evidence and report when a screen has not settled. Tools support app restarts, launch arguments and environment, appearance, text size, location and privacy settings. Input and configuration retain approval checks; app builds still use your project’s build tools.
+- **A new empty-chat background and smaller refinements.** Empty chats have an animated ASCII field, with an Appearance switch and a still version for reduced motion. The field stops when hidden or disabled and stays out of terminal views. Updated tool, app and connector icons, compact archive controls, clearer permission text, and corrected plan, voice-layout and transcript clearance make everyday controls easier to use.
+
+### Changed
+
+- **Clearer Claude token totals.** Resumed Claude sessions avoid counting restored usage again, and Inbox separates observed cache reads from other tokens. Accounting keeps native-session and process identity, preserves child usage until a real parent result covers it, and excludes output from cache-read estimates. Historical records without enough evidence remain partial; these figures are not an independent billing statement.
+
+### Fixed
+
+- **Claude keeps the permissions and session you chose.** Ask for approval explicitly selects Claude’s default permission mode. Changing behavior settings such as Artifacts no longer discards a resumable session. Permission descriptions distinguish Claude’s modes from Codex’s sandbox policies. Finished or interrupted foreground Claude tasks settle with their turn, without stopping background work that still owns its lifecycle. Slash-command catalog updates no longer appear as unknown transcript events.
+- **Less waiting on task-heavy conversations.** Opening a conversation with many task updates avoids repeated quadratic database scans. The query retains the same reconstructed task state and history. Stale transcript row measurements are also ignored. These fixes address specific slow-query and layout cases; they do not establish that every server or provider stall is resolved.
+- **Keep typing while an agent uses the browser.** Agent clicks, typing and browser inspection no longer take native focus from the composer. Native browser hover also preserves the keyboard target. Input uses the tab’s protocol connection, and restored screenshot visibility keeps its focus behavior. This does not promise every website accepts automated input.
+- **Resolve a blocked provider switch.** If background tasks prevent a handoff, the composer offers Stop tasks and switch. The source keeps running until you choose that action. A failed handoff retains the source selection and its actual error instead of reporting success.
+
+### Verification
+
+With Node 24.13.1 and Bun 1.4.2, the full local `bun run test` passed **16,995 tests, with 39 skipped**. Frozen install, seven workspace typechecks, release smoke, Windows runtime boundary, migration lineage and brand checks passed. Formatting and lint passed after verified AppleDouble metadata files were moved aside (918 lint warnings, zero errors). The initial format/lint attempts failed on binary metadata, not source diagnostics.
+
+The first full build failed while loading an existing Turbopack persistence directory (`invalid digit found in string`). The next passed marketing but failed Vite output cleanup with `ENOTEMPTY` under `apps/web/dist/central-icons-fill`. Generated caches/output directories were preserved and fresh directories used; the final `bun run build` passed all five build tasks, with no runtime source changes. These initial failures remain recorded rather than being described as an uninterrupted pass. Marketing documentation checks passed (59 mirror tests, 60 production-site tests), along with website lint, production builds and external-link checks.
+
+Exact-tag CI remains the publication gate for all quality/server tests, four native packages, provenance, macOS signing/notarization and Intel startup, and Windows Defender/startup under the exact `1.0.5` unsigned exception.
+
+PR #1934 previously received an actual `OK` reply from Claude Sonnet 4.6 in isolated state. That is one session smoke, not a guarantee for every provider. Voice visibility has browser coverage; live microphone/provider behavior and manual installed-app upgrades are not established. The task-state optimization preserves reconstructed SQL results; it does not resolve every server stall.
+
+The repository website mirror now also includes its missing 1.0.2–1.0.4 entries; the production website retains its existing published history. The durable documentation audit updates composer, Activity, subagents, handoffs, browser focus, Claude accounting and channel availability; new inline-visual and Connectors guides are linked from navigation and overview pages. See [release source audit](docs/releases/1.0.5-source-audit.md).
+
 ## 1.0.4 — 2026-10-13
 
 **Faster long chats, browser tabs that keep their place, and more dependable session recovery and Computer Use.**

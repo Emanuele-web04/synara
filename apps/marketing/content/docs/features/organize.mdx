@@ -106,7 +106,15 @@ Thread hover cards preview unsent draft text. Marking a chat **Done** offers an 
 
 Source evidence: Synara `48603e869`, the audited release head for `1.0.1-beta.2`. `apps/server/src/threadSearch.ts`, `apps/web/src/components/SidebarSearchPalette.tsx`, `apps/web/src/components/Sidebar.tsx`, and `apps/web/src/hooks/useSidebarThreadActions.ts`.
 
-For long conversations, see [paged history and reload recovery](/docs/features/conversation-history). Provider-native child agents appear in [Subagents](/docs/features/subagents).
+For long conversations, see [conversation history and reload recovery](/docs/features/conversation-history). Provider-native child agents appear in [Subagents](/docs/features/subagents).
+
+## Work through Activity Priority
+
+Stable 1.0.5 and Beta replace Activity's Recent section with **Priority** in Time grouping. The first sort lists chats waiting for approvals, answers or plan review, then unseen results and reminders, then working chats. Rows retain their place as you read or finish work. **Clear read**, reopening Activity, or changing its scope or grouping refreshes that order; Done, snoozed and archived chats leave the section. Preparing a new worktree also counts as work.
+
+Press `mod+alt+a` to cycle through chats waiting on you, followed by unseen work. The Activity bell uses the same attention state. Native subagents are opened from their parent's cards or roster rather than separate sidebar rows.
+
+Source evidence: feature head `4b2441d`; `apps/web/src/components/SidebarActivityView.logic.ts`, `SidebarActivityView.tsx`, `Sidebar.tsx` and `apps/web/src/keybindings.ts`.
 
 ## Choose your chat header
 

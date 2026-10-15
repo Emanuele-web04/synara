@@ -49,3 +49,21 @@ To configure it later, open **Settings → General → Safari import setup**:
 Full Disk Access is a broad macOS permission that reaches beyond Safari. You can decline and sign in directly in Synara instead. Opening System Settings or dismissing the setup does not prove that macOS has granted access; a later import reports the actual reader outcome.
 
 For browser interactions and embedded sign-in popups, continue with [Browser verification](/docs/workflows/browser-verification). See [Browser troubleshooting](/docs/troubleshooting/browser) for reader errors, locked saved logins, and persistence failures.
+
+## Switching tabs and restoring suspended pages
+
+In 1.0.4, ordinary inactive tabs stay loaded for up to ten minutes, and a chat's browser can remain loaded for up to five minutes after leaving that chat. While the page remains loaded, its forms, scroll position and DOM state are retained. Hidden pages may be suspended sooner under the per-chat or app-wide runtime budget.
+
+The manager keeps up to five inactive tabs warm per chat and targets a budget of twelve browser-owned live page runtimes across the app. Visible pages, protected automation actions and OAuth opener pages are excluded from eviction, so the budget is not an absolute memory guarantee. Under pressure, the inactivity delay can fall to one minute.
+
+A suspended tab reloads its saved URL when reopened; unsaved forms or client-only page state may be lost. Agent-owned tabs also restore when no tool is acting on them. If the desktop window is replaced, destroyed page runtimes are marked for the same restoration. These rules concern loaded pages, not the [saved-login vault](#saved-logins) or a guarantee that a site keeps you signed in.
+
+If a page is still empty, preserve its URL and the last tool result before following [browser troubleshooting](/docs/troubleshooting/browser).
+
+Source evidence: Synara v1.0.4 (`a62d7c733d19f5538ffc0d126d57437b3b578ff1`) `apps/desktop/src/browserManager.ts`.
+
+## Typing while the agent works
+
+Stable 1.0.5 and Beta preserve composer focus while the agent clicks, types or inspects a native browser tab. Hovering over the native page also keeps your existing keyboard target. This uses tab protocol input and does not guarantee that every website accepts the action; inspect the page's actual result.
+
+Source evidence: feature head `4b2441d`; `apps/desktop/src/browserAutomation/betterwrightCdp.ts`, `screenshotCapture.ts` and `apps/web/src/components/ChatView.tsx`.
