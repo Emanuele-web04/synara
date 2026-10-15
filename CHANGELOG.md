@@ -33,6 +33,8 @@ The first full build failed while loading an existing Turbopack persistence dire
 
 Exact-tag CI remains the publication gate for all quality/server tests, four native packages, provenance, macOS signing/notarization and Intel startup, and Windows Defender/startup under the exact `1.0.5` unsigned exception.
 
+The first tag candidate failed the CI identity check because two late documentation additions named the website repository using a retired product identity. Those references were corrected without weakening the guard. The earlier local brand check preceded those additions; the corrected candidate rechecks the complete tracked documentation before publication.
+
 PR #1934 previously received an actual `OK` reply from Claude Sonnet 4.6 in isolated state. That is one session smoke, not a guarantee for every provider. Voice visibility has browser coverage; live microphone/provider behavior and manual installed-app upgrades are not established. The task-state optimization preserves reconstructed SQL results; it does not resolve every server stall.
 
 The repository website mirror now also includes its missing 1.0.2–1.0.4 entries; the production website retains its existing published history. The durable documentation audit updates composer, Activity, subagents, handoffs, browser focus, Claude accounting and channel availability; new inline-visual and Connectors guides are linked from navigation and overview pages. See [release source audit](docs/releases/1.0.5-source-audit.md).

@@ -401,7 +401,7 @@ Authority: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`, tree
 `v1.0.4` and Beta range after `v1.0.2-beta.1`. Per-change source map:
 Synara `docs/releases/1.0.5-source-audit.md`.
 
-Production deploys from Emanuele-web04/dpcode-website; apps/marketing is the
+Production deploys from the separate website repository; apps/marketing is the
 Synara repository mirror. The current production guides already documented
 1.0.3/1.0.4 recovery and Computer Use. Their detail is retained, and stale
 history/cache claims in the mirror are replaced. New inline-visual and Beta
