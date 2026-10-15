@@ -6431,6 +6431,150 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect(
+    "uses native CLI effort metadata for discovery, default spawn and live dispatch",
+    () => {
+      const queries: FakeClaudeQuery[] = [];
+      const inputs: ClaudeQueryOptions[] = [];
+      const layer = makeClaudeAdapterLive({
+        createQuery: (input) => {
+          const query = new FakeClaudeQuery();
+          setSupportedModels(query, [
+            {
+              value: "runtime-fixture-model",
+              displayName: "Runtime fixture",
+              description: "Fixture",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "xhigh", "max"],
+              supportsAdaptiveThinking: true,
+              supportsFastMode: false,
+            },
+          ]);
+          queries.push(query);
+          inputs.push(input.options);
+          return query;
+        },
+      }).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const catalog = yield* adapter.listModels!({
+          provider: "claudeAgent",
+          cwd: "/tmp/project",
+        });
+        const model = catalog.models[0]!;
+        assert.deepEqual(
+          model.supportedReasoningEfforts?.map((level) => level.value),
+          ["default", "low", "xhigh", "max"],
+        );
+        assert.equal(model.defaultReasoningEffort, "default");
+        assert.equal(model.supportsThinkingToggle, false);
+        assert.equal(model.supportsFastMode, false);
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          cwd: "/tmp/project",
+          modelSelection: { provider: "claudeAgent", model: "runtime-fixture-model" },
+        });
+        assert.equal((inputs[1]!.settings as Record<string, unknown>).effortLevel, undefined);
+        assert.equal(inputs[1]!.effort, undefined);
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Fixture request",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "xhigh" },
+          },
+        });
+        assert.deepInclude(queries[1]!.applyFlagSettingsCalls, { effortLevel: "xhigh" });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    },
+  );
+
+  it.effect("rejects an effort the session CLI explicitly excludes before dispatch", () => {
+    const harness = makeHarness();
+    setSupportedModels(harness.query, [
+      {
+        value: "runtime-fixture-model",
+        displayName: "Runtime fixture",
+        description: "Fixture",
+        supportsEffort: true,
+        supportedEffortLevels: ["low"],
+        supportsAdaptiveThinking: true,
+      },
+    ]);
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        modelSelection: { provider: "claudeAgent", model: "runtime-fixture-model" },
+      });
+      const result = yield* adapter
+        .sendTurn({
+          threadId: THREAD_ID,
+          input: "Fixture request",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "xhigh" },
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure")
+        assert.include(providerValidationIssue(result.failure), 'does not support effort "xhigh"');
+      assert.notDeepInclude(harness.query.applyFlagSettingsCalls, { effortLevel: "xhigh" });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "keeps native max spawn-fixed on a runtime-only model without prior UI discovery",
+    () => {
+      const harness = makeHarness();
+      setSupportedModels(harness.query, [
+        {
+          value: "runtime-fixture-model",
+          displayName: "Runtime fixture",
+          description: "Fixture",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "max"],
+          supportsAdaptiveThinking: true,
+        },
+      ]);
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "max" },
+          },
+        });
+        assert.equal(harness.getLastCreateQueryInput()!.options.effort, "max");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("discovers Claude model capabilities before a session starts", () => {
     const query = new FakeClaudeQuery();
     let createQueryCalls = 0;

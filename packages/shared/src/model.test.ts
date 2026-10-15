@@ -894,6 +894,15 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
+  it("restarts for max on a CLI-only model without relying on a catalog release", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("runtime-fixture-model", { effort: "low" }),
+        selection("runtime-fixture-model", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not restart for a model-only change", () => {
     expect(
       claudeSelectionRequiresRestart(
@@ -903,22 +912,22 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when a model switch makes a persisted max effort effective", () => {
+  it("keeps CLI-owned max spawn-fixed when switching from a legacy catalog model", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-haiku-4-5", { effort: "max" }),
         selection("claude-sonnet-5", { effort: "max" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("restarts when a model switch makes a persisted max effort unsupported", () => {
+  it("leaves max support validation to the CLI when switching to a legacy catalog model", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-sonnet-5", { effort: "max" }),
         selection("claude-haiku-4-5", { effort: "max" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("still restarts when spawn-fixed options change together with the model", () => {
