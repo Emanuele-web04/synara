@@ -22,6 +22,156 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-beta.1",
+    date: "Oct 15",
+    features: [
+      {
+        id: "connectors",
+        title: "Connect your tools to Synara Beta",
+        description:
+          "Sign in to remote MCP services from Settings → Connectors and use their tools in supported agent sessions.",
+        details:
+          "Claude, Codex and OpenCode support remote HTTP connectors; ACP providers require advertised HTTP MCP support. Pi, Devin and Antigravity do not. New sessions receive connected tools. Custom URLs require public HTTPS; sign-in requires loopback. Slack needs your own OAuth app and an updated redirect URL when the desktop port changes. Stable keeps Connectors disabled.",
+      },
+      {
+        id: "inline-visuals",
+        title: "Interactive visuals inside your conversations",
+        description:
+          "Agents can now show charts, tables, comparisons, checklists and calculators directly in Beta chats.",
+        details:
+          "Native components follow your theme and font size. Desktop apps also support isolated, self-contained HTML views; browser-hosted clients show native components only. Visuals stay with their chat in the current app’s data home.",
+      },
+      {
+        id: "composer",
+        title: "A compact composer with room for your work",
+        description:
+          "Short drafts fit into a single row that expands for longer messages. Goals, tasks and changes sit in floating capsules above it.",
+        details:
+          "Open a capsule for details or use the + menu for extras. Plans remain accessible, queued drafts survive layout changes, and narrow editor panes keep branch and model controls readable. Notices and task controls use the same compact layout.",
+      },
+      {
+        id: "activity-priority",
+        title: "Find the chats that need you next",
+        description:
+          "Activity’s Priority section puts approvals, questions and ready plans ahead of unseen results and running work.",
+        details:
+          "Rows hold their place while you work through them; Clear read refreshes the list. Use mod+alt+a to cycle through chats waiting on you and unseen work. Native subagent chats stay in their parent’s cards and roster instead of filling the sidebar.",
+      },
+      {
+        id: "simulator",
+        title: "More capable iOS simulator tools",
+        description:
+          "Agents can launch and inspect apps, wait for screens, read bounded logs and configure test conditions, with repaired input on Xcode 27.",
+        details:
+          "Actions return screen evidence and report when a screen has not settled. Tools support app restarts, launch arguments and environment, appearance, text size, location and privacy settings. Input and configuration retain approval checks; app builds still use your project’s build tools.",
+      },
+      {
+        id: "claude-permissions",
+        title: "Claude keeps the permissions and session you chose",
+        description:
+          "Ask for approval explicitly selects Claude’s default permission mode. Changing behavior settings such as Artifacts no longer discards a resumable session.",
+        details:
+          "Permission descriptions distinguish Claude’s modes from Codex’s sandbox policies. Finished or interrupted foreground Claude tasks settle with their turn, without stopping background work that still owns its lifecycle. Slash-command catalog updates no longer appear as unknown transcript events.",
+      },
+      {
+        id: "history-performance",
+        title: "Less waiting on task-heavy conversations",
+        description:
+          "Opening a conversation with many task updates avoids repeated quadratic database scans.",
+        details:
+          "The query retains the same reconstructed task state and history. Stale transcript row measurements are also ignored. These fixes address specific slow-query and layout cases; they do not establish that every server or provider stall is resolved.",
+      },
+      {
+        id: "claude-usage",
+        title: "Clearer Claude token totals",
+        description:
+          "Resumed Claude sessions avoid counting restored usage again, and Inbox separates observed cache reads from other tokens.",
+        details:
+          "Accounting keeps native-session and process identity, preserves child usage until a real parent result covers it, and excludes output from cache-read estimates. Historical records without enough evidence remain partial; these figures are not an independent billing statement.",
+      },
+      {
+        id: "browser-focus",
+        title: "Keep typing while an agent uses the browser",
+        description:
+          "Agent clicks, typing and browser inspection no longer take native focus from the composer.",
+        details:
+          "Native browser hover also preserves the keyboard target. Input uses the tab’s protocol connection, and restored screenshot visibility keeps its focus behavior. This does not promise every website accepts automated input.",
+      },
+      {
+        id: "handoff",
+        title: "Resolve a blocked provider switch",
+        description:
+          "If background tasks prevent a handoff, the composer offers Stop tasks and switch.",
+        details:
+          "The source keeps running until you choose that action. A failed handoff retains the source selection and its actual error instead of reporting success.",
+      },
+      {
+        id: "landing-polish",
+        title: "A new empty-chat background and smaller refinements",
+        description:
+          "Empty chats have an animated ASCII field, with an Appearance switch and a still version for reduced motion.",
+        details:
+          "The field stops when hidden or disabled and stays out of terminal views. Updated tool, app and connector icons, compact archive controls, clearer permission text, and corrected plan, voice-layout and transcript clearance make everyday controls easier to use.",
+      },
+      {
+        id: "beta-history",
+        title: "Full conversation reloads and safer recovery",
+        description:
+          "Since the previous Beta, native chats restore their full saved conversation and apply rollbacks made while disconnected.",
+        details:
+          "The 1.0.2 recent-history pager and private detail cache were removed; imported provider history retains its own loader. Reconnects restore subscriptions without replaying uncertain requests. Missing owners cannot trigger abandoned child commands, and eligible ordinary chats can continue after an unexpected shutdown while approvals, goals, Hubs and scheduled work retain their own recovery rules.",
+      },
+      {
+        id: "beta-hubs",
+        title: "Clearer Hub navigation and consistent permissions",
+        description:
+          "Hubs appears in the main rail, with coordinator rows, worker navigation and settings beside your projects.",
+        details:
+          "Hiding Hubs again is respected. Check-ins use the coordinator’s current access mode; new workers inherit a supported mode or fall back to Ask for approval. Verified Claude Auto capability remains tied to the model and account. Gateway and External MCP callers can select a configured provider account for new work and automations.",
+      },
+      {
+        id: "beta-computer",
+        title: "Paste files and recover Computer Use actions",
+        description:
+          "On macOS, agents can paste workspace images and files, preserve supported clipboard formats and recover expired foreground requests.",
+        details:
+          "A newer human clipboard copy is retained. Native targeting excludes unrelated or parked document trees and cursor overlays. Input listeners recover with readiness checks, state and scroll progress avoid false repetition blocks, and uncertain text delivery is not replayed automatically. App outcomes still need verification.",
+      },
+      {
+        id: "beta-browser",
+        title: "Browser tabs keep their place through ordinary switches",
+        description:
+          "Inactive browser tabs stay warm longer, preserving forms, scroll and page state until runtime limits require suspension.",
+        details:
+          "Hidden tabs can suspend earlier under pressure. Suspended pages and tabs whose desktop window was replaced reload their saved URL when reopened; unsaved state is not guaranteed indefinitely. Desktop HTTP requests also avoid the macOS Electron socket failure.",
+      },
+      {
+        id: "beta-session",
+        title: "Protect live sessions and resume Claude deliberately",
+        description:
+          "Active provider work is protected from stale cleanup decisions, delayed completion events and event-loop stalls.",
+        details:
+          "Claude’s long-idle resume review is off by default; enable it in Providers when you want the choice. Agent and automation sends are not held for that personal review. Nested Codex sessions preserve user configuration and source-account identity, startup reconciliation respects live ownership, and behavior-only Claude settings retain resume ownership.",
+      },
+      {
+        id: "beta-navigation",
+        title: "More control over chat headers and sidebar order",
+        description:
+          "Turn Thread tabs off for a simpler header, and disable Working and unread on top for chronological Recently active ordering.",
+        details:
+          "Rows stay anchored during pointer interaction; the Automations badge counts configured automations. Working for and Worked for use compact disclosures, and background completions keep an active response together. First-message naming survives replay without overwriting manual titles.",
+      },
+      {
+        id: "beta-provider-polish",
+        title: "Provider and workspace refinements since the last Beta",
+        description:
+          "Pi reports missing installations accurately, Grok 4.7 Build Fast offers Extra High, and access-mode changes keep idle work settled.",
+        details:
+          "Provider effort and availability still depend on installed runtimes and accounts. Windows executable resolution prefers spawn-safe candidates; process scans no longer block POSIX maintenance, named pipes cannot strand ordinary file workers, and the context ring, file-read icon, Hubs empty state and Skip setup keyboard focus are corrected. Shared TypeScript preparation is serialized.",
+      },
+    ],
+  },
+  {
     version: "1.0.5",
     date: "Oct 15",
     features: [
