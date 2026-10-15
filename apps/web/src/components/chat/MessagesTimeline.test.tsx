@@ -784,6 +784,40 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
+  it("uses the Synara mark for the default Thinking status", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Thinking"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).toContain('data-synara-working-loader="true"');
+    expect(markup).toContain("synara-working-loader__mark");
+  });
+
+  it("keeps semantic status icons when the working label is not Thinking", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Checking message delivery…"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-synara-working-loader="true"');
+    expect(markup).toContain('class="size-3.5 shrink-0"');
+  });
+
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const activeTurnId = TurnId.makeUnsafe("turn-live-status");
