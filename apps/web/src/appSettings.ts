@@ -508,6 +508,13 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentSubagents: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Project actions (scripts) section in the Environment panel. The chat top bar runs the
+  // selected project's actions; this section is where the first one gets created and edited.
+  showEnvironmentActions: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Chat top bar: which action controls sit before the divider. Hiding one keeps its
+  // command reachable elsewhere (keybinding, Environment panel, sidebar thread menu).
+  showHeaderHandoff: Schema.Boolean.pipe(withDefaults(() => true)),
+  showHeaderActions: Schema.Boolean.pipe(withDefaults(() => true)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),

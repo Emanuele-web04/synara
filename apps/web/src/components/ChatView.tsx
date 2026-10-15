@@ -82,6 +82,7 @@ import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/provi
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
 import { holdQueuedComposerTurnsForStop } from "~/lib/queuedComposerDrain";
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
+import { resolveInheritedThreadContext } from "~/lib/threadBootstrap";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadSnoozedUntil, resolveSnoozeDeadline } from "~/lib/threadSnooze";
@@ -5506,6 +5507,16 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
+  // Header "New thread": mints a thread in the active workspace (same branch/worktree/env),
+  // falling back to the project when there is no server/draft thread yet.
+  const onNewThreadFromHeader = useStableCallback(() => {
+    const targetProjectId = activeProject?.id ?? activeThread?.projectId ?? null;
+    if (!targetProjectId) return;
+    void handleNewThread(
+      targetProjectId,
+      resolveInheritedThreadContext({ activeThread, activeDraftThread: draftThread }),
+    );
+  });
   const dismissActiveThreadError = useCallback(() => {
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
@@ -6053,6 +6064,17 @@ export default function ChatView({
     onRenamePinnedMessage: handleRenamePinnedMessage,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
+    ...(activeProjectScripts !== undefined
+      ? {
+          projectActions: {
+            scripts: activeProjectScripts,
+            onRunScript: onRunProjectScriptFromHeader,
+            onAddScript: saveProjectScript,
+            onUpdateScript: updateProjectScript,
+            onDeleteScript: deleteProjectScript,
+          },
+        }
+      : {}),
     onClose: closeEnvironmentPanelAfterAction,
     onRegisterCommitAndPushTrigger,
   };
@@ -6706,7 +6728,8 @@ export default function ChatView({
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           continueHandoffActionTargets={continueHandoffTargets}
-          showHandoffAction={handoffAvailability.providerHandoff}
+          showHandoffAction={handoffAvailability.providerHandoff && settings.showHeaderHandoff}
+          showHeaderActions={settings.showHeaderActions}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}
@@ -6738,6 +6761,7 @@ export default function ChatView({
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
+          onNewThread={onNewThreadFromHeader}
           onToggleDiff={onToggleDiff}
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
           onCreateHandoff={onCreateHandoffThread}
