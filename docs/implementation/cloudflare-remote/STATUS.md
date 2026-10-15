@@ -980,3 +980,20 @@ session.started with a consistent runtime generation at 00:02:55 CEST on
 not public publication, a physical-camera test or a TestFlight background-push
 test. A subsequent user request to improve mobile first-send titles/provider
 icons is separate native work and is not included in build 131.
+
+### 2026-10-16 — Packaged desktop workspace startup
+
+The `.6` subframe navigation guard admitted only `about:blank` and
+`about:srcdoc`, blocking the application's own workspace document. MacBook →
+Mini pairing completed, but the pane stayed blank and never reported ready.
+The previous qualification covered desktop dialogs and mobile-to-Mac RPC,
+not this packaged desktop workspace startup path.
+
+The guard now permits the main app to initialize a fresh direct child with its
+exact shell document, and that initialized workspace to reload the same document
+for recovery. Inline visuals, foreign initiators, other app identities and URL
+data remain blocked. No pairing, account or transport policy was changed.
+Nineteen guard tests pass, including regressions that fail before the fix.
+A real Electron fixture also confirms initial loading, retry/reload and continued
+containment of an inline visual. Signed installation and MacBook → Mini live
+qualification are the remaining candidate checks.
