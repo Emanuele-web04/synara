@@ -937,3 +937,42 @@ describe("getComposerProviderState", () => {
     });
   });
 });
+
+describe("CLI-discovered Claude dispatch", () => {
+  const runtimeModel: ProviderModelDescriptor = {
+    slug: "runtime-fixture-model",
+    name: "Runtime fixture",
+    supportsThinkingToggle: false,
+    supportsFastMode: false,
+    supportedReasoningEfforts: [{ value: "default" }, { value: "low" }, { value: "max" }],
+    defaultReasoningEffort: "default",
+  };
+  it("preserves an explicit native effort for a model absent from the static catalog", () => {
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "runtime-fixture-model",
+        prompt: "",
+        runtimeModel,
+        modelOptions: { claudeAgent: { effort: "max", thinking: false, fastMode: true } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ effort: "max" });
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "runtime-fixture-model",
+        prompt: "",
+        runtimeModel,
+        modelOptions: { claudeAgent: {} },
+      }).modelOptionsForDispatch,
+    ).toBeUndefined();
+  });
+  it("honors an explicit empty CLI ladder instead of restoring the static one", () => {
+    const selection = getComposerTraitSelection("claudeAgent", "claude-opus-4-8", "", undefined, {
+      ...runtimeModel,
+      slug: "claude-opus-4-8",
+      supportedReasoningEfforts: [],
+    });
+    expect(selection.effortLevels).toEqual([]);
+  });
+});

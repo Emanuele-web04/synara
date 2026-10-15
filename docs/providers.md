@@ -197,6 +197,12 @@ For a release newer than Synara's catalog, the picker shows the concrete ID. Age
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
 advertised alias.
 
+Claude effort levels, adaptive-thinking support and fast-mode availability come from the installed
+CLI when it supplies that metadata, including for models newer than Synara’s fallback catalog.
+“Default (CLI)” leaves effort unset so Claude Code chooses its own default; explicit levels are
+validated against the session’s native catalog. Older CLIs retain fallback behavior for metadata
+fields they omit.
+
 Claude model discovery caches catalogs by the detected CLI version as well as the executable
 path. A detected CLI update refreshes the picker even when the path stays the same, including
 after a restart. Catalog revalidation uses a temporary Claude process because running sessions
