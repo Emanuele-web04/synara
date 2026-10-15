@@ -28,7 +28,8 @@ composer; it is not sent twice.
 
 Empty chats show an animated ASCII background by default. Turn it off in **Settings →
 Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
-clicks can still trigger a ripple. The decoration pauses while its chat is hidden.
+clicks can still trigger a ripple. The pattern fades around the composer and stays out of the
+input, including during ripples. The decoration pauses while its chat is hidden.
 
 ## The main surfaces
 
