@@ -1,6 +1,6 @@
 import { expect, type Page } from "playwright/test";
 
-export async function seedEditorProject(page: Page, workspace: string): Promise<string> {
+export async function openEditorAcceptanceApp(page: Page): Promise<void> {
   await page.goto("/");
   // Fail at bootstrap rather than sending a command into a disconnected transport.
   await expect
@@ -17,13 +17,28 @@ export async function seedEditorProject(page: Page, workspace: string): Promise<
       { timeout: 20_000 },
     )
     .toBe(true);
-  // The welcome tour suppresses the separate import announcement for new users.
-  // Dismiss the real tour rather than waiting for an intentionally absent dialog.
-  const welcome = page.getByRole("dialog", { name: "Welcome to Synara", exact: true });
-  const skipTour = welcome.getByRole("button", { name: "Skip setup", exact: true });
-  await expect(skipTour).toBeVisible();
-  await skipTour.click();
+  const onboarding = () =>
+    page.evaluate(async () => {
+      const modulePath = "/src/onboarding/onboardingDialogStore.ts";
+      const { useOnboardingDialogStore } = await import(/* @vite-ignore */ modulePath);
+      const state = useOnboardingDialogStore.getState();
+      return { settled: state.startupGateSettled, open: state.isOpen };
+    });
+  await expect.poll(async () => (await onboarding()).settled).toBe(true);
+  // Tests share an isolated installation, but each has a fresh browser context.
+  // Read the real gate rather than assuming every visit is first-run or mutating
+  // onboarding state to hide an unexpected modal.
+  if ((await onboarding()).open) {
+    const welcome = page.getByRole("dialog", { name: "Welcome to Synara", exact: true });
+    const skipTour = welcome.getByRole("button", { name: "Skip setup", exact: true });
+    await expect(skipTour).toBeVisible();
+    await skipTour.click();
+  }
   await expect(page.getByRole("dialog")).toHaveCount(0);
+}
+
+export async function seedEditorProject(page: Page, workspace: string): Promise<string> {
+  await openEditorAcceptanceApp(page);
   return page.evaluate(async (cwd) => {
     const modulePath = "/src/nativeApi.ts";
     const { ensureNativeApi } = await import(/* @vite-ignore */ modulePath);
