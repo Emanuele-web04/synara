@@ -952,3 +952,48 @@ illustrations now use the existing UI typography tokens so they follow the font
 setting. The final UI pass passed format, lint, twelve-package typecheck, four
 typography/selector guards and 26 browser cases covering Connections, inline
 visual blocks and the preview toolbar. No test threshold was relaxed.
+
+### Synara Remote .6 qualification
+
+Build-only CI [38811340707](https://github.com/Emanuele-web04/synara/actions/runs/38811340707)
+passed all gates for candidate `11094322e38de4dcef5c4f4997506202821b3125`. Remote
+`1.0.6-remote.6` is installed and open on both Macs, with `.5` retained for
+rollback. The Mini verified the full GitHub artifact digest, provenance and
+lockfile; both Macs verified the ZIP hash, Developer ID signature, Gatekeeper and
+notarization. The temporary single-file transfer listener is confirmed closed.
+
+The Mini preserves 46 chats, 215 message rows and 91 turns; the MacBook preserves
+all original 103 chats, 1,745 messages, 357 turns, 16 projects, 57 attachments and
+seven icons. Account, machine identity and approvals remain unchanged. Separate
+user activity added two chats, four messages and two completed turns on the
+MacBook after the initial comparison; no original row was lost. The MacBook
+also logged two model-catalog refresh timeouts on other chats; this qualification
+does not claim those were repaired.
+
+The installed Mini dialog passed Phone/Computer switching and Copy code / Copy
+fingerprint feedback. Connections tab switching was also verified on the
+MacBook; the invite/copy actions were not repeated there. The existing iOS
+simulator build 131 reconnected to both Macs and read their existing transcripts
+without pairing again or sending new turns. MacBook x-limiter reached ready and
+session.started with a consistent runtime generation at 00:02:55 CEST on
+16 October. No physical phone was used. This is desktop candidate qualification,
+not public publication, a physical-camera test or a TestFlight background-push
+test. A subsequent user request to improve mobile first-send titles/provider
+icons is separate native work and is not included in build 131.
+
+### 2026-10-16 — Packaged desktop workspace startup
+
+The `.6` subframe navigation guard admitted only `about:blank` and
+`about:srcdoc`, blocking the application's own workspace document. MacBook →
+Mini pairing completed, but the pane stayed blank and never reported ready.
+The previous qualification covered desktop dialogs and mobile-to-Mac RPC,
+not this packaged desktop workspace startup path.
+
+The guard now permits the main app to initialize a fresh direct child with its
+exact shell document, and that initialized workspace to reload the same document
+for recovery. Inline visuals, foreign initiators, other app identities and URL
+data remain blocked. No pairing, account or transport policy was changed.
+Nineteen guard tests pass, including regressions that fail before the fix.
+A real Electron fixture also confirms initial loading, retry/reload and continued
+containment of an inline visual. Signed installation and MacBook → Mini live
+qualification are the remaining candidate checks.
