@@ -41,7 +41,7 @@ jobs:
             apps/web/src/components/codeEditor/extensionLanguageProviders.ts \
             apps/web/src/components/codeEditor/extensionRichLanguage.browser.tsx docs/editor/extensions.md \
             .github/workflows/code-oss-extension-acceptance.yml
-      - name: Store a normalized candidate without publishing a branch
+      - name: Store code-only candidate; leave workflow publication to the authorized connector
         id: objects
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,16 +74,20 @@ jobs:
           for (const file of new Set([...changed,...created])) {
             if (!allowed.has(file)) throw new Error(`Unexpected edit ${file}`);
             const blob = await api('git/blobs', {content: await readFile(file,'utf8'), encoding:'utf-8'});
-            tree.push({path:file,mode:'100644',type:'blob',sha:blob.sha});
+            if (file.startsWith('.github/workflows/')) {
+              console.log('PERMANENT_WORKFLOW_BLOB', file, blob.sha);
+            } else {
+              tree.push({path:file,mode:'100644',type:'blob',sha:blob.sha});
+            }
           }
           for (const file of ['scripts/continue-extension-language.mjs','scripts/continue-extension-watchers.mjs','scripts/continue-extension-evidence.mjs']) tree.push({path:file,mode:'100644',type:'blob',sha:null});
+          console.log('NORMALIZED_FILES',JSON.stringify(tree));
           const base = await api(`git/commits/${process.env.CANDIDATE_BASE}`);
           const result = await api('git/trees', {base_tree:base.tree.sha,tree});
           const identity = {name:'Commander Chara',email:'249489759+cmdr-chara@users.noreply.github.com'};
-          const commit = await api('git/commits', {message:'feat(extensions): add native semantic hints and external file events', tree:result.sha, parents:[process.env.PARENT_SHA,process.env.CANDIDATE_BASE], author:identity,committer:identity});
+          const commit = await api('git/commits', {message:'feat(extensions): add native semantic hints and external file events', tree:result.sha, parents:[process.env.CANDIDATE_BASE], author:identity,committer:identity});
           console.log('CANDIDATE_COMMIT',commit.sha);
           console.log('CANDIDATE_TREE',result.sha);
-          console.log('NORMALIZED_FILES',JSON.stringify(tree));
           await appendFile(process.env.GITHUB_OUTPUT,`candidate=${commit.sha}\n`);
           NODE
   checks:
