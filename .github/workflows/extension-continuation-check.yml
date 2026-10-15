@@ -10,7 +10,7 @@ concurrency:
   group: extension-continuation-${{ github.ref }}
   cancel-in-progress: true
 env:
-  CANDIDATE_BASE: e24322a130cca4e2b539832a6c9d5a92626d3e1f
+  CANDIDATE_BASE: 569748315f0c56445d386bed0d6b5252d4b91ad1
   IMPLEMENTATION_BASE: 4268fc833b4ed00cec74ec328e0170144af337cf
 jobs:
   prepare:
