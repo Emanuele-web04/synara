@@ -443,6 +443,13 @@ export interface DesktopWindowMaterial {
   blurRadius: number;
 }
 
+/**
+ * How the desktop window backs the translucent shell. `native`: macOS vibrancy with the
+ * adjustable desktop blur (`setWindowMaterial`). `compositor`: a transparent window that the
+ * Linux compositor (Hyprland) blurs with its own settings, so the radius is not ours to set.
+ */
+export type DesktopWindowTranslucency = "native" | "compositor";
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -988,6 +995,11 @@ export interface DesktopBridge {
   setTheme: (theme: DesktopTheme) => Promise<void>;
   /** macOS only; resolves false when the adjustable blur is unavailable. */
   setWindowMaterial?: (input: DesktopWindowMaterial) => Promise<boolean>;
+  /**
+   * Set when the desktop window was created see-through. Absent on opaque windows
+   * (Windows, Linux without a blurring compositor) and in browsers.
+   */
+  windowTranslucency?: DesktopWindowTranslucency;
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
