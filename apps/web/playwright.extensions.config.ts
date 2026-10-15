@@ -14,7 +14,11 @@ const servers = Array.isArray(editorConfig.webServer)
 
 export default defineConfig({
   ...editorConfig,
-  testMatch: ["editorExtensions.e2e.ts", "editorExtensionDebug.e2e.ts"],
+  testMatch: [
+    "editorExtensions.e2e.ts",
+    "editorExtensionDebug.e2e.ts",
+    "editorExtensionVsix.e2e.ts",
+  ],
   timeout: 180_000,
   reporter: [["list"], ["json", { outputFile: "test-results/extensions-acceptance.json" }]],
   webServer: servers.map((server) => ({

@@ -442,8 +442,12 @@ function installMainThreadActors() {
     MainThreadFileSystem: nativeFileSystem(() => initialization, parent),
     MainThreadFileSystemEventService: {
       async $watch(extensionId, session, resource, options) {
-        await fileEvents.watch(session, resource, options);
-        event("watch.add", { extensionId, session, resource, options });
+        try {
+          await fileEvents.watch(session, resource, options);
+          event("watch.add", { extensionId, session, resource, options });
+        } catch (error) {
+          event("error", "Extension watcher is unavailable: " + error.message);
+        }
       },
       $unwatch(session) {
         fileEvents?.unwatch(session);

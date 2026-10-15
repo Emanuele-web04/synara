@@ -40,6 +40,11 @@ exports.activate = (context) => {
     }),
     vscode.commands.registerCommand("synara.fixture.refresh", () => { semanticChanges.fire(); hintChanges.fire(); return true; }),
     vscode.commands.registerCommand("synara.fixture.events", () => changes.slice()),
+    vscode.commands.registerCommand("synara.fixture.blockedWatch", () => {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(process.env.HOME, "**/*.watch"));
+      context.subscriptions.push(watcher);
+      return true;
+    }),
   );
   const watcher = vscode.workspace.createFileSystemWatcher("**/*.watch");
   context.subscriptions.push(watcher,
@@ -170,6 +175,26 @@ describe.skipIf(!enabled)("real Code-OSS semantic, hint and filesystem adapters"
             ).events.filter((event) => event.event === "providers").length,
         )
         .toBeGreaterThanOrEqual(2);
+      const watchStart = await runtime.runtimeRequest(owner, { operation: "poll", cwd, hostId });
+      await invoke("command", { id: "synara.fixture.blockedWatch" });
+      await expect
+        .poll(
+          async () => {
+            const result = await runtime.runtimeRequest(owner, {
+              operation: "poll",
+              cwd,
+              hostId,
+              after: watchStart.sequence,
+            });
+            expect(result.status).toBe("running");
+            return result.events.some(
+              (event) =>
+                event.event === "error" && event.bodyJson.includes("watcher leaves its workspace"),
+            );
+          },
+          { timeout: 5_000 },
+        )
+        .toBe(true);
       const changes = async () =>
         z
           .array(z.object({ type: z.string(), path: z.string() }))
