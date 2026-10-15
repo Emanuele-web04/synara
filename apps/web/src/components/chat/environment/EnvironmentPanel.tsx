@@ -15,6 +15,7 @@ import type {
   MessageId,
   PinnedMessage,
   ProjectId,
+  ProjectScript,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -49,6 +50,8 @@ import { useTemporaryThreadStore } from "~/temporaryThreadStore";
 import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import { EnvironmentActionsSection } from "./EnvironmentActionsSection";
+import type { NewProjectScriptInput } from "../ProjectActionDialog";
 import {
   EnvironmentAutomationsSection,
   type EnvironmentAutomationPanelItem,
@@ -160,6 +163,21 @@ export interface EnvironmentPanelProps {
   onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
   /** Copy/append current project instructions into the active thread's notepad. */
   onCopyProjectInstructionsToNotes: () => void;
+  /**
+   * The active project's actions (scripts), shown in the Actions section — the one place the
+   * first action can be created now that the top bar's "Add action" slot is the New thread
+   * button. Undefined on non-project threads hides the section.
+   */
+  projectActions?: {
+    readonly scripts: readonly ProjectScript[];
+    readonly onRunScript: (script: ProjectScript) => void;
+    readonly onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
+    readonly onUpdateScript: (
+      scriptId: string,
+      input: NewProjectScriptInput,
+    ) => Promise<void> | void;
+    readonly onDeleteScript: (scriptId: string) => Promise<void> | void;
+  };
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
   /** Open the shared automation editor for a thread-bound automation row. */
@@ -245,6 +263,7 @@ export function EnvironmentPanel({
   canCopyProjectInstructionsToNotes,
   onProjectInstructionsChange,
   onCopyProjectInstructionsToNotes,
+  projectActions,
   onToggleDiff,
   onOpenAutomation,
   onOpenGithubRepository,
@@ -356,6 +375,17 @@ export function EnvironmentPanel({
           activeThreadId={activeThreadId}
           variant="panel"
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
+        />
+      ) : null}
+
+      {settings.showEnvironmentActions && projectActions ? (
+        <EnvironmentActionsSection
+          scripts={projectActions.scripts}
+          keybindings={keybindings}
+          onRunScript={projectActions.onRunScript}
+          onAddScript={projectActions.onAddScript}
+          onUpdateScript={projectActions.onUpdateScript}
+          onDeleteScript={projectActions.onDeleteScript}
         />
       ) : null}
 
