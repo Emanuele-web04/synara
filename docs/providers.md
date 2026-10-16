@@ -223,6 +223,10 @@ manual retries for at least one minute, and backs off failures. Checks for the v
 priority over queued background catalog loads.
 Failed refreshes retain the last successful catalog. Refreshing does not change the
 selected model or restart running sessions, and availability still comes from the provider runtime.
+Partial or fallback catalogs are retried on demand after a thirty-second cooldown and are never
+persisted or substituted for the last complete catalog. The first upgrade to this cache format
+discards the old catalog snapshot once, then rediscovers models on demand with the same shared
+request and failure limits; accounts, saved models, and sessions are unaffected.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or
