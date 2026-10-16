@@ -8,10 +8,10 @@ See [`manifest.json`](manifest.json) for source workflow run IDs, original scree
 
 New capture: [run 38877198693](https://github.com/Emanuele-web04/synara/actions/runs/38877198693), Chromium 151.0.7922.34. Before revision `9fc733a`; After revision `d5ea733`. All three pairs use matching themes/viewports/fixture tasks.
 
-| Surface | Before | After |
-| --- | --- | --- |
-| Tasks · dark | ![Tasks · dark before](current/before-tasks-dark.png) | ![Tasks · dark after](current/after-tasks-dark.png) |
-| Tasks · light | ![Tasks · light before](current/before-tasks-light.png) | ![Tasks · light after](current/after-tasks-light.png) |
+| Surface                 | Before                                                             | After                                                            |
+| ----------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Tasks · dark            | ![Tasks · dark before](current/before-tasks-dark.png)              | ![Tasks · dark after](current/after-tasks-dark.png)              |
+| Tasks · light           | ![Tasks · light before](current/before-tasks-light.png)            | ![Tasks · light after](current/after-tasks-light.png)            |
 | Tasks · narrow (390 px) | ![Tasks · narrow (390 px) before](current/before-tasks-narrow.png) | ![Tasks · narrow (390 px) after](current/after-tasks-narrow.png) |
 
 ### Further verified Tasks interactions
@@ -36,16 +36,16 @@ New capture: [run 38877198693](https://github.com/Emanuele-web04/synara/actions/
 
 Capture: [run 38804921325](https://github.com/Emanuele-web04/synara/actions/runs/38804921325). Before `ac2d3c1`; After product-file revision `7fb4a36`. These images represent their earlier code revisions, **not** a second run against the final Tasks branch.
 
-| Surface | Before | After |
-| --- | --- | --- |
-| Database table | ![Database table before](previous/before-table.png) | ![Database table after](previous/after-table.png) |
-| Status board | ![Status board before](previous/before-board.png) | ![Status board after](previous/after-board.png) |
-| Calendar | ![Calendar before](previous/before-calendar.png) | ![Calendar after](previous/after-calendar.png) |
-| Timeline | ![Timeline before](previous/before-timeline.png) | ![Timeline after](previous/after-timeline.png) |
-| Sprint planning | ![Sprint planning before](previous/before-sprints.png) | ![Sprint planning after](previous/after-sprints.png) |
-| Mapping controls | ![Mapping controls before](previous/before-mapping.png) | ![Mapping controls after](previous/after-mapping.png) |
-| Settings | ![Settings before](previous/before-settings.png) | ![Settings after](previous/after-settings.png) |
-| Wiki page | ![Wiki page before](previous/before-wiki.png) | ![Wiki page after](previous/after-wiki.png) |
+| Surface          | Before                                                           | After                                                          |
+| ---------------- | ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| Database table   | ![Database table before](previous/before-table.png)              | ![Database table after](previous/after-table.png)              |
+| Status board     | ![Status board before](previous/before-board.png)                | ![Status board after](previous/after-board.png)                |
+| Calendar         | ![Calendar before](previous/before-calendar.png)                 | ![Calendar after](previous/after-calendar.png)                 |
+| Timeline         | ![Timeline before](previous/before-timeline.png)                 | ![Timeline after](previous/after-timeline.png)                 |
+| Sprint planning  | ![Sprint planning before](previous/before-sprints.png)           | ![Sprint planning after](previous/after-sprints.png)           |
+| Mapping controls | ![Mapping controls before](previous/before-mapping.png)          | ![Mapping controls after](previous/after-mapping.png)          |
+| Settings         | ![Settings before](previous/before-settings.png)                 | ![Settings after](previous/after-settings.png)                 |
+| Wiki page        | ![Wiki page before](previous/before-wiki.png)                    | ![Wiki page after](previous/after-wiki.png)                    |
 | Rich-text editor | ![Rich-text editor before](previous/before-rich-text-editor.png) | ![Rich-text editor after](previous/after-rich-text-editor.png) |
 
 The two mapping-control PNGs are byte-identical in the source archive (same blob SHA); both originals are retained for completeness. Do not interpret that pair as visual proof of change.

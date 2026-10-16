@@ -1,49 +1,49 @@
-name: Format Notion PR Gallery
+name: Notion Tasks evidence
 
 on:
   push:
     branches: [feat/notion-enterprise-oauth-integration]
-    paths: [.github/workflows/notion-ux-workspace.yml]
+    paths:
+      - .github/workflows/notion-ux-workspace.yml
+      - apps/web/scripts/notion-tasks-*.mjs
+      - apps/web/src/components/tasks/**
+      - apps/web/src/components/notion/**
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  format-gallery:
+  evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 20
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
-        with:
-          scope: static
-      - name: Format exactly the new evidence gallery
+      - name: Check pristine source formatting
+        run: bun run fmt:check
+      - name: Focused Tasks and Notion checks
         run: |
-          bun run fmt -- docs/assets/notion-pr-1937/README.md
-          git diff --check
-          git diff -- docs/assets/notion-pr-1937/README.md
-      - name: Stage formatted README without publishing a branch change
+          bun run test:web:focused src/components/tasks/taskFilters.test.ts src/components/tasks/tasks.logic.test.ts src/components/notion/notionDrafts.test.ts src/components/notion/notionWrites.test.ts
+          bun run --cwd apps/server test src/notion/runtime.test.ts src/agentGateway/notionTools.test.ts src/agentGateway/notionApproval.test.ts
+      - name: Install the pinned browser
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install chromium
+      - name: Capture actual component journeys
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          NOTION_EVIDENCE_DIR: ${{ runner.temp }}/notion-tasks-evidence
         run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
-          const filename="docs/assets/notion-pr-1937/README.md";
-          const changed=execFileSync("git",["diff","--name-only"],{encoding:"utf8"}).trim().split("\n").filter(Boolean);
-          if(changed.length!==1||changed[0]!==filename)throw Error("Unexpected formatter changes: "+changed.join(", "));
-          const bytes=readFileSync(filename);
-          const response=await fetch("https://api.github.com/repos/"+process.env.GH_REPO+"/git/blobs",{
-            method:"POST",
-            headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+process.env.GH_TOKEN,"X-GitHub-Api-Version":"2022-11-28","Content-Type":"application/json"},
-            body:JSON.stringify({content:bytes.toString("base64"),encoding:"base64"}),
-          });
-          const data=await response.json();
-          if(!response.ok||!data.sha)throw Error("Blob staging failed: "+response.status+" "+String(data.message||""));
-          console.log("FORMATTED_README_SHA="+data.sha);
-          console.log("Published no refs; formatting-only bytes="+bytes.length);
-          NODE
+          git diff --exit-code
+          node apps/web/scripts/notion-tasks-evidence.mjs
+          git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: notion-tasks-before-after
+          path: ${{ runner.temp }}/notion-tasks-evidence
+          retention-days: 14
+          if-no-files-found: error
