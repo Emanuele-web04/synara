@@ -298,11 +298,6 @@ export function ActivityThreadRow({
               aria-label="Worktree"
             />
           ) : null}
-          {external ? (
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/70">
-              · {external.hostName}
-            </span>
-          ) : null}
           <span className="flex min-w-0 shrink-[100] items-center gap-1.5">
             {pr && !external ? (
               <PrStateChip

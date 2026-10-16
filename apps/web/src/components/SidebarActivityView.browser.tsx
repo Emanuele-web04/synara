@@ -213,6 +213,9 @@ describe("SidebarActivityView", () => {
     expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
     const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
     expect(remoteRow).toHaveAttribute("draggable", "false");
+    // The computer is named by the hover card and the accessible label, not the meta line.
+    expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
+    expect(remoteRow.element().textContent).not.toContain("Studio Mac");
     expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
     await remoteRow.click();
     expect(onRemoteOpen).toHaveBeenCalledOnce();
