@@ -6605,7 +6605,9 @@ const make = Effect.gen(function* () {
     >["payload"],
   ) {
     if (!payload.retryFrom) return;
-    const thread = yield* resolveThread(payload.threadId);
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getThreadDetailById(payload.threadId),
+    );
     const detail = thread
       ? effortRetryPreconditionViolation(
           thread,
@@ -6644,7 +6646,9 @@ const make = Effect.gen(function* () {
         updatedAt: new Date().toISOString(),
       });
     }
-    const originalThread = yield* resolveThread(payload.threadId);
+    const originalThread = payload.retryFrom
+      ? Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(payload.threadId))
+      : yield* resolveThread(payload.threadId);
     const originalMessage = originalThread?.messages.find(
       (message) => message.id === payload.messageId,
     );
