@@ -2403,5 +2403,4 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     );
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
   });
-
 });
