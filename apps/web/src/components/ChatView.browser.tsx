@@ -3950,6 +3950,87 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps the selected Activity grouping after switching back from classic view", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-activity-grouping" as MessageId,
+          targetText: "activity grouping",
+        }),
+      ),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+      await page.getByRole("menuitemradio", { name: "Project" }).click();
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
+
+      await page.getByRole("button", { name: "Switch to classic view" }).click();
+      await page.getByRole("button", { name: "Switch to activity view" }).click();
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Project" }))
+        .toHaveAttribute("aria-checked", "true");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores Activity grouping on mount and adopts an external grouping change", async () => {
+    const key = "synara:sidebar-ui:v1";
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        activityViewEnabled: true,
+        activityGroupMode: "project",
+        activityScope: PROJECT_ID,
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("activity-grouping-external"),
+        targetText: "Stored Activity grouping",
+      }),
+    });
+    try {
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Project", exact: true }))
+        .toHaveAttribute("aria-checked", "true");
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
+
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...JSON.parse(localStorage.getItem(key) ?? "{}"),
+          activityGroupMode: "time",
+          activityScope: null,
+        }),
+      );
+      window.dispatchEvent(new StorageEvent("storage", { key, storageArea: localStorage }));
+      await page.getByRole("button", { name: "Activity options", exact: true }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Time", exact: true }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
+      await expect
+        .poll(() => JSON.parse(localStorage.getItem(key) ?? "{}"))
+        .toMatchObject({ activityGroupMode: "project", activityScope: null });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each([
     { destination: "Home", keepsActivity: true },
     { destination: "Spaces", keepsActivity: false },

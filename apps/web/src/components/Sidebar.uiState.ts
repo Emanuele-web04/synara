@@ -5,7 +5,7 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
@@ -23,6 +23,8 @@ export type SidebarUiState = {
   activityViewEnabled: boolean;
   /** Project (or merged chats) the Activity feed is scoped to; null shows every project. */
   activityScope: ActivityScopeSelection;
+  /** Keeps Activity grouping across view remounts and reloads. */
+  activityGroupMode: ActivityGroupMode;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
@@ -33,6 +35,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   lastThreadRoute: null,
   activityViewEnabled: false,
   activityScope: null,
+  activityGroupMode: "time",
 };
 
 // Persisted paging is a request, not a promise: render-time clamping trims it to the real
@@ -98,6 +101,7 @@ export function readSidebarUiState(): SidebarUiState {
       } | null;
       activityViewEnabled?: boolean;
       activityScope?: unknown;
+      activityGroupMode?: unknown;
     };
 
     const lastThreadRoute =
@@ -147,6 +151,7 @@ export function readSidebarUiState(): SidebarUiState {
       lastThreadRoute,
       activityViewEnabled: parsed.activityViewEnabled === true,
       activityScope: sanitizeActivityScope(parsed.activityScope),
+      activityGroupMode: parsed.activityGroupMode === "project" ? "project" : "time",
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
@@ -240,6 +245,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
           : null,
         activityViewEnabled: input.activityViewEnabled,
         activityScope: sanitizeActivityScope(input.activityScope),
+        activityGroupMode: input.activityGroupMode === "project" ? "project" : "time",
       }),
     );
   } catch {
