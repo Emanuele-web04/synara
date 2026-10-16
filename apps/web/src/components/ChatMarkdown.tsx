@@ -30,6 +30,7 @@ import React, {
   type CSSProperties,
   Suspense,
   isValidElement,
+  lazy,
   memo,
   use,
   useDeferredValue,
@@ -117,6 +118,7 @@ const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
 const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
+const LazyMermaidDiagram = lazy(() => import("./MermaidDiagram"));
 
 function isExternalHttpHref(href: string | undefined): href is string {
   return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
@@ -1172,6 +1174,7 @@ interface MarkdownRenderContextValue {
   knownAbsoluteFilePaths: string[] | undefined;
   diffThemeName: DiffThemeName;
   isStreaming: boolean;
+  findQuery: string;
   isUserVariant: boolean;
   usesAutomaticBlockDirection: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
@@ -1334,8 +1337,14 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming, isUserVariant, usesAutomaticBlockDirection } =
-      useContext(MarkdownRenderContext)!;
+    const {
+      sourceText,
+      diffThemeName,
+      isStreaming,
+      findQuery,
+      isUserVariant,
+      usesAutomaticBlockDirection,
+    } = useContext(MarkdownRenderContext)!;
     const renderInlineVisual = useContext(InlineVisualEmbedContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
@@ -1377,13 +1386,21 @@ const MARKDOWN_COMPONENTS: Components = {
         ) : (
           <CodeHighlightErrorBoundary fallback={highlightedFallback}>
             <Suspense fallback={highlightedFallback}>
-              <SuspenseShikiCodeBlock
-                language={fence.language}
-                code={code}
-                themeName={diffThemeName}
-                isStreaming={isStreaming}
-                sourceOffset={sourceOffset}
-              />
+              {fence.language === "mermaid" && !isStreaming && !findQuery.trim() ? (
+                <LazyMermaidDiagram
+                  code={code}
+                  theme={diffThemeName === "github-dark" ? "dark" : "light"}
+                  fallback={highlightedFallback}
+                />
+              ) : (
+                <SuspenseShikiCodeBlock
+                  language={fence.language}
+                  code={code}
+                  themeName={diffThemeName}
+                  isStreaming={isStreaming}
+                  sourceOffset={sourceOffset}
+                />
+              )}
             </Suspense>
           </CodeHighlightErrorBoundary>
         )}
@@ -1670,6 +1687,7 @@ function ChatMarkdown({
       knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
+      findQuery,
       isUserVariant,
       usesAutomaticBlockDirection,
       mentionReferences,
@@ -1685,6 +1703,7 @@ function ChatMarkdown({
       knownAbsoluteFilePaths,
       diffThemeName,
       isStreaming,
+      findQuery,
       isUserVariant,
       usesAutomaticBlockDirection,
       mentionReferences,
