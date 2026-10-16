@@ -1,9 +1,15 @@
+import { appHistory } from "../../appNavigation";
 import {
   readWorkspaceFrame,
+  workspaceRoute,
   type WorkspaceChatCreationCommand,
   type WorkspaceNavigation,
 } from "./workspaceFrame";
-import { readAvailableWorkspaceNavigation, readWorkspaceSessions } from "./workspaceSessions";
+import {
+  readAvailableWorkspaceNavigation,
+  readWorkspaceSessions,
+  type WorkspaceSession,
+} from "./workspaceSessions";
 
 type ChatCreationHandler = (
   command: WorkspaceChatCreationCommand,
@@ -26,6 +32,12 @@ export function createWorkspaceChat(
 ): Promise<void> {
   if (!createChat) return Promise.reject(new Error("This computer is not ready to create a chat."));
   return createChat(command, isAvailable);
+}
+
+export function openWorkspacePath(owner: string | WorkspaceSession, path: string): void {
+  if (typeof owner !== "string" && !readAvailableWorkspaceNavigation(owner)) return;
+  const environmentId = typeof owner === "string" ? owner : owner.host.executionScope.environmentId;
+  appHistory.push(workspaceRoute(environmentId, path));
 }
 
 export function registerWorkspaceTerminalCreation(handler: () => void): () => void {

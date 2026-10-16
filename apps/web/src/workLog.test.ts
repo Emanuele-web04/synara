@@ -1653,6 +1653,43 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps the owning computer of a remote Synara thread creation recap", () => {
+    const thread = {
+      threadId: "remote-thread",
+      title: "Say hi",
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      environment: "local",
+      status: "task_dispatched",
+    };
+    const recap = (payload: Record<string, unknown>) =>
+      deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "synara-created-remote-thread",
+            createdAt: "2026-02-23T00:00:05.000Z",
+            turnId: "turn-1",
+            kind: "synara.threads.created",
+            summary: "Created 1 Synara thread",
+            tone: "info",
+            payload: { operationId: "gateway:create:remote", threads: [thread], ...payload },
+          }),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+      )[0]?.synaraThreadCreation;
+
+    expect(recap({ environmentId: "mini", hostName: " Mac mini " })).toEqual({
+      operationId: "gateway:create:remote",
+      requestedCount: 1,
+      createdCount: 1,
+      threads: [thread],
+      environmentId: "mini",
+      hostName: "Mac mini",
+    });
+    expect(recap({ environmentId: "mini" })).not.toHaveProperty("hostName");
+    expect(recap({ hostName: "Mac mini" })).not.toHaveProperty("hostName");
+  });
+
   it("exposes deterministic worker monitor notices for coordinator rows", () => {
     const activities: OrchestrationThreadActivity[] = [
       // Monitor rows are posted with no turn id and must survive the

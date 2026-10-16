@@ -92,6 +92,68 @@ function parsePullRequestSelector(ref: string): PullRequestSelector | null {
   };
 }
 
+export interface ThreadCreationRecapInput {
+  readonly callerThreadId: string;
+  readonly callerTurnId: string;
+  readonly result: SynaraCreateThreadsResult;
+  /** Set when the threads were created on another paired computer. */
+  readonly remote?: { readonly environmentId: string; readonly hostName: string };
+}
+
+/**
+ * Append the transcript recap card to the caller's own turn. The ids are
+ * derived from the operation (and its computer) so a retry never adds a
+ * second card; a failed append only warns.
+ */
+export function appendThreadCreationRecap(
+  orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">,
+  input: ThreadCreationRecapInput,
+): Effect.Effect<void> {
+  const marker = stableGatewayDigest({
+    operationId: input.result.operationId,
+    kind: "threads-created-recap",
+    ...(input.remote ? { environmentId: input.remote.environmentId } : {}),
+  });
+  const createdAt = gatewayIsoNow();
+  const threadLabel = input.result.createdCount === 1 ? "thread" : "threads";
+  return orchestrationEngine
+    .dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
+      threadId: ThreadId.makeUnsafe(input.callerThreadId),
+      activity: {
+        id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
+        tone: "info",
+        kind: "synara.threads.created",
+        summary: `Created ${input.result.createdCount} Synara ${threadLabel}`,
+        payload: {
+          source: "synara_mcp",
+          ...(input.remote
+            ? { environmentId: input.remote.environmentId, hostName: input.remote.hostName }
+            : {}),
+          operationId: input.result.operationId,
+          requestId: input.result.requestId,
+          requestedCount: input.result.requestedCount,
+          createdCount: input.result.createdCount,
+          threads: JSON.parse(JSON.stringify(input.result.threads)),
+        },
+        turnId: TurnId.makeUnsafe(input.callerTurnId),
+        createdAt,
+      },
+      createdAt,
+    })
+    .pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("agent gateway could not append thread creation recap", {
+          operationId: input.result.operationId,
+          callerThreadId: input.callerThreadId,
+          error: errorText(error),
+        }),
+      ),
+    );
+}
+
 interface CreationCoordinatorDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
@@ -295,51 +357,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ),
       );
     });
-
-  const appendThreadCreationRecap = (input: {
-    readonly callerThreadId: string;
-    readonly callerTurnId: string;
-    readonly result: SynaraCreateThreadsResult;
-  }) => {
-    const marker = stableGatewayDigest({
-      operationId: input.result.operationId,
-      kind: "threads-created-recap",
-    });
-    const createdAt = gatewayIsoNow();
-    const threadLabel = input.result.createdCount === 1 ? "thread" : "threads";
-    return orchestrationEngine
-      .dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
-        threadId: ThreadId.makeUnsafe(input.callerThreadId),
-        activity: {
-          id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
-          tone: "info",
-          kind: "synara.threads.created",
-          summary: `Created ${input.result.createdCount} Synara ${threadLabel}`,
-          payload: {
-            source: "synara_mcp",
-            operationId: input.result.operationId,
-            requestId: input.result.requestId,
-            requestedCount: input.result.requestedCount,
-            createdCount: input.result.createdCount,
-            threads: JSON.parse(JSON.stringify(input.result.threads)),
-          },
-          turnId: TurnId.makeUnsafe(input.callerTurnId),
-          createdAt,
-        },
-        createdAt,
-      })
-      .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("agent gateway could not append thread creation recap", {
-            operationId: input.result.operationId,
-            callerThreadId: input.callerThreadId,
-            error: errorText(error),
-          }),
-        ),
-      );
-  };
 
   const run = (input: typeof SynaraCreateThreadsInput.Type, context: GatewayCreationContext) => {
     return Effect.gen(function* () {
@@ -1343,7 +1360,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
       if (context.kind === "provider-session" && !context.remoteCaller) {
-        yield* appendThreadCreationRecap({
+        yield* appendThreadCreationRecap(orchestrationEngine, {
           callerThreadId: context.callerThreadId,
           callerTurnId: callerTurnId!,
           result,

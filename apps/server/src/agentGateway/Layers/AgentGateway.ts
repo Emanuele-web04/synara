@@ -92,7 +92,7 @@ import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../too
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
-import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
+import { appendThreadCreationRecap, makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeHubWorkGateway } from "../hubWorkGateway";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions";
@@ -1705,6 +1705,8 @@ export const makeAgentGateway = Effect.gen(function* () {
               environment,
               connections,
               requireThreadShell,
+              appendThreadCreationRecap: (input) =>
+                appendThreadCreationRecap(orchestrationEngine, input),
               assertRemoteWriteAllowed: (callerThreadId) =>
                 Effect.gen(function* () {
                   const principal = yield* projectAgentService.resolvePrincipalForThread(
