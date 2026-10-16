@@ -1269,3 +1269,26 @@ in the Mini’s actual Remote app. Candidate .12 includes existing fix `d322f6e`
 authenticated paired view exposes origin-only metadata while connector setup and
 management retain owner authorization. No new iOS/iPadOS binary is needed. Public
 release, installation and simulator verification remain pending until recorded.
+
+### Remote .12 public; Vercel renewal follow-up
+
+Remote .12 source `5d0471a` is public with all CI gates passed in run 38922338763. All four public assets, exact source/lockfile provenance, Remote feed,
+Developer ID, Gatekeeper and app/DMG staples passed local verification. Stable
+Latest v1.0.5 and historical v0.4.2 assets are unchanged. Both Macs have .12.
+MacBook preserved 107 chats, 1,763 messages and 363 turns; Mini pre-upgrade backup
+contains 55 chats, 238 messages and 102 turns. The .12 MacBook-to-Mini chat returned
+`SYNARA_REMOTE12_MACBOOK_TO_MINI_OK`, persisted after reopening and Reload.
+
+Native build 136 still omitted Vercel because its existing grant is now marked
+needs-auth on both Macs. The Mini's stored grant contains only `openid`, no refresh
+token, and expired at 14:30:54 UTC. No token was printed or transferred. Source fix
+`22c3591` requests Vercel's documented `offline_access` scope. Its real-SDK wire
+regression fails before the fix and passes after it, including simulated expiry
+and reload; all 108 focused tests pass with loopback fixture permission. An initial
+sandbox run denied fixture listeners (EPERM); this was an environment failure.
+
+Candidate .13 prepares that fix. Publication, scoped live Vercel consent and
+phone-menu/tool verification remain pending. The user has a separate project-scope
+question because Vercel's MCP consent includes read/write permissions. No new
+grant, paid feature, API key, physical-phone action or iOS binary is required just
+to prepare this source fix.

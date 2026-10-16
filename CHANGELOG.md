@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.6-remote.13 — 2026-10-16
+
+### Fixed
+
+- Vercel sign-in requests renewable access (`offline_access`) alongside the scopes requested by its MCP endpoint. Previous `openid`-only grants could expire without a refresh token, hiding Vercel from iPhone/iPad suggestions. Existing grants need one Reconnect after upgrading.
+- Project access remains the user's choice on Vercel's consent page. Tokens stay on the execution computer; other connector scopes are unchanged.
+
+### Verification
+
+- Includes source fix `22c3591`. A regression using the real MCP OAuth SDK fails before the fix, then passes authorization, persisted reload, simulated expiry and refresh. Fixture HTTP responses do not prove a live Vercel consent or refresh.
+- Publication requires exact-source quality/server gates, signed/notarized macOS ARM64 packaging and packaged startup qualification. TestFlight 0.1 (136) remains compatible; Remote identity, data and feed are unchanged.
+
 ## 1.0.6-remote.12 — 2026-10-16
 
 ### Fixed

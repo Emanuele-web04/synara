@@ -22,6 +22,18 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.13",
+    date: "Oct 16",
+    features: [
+      {
+        id: "renewable-vercel-login",
+        title: "Renew your Vercel connection",
+        description:
+          "Vercel sign-in now requests access that can renew automatically. Reconnect an existing Vercel connector once after updating, then choose the projects it may access on Vercel's consent page.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.12",
     date: "Oct 16",
     features: [
