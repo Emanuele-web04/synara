@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { homedir } from "node:os";
 import { BrowserCookieImportInput, ThreadId } from "@synara/contracts";
 import { Schema } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   closeBrowser: vi.fn(),
   closeConnection: vi.fn(),
   connect: vi.fn(),
+  inventory: vi.fn(),
+  exec: vi.fn(),
+  readCookieSnapshotProcess: vi.fn(),
   constructedOptions: { current: undefined as unknown },
 }));
 vi.mock("betterwright", () => ({
@@ -23,6 +27,12 @@ vi.mock("betterwright", () => ({
     constructor(
       public options: {
         hostTarget: { connect(arg: unknown): Promise<{ close(): Promise<void> }> };
+        chromiumKeychainPassword?: (browser: string, timeoutMs: number) => Promise<string>;
+        chromiumCookieSnapshot?: (
+          source: { browser: string; profile?: string },
+          timeoutMs: number,
+          keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
+        ) => Promise<unknown>;
       },
     ) {
       mocks.constructedOptions.current = options;
@@ -41,6 +51,16 @@ vi.mock("betterwright", () => ({
   },
 }));
 vi.mock("./betterwrightConnection", () => ({ openBetterwrightConnection: mocks.connect }));
+vi.mock("./chromiumProfileInventory", () => ({
+  listChromiumProfileInventory: mocks.inventory,
+}));
+vi.mock("./chromiumCookieReadProcess", () => ({
+  readChromiumCookieSnapshotProcess: mocks.readCookieSnapshotProcess,
+}));
+vi.mock("@synara/shared/processRuntime", async (original) => ({
+  ...(await original<typeof import("@synara/shared/processRuntime")>()),
+  execProcessFile: mocks.exec,
+}));
 import { BrowserCookieImport } from "./browserCookieImport";
 
 const input = {
@@ -51,6 +71,8 @@ const input = {
   browser: "chrome",
   profile: "Default",
 } as const;
+const platform =
+  process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.sources.mockResolvedValue([
@@ -69,6 +91,8 @@ beforeEach(() => {
   mocks.closeBrowser.mockResolvedValue(undefined);
   mocks.closeConnection.mockResolvedValue(undefined);
   mocks.constructedOptions.current = undefined;
+  mocks.inventory.mockResolvedValue([]);
+  mocks.readCookieSnapshotProcess.mockResolvedValue({ detailedCookies: [], warnings: [] });
   mocks.connect.mockImplementation(async () => {
     let closing: Promise<void> | undefined;
     return {
@@ -92,9 +116,14 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
     },
   });
   const releaseHumanOperation = vi.fn();
+  const disposeProfileRuntime = vi.fn();
   const waitForAgents = vi.fn(async () => {});
   const manager = {
     beginHumanBrowserOperation: vi.fn(() => releaseHumanOperation),
+    createProfileCookieImportRuntime: vi.fn(async () => ({
+      webContents: contents,
+      dispose: disposeProfileRuntime,
+    })),
     getCookieImportRuntime: vi.fn(async () => ({ webContents: contents })),
   };
   return {
@@ -106,6 +135,7 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
     ),
     contents,
     manager,
+    disposeProfileRuntime,
     releaseHumanOperation,
     waitForAgents,
     rememberSessionImport,
@@ -113,6 +143,34 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
 }
 
 describe("human-only cookie import", () => {
+  it("uses the OS user home for inventory instead of the browser-engine state directory", async () => {
+    const { importer } = fixture();
+    await importer.inventoryChromiumProfiles();
+    expect(mocks.inventory).toHaveBeenCalledExactlyOnceWith(homedir());
+    expect(mocks.inventory).not.toHaveBeenCalledWith("/synthetic-home");
+  });
+
+  it("keeps native Linux Chromium sources available through the runtime gate", async () => {
+    mocks.sources.mockResolvedValue([
+      { id: "chrome", name: "Google Chrome" },
+      { id: "brave", name: "Brave" },
+      { id: "chromium", name: "Chromium" },
+      { id: "opera", name: "Opera" },
+      { id: "vivaldi", name: "Vivaldi" },
+      { id: "firefox", name: "Firefox" },
+    ]);
+
+    await expect(
+      new BrowserCookieImport("/home", {} as DesktopBrowserManager, async () => {}).sources(),
+    ).resolves.toEqual([
+      { id: "chrome", name: "Google Chrome" },
+      { id: "brave", name: "Brave" },
+      { id: "chromium", name: "Chromium" },
+      { id: "opera", name: "Opera" },
+      { id: "vivaldi", name: "Vivaldi" },
+    ]);
+  });
+
   it("imports only the selected visible site with app-bound injection disabled and returns counts", async () => {
     const { importer, contents } = fixture();
     expect(await importer.sources()).toEqual([{ id: "chrome", name: "Chrome" }]);
@@ -120,6 +178,9 @@ describe("human-only cookie import", () => {
       ok: true,
       imported: 2,
       skipped: 1,
+      sessionRestore: "available",
+      browser: "chrome",
+      platform,
       warnings: [{ code: "unsupported", count: 1 }],
     });
     expect(mocks.sync).toHaveBeenCalledWith({
@@ -138,12 +199,124 @@ describe("human-only cookie import", () => {
     expect(contents.listenerCount("did-start-navigation")).toBe(0);
   });
 
+  it("returns source_missing when the selected profile disappears before import", async () => {
+    mocks.profiles.mockResolvedValueOnce([]);
+    const { importer } = fixture();
+    await expect(importer.import(input)).resolves.toEqual({
+      ok: false,
+      code: "source_missing",
+      platform,
+    });
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["helium", "Helium", "Helium Storage Key"],
+    ["aside", "Aside", "Aside Safe Storage"],
+    ["dia", "Dia", "Dia Safe Storage"],
+  ])(
+    "uses only %s's owned Keychain item and preserves import scope",
+    async (browser, account, service) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { ...descriptor, value: "darwin" });
+      try {
+        mocks.exec.mockImplementation((_file, _args, _options, callback) =>
+          callback(null, "synthetic-key\n"),
+        );
+        mocks.sync.mockImplementation(async () => {
+          const options = mocks.constructedOptions.current as {
+            chromiumKeychainPassword(browser: string, timeoutMs: number): Promise<string>;
+            chromiumCookieSnapshot(
+              source: { browser: string; profile?: string },
+              timeoutMs: number,
+              keychainPassword: (browser: string, timeoutMs: number) => Promise<string>,
+            ): Promise<unknown>;
+          };
+          expect(await options.chromiumKeychainPassword(browser, 30_000)).toBe("synthetic-key");
+          await expect(
+            options.chromiumKeychainPassword(browser === "helium" ? "aside" : "helium", 30_000),
+          ).rejects.toThrow("Unsupported cookie source");
+          await expect(options.chromiumKeychainPassword("__proto__", 30_000)).rejects.toThrow(
+            "Unsupported cookie source",
+          );
+          await options.chromiumCookieSnapshot(
+            { browser, profile: "Default" },
+            30_000,
+            async () => "synthetic-key",
+          );
+          return { ok: true, synced: 1, skipped: 0, cookieImportDomains: ["example.test"] };
+        });
+        const { importer } = fixture();
+        expect(
+          (
+            await importer.import({
+              ...input,
+              browser: browser as "helium" | "aside" | "arc" | "dia",
+            })
+          ).ok,
+        ).toBe(true);
+        expect(mocks.exec).toHaveBeenCalledExactlyOnceWith(
+          "/usr/bin/security",
+          ["find-generic-password", "-w", "-a", account, "-s", service],
+          expect.objectContaining({
+            timeout: 15_000,
+            maxBuffer: 4096,
+            signal: expect.any(AbortSignal),
+            killSignal: "SIGKILL",
+          }),
+          expect.any(Function),
+        );
+        expect(mocks.sync).toHaveBeenCalledWith(
+          expect.objectContaining({ domains: ["example.test"], windowsAppBound: "disabled" }),
+        );
+        expect(mocks.readCookieSnapshotProcess).toHaveBeenCalledWith(
+          { browser, profile: "Default" },
+          30_000,
+          expect.any(Function),
+          expect.any(AbortSignal),
+          homedir(),
+        );
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+      }
+    },
+  );
+
+  it("cancels owned Keychain acquisition on navigation and exposes no helper output", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...descriptor, value: "darwin" });
+    try {
+      const { importer, contents, releaseHumanOperation } = fixture();
+      mocks.exec.mockImplementation((_file, _args, options, callback) => {
+        contents.emit("did-start-navigation", {}, "https://other.test", false, true);
+        expect(options.signal.aborted).toBe(true);
+        callback(new Error("synthetic-private-diagnostic"), "synthetic-private-key");
+      });
+      mocks.sync.mockImplementation(async () => {
+        const options = mocks.constructedOptions.current as {
+          chromiumKeychainPassword(browser: string, timeoutMs: number): Promise<string>;
+        };
+        await options.chromiumKeychainPassword("helium", 30_000);
+        throw new Error("Import must not proceed after cancellation.");
+      });
+      const failure = await importer
+        .import({ ...input, browser: "helium" })
+        .catch((error: Error) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).not.toMatch(/synthetic-private/);
+      expect(mocks.closeConnection).toHaveBeenCalledWith(true);
+      expect(releaseHumanOperation).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
+
   it("rejects other origins, profile paths and unsupported sources before extraction", async () => {
     const { importer } = fixture();
     await expect(importer.import({ ...input, origin: "https://unrelated.test" })).rejects.toThrow();
     await expect(
       importer.import({ ...input, profile: "/private/arbitrary-path" }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ ok: false, code: "source_missing" });
     expect(() =>
       Schema.decodeUnknownSync(BrowserCookieImportInput)({ ...input, browser: "unsupported" }),
     ).toThrow();
@@ -196,17 +369,39 @@ describe("human-only cookie import", () => {
     expect(releaseHumanOperation).toHaveBeenCalledOnce();
   });
 
-  it("requires session restoration checkpointing before reporting import success", async () => {
+  it("reports verified cookie transfer when the optional session restoration checkpoint fails", async () => {
     const remember = vi.fn(async (_domains: readonly string[]) => {
       throw new Error("synthetic-checkpoint-failure");
     });
     const { importer, releaseHumanOperation } = fixture(remember);
     await expect(importer.import(input)).resolves.toMatchObject({
-      ok: false,
-      code: "persistence_failed",
+      ok: true,
+      sessionRestore: "unavailable",
+      imported: 2,
+      skipped: 1,
     });
     expect(remember).toHaveBeenCalledWith(["example.test"]);
     expect(releaseHumanOperation).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a profile import while it is waiting for browser agents", async () => {
+    let resume!: () => void;
+    const { importer, waitForAgents, disposeProfileRuntime, releaseHumanOperation } = fixture();
+    waitForAgents.mockImplementation(() => new Promise<void>((resolve) => (resume = resolve)));
+    const pending = importer.import({
+      browser: "chrome",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    await vi.waitFor(() => expect(waitForAgents).toHaveBeenCalledOnce());
+
+    await importer.cancel();
+    await expect(pending).resolves.toMatchObject({ ok: false, code: "cancelled", platform });
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(disposeProfileRuntime).toHaveBeenCalledOnce();
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
+    resume();
   });
 
   it("revokes the import connection on navigation and always cleans up after failure", async () => {
@@ -278,6 +473,74 @@ describe("human-only cookie import", () => {
     expect(releaseHumanOperation).toHaveBeenCalledTimes(1);
   });
 
+  it("imports an explicitly confirmed whole profile through a hidden shared-session target", async () => {
+    const { importer, manager, disposeProfileRuntime, rememberSessionImport } = fixture();
+    const request = Schema.decodeUnknownSync(BrowserCookieImportInput)({
+      browser: "chrome",
+      profile: "Default",
+      scope: "profile",
+      confirmed: true,
+    });
+    expect(await importer.import(request)).toEqual({
+      ok: true,
+      imported: 2,
+      skipped: 1,
+      sessionRestore: "available",
+      browser: "chrome",
+      platform,
+      warnings: [{ code: "unsupported", count: 1 }],
+    });
+    expect(manager.createProfileCookieImportRuntime).toHaveBeenCalledTimes(1);
+    expect(manager.createProfileCookieImportRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.profiles.mock.invocationCallOrder[0]!,
+    );
+    expect(manager.getCookieImportRuntime).not.toHaveBeenCalled();
+    expect(disposeProfileRuntime).toHaveBeenCalledTimes(1);
+    expect(rememberSessionImport).toHaveBeenCalledWith(["example.test"]);
+  });
+
+  it("disposes a profile target when setup fails before the reader starts", async () => {
+    const { importer, waitForAgents, disposeProfileRuntime } = fixture();
+    waitForAgents.mockRejectedValue(new Error("setup failed"));
+    await expect(
+      importer.import({
+        browser: "chrome",
+        profile: "Default",
+        scope: "profile",
+        confirmed: true,
+      }),
+    ).rejects.toThrow("setup failed");
+    expect(disposeProfileRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed targeted requests instead of treating them as destinationless", () => {
+    const targeted = {
+      threadId: input.threadId,
+      browser: input.browser,
+      profile: input.profile,
+      scope: "profile",
+      confirmed: true,
+    };
+    expect(() => Schema.decodeUnknownSync(BrowserCookieImportInput)(targeted)).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({
+        ...targeted,
+        tabId: input.tabId,
+        threadId: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserCookieImportInput)({
+        tabId: input.tabId,
+        browser: input.browser,
+        profile: input.profile,
+        scope: "profile",
+        confirmed: true,
+      }),
+    ).toThrow();
+  });
+
   it("requires explicit profile consent and permits all-sites import from a blank tab", async () => {
     const { importer, contents, rememberSessionImport } = fixture();
     const profile = {
@@ -314,6 +577,12 @@ describe("human-only cookie import", () => {
     [{ cookieReaderCode: "source_extraction_failed" }, "reader_failed"],
     [{ cookieReaderCode: "timed_out" }, "timed_out"],
     [{ cookieReaderCode: "reader_unavailable" }, "reader_unavailable"],
+    [{ cookieReaderCode: "source_too_large" }, "source_too_large"],
+    [{ cookieReaderCode: "resource_exhausted" }, "source_too_large"],
+    [{ cookieSyncFailureCode: "redaction_capacity" }, "redaction_capacity"],
+    [{ cookieSyncFailureCode: "target_capacity" }, "target_capacity"],
+    [{ cookieSyncFailureCode: "target_eviction" }, "target_eviction"],
+    [{ cookieSyncFailureCode: "target_failed" }, "target_failed"],
     [{ cookieReaderCode: "no_selected_source" }, "source_missing"],
     [{}, "transfer_failed"],
   ])(
@@ -332,3 +601,24 @@ describe("human-only cookie import", () => {
     },
   );
 });
+
+it.each(["resource_exhausted", "source_too_large"])(
+  "translates %s during profile preflight",
+  async (code) => {
+    const { importer, releaseHumanOperation } = fixture();
+    mocks.profiles.mockRejectedValueOnce(
+      Object.assign(new Error("private profile detail"), {
+        cookieReaderCode: code,
+        cookieReaderStage: "discovery",
+      }),
+    );
+    expect(await importer.import({ ...input, browser: "helium" })).toEqual({
+      ok: false,
+      code: "source_too_large",
+      platform,
+      stage: "discovery",
+    });
+    expect(mocks.sync).not.toHaveBeenCalled();
+    expect(releaseHumanOperation).toHaveBeenCalledOnce();
+  },
+);

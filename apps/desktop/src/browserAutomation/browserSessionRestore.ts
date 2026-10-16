@@ -196,14 +196,8 @@ export class BrowserSessionRestore {
   }
 
   async rememberImport(domains: readonly string[]): Promise<void> {
-    if (!this.available) throw new Error("Secure browser session storage is unavailable.");
-    try {
-      const key = await this.keys.provide();
-      key.fill(0);
-    } catch {
-      this.available = false;
+    if (this.disposed || !this.available)
       throw new Error("Secure browser session storage is unavailable.");
-    }
     let raw: unknown[];
     try {
       raw = await this.backend.read();
@@ -216,9 +210,22 @@ export class BrowserSessionRestore {
     } catch {
       throw new Error("Browser session metadata is unsupported.");
     }
-    const imported = new Set(domains.map(domainName));
+    const imported = new Set([...this.domains, ...domains].map(domainName));
     for (const cookie of cookies)
       if (imported.has(domainName(cookie.domain))) this.domains.add(cookie.domain);
+    try {
+      if (!(await this.store.available()))
+        throw new Error("Secure browser session storage is unavailable.");
+      const key = await this.keys.provide();
+      key.fill(0);
+    } catch {
+      // Keep only the imported-domain metadata in memory so a later import can
+      // retry after the OS key store becomes available. No cookie values are
+      // written unless the data key has a verified OS-protected envelope.
+      this.keyProtection?.dispose();
+      this.keyProtection = undefined;
+      throw new Error("Secure browser session storage is unavailable.");
+    }
     await this.save();
   }
 

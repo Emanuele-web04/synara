@@ -186,8 +186,19 @@ export class VaultKeyProtection {
 
   async provide(): Promise<Buffer> {
     await this.ready;
-    if (this.disposed || !this.key || !this.envelope)
-      throw new Error("Unlock the browser vault first.");
+    if (this.disposed || !this.key) throw new Error("Unlock the browser vault first.");
+    const needsOsProtection = !this.envelope || !this.envelope.os;
+    const osAvailable =
+      needsOsProtection && this.store ? await this.store.available().catch(() => false) : false;
+    if (!this.envelope) {
+      if (!osAvailable) throw new Error("Unlock the browser vault first.");
+      const os = this.wrapForOs(this.key);
+      await this.persist({ version: 1, os, master: null });
+      await this.removeLegacyKey();
+    } else if (!this.envelope.os && osAvailable) {
+      const os = this.wrapForOs(this.key);
+      await this.persist({ ...this.envelope, os });
+    }
     return Buffer.from(this.key);
   }
 

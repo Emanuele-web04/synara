@@ -474,6 +474,7 @@ export class DesktopBrowserManager {
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
   private readonly previewThreadIds = new Set<ThreadId>();
   private readonly occludedThreadIds = new Set<ThreadId>();
+  private readonly profileCookieImportWindows = new Set<BrowserWindow>();
   private readonly sessionPolicy: BrowserSessionPolicy;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
@@ -524,6 +525,12 @@ export class DesktopBrowserManager {
 
   setWindow(window: BrowserWindow | null): void {
     const previousWindow = this.window;
+    if (previousWindow !== window) {
+      for (const importWindow of this.profileCookieImportWindows) {
+        if (!importWindow.isDestroyed()) importWindow.destroy();
+      }
+      this.profileCookieImportWindows.clear();
+    }
     if (previousWindow && previousWindow !== window) {
       // Detach while the old BrowserWindow is still addressable; clearing the
       // field first leaves native child views orphaned over the next renderer.
@@ -1260,6 +1267,10 @@ export class DesktopBrowserManager {
     this.disposed = true;
     this.annotations.dispose();
     this.sessionPolicy.dispose();
+    for (const window of this.profileCookieImportWindows) {
+      if (!window.isDestroyed()) window.destroy();
+    }
+    this.profileCookieImportWindows.clear();
     this.clearAllPendingWindowOpenTasks();
     for (const timer of this.suspendTimers.values()) {
       clearTimeout(timer);
@@ -1476,6 +1487,58 @@ export class DesktopBrowserManager {
       tabId: tab.id,
       webContents: runtime.webContents,
       expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+    };
+  }
+
+  /**
+   * Creates a hidden target in the shared persistent browser partition for an explicitly
+   * confirmed whole-profile import started outside a browser tab (for example, onboarding).
+   */
+  async createProfileCookieImportRuntime(signal?: AbortSignal): Promise<{
+    webContents: WebContents;
+    dispose(): void;
+  }> {
+    signal?.throwIfAborted();
+    if (this.disposed || !this.window) throw new Error("Browser manager is unavailable.");
+    const window = new BrowserWindow({
+      show: false,
+      skipTaskbar: true,
+      width: 1,
+      height: 1,
+      webPreferences: {
+        partition: BROWSER_SESSION_PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    this.profileCookieImportWindows.add(window);
+    window.once("closed", () => this.profileCookieImportWindows.delete(window));
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      this.profileCookieImportWindows.delete(window);
+      if (!window.isDestroyed()) window.destroy();
+    };
+    const onAbort = () => dispose();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      await window.loadURL("about:blank");
+      signal?.throwIfAborted();
+    } catch (error) {
+      dispose();
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+    if (this.disposed || !this.window || window.isDestroyed()) {
+      dispose();
+      throw new Error("Browser manager is unavailable.");
+    }
+    return {
+      webContents: window.webContents,
+      dispose,
     };
   }
 

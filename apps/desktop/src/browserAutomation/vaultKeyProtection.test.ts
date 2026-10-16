@@ -66,6 +66,25 @@ describe("vault key protection", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     restarted.dispose();
   });
 
+  it("wraps the in-memory key when OS storage becomes available after first use", async () => {
+    const home = await directory();
+    const backingStore = keyStore();
+    let available = false;
+    const store = { ...backingStore, available: async () => available };
+    const keys = new VaultKeyProtection(home, store);
+
+    await expect(keys.provide()).rejects.toThrow("Unlock");
+    available = true;
+    const original = await keys.provide();
+    expect(await keys.status()).toMatchObject({ locked: false, osProtected: true });
+
+    const restarted = new VaultKeyProtection(home, store);
+    expect(await restarted.provide()).toEqual(original);
+    original.fill(0);
+    keys.dispose();
+    restarted.dispose();
+  });
+
   it("migrates the existing key without changing it and supports OS-backed agent access", async () => {
     const home = await directory();
     const original = randomBytes(32);

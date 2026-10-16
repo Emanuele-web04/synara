@@ -10,10 +10,14 @@ export function BrowserVaultMaster({
   api,
   action,
   onDone,
+  disabled = false,
+  onBusyChange,
 }: {
   api: BrowserVaultMethods;
   action: MasterAction;
   onDone: () => void;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -47,13 +51,14 @@ export function BrowserVaultMaster({
   }, []);
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || disabled) return;
     if (action.kind === "setup" && (password.length < 12 || password !== confirmation)) {
       setError("Use at least 12 characters and enter the same password twice.");
       return;
     }
     const request = ++generation.current;
     setBusy(true);
+    onBusyChange?.(true);
     setError(null);
     const secret = password;
     setPassword("");
@@ -80,7 +85,8 @@ export function BrowserVaultMaster({
       if (request === generation.current)
         setError("Could not verify the master password. Try again shortly.");
     } finally {
-      if (request === generation.current) setBusy(false);
+      setBusy(false);
+      onBusyChange?.(false);
     }
   };
 
@@ -121,7 +127,7 @@ export function BrowserVaultMaster({
               maxLength={1024}
               autoComplete={action.kind === "setup" ? "new-password" : "current-password"}
               onChange={(event) => setPassword(event.target.value)}
-              disabled={busy}
+              disabled={busy || disabled}
             />
           </label>
           {action.kind === "setup" ? (
@@ -134,7 +140,7 @@ export function BrowserVaultMaster({
                   maxLength={1024}
                   autoComplete="new-password"
                   onChange={(event) => setConfirmation(event.target.value)}
-                  disabled={busy}
+                  disabled={busy || disabled}
                 />
               </label>
               <p className="text-ui leading-snug text-muted-foreground">
@@ -148,10 +154,16 @@ export function BrowserVaultMaster({
             </p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={action.kind !== "reveal" && (busy || disabled)}
+              onClick={onDone}
+            >
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={busy || !password}>
+            <Button type="submit" size="sm" disabled={busy || disabled || !password}>
               {busy
                 ? "Verifying..."
                 : action.kind === "setup"
