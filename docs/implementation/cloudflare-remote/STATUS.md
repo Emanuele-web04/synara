@@ -26,6 +26,12 @@ is not required for this backend change.
 
 ## Main Codex reliability sync — 2026-10-16
 
+Also integrated the subsequent main `7cfd65d` commit preparing Stable 1.0.6:
+package/lockfile versions, release notes and provider/runtime documentation.
+Identity, migration lineage, What's New logic, marketing documentation, formatting,
+lint and workspace typecheck checks pass after that metadata update. This operation
+does not publish Stable or create a new Remote release.
+
 Integrated the six commits through main `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`
 without rewriting the shared branch. Live adapter-owned turns survive runtime
 reconciliation; stale work is paged fairly; handoff outcomes settle durably without

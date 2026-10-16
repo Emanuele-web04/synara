@@ -2,7 +2,8 @@
 
 ## Accesso beta pubblico e aggiornamento main — 16 ottobre 2026
 
-- Integrati i fix Codex di main fino a `612aff6`: turni vivi e recupero,
+- Integrati i 7 commit di main fino a `7cfd65d`, inclusa la preparazione Stable
+  1.0.6. Fix Codex: turni vivi e recupero,
   handoff senza replay, metadati moderazione fuori dalla chat, cache modelli
   degradata temporanea. Entrambi i gruppi del conflitto nei test sono conservati.
 - Autorizzata la beta per tutti gli account: aggiunta l'impostazione backend
