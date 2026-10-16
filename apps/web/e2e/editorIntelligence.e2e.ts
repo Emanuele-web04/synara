@@ -1,3 +1,4 @@
+import { seedEditorProject } from "./editorAcceptanceFixture";
 import { test, expect, type Page, type TestInfo } from "playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -19,7 +20,7 @@ const person: Person = { name: "Ada", age: 37 };
 const message = greet(person.name);
 console.log(message);
 `;
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   workspace = await mkdtemp(path.join(os.tmpdir(), "synara-editor-project-"));
   await writeFile(
     path.join(workspace, "tsconfig.json"),
@@ -50,69 +51,12 @@ test.beforeAll(async () => {
   ]);
   await writeFile(path.join(workspace, "main.ts"), source.replace('"Ada"', '"Grace"'));
 });
-test.afterAll(async () => {
+test.afterEach(async () => {
   if (workspace) await rm(workspace, { recursive: true, force: true });
 });
 
 async function seed(page: Page) {
-  await page.goto("/");
-  // Fail at bootstrap rather than sending a command into a disconnected transport.
-  await expect
-    .poll(
-      () =>
-        page.evaluate(async () => {
-          const modulePath = "/src/nativeApi.ts";
-          const { ensureNativeApi, readNativeApiServerCapability } = await import(
-            /* @vite-ignore */ modulePath
-          );
-          ensureNativeApi();
-          return readNativeApiServerCapability("rpc.typed-errors");
-        }),
-      { timeout: 20_000 },
-    )
-    .toBe(true);
-  // The welcome tour suppresses the separate import announcement for new users.
-  // Dismiss the real tour rather than waiting for an intentionally absent dialog.
-  const welcome = page.getByRole("dialog", { name: "Welcome to Synara", exact: true });
-  const skipTour = welcome.getByRole("button", { name: "Skip setup", exact: true });
-  await expect(skipTour).toBeVisible();
-  await skipTour.click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page
-    .evaluate(async (cwd) => {
-      const modulePath = "/src/nativeApi.ts";
-      const { ensureNativeApi } = await import(/* @vite-ignore */ modulePath);
-      const api = ensureNativeApi();
-      const now = new Date().toISOString();
-      const projectId = crypto.randomUUID();
-      const threadId = crypto.randomUUID();
-      await api.orchestration.dispatchCommand({
-        type: "project.create",
-        commandId: crypto.randomUUID(),
-        projectId,
-        title: "Editor acceptance",
-        workspaceRoot: cwd,
-        createdAt: now,
-      });
-      await api.orchestration.dispatchCommand({
-        type: "thread.create",
-        commandId: crypto.randomUUID(),
-        threadId,
-        projectId,
-        title: "Native editor intelligence",
-        modelSelection: { provider: "codex", model: "gpt-5.4" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: "main",
-        worktreePath: null,
-        createdAt: now,
-      });
-      // No turn is submitted: model metadata does not start a provider or send project data.
-      return threadId;
-    }, workspace)
-    .then((id) => {
-      threadId = id;
-    });
+  threadId = await seedEditorProject(page, workspace);
 }
 async function editorVisible(page: Page, relativePath: string) {
   // Monaco's native EditContext input has no width until it receives focus.

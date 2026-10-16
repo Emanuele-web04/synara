@@ -1,0 +1,82 @@
+name: Code-OSS extension acceptance
+on:
+  pull_request:
+    paths:
+      - .github/actions/build-code-oss/**
+      - .github/workflows/code-oss-extension-acceptance.yml
+      - apps/server/src/extensions/**
+      - apps/server/src/platform/extensionHostSandbox*
+      - apps/server/src/wsRpc.ts
+      - apps/web/src/components/codeEditor/**
+      - apps/web/src/components/settings/EditorExtensionsSettingsPanel.tsx
+      - apps/web/e2e/editorExtension*
+      - apps/web/playwright.extensions.config.ts
+      - packages/contracts/src/editorExtension*
+      - scripts/build-code-oss-host.mjs
+      - scripts/code-oss-notices.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: code-oss-extensions-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  packages:
+    name: Package safety (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Actual VSIX extraction and registry boundaries
+        run: bun run --cwd apps/server test src/extensions/manifest.test.ts src/extensions/vsix.test.ts src/extensions/openVsx.test.ts
+  native:
+    name: Real extensions and native Synara UI
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Build Synara server
+        run: bun run --cwd apps/server build
+      - uses: ./.github/actions/build-code-oss
+      - name: Install isolated runtime dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap gdb
+      - name: Actual formatter, linter, LSP, debugger and isolation checks
+        env:
+          SYNARA_TEST_CODE_OSS_HOST: ${{ github.workspace }}/apps/server/dist/code-oss/extension-host.mjs
+          SYNARA_TEST_EXTENSION_SANDBOX: "1"
+        run: bun run --cwd apps/server test src/extensions/realLanguageFeatures.test.ts src/extensions/realRuntime.test.ts src/extensions/realLanguageServer.test.ts src/extensions/realDebuggerExtension.test.ts src/extensions/realLinterExtension.test.ts src/platform/extensionHostSandbox.integration.test.ts
+      - name: Install browser
+        if: ${{ !cancelled() }}
+        run: bun run --cwd apps/web test:browser:install
+      - name: Native extension language adapters
+        if: ${{ !cancelled() }}
+        run: bun run --cwd apps/web test:browser:ci -- --project=components src/components/codeEditor/extensionRichLanguage.browser.tsx src/components/codeEditor/editorExtensionBridge.browser.tsx src/components/codeEditor/extensionContributions.browser.tsx
+      - name: Real native extension journeys
+        if: ${{ !cancelled() }}
+        env:
+          SYNARA_TEST_CODE_OSS_HOST: ${{ github.workspace }}/apps/server/dist/code-oss/extension-host.mjs
+        run: cd apps/web && ./node_modules/.bin/playwright test --config playwright.extensions.config.ts
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: native-extension-application-evidence
+          path: apps/web/test-results
+          retention-days: 14
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: code-oss-extension-runtime
+          path: apps/server/dist/code-oss
+          retention-days: 7
+          if-no-files-found: warn

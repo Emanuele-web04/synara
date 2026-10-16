@@ -588,6 +588,14 @@ export function createWsNativeApi(): NativeApi {
       onEvent: terminalEventListeners.subscribe,
     },
     editor: {
+      extensionRuntime: (input, options) =>
+        transport.request(WS_METHODS.editorExtensionRuntime, input, {
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
+      extensions: (input, options) =>
+        transport.request(WS_METHODS.editorExtensions, input, {
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }),
       debugStart: (input, options) =>
         transport.request(WS_METHODS.editorDebugStart, input, {
           ...(options?.signal ? { signal: options.signal } : {}),

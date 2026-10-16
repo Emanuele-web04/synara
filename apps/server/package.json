@@ -41,10 +41,12 @@
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
+    "semver": "7.7.4",
     "smol-toml": "^1.7.0",
     "typescript": "catalog:",
     "ws": "^8.21.0",
     "yaml": "^2.8.3",
+    "yauzl": "3.4.0",
     "zod": "4.3.6"
   },
   "devDependencies": {
@@ -55,7 +57,9 @@
     "@synara/web": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
+    "@types/semver": "7.7.0",
     "@types/ws": "^8.5.13",
+    "@types/yauzl": "2.10.3",
     "tsdown": "catalog:",
     "vitest": "catalog:"
   },

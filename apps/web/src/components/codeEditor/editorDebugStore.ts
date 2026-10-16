@@ -11,6 +11,15 @@ import type {
 import { ensureNativeApi } from "~/nativeApi";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 
+export interface EditorDebugBackend {
+  start: (
+    input: EditorDebugStartInput,
+    options?: { signal?: AbortSignal },
+  ) => Promise<{ sessionId: string }>;
+  action: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+  poll: (input: { sessionId: string; after: number }) => Promise<EditorDebugSnapshot>;
+}
+
 type Watch = { expression: string; value: string; variablesReference: number };
 export type EditorDebugState = {
   phase: "idle" | "starting" | "running" | "paused" | "ended";
@@ -51,6 +60,7 @@ const registries = new WeakMap<QueryClient, Map<string, EditorDebugStore>>();
 /** Workspace-owned debug state survives changing editor/diff surfaces without starting another process. */
 export class EditorDebugStore {
   private state = initial();
+  private selectedBackend: EditorDebugBackend | undefined;
   private listeners = new Set<() => void>();
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private generation = 0;
@@ -75,6 +85,7 @@ export class EditorDebugStore {
     this.update({ error: error instanceof Error ? error.message : "Debugger operation failed." });
   clearError = () => this.update({ error: null });
   private api() {
+    if (this.selectedBackend) return this.selectedBackend;
     const api = ensureNativeApi().editor;
     if (!api?.debugStart || !api.debugAction || !api.debugPoll)
       throw new Error(
@@ -82,9 +93,13 @@ export class EditorDebugStore {
       );
     return { start: api.debugStart, action: api.debugAction, poll: api.debugPoll };
   }
-  async start(input: Omit<EditorDebugStartInput, "cwd" | "breakpoints">) {
+  async start(
+    input: Omit<EditorDebugStartInput, "cwd" | "breakpoints">,
+    backend?: EditorDebugBackend,
+  ) {
     if (!["idle", "ended"].includes(this.state.phase))
       throw new Error("A debug session is already running.");
+    this.selectedBackend = backend;
     const api = this.api();
     this.launchController = new AbortController();
     const signal = this.launchController.signal;

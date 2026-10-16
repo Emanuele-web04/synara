@@ -72,11 +72,11 @@ function DiffPanelHarness() {
   );
 }
 
-async function mountPanel(getDiff: ReturnType<typeof vi.fn>) {
+async function mountPanel(getDiff: ReturnType<typeof vi.fn>, isRepo = true) {
   vi.stubGlobal("nativeApi", {
     orchestration: { getTurnDiff: getDiff, getFullThreadDiff: getDiff },
     git: {
-      listBranches: vi.fn().mockResolvedValue({ isRepo: true, branches: [] }),
+      listBranches: vi.fn().mockResolvedValue({ isRepo, branches: [] }),
       status: vi.fn().mockResolvedValue({
         branch: "main",
         hasWorkingTreeChanges: false,
@@ -122,6 +122,14 @@ afterEach(async () => {
   useStore.setState(initialStore);
   vi.unstubAllGlobals();
   localStorage.clear();
+});
+
+it("shows a plain empty state for a folder without Git", async () => {
+  await mountPanel(vi.fn().mockResolvedValue({ diff: "" }), false);
+  await expect
+    .element(page.getByText("This folder is not a Git repository. There are no changes to show."))
+    .toBeVisible();
+  expect(document.body.textContent).not.toContain("Git command failed");
 });
 
 it.each(["Last turn"])(

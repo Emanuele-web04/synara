@@ -682,6 +682,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "AccountUsageSync"],
+        [137, "AccountUsageSyncIdentity"],
+        [138, "RemoteDeviceTrust"],
+        [139, "RemoteConnectionPreferences"],
+        [140, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -769,6 +774,11 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
           { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
           { migration_id: 135, name: "ProjectionMessageTurnActivityIndex" },
+          { migration_id: 136, name: "AccountUsageSync" },
+          { migration_id: 137, name: "AccountUsageSyncIdentity" },
+          { migration_id: 138, name: "RemoteDeviceTrust" },
+          { migration_id: 139, name: "RemoteConnectionPreferences" },
+          { migration_id: 140, name: "RemoteAccessControls" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -936,6 +946,11 @@ agentGatewayRetentionLegacyLayer(
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "AccountUsageSync"],
+          [137, "AccountUsageSyncIdentity"],
+          [138, "RemoteDeviceTrust"],
+          [139, "RemoteConnectionPreferences"],
+          [140, "RemoteAccessControls"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1066,6 +1081,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "AccountUsageSync"],
+        [137, "AccountUsageSyncIdentity"],
+        [138, "RemoteDeviceTrust"],
+        [139, "RemoteConnectionPreferences"],
+        [140, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1137,6 +1157,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "AccountUsageSync"],
+          [137, "AccountUsageSyncIdentity"],
+          [138, "RemoteDeviceTrust"],
+          [139, "RemoteConnectionPreferences"],
+          [140, "RemoteAccessControls"],
         ],
       );
 
@@ -1262,6 +1287,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [133, "ProjectionTurnsWorkspaceInitialization"],
         [134, "ProjectionThreadsForkSourceMessage"],
         [135, "ProjectionMessageTurnActivityIndex"],
+        [136, "AccountUsageSync"],
+        [137, "AccountUsageSyncIdentity"],
+        [138, "RemoteDeviceTrust"],
+        [139, "RemoteConnectionPreferences"],
+        [140, "RemoteAccessControls"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1329,6 +1359,11 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [133, "ProjectionTurnsWorkspaceInitialization"],
           [134, "ProjectionThreadsForkSourceMessage"],
           [135, "ProjectionMessageTurnActivityIndex"],
+          [136, "AccountUsageSync"],
+          [137, "AccountUsageSyncIdentity"],
+          [138, "RemoteDeviceTrust"],
+          [139, "RemoteConnectionPreferences"],
+          [140, "RemoteAccessControls"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

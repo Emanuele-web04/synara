@@ -922,11 +922,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       return {
         ...input,
         args: [...input.args],
+        // Git diagnostics are parsed below; keep them stable across desktop locales.
+        env: { ...input.env, LC_ALL: "C" },
         ...(subcommand === "push" ||
         subcommand === "fetch" ||
         subcommand === "pull" ||
         subcommand === "clone"
-          ? { env: { ...input.env, GIT_TERMINAL_PROMPT: "0" } }
+          ? { env: { ...input.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" } }
           : {}),
       };
     };

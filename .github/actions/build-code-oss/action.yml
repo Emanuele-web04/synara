@@ -1,0 +1,42 @@
+name: Build pinned Code-OSS extension host
+description: Verify immutable upstream source and bundle the optional headless extension host without recovery artifacts.
+inputs:
+  output-directory:
+    description: Runtime output directory relative to the repository or an absolute isolated path.
+    required: false
+    default: apps/server/dist/code-oss
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/code-oss-npm-cache
+        key: ${{ runner.os }}-code-oss-npm-7debcd0e2acdea1c52de81bf9ee1620444407dda-esbuild-0.25.12-v1
+    - name: Verify immutable Code-OSS archive
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/code-oss-build"
+        cd "$RUNNER_TEMP/code-oss-build"
+        curl --fail --silent --show-error --location --max-time 90 \
+          'https://codeload.github.com/microsoft/vscode/tar.gz/7debcd0e2acdea1c52de81bf9ee1620444407dda' -o source.tar.gz
+        echo '75b125b51f7258dbbd4cafb25ae658ea0edac4f2f5ad2ff9f61aeb8e1f99ee5e  source.tar.gz' | sha256sum -c -
+        tar -xzf source.tar.gz
+    - name: Install locked upstream dependencies and pinned builder
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP/code-oss-build/vscode-7debcd0e2acdea1c52de81bf9ee1620444407dda"
+        npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$RUNNER_TEMP/code-oss-npm-cache" \
+          > "$RUNNER_TEMP/code-oss-install.log" 2>&1 || { tail -60 "$RUNNER_TEMP/code-oss-install.log"; exit 1; }
+        mkdir -p "$RUNNER_TEMP/code-oss-build/builder"
+        cd "$RUNNER_TEMP/code-oss-build/builder"
+        printf '%s\n' '{"private":true,"dependencies":{"esbuild":"0.25.12"}}' > package.json
+        npm install --ignore-scripts --no-audit --no-fund --cache "$RUNNER_TEMP/code-oss-npm-cache"
+    - name: Build only the headless runtime
+      shell: bash
+      env:
+        SYNARA_CODE_OSS_SOURCE: ${{ runner.temp }}/code-oss-build/vscode-7debcd0e2acdea1c52de81bf9ee1620444407dda
+        SYNARA_CODE_OSS_OUTPUT: ${{ inputs.output-directory }}
+        SYNARA_ESBUILD_MODULE: ${{ runner.temp }}/code-oss-build/builder/node_modules/esbuild/lib/main.js
+      run: node scripts/build-code-oss-host.mjs

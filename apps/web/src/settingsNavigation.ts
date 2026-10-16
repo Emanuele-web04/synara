@@ -22,6 +22,7 @@ export const SETTINGS_SECTION_IDS = [
   "models",
   "providers",
   "skills",
+  "extensions",
   "usage",
   "connectors",
   "integrations",
@@ -190,6 +191,14 @@ const ALL_SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
       "Choose the source control writing style, Git writing model, and custom model slugs.",
     icon: "brain",
     eyebrow: "Model configuration",
+  },
+  {
+    id: "extensions",
+    group: "coding",
+    label: "Extensions",
+    description: "Install Open VSX and VSIX editor tools and manage their permissions.",
+    icon: "puzzle",
+    eyebrow: "Editor tools",
   },
   {
     id: "skills",

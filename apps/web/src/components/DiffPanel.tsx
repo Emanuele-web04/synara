@@ -1482,7 +1482,7 @@ export default function DiffPanel({
         </PanelStateMessage>
       ) : gitRepoStatus === false ? (
         <PanelStateMessage density="compact" fill="flex">
-          Turn diffs are unavailable because this project is not a git repository.
+          This folder is not a Git repository. There are no changes to show.
         </PanelStateMessage>
       ) : gitRepoStatusError ? (
         <PanelStateMessage density="compact" fill="flex">

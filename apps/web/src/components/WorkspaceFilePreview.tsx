@@ -1,3 +1,5 @@
+import { usePreviewEditorHandoff } from "./codeEditor/editorViewHandoff";
+import { preloadCodeEditorSurface } from "./codeEditor/CodeEditorPane";
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
 //          markdown, images, PDFs) for workspace files plus absolute local
@@ -885,6 +887,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileQuery.data.lineEnding !== "mixed" &&
     (!editBufferDirty || (editor.canEdit && !editor.state.saveError && !editor.state.conflict));
   const { onEditFile } = props;
+  const handoff = usePreviewEditorHandoff({
+    client: queryClient,
+    cwd: workspaceRoot,
+    filePath,
+    contents: displayedFileContents,
+    enabled: !showMarkdownPreview && !fileIsImage && !fileIsPdf && !activeEditBuffer,
+    container: contentsRef,
+    load: preloadCodeEditorSurface,
+    onEdit: onEditFile,
+  });
   // The editor writes the path back in place, so it is offered only for
   // sources the shared editor rules consider writable (symlinks included).
   const editFile =
@@ -895,7 +907,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     filePath !== null &&
     fileQuery.data !== undefined &&
     resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data) === null
-      ? () => onEditFile(filePath)
+      ? handoff.begin
       : undefined;
 
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
@@ -977,6 +989,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
         truncated={fileQuery.data?.truncated ?? false}
         onEditFile={editFile}
+        preparingEditor={handoff.preparing}
         dirty={editBufferDirty}
         saveState={
           activeEditBuffer

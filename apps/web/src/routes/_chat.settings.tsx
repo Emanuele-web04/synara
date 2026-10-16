@@ -1,3 +1,4 @@
+import { EditorExtensionsSettingsPanel } from "~/components/settings/EditorExtensionsSettingsPanel";
 // FILE: _chat.settings.tsx
 // Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
 // Layer: Route screen
@@ -1698,6 +1699,8 @@ function SettingsRouteView() {
         return <KeyboardShortcutsSettingsPanel />;
       case "profile":
         return <ProfileSettingsPanel />;
+      case "extensions":
+        return <EditorExtensionsSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":

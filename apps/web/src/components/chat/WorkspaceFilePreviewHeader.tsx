@@ -59,6 +59,7 @@ interface WorkspaceFilePreviewHeaderProps {
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
   onEditFile?: (() => void) | undefined;
+  preparingEditor?: boolean;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
   saveState?: string | undefined;
@@ -361,11 +362,19 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           <ChatHeaderIconButton
             type="button"
             tone="plain"
-            label="Edit file"
-            title="Edit file"
+            label={props.preparingEditor ? "Cancel opening editor" : "Edit file"}
+            title={props.preparingEditor ? "Cancel opening editor" : "Edit file"}
+            aria-busy={props.preparingEditor ?? false}
             onClick={props.onEditFile}
           >
-            <PencilIcon aria-hidden="true" className="size-3.5" />
+            {props.preparingEditor ? (
+              <RefreshCwIcon
+                aria-hidden="true"
+                className="size-3.5 animate-spin motion-reduce:animate-none"
+              />
+            ) : (
+              <PencilIcon aria-hidden="true" className="size-3.5" />
+            )}
           </ChatHeaderIconButton>
         ) : null}
 

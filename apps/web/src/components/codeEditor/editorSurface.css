@@ -53,3 +53,29 @@
   color: var(--color-primary);
   font-weight: bold;
 }
+
+/* Same quiet, rounded indicators as Synara; retain Monaco's drag/keyboard behavior.
+   A full 12px hit area surrounds an 8px pill. Tracks never compete with code. */
+.synara-code-editor .monaco-scrollable-element > .scrollbar > .slider {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 14%, transparent);
+  background-clip: padding-box;
+  box-sizing: border-box;
+}
+.synara-code-editor .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background-color: color-mix(in srgb, var(--foreground) 24%, transparent);
+}
+.synara-code-editor .monaco-scrollable-element > .scrollbar > .slider.active {
+  background-color: color-mix(in srgb, var(--foreground) 34%, transparent);
+}
+@media (forced-colors: active) {
+  .synara-code-editor .monaco-scrollable-element > .scrollbar > .slider {
+    background-color: ButtonText;
+    forced-color-adjust: none;
+  }
+  .synara-code-editor .monaco-scrollable-element > .scrollbar > .slider:hover,
+  .synara-code-editor .monaco-scrollable-element > .scrollbar > .slider.active {
+    background-color: Highlight;
+  }
+}

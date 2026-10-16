@@ -1,4 +1,9 @@
 import {
+  EditorExtensionRuntimeInput,
+  EditorExtensionRuntimeResult,
+} from "./editorExtensionRuntime";
+import { EditorExtensionsInput, EditorExtensionsResult } from "./editorExtensions";
+import {
   EditorDebugStartInput,
   EditorDebugStartResult,
   EditorDebugActionInput,
@@ -644,6 +649,18 @@ export const WsEditorDebugActionRpc = Rpc.make(WS_METHODS.editorDebugAction, {
 export const WsEditorDebugPollRpc = Rpc.make(WS_METHODS.editorDebugPoll, {
   payload: EditorDebugPollInput,
   success: EditorDebugSnapshot,
+  error: WsRpcError,
+});
+
+export const WsEditorExtensionRuntimeRpc = Rpc.make(WS_METHODS.editorExtensionRuntime, {
+  payload: EditorExtensionRuntimeInput,
+  success: EditorExtensionRuntimeResult,
+  error: WsRpcError,
+});
+
+export const WsEditorExtensionsRpc = Rpc.make(WS_METHODS.editorExtensions, {
+  payload: EditorExtensionsInput,
+  success: EditorExtensionsResult,
   error: WsRpcError,
 });
 
@@ -2004,6 +2021,8 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectsSearchContentRpc,
   WsProjectsPrewarmSearchIndexRpc,
   WsEditorIntelligenceRpc,
+  WsEditorExtensionsRpc,
+  WsEditorExtensionRuntimeRpc,
   WsEditorDebugStartRpc,
   WsEditorDebugActionRpc,
   WsEditorDebugPollRpc,

@@ -344,6 +344,22 @@ function pickNames(
   return picked;
 }
 
+function withoutCachedAppImagePaths(
+  environment: Partial<Record<string, string>>,
+  platform: NodeJS.Platform,
+): Partial<Record<string, string>> {
+  if (platform !== "linux" || environment.PATH === undefined) return environment;
+  // AppImage mounts belong to one launch. A disconnected FUSE mount in PATH
+  // makes spawn fail with ENOTCONN before it reaches system executables.
+  // Callers merge the current process PATH back in, preserving its live mount.
+  return {
+    ...environment,
+    PATH: environment.PATH.split(":")
+      .filter((entry) => !/\/\.mount_[^/]+(?:\/|$)/.test(entry))
+      .join(":"),
+  };
+}
+
 function currentSshAuthSocket(env: NodeJS.ProcessEnv): string | undefined {
   const socketPath = env.SSH_AUTH_SOCK?.trim();
   return socketPath ? socketPath : undefined;
@@ -433,7 +449,7 @@ export function createCachedLoginShellEnvironmentReader(
       ) {
         const cachedEnvironment = pickReusableCachedNames(entry, names, env);
         if (cachedEnvironment !== null) {
-          return cachedEnvironment;
+          return withoutCachedAppImagePaths(cachedEnvironment, platform);
         }
       }
     }
@@ -442,7 +458,9 @@ export function createCachedLoginShellEnvironmentReader(
 
     if (cachePath !== null && key !== null && environment.PATH !== undefined) {
       const captured: Record<string, string> = {};
-      for (const [name, value] of Object.entries(environment)) {
+      for (const [name, value] of Object.entries(
+        withoutCachedAppImagePaths(environment, platform),
+      )) {
         if (value !== undefined) {
           captured[name] = value;
         }

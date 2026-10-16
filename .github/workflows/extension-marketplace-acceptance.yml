@@ -1,0 +1,45 @@
+name: Native extension marketplace acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/extension-marketplace-acceptance.yml
+      - apps/web/src/components/settings/ExtensionMarketplace*
+      - apps/web/src/components/settings/EditorExtensionsSettingsPanel.tsx
+      - apps/web/src/components/settings/editorExtensionsApi.ts
+      - apps/web/e2e/editorMarketplace.e2e.ts
+      - apps/web/e2e/editorAcceptanceFixture.ts
+      - apps/web/playwright.marketplace.config.ts
+      - apps/server/src/extensions/openVsx.ts
+      - apps/server/src/extensions/registryCatalog.test.ts
+      - apps/server/src/extensions/extensionManager.ts
+      - packages/contracts/src/editorExtensions.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: extension-marketplace-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  marketplace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Catalog and package transport boundaries
+        run: bun run --cwd apps/server test src/extensions/registryCatalog.test.ts src/extensions/openVsx.test.ts
+      - name: Install browser
+        run: bun run --cwd apps/web test:browser:install
+      - name: Native discovery and approval boundaries
+        run: bun run --cwd apps/web test:browser:ci -- --project=components src/components/settings/ExtensionMarketplace.browser.tsx
+      - name: Real Open VSX marketplace, installation and removal
+        run: cd apps/web && ./node_modules/.bin/playwright test --config playwright.marketplace.config.ts
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: native-marketplace-application-evidence
+          path: apps/web/test-results
+          retention-days: 14
+          if-no-files-found: warn

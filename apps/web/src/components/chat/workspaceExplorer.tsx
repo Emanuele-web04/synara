@@ -684,6 +684,7 @@ export function WorkspaceExplorerSidebar(props: {
 }
 
 export function ExplorerActivityBarButton(props: {
+  disabled?: boolean;
   label: string;
   active: boolean;
   onClick: () => void;
@@ -693,9 +694,10 @@ export function ExplorerActivityBarButton(props: {
     <button
       type="button"
       className={cn(
-        "relative flex h-12 w-full cursor-pointer items-center justify-center text-muted-foreground/72 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+        "relative flex h-12 w-full shrink-0 cursor-pointer items-center justify-center text-muted-foreground/72 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40",
         props.active && "bg-[var(--color-background-button-secondary)] text-foreground",
       )}
+      disabled={props.disabled}
       aria-label={props.label}
       aria-pressed={props.active}
       title={props.label}

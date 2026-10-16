@@ -1,3 +1,9 @@
+import { useLayoutEffect } from "react";
+import { rememberEditorView, takeEditorView, type EditorViewHandoff } from "./editorViewHandoff";
+import { useContext } from "react";
+import { EditorToolScopeContext, type EditorTool } from "./editorToolScope";
+import { getEditorExtensionBridge } from "./editorExtensionBridge";
+import { EditorExtensionInteraction } from "./EditorExtensionInteraction";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EditorLocation, ContextMenuItem } from "@synara/contracts";
@@ -52,6 +58,14 @@ const emptyPicker: PickerState = { title: "Editor commands", mode: "commands", r
 
 export default function MonacoEditorSurface(props: SurfaceProps) {
   const client = useQueryClient();
+  const toolScope = useContext(EditorToolScopeContext);
+  const toolOwner = useRef({});
+  const openTool = useRef<(tool: EditorTool, manage?: () => void) => void>(() => undefined);
+  const extensionInteractionOwner = useRef({});
+  const extensionBridge = useMemo(
+    () => (props.workspaceRoot ? getEditorExtensionBridge(client, props.workspaceRoot) : null),
+    [client, props.workspaceRoot],
+  );
   const debugStore = useMemo(
     () => (props.workspaceRoot ? getEditorDebugStore(client, props.workspaceRoot) : null),
     [client, props.workspaceRoot],
@@ -76,6 +90,80 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
   } | null>(null);
   const [renaming, setRenaming] = useState(false);
   const commandRef = useRef<(id: string) => void>(() => undefined);
+  useEffect(() => {
+    if (!controller || !extensionBridge) return;
+    return extensionBridge.retain(
+      controller.entry,
+      !props.readOnly,
+      extensionInteractionOwner.current,
+    );
+  }, [controller, extensionBridge, props.readOnly]);
+
+  useEffect(() => {
+    if (!controller || !toolScope) return;
+    const owner = toolOwner.current;
+    const release = toolScope.attach(owner, {
+      filePath: controller.entry.relativePath,
+      available: [],
+      selected: null,
+      problemCount: 0,
+      debugging: false,
+      open: (tool, manage) => openTool.current(tool, manage),
+    });
+    const focus = controller.editor.onDidFocusEditorText(() => toolScope.focus(owner));
+    const debug = () =>
+      toolScope.update(owner, {
+        debugging: Boolean(
+          debugStore && ["starting", "running", "paused"].includes(debugStore.getSnapshot().phase),
+        ),
+      });
+    const unsubscribe = debugStore?.subscribe(debug);
+    debug();
+    return () => {
+      focus.dispose();
+      unsubscribe?.();
+      release();
+    };
+  }, [controller, toolScope, debugStore]);
+  useEffect(() => {
+    if (!controller || !toolScope) return;
+    const selected: EditorTool | null =
+      debugLaunch || picker?.title === "Run and debug"
+        ? "debug"
+        : picker?.title === "Go to symbol in file"
+          ? "outline"
+          : picker?.title === "Problems in this file"
+            ? "problems"
+            : picker?.title === "Extensions"
+              ? "extensions"
+              : picker?.mode === "commands"
+                ? "commands"
+                : null;
+    toolScope.update(toolOwner.current, {
+      available: [
+        "problems",
+        "commands",
+        "extensions",
+        ...(debugStore ? ["debug" as const] : []),
+        ...(supportsProjectIntelligence(controller.entry) ? ["outline" as const] : []),
+      ],
+      selected,
+      problemCount: diagnosticCount.errors + diagnosticCount.warnings,
+    });
+  }, [controller, toolScope, debugStore, debugLaunch, picker, diagnosticCount]);
+  openTool.current = (tool, manage) => {
+    if (tool === "extensions") {
+      results("Extensions", [
+        ...(manage ? [{ id: "extensions:manage", label: "Manage extensions", run: manage }] : []),
+        ...commands().filter((row) => row.id.startsWith("extensions:")),
+      ]);
+    } else if (tool === "debug") {
+      results(
+        "Run and debug",
+        commands().filter((row) => row.id.startsWith("debug") || row.id === "extensions:debug"),
+      );
+    } else commandRef.current(tool === "outline" ? "documentSymbols" : tool);
+  };
 
   function report(error: unknown) {
     const entry = controllerRef.current?.entry;
@@ -193,16 +281,22 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         return;
       }
       case "problems": {
-        const result = await requestIntelligence(entry, "diagnostics");
-        if (!result) return;
+        // Both native intelligence and extension diagnostics already publish
+        // to this model. Keep one authoritative list, without a second service.
+        const markers = monaco.editor.getModelMarkers({ resource: entry.model.uri });
         results(
           "Problems in this file",
-          (result.diagnostics ?? []).map((item, index) => ({
+          markers.map((item, index) => ({
             id: `problem:${index}`,
             label: item.message,
-            detail: `${item.severity} · line ${entry.model.getPositionAt(item.start).lineNumber}`,
+            detail: `${item.source ?? "Diagnostic"} · line ${item.startLineNumber}`,
             run: () => {
-              const range = offsetRange(entry.model, item);
+              const range = new monaco.Range(
+                item.startLineNumber,
+                item.startColumn,
+                item.endLineNumber,
+                item.endColumn,
+              );
               editor.setSelection(range);
               editor.revealRangeInCenter(range);
               editor.focus();
@@ -312,6 +406,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
               : []),
           ]
         : []),
+      ...(extensionBridge && editable ? extensionBridge.actionRows(active.entry, results) : []),
       action("editor.foldAll", "Fold all"),
       action("editor.unfoldAll", "Unfold all"),
       ...(current.current.props.onReferenceInChat
@@ -320,9 +415,10 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     ];
   }
 
+  const viewHandoffRef = useRef<{ key: string; view: EditorViewHandoff } | null>(null);
   const cwd = props.workspaceRoot ?? null;
   const diff = props.original !== undefined;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const initial = current.current.props;
@@ -368,6 +464,59 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     const viewKey = diff ? "diff" : "file";
     const view = entry.viewStates.get(viewKey);
     if (view) editor.restoreViewState(view);
+    const handoffKey = JSON.stringify([cwd, initial.fileName, diff]);
+    const requestedHandoff =
+      !diff && cwd ? takeEditorView(client, cwd, initial.fileName, "editor") : undefined;
+    if (requestedHandoff) viewHandoffRef.current = { key: handoffKey, view: requestedHandoff };
+    const handoff =
+      viewHandoffRef.current?.key === handoffKey ? viewHandoffRef.current.view : undefined;
+    if (handoff) {
+      const line = Math.min(entry.model.getLineCount(), Math.max(1, handoff.lineNumber));
+      if (handoff.selection) {
+        const start = entry.model.getPositionAt(handoff.selection.start);
+        const end = entry.model.getPositionAt(handoff.selection.end);
+        editor.setSelection(
+          new monaco.Selection(start.lineNumber, start.column, end.lineNumber, end.column),
+        );
+      }
+      // Measure the long visible lines before restoring horizontal offset;
+      // otherwise Monaco clamps it against its still-empty initial scroll width.
+      editor.layout();
+      editor.render(true);
+      editor.focus();
+      editor.setScrollPosition(
+        {
+          scrollTop:
+            editor.getTopForLineNumber(line) +
+            handoff.lineFraction * editor.getOption(monaco.editor.EditorOption.lineHeight),
+          scrollLeft: handoff.scrollLeft,
+        },
+        monaco.editor.ScrollType.Immediate,
+      );
+    }
+    // React Strict Mode may set up, clean up, and set up the editor before
+    // the first commit settles. Keep the explicit handoff for the surviving
+    // instance, then release it once. Never reclaim focus from another control.
+    if (handoff)
+      queueMicrotask(() => {
+        if (controllerRef.current !== active || !container.isConnected) return;
+        if (viewHandoffRef.current?.view === handoff) viewHandoffRef.current = null;
+        if (pending) return;
+        const focused = document.activeElement;
+        if (focused !== document.body && focused && !container.contains(focused)) return;
+        editor.focus();
+        editor.setScrollPosition(
+          {
+            scrollTop:
+              editor.getTopForLineNumber(
+                Math.min(entry.model.getLineCount(), Math.max(1, handoff.lineNumber)),
+              ) +
+              handoff.lineFraction * editor.getOption(monaco.editor.EditorOption.lineHeight),
+            scrollLeft: handoff.scrollLeft,
+          },
+          monaco.editor.ScrollType.Immediate,
+        );
+      });
     const pending = takeEditorLocation(entry.model.uri);
     if (pending) {
       editor.setSelection(pending);
@@ -535,6 +684,19 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       }),
     );
     return () => {
+      if (!diff && cwd) {
+        const lineNumber = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
+        const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+        rememberEditorView(client, cwd, initial.fileName, {
+          target: "preview",
+          lineNumber,
+          lineFraction: Math.max(
+            0,
+            (editor.getScrollTop() - editor.getTopForLineNumber(lineNumber)) / lineHeight,
+          ),
+          scrollLeft: editor.getScrollLeft(),
+        });
+      }
       const viewState = editor.saveViewState();
       if (viewState) entry.viewStates.set(viewKey, viewState);
       if (initial.historyControlsRef?.current === controls)
@@ -849,12 +1011,24 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           />
         </>
       ) : null}
+      {extensionBridge ? (
+        <EditorExtensionInteraction
+          bridge={extensionBridge}
+          entry={controller?.entry ?? null}
+          owner={extensionInteractionOwner.current}
+        />
+      ) : null}
       <EditorActionPicker
         open={picker !== null}
         title={picker?.title ?? "Editor commands"}
         query={query}
         rows={rows}
         busy={picker?.mode === "workspaceSymbols" && searching}
+        message={
+          picker?.title === "Problems in this file" && picker.rows.length === 0 && !query.trim()
+            ? "No problems found in this file."
+            : null
+        }
         onQueryChange={setQuery}
         onClose={() => {
           setPicker(null);

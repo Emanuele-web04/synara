@@ -1,3 +1,6 @@
+import { useContext } from "react";
+import { EditorToolScopeContext, EditorToolScopeProvider } from "./codeEditor/editorToolScope";
+import { EditorToolsActivityBar } from "./codeEditor/EditorToolsActivityBar";
 // FILE: EditorWorkspaceView.tsx
 // Purpose: Native editing surface with file explorer, workspace text search,
 //          file/diff editing and previews, and chat.
@@ -111,6 +114,7 @@ interface EditorWorkspaceViewProps {
   onEditFile: (filePath: string) => void;
   onCloseEdit: () => void;
   onExitEditorView: () => void;
+  onManageExtensions?: () => void;
   /**
    * Lets the owner route its own editor-replacing actions (chat file links,
    * diff toggles) through the same dirty/saving guard as in-view exits.
@@ -350,6 +354,7 @@ function EditorActivityBar(props: {
   searchActive: boolean;
   sidebarVisible: boolean;
   onSelectItem: (item: EditorActivityBarItem) => void;
+  onManageExtensions: () => void;
 }) {
   const centerFamily = editorCenterModeFamily(props.centerMode);
   const filesActive = props.sidebarVisible && !props.searchActive && centerFamily === "file";
@@ -357,7 +362,7 @@ function EditorActivityBar(props: {
   const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
-      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 app-content-surface"
+      className="flex w-12 shrink-0 flex-col items-center overflow-y-auto border-r border-border/65 app-content-surface"
       aria-label="Editor activity bar"
     >
       <ExplorerActivityBarButton
@@ -381,6 +386,7 @@ function EditorActivityBar(props: {
       >
         <SearchIcon className="size-5" />
       </ExplorerActivityBarButton>
+      <EditorToolsActivityBar onManageExtensions={props.onManageExtensions} />
     </nav>
   );
 }
@@ -390,6 +396,15 @@ export interface EditorLeaveGuard {
 }
 
 export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
+  return (
+    <EditorToolScopeProvider>
+      <EditorWorkspaceViewContent {...props} />
+    </EditorToolScopeProvider>
+  );
+}
+
+function EditorWorkspaceViewContent(props: EditorWorkspaceViewProps) {
+  const toolScope = useContext(EditorToolScopeContext);
   // The editor header sits flush against the window's left edge whenever the
   // global sidebar is collapsed, so it has to clear the macOS traffic lights the
   // same way every other chat-surface header does.
@@ -656,6 +671,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           centerMode={props.centerMode}
           searchActive={searchPaneActive}
           sidebarVisible={sidebarVisible}
+          onManageExtensions={() => guardLeavingEdit(() => props.onManageExtensions?.())}
           onSelectItem={(item) =>
             editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
               ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
@@ -712,7 +728,11 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               <div
                 className={cn("min-h-0 min-w-0 flex-1", props.centerMode !== "diff" && "hidden")}
               >
-                {props.diffPanel}
+                <EditorToolScopeContext.Provider
+                  value={props.centerMode === "diff" ? toolScope : null}
+                >
+                  {props.diffPanel}
+                </EditorToolScopeContext.Provider>
               </div>
               {props.centerMode === "fileEdit" && props.editFilePath !== null ? (
                 <div className="flex min-h-0 min-w-0 flex-1">
