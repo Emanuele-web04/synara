@@ -3,6 +3,9 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
+import { MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+
+import { isBetaFeatureOn } from "~/betaFeatures";
 import { KEYBINDINGS_ICON_NAME } from "~/lib/icons";
 
 export const SETTINGS_SECTION_IDS = [
@@ -20,6 +23,7 @@ export const SETTINGS_SECTION_IDS = [
   "providers",
   "skills",
   "usage",
+  "connectors",
   "integrations",
   "advanced",
 ] as const;
@@ -65,7 +69,21 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   { id: "archived", label: "Archived" },
 ] as const;
 
-export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
+/** Sections that exist only where their Beta-only feature is on. */
+const SETTINGS_SECTION_BETA_FEATURES: Partial<Record<SettingsSectionId, string>> = {
+  connectors: MCP_CONNECTORS_BETA_FEATURE,
+};
+
+/** False for a Beta-only section on Stable: no nav entry, search result, or deep link. */
+export function isSettingsSectionAvailable(
+  section: SettingsSectionId,
+  isOn: (feature: string) => boolean = isBetaFeatureOn,
+): boolean {
+  const feature = SETTINGS_SECTION_BETA_FEATURES[section];
+  return feature === undefined || isOn(feature);
+}
+
+const ALL_SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   {
     id: "general",
     group: "personal",
@@ -140,6 +158,15 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     badge: "Beta",
   },
   {
+    id: "connectors",
+    group: "integrations",
+    label: "Connectors",
+    description: "Sign in to Supabase, Linear, Notion, and other services your agents can use.",
+    icon: "connectors-1",
+    eyebrow: "Remote MCP servers",
+    badge: "Beta",
+  },
+  {
     id: "integrations",
     group: "integrations",
     label: "MCP connections",
@@ -198,6 +225,10 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
 ] as const;
 
+export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = ALL_SETTINGS_NAV_ITEMS.filter(
+  (item) => isSettingsSectionAvailable(item.id),
+);
+
 /**
  * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
  * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
@@ -216,5 +247,9 @@ export function normalizeSettingsSection(value: unknown): SettingsSectionId {
   if (typeof value !== "string") {
     return "general";
   }
-  return SETTINGS_SECTION_IDS.find((candidate) => candidate === value) ?? "general";
+  return (
+    SETTINGS_SECTION_IDS.find(
+      (candidate) => candidate === value && isSettingsSectionAvailable(candidate),
+    ) ?? "general"
+  );
 }

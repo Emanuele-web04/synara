@@ -16,6 +16,7 @@ import {
   FileReadIcon,
   GlobeIcon,
   type LucideIcon,
+  McpIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -25,6 +26,7 @@ import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import type { WorkLogEntry } from "../../session-logic";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
@@ -126,6 +128,8 @@ export function ToolCallGroupSummaryRow(
         >
           {showFavicon && iconWebFetchUrl ? (
             <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
+          ) : Icon === McpIcon && iconEntry?.mcpServer ? (
+            <McpServerIcon serverName={iconEntry.mcpServer} className="size-3.5" />
           ) : (
             renderWorkEntryIcon(Icon, "size-3.5")
           )}

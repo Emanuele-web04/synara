@@ -279,3 +279,79 @@ describe("frame drain and still recovery", () => {
     expect(sink.received).toEqual([1, 3]);
   });
 });
+
+/** A TCP socket stand-in: bytes stay queued until the test drains them. */
+function slowSocket() {
+  let pending = 0;
+  const drainListeners = new Set<() => void>();
+  return {
+    write: (bytes: number) => {
+      pending += bytes;
+    },
+    drain: () => {
+      pending = 0;
+      for (const listener of drainListeners) listener();
+    },
+    listenerCount: () => drainListeners.size,
+    byteStream: {
+      pendingBytes: () => pending,
+      onDrain: (listener: () => void) => {
+        drainListeners.add(listener);
+        return () => {
+          drainListeners.delete(listener);
+        };
+      },
+    },
+  };
+}
+
+describe("frame sink over a slow socket", () => {
+  it("counts bytes still queued on the socket, which a settled send hides", async () => {
+    const socket = slowSocket();
+    const sink = makeFrameSink({
+      // Resolves at once, like Effect's WebSocket writer after `ws.send`.
+      send: async (bytes) => socket.write(bytes.byteLength),
+      isOpen: () => true,
+      byteStream: socket.byteStream,
+    });
+
+    sink.send(new Uint8Array(4_000));
+    await Promise.resolve();
+
+    expect(sink.bufferedAmount()).toBe(4_000);
+  });
+
+  it("drops for a client that stopped reading and resumes when the socket drains", async () => {
+    const socket = slowSocket();
+    const sent: number[] = [];
+    const sink = makeFrameSink({
+      send: async (bytes) => {
+        sent.push(bytes[0]!);
+        socket.write(1_000);
+      },
+      isOpen: () => true,
+      byteStream: socket.byteStream,
+    });
+    const transport = makeTransport({ socketBudgetBytes: 1_500, queueLimit: 2 });
+    const unsubscribe = transport.subscribe("device", sink);
+
+    transport.publish("device", { sequence: 1, keyframe: true, codecConfig: false });
+    transport.publish("device", { sequence: 2, keyframe: false, codecConfig: false });
+    await Promise.resolve();
+    for (let sequence = 3; sequence <= 9; sequence++) {
+      transport.publish("device", { sequence, keyframe: false, codecConfig: false });
+    }
+    await Promise.resolve();
+    // Two frames fill the budget; the rest are queued, then shed.
+    expect(sent).toEqual([1, 2]);
+    expect(transport.statsFor("device").at(0)?.dropped ?? 0).toBeGreaterThan(0);
+
+    transport.publish("device", { sequence: 10, keyframe: true, codecConfig: false });
+    socket.drain();
+    await Promise.resolve();
+    expect(sent.at(-1)).toBe(10);
+
+    unsubscribe();
+    expect(socket.listenerCount()).toBe(0);
+  });
+});

@@ -1347,7 +1347,8 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
-      assert.equal(createInput?.options.permissionMode, undefined);
+      // Pinned, so a settings `permissions.defaultMode` cannot silently stop the prompts.
+      assert.equal(createInput?.options.permissionMode, "default");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
       const systemPrompt = createInput?.options.systemPrompt;
       if (
@@ -6430,6 +6431,151 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect(
+    "uses native CLI effort metadata for discovery, default spawn and live dispatch",
+    () => {
+      const queries: FakeClaudeQuery[] = [];
+      const inputs: ClaudeQueryOptions[] = [];
+      const layer = makeClaudeAdapterLive({
+        createQuery: (input) => {
+          const query = new FakeClaudeQuery();
+          setSupportedModels(query, [
+            {
+              value: "runtime-fixture-model",
+              displayName: "Runtime fixture",
+              description: "Fixture",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "xhigh", "max"],
+              supportsAdaptiveThinking: true,
+              supportsFastMode: false,
+            },
+          ]);
+          queries.push(query);
+          inputs.push(input.options);
+          return query;
+        },
+      }).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const catalog = yield* adapter.listModels!({
+          provider: "claudeAgent",
+          cwd: "/tmp/project",
+        });
+        const model = catalog.models[0]!;
+        assert.deepEqual(
+          model.supportedReasoningEfforts?.map((level) => level.value),
+          ["low", "xhigh", "max"],
+        );
+        assert.equal(model.defaultReasoningEffort, undefined);
+        assert.equal(model.supportedReasoningEfforts?.[0]?.label, "Low");
+        assert.equal(model.supportsThinkingToggle, false);
+        assert.equal(model.supportsFastMode, false);
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          cwd: "/tmp/project",
+          modelSelection: { provider: "claudeAgent", model: "runtime-fixture-model" },
+        });
+        assert.equal((inputs[1]!.settings as Record<string, unknown>).effortLevel, undefined);
+        assert.equal(inputs[1]!.effort, undefined);
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Fixture request",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "xhigh" },
+          },
+        });
+        assert.deepInclude(queries[1]!.applyFlagSettingsCalls, { effortLevel: "xhigh" });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    },
+  );
+
+  it.effect("rejects an effort the session CLI explicitly excludes before dispatch", () => {
+    const harness = makeHarness();
+    setSupportedModels(harness.query, [
+      {
+        value: "runtime-fixture-model",
+        displayName: "Runtime fixture",
+        description: "Fixture",
+        supportsEffort: true,
+        supportedEffortLevels: ["low"],
+        supportsAdaptiveThinking: true,
+      },
+    ]);
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        modelSelection: { provider: "claudeAgent", model: "runtime-fixture-model" },
+      });
+      const result = yield* adapter
+        .sendTurn({
+          threadId: THREAD_ID,
+          input: "Fixture request",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "xhigh" },
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure")
+        assert.include(providerValidationIssue(result.failure), 'does not support effort "xhigh"');
+      assert.notDeepInclude(harness.query.applyFlagSettingsCalls, { effortLevel: "xhigh" });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "keeps native max spawn-fixed on a runtime-only model without prior UI discovery",
+    () => {
+      const harness = makeHarness();
+      setSupportedModels(harness.query, [
+        {
+          value: "runtime-fixture-model",
+          displayName: "Runtime fixture",
+          description: "Fixture",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "max"],
+          supportsAdaptiveThinking: true,
+        },
+      ]);
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "runtime-fixture-model",
+            options: { effort: "max" },
+          },
+        });
+        assert.equal(harness.getLastCreateQueryInput()!.options.effort, "max");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("discovers Claude model capabilities before a session starts", () => {
     const query = new FakeClaudeQuery();
     let createQueryCalls = 0;
@@ -6664,6 +6810,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
+        // Slash-command list refresh: menu bookkeeping, never a transcript warning.
+        harness.query.emit({
+          type: "system",
+          subtype: "commands_changed",
+          commands: [{ name: "review", description: "Review changes", argumentHint: "" }],
+          session_id: "sdk-session-commands",
+          uuid: "00000000-0000-4000-8000-000000000001",
+        } as SDKMessage);
+
         // Incremental task patches we intentionally drop — must not warn either.
         for (let i = 0; i < 3; i += 1) {
           harness.query.emit({
@@ -6728,6 +6883,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         );
         assert.equal(
           warningMessages.some((message) => message.includes("task_updated")),
+          false,
+        );
+        assert.equal(
+          warningMessages.some((message) => message.includes("commands_changed")),
           false,
         );
         assert.equal(
@@ -9498,7 +9657,47 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         const events = Array.from(yield* Fiber.join(next));
         const completed = events.find((event) => event.type === "turn.completed");
         assert.equal(completed?.type, "turn.completed");
-        if (completed?.type === "turn.completed") {
+        if (completed?.type === "turn.completed" && boundary === "resumed process") {
+          // Claude Code may restore the session's saved totals into a resumed
+          // process's first result, so it only becomes the baseline.
+          assert.isUndefined(completed.payload.modelUsage);
+          assert.isUndefined(completed.payload.totalCostUsd);
+          const after = yield* collectCompletion();
+          yield* adapter.sendTurn({ threadId: THREAD_ID, input: "after", attachments: [] });
+          emitResult(oldSessionId, "after-accounting-result", 200, 50, 80, 260, 3);
+          const afterCompleted = Array.from(yield* Fiber.join(after)).find(
+            (event) => event.type === "turn.completed",
+          );
+          assert.equal(afterCompleted?.type, "turn.completed");
+          if (afterCompleted?.type === "turn.completed") {
+            assert.equal(afterCompleted.payload.totalCostUsd, 1);
+            assert.deepEqual(afterCompleted.payload.modelUsage?.["claude-sonnet-5"], {
+              inputTokens: 50,
+              outputTokens: 30,
+              cacheReadInputTokens: 30,
+              cacheCreationInputTokens: 60,
+              costUSD: 1,
+              contextWindow: 200000,
+              maxOutputTokens: 64000,
+              webSearchRequests: 0,
+            });
+          }
+          // A later native identity change starts fresh accounting, not another
+          // restored baseline: the resume flag is a one-result obligation.
+          const changed = yield* collectCompletion();
+          yield* adapter.sendTurn({ threadId: THREAD_ID, input: "new identity", attachments: [] });
+          emitResult(newSessionId, "identity-accounting-result", 10, 20, 30, 40, 1);
+          const changedCompleted = Array.from(yield* Fiber.join(changed)).find(
+            (event) => event.type === "turn.completed",
+          );
+          assert.equal(changedCompleted?.type, "turn.completed");
+          if (changedCompleted?.type === "turn.completed") {
+            assert.equal(changedCompleted.payload.totalCostUsd, 1);
+            assert.deepInclude(changedCompleted.payload.modelUsage?.["claude-sonnet-5"], {
+              inputTokens: 10,
+            });
+          }
+        } else if (completed?.type === "turn.completed") {
           assert.equal(completed.payload.totalCostUsd, sameQuery ? 1 : 2);
           assert.deepEqual(completed.payload.modelUsage?.["claude-sonnet-5"], {
             inputTokens: sameQuery ? 50 : 150,
@@ -10294,11 +10493,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         "sdk-resultless-accounting",
         "first-block",
         "first",
-        { input_tokens: 100 },
+        { input_tokens: 40, cache_read_input_tokens: 60 },
         "first-call",
       );
       emitSuccessResult(harness.query, "sdk-resultless-accounting", "first-result", {
-        input_tokens: 100,
+        input_tokens: 40,
+        cache_read_input_tokens: 60,
       });
       yield* Deferred.await(firstCompleted);
 
@@ -10309,7 +10509,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         "sdk-resultless-accounting",
         "background-block",
         "background",
-        { input_tokens: 10 },
+        { input_tokens: 2, cache_read_input_tokens: 8 },
         "background-call",
       );
       yield* Deferred.await(syntheticStarted);
@@ -10339,6 +10539,19 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(
         events.filter((event) => event.type === "turn.completed")[1]?.payload.mainLoopTokens,
         10,
+      );
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "turn.completed")
+          .map((event) => (event.payload as Record<string, unknown>).claudeResultObserved),
+        [true, false, true],
+      );
+      // A result settles its turn's cache reads; a resultless turn sums its requests'.
+      assert.deepEqual(
+        events.flatMap((event) =>
+          event.type === "turn.completed" ? [event.payload.mainLoopCacheReadTokens] : [],
+        ),
+        [60, 8, 0],
       );
       assert.deepEqual(
         events
@@ -14175,6 +14388,12 @@ describe("Claude cache preflight", () => {
         });
         const restartedCursor = restarted.resumeCursor as Record<string, unknown>;
         assert.deepInclude(restartedCursor, savedMetadata);
+        const previousProcess = (cursor.claudeCache as { processId?: string }).processId;
+        const restartedProcess = (restartedCursor.claudeCache as { processId?: string }).processId;
+        assert.isString(previousProcess);
+        assert.isString(restartedProcess);
+        assert.notEqual(restartedProcess, previousProcess);
+
         assert.deepInclude(restartedCursor.claudeCache, {
           ...expectedCache,
           lifecycleGeneration: "second-generation",
@@ -14236,6 +14455,72 @@ describe("Claude cache preflight", () => {
     },
   );
 
+  it.effect("keeps one query identity across hook-less estimates, requests and compaction", () => {
+    const harness = makeHarness();
+    harness.query.setContextUsageResponse({
+      apiUsage: null,
+      categories: [],
+      totalTokens: 120,
+      maxTokens: 200000,
+      rawMaxTokens: 200000,
+      percentage: 0.06,
+      gridRows: [],
+      model: "claude-sonnet-5",
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      autoCompactThreshold: 160000,
+      isAutoCompactEnabled: true,
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        lifecycleGeneration: "reused-generation",
+        resumeCursor: { resume: nativeSessionId },
+      });
+      const initial = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(initial?.source, "local-estimate");
+      assert.isString(initial?.processId);
+      const requestUsage = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "thread.token-usage.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Continue", attachments: [] });
+      emitAssistantUsage(
+        harness.query,
+        nativeSessionId,
+        "fallback-request",
+        "reply",
+        { input_tokens: 10 },
+        "fallback-message",
+      );
+      const [request] = yield* Fiber.join(requestUsage);
+      if (request?.type === "thread.token-usage.updated") {
+        assert.equal(request.payload.usage.claudeCache?.processId, initial?.processId);
+      }
+      const boundary = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.type === "thread.state.changed" && event.payload.state === "compacted",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      emitCompactionBoundary(harness.query, nativeSessionId, "fallback-compact");
+      yield* Fiber.join(boundary);
+      const afterCompaction = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.equal(afterCompaction?.source, "local-estimate");
+      assert.equal(afterCompaction?.processId, initial?.processId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("uses durable response evidence after a restart when SessionStart is absent", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -14289,6 +14574,47 @@ describe("Claude cache preflight", () => {
       assert.equal(observation?.contextTokens, 800001);
       assert.equal(observation?.state, "likely-expired");
       assert.equal(observation?.ttlSeconds, 3600);
+      const processId = (observation as unknown as Record<string, unknown>).processId;
+      assert.isString(processId);
+      yield* TestClock.adjust("1 second");
+      yield* Effect.promise(() =>
+        hook(
+          {
+            hook_event_name: "SessionStart",
+            session_id: nativeSessionId,
+            source: "resume",
+            context_tokens: 800002,
+            transcript_path: "/tmp/fixture.jsonl",
+            cwd: "/tmp",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      const repeated = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      assert.notEqual(repeated?.observedAt, observation?.observedAt);
+      assert.equal((repeated as unknown as Record<string, unknown>).processId, processId);
+      assert.equal(repeated?.contextTokens, 800002);
+      const requestUsage = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "thread.token-usage.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Continue", attachments: [] });
+      emitAssistantUsage(
+        harness.query,
+        nativeSessionId,
+        "process-identity",
+        "reply",
+        { input_tokens: 10 },
+        "process-request",
+      );
+      const [request] = yield* Fiber.join(requestUsage);
+      assert.equal(request?.type, "thread.token-usage.updated");
+      if (request?.type === "thread.token-usage.updated") {
+        assert.equal(request.payload.usage.claudeCache?.processId, processId);
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -14320,13 +14646,23 @@ describe("Claude cache preflight", () => {
 
   it.effect("does not restore pre-compaction cache metadata from a sparse startup hook", () => {
     const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       yield* adapter.startSession({
         threadId: THREAD_ID,
         runtimeMode: "full-access",
-        resumeCursor: { resume: nativeSessionId, claudeCache: resumedObservation },
+        resumeCursor: {
+          resume: nativeSessionId,
+          claudeCache: resumedObservation,
+          processedTokenTotal: 0,
+          tokenAccountingVersion: 1,
+        },
       });
+      const beforeCompaction = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/compact", attachments: [] });
       const boundary = yield* adapter.streamEvents.pipe(
         Stream.filter(
           (event) => event.type === "thread.state.changed" && event.payload.state === "compacted",
@@ -14356,6 +14692,28 @@ describe("Claude cache preflight", () => {
       assert.isUndefined(observation?.contextTokens);
       assert.isUndefined(observation?.lastResponseAt);
       assert.isUndefined(observation?.ttlSeconds);
+      assert.isString(observation?.processId);
+      assert.equal(observation?.processId, beforeCompaction?.processId);
+      const settledUsage = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "thread.token-usage.updated"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      emitSuccessResult(harness.query, nativeSessionId, "compact-result", {
+        input_tokens: 11,
+        output_tokens: 2,
+      });
+      const [usage] = yield* Fiber.join(settledUsage);
+      assert.equal(usage?.type, "thread.token-usage.updated");
+      if (usage?.type === "thread.token-usage.updated") {
+        // The sparse hook is still persisted by the accounting-only result.
+        // Stats must distinguish this same-process hook from a native restart.
+        assert.deepInclude(usage.payload.usage.claudeCache, {
+          source: "session-start",
+          processId: observation?.processId,
+        });
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -14942,6 +15300,284 @@ describe("Claude subagent tracking", () => {
         }
       ).agentStates;
       assert.deepEqual(agentStates, { [FG]: { status: "stopped" } });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  for (const returnedToForeground of [false, true]) {
+    it.effect(
+      `settles a foreground task left open by a turn that hit the usage limit (returned: ${returnedToForeground})`,
+      () => {
+        const harness = makeHarness();
+        const FG = "toolu_limited_agent";
+        const BASH = "toolu_limited_bash";
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil(
+              (event) =>
+                event.type === "task.completed" && payloadRecord(event).summary === "Late notice.",
+            ),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* startTrackingSession(adapter);
+
+          for (const message of [
+            rootToolUse(0, BASH, "Bash", { command: "make", description: "Build" }),
+            system("task_started", {
+              task_id: "task-limited-bash",
+              tool_use_id: BASH,
+              task_type: "local_bash",
+              is_backgrounded: false,
+              description: "Build",
+            }),
+            rootToolUse(1, FG, "Agent", { description: "Limited job", prompt: "Dig in." }),
+            system("task_started", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: false,
+              description: "Limited job",
+            }),
+            subagentAssistant(FG, [{ type: "text", text: "Digging." }]),
+            ...(returnedToForeground
+              ? [
+                  system("task_updated", {
+                    task_id: "task-limited-bash",
+                    patch: { is_backgrounded: true },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited",
+                    patch: { is_backgrounded: true },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited-bash",
+                    patch: { is_backgrounded: false },
+                  }),
+                  system("task_updated", {
+                    task_id: "task-limited",
+                    patch: { is_backgrounded: false },
+                  }),
+                ]
+              : []),
+            {
+              type: "assistant",
+              session_id: SESSION,
+              uuid: nextUuid(),
+              parent_tool_use_id: null,
+              error: "rate_limit",
+              message: {
+                id: `msg-${nextUuid()}`,
+                content: [{ type: "text", text: "You've hit your limit." }],
+                usage: { input_tokens: 0, output_tokens: 0 },
+              },
+            } as unknown as SDKMessage,
+            {
+              type: "result",
+              subtype: "success",
+              is_error: true,
+              result: "You've hit your limit.",
+              errors: [],
+              session_id: SESSION,
+              uuid: nextUuid(),
+            } as unknown as SDKMessage,
+            // Zombie tail, then a real notification that arrives after all.
+            system("task_progress", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              description: "Still digging",
+              usage: { total_tokens: 1, tool_uses: 0, duration_ms: 1 },
+            }),
+            system("task_notification", {
+              task_id: "task-limited",
+              tool_use_id: FG,
+              status: "stopped",
+              output_file: "/tmp/limited.out",
+              summary: "Late notice.",
+            }),
+          ]) {
+            harness.query.emit(message);
+          }
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          const rootTurnId = events.find(
+            (event) => event.type === "turn.started" && isRootEvent(event),
+          )?.turnId;
+          const turnCompletedIndex = events.findIndex(
+            (event) => event.type === "turn.completed" && isRootEvent(event),
+          );
+          assert.equal(payloadRecord(events[turnCompletedIndex]!).state, "failed");
+          const settled = events
+            .slice(0, turnCompletedIndex)
+            .filter((event) => isRootEvent(event) && event.type === "task.completed")
+            .map((event) => ({
+              taskId: taskIdOf(event),
+              status: payloadRecord(event).status,
+              toolUseId: payloadRecord(event).toolUseId,
+              turnId: event.turnId,
+            }));
+          assert.deepEqual(settled, [
+            {
+              taskId: "task-limited-bash",
+              status: "failed",
+              toolUseId: undefined,
+              turnId: rootTurnId,
+            },
+            { taskId: "task-limited", status: "failed", toolUseId: FG, turnId: rootTurnId },
+          ]);
+          // Late progress cannot mark the settled task live again.
+          assert.equal(
+            events
+              .slice(turnCompletedIndex)
+              .some(
+                (event) => event.type === "task.progress" && taskIdOf(event) === "task-limited",
+              ),
+            false,
+          );
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  it.effect("leaves background tasks open when the launching turn ends", () => {
+    const harness = makeHarness();
+    const BG = "toolu_bg_at_turn_end";
+    const MOVED = "toolu_moved_bash";
+    const LISTED = "toolu_listed_bash";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, BG, "Agent", {
+          description: "Background job",
+          prompt: "Take your time.",
+          run_in_background: true,
+        }),
+        system("task_started", {
+          task_id: "task-bg-open",
+          tool_use_id: BG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: true,
+          description: "Background job",
+        }),
+        userMessage(null, [trackingToolResult(BG, "Async agent launched successfully.")], {
+          status: "async_launched",
+          agentId: "task-bg-open",
+        }),
+        rootToolUse(1, MOVED, "Bash", { command: "serve", description: "Serve" }),
+        system("task_started", {
+          task_id: "task-moved",
+          tool_use_id: MOVED,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Serve",
+        }),
+        system("task_updated", { task_id: "task-moved", patch: { is_backgrounded: true } }),
+        userMessage(null, [trackingToolResult(MOVED, "Moved to background.")]),
+        rootToolUse(2, LISTED, "Bash", { command: "watch", description: "Watch" }),
+        system("task_started", {
+          task_id: "task-listed",
+          tool_use_id: LISTED,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Watch",
+        }),
+        system("background_tasks_changed", {
+          tasks: [
+            { task_id: "task-bg-open", task_type: "local_agent", description: "Background job" },
+            { task_id: "task-moved", task_type: "local_bash", description: "Serve" },
+            { task_id: "task-listed", task_type: "local_bash", description: "Watch" },
+          ],
+        }),
+        userMessage(null, [trackingToolResult(LISTED, "Moved to background.")]),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(events.filter((event) => event.type === "task.completed").map(taskIdOf), []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not repeat terminal evidence a foreground task already reported", () => {
+    const harness = makeHarness();
+    const FG = "toolu_reported_agent";
+    const BASH = "toolu_reported_bash";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* startTrackingSession(adapter);
+
+      for (const message of [
+        rootToolUse(0, FG, "Agent", { description: "Reported job", prompt: "Report back." }),
+        system("task_started", {
+          task_id: "task-reported",
+          tool_use_id: FG,
+          task_type: "local_agent",
+          subagent_type: "general-purpose",
+          is_backgrounded: false,
+          description: "Reported job",
+        }),
+        subagentAssistant(FG, [{ type: "text", text: "Reported." }]),
+        system("task_updated", { task_id: "task-reported", patch: { status: "completed" } }),
+        system("task_notification", {
+          task_id: "task-reported",
+          tool_use_id: FG,
+          status: "completed",
+          output_file: "/tmp/reported.out",
+          summary: "Reported.",
+        }),
+        userMessage(null, [trackingToolResult(FG, "Reported.")], {
+          status: "completed",
+          agentId: "task-reported",
+        }),
+        rootToolUse(1, BASH, "Bash", { command: "false", description: "Fail" }),
+        system("task_started", {
+          task_id: "task-reported-bash",
+          tool_use_id: BASH,
+          task_type: "local_bash",
+          is_backgrounded: false,
+          description: "Fail",
+        }),
+        system("task_updated", {
+          task_id: "task-reported-bash",
+          patch: { status: "failed", error: "exit code 1" },
+        }),
+        userMessage(null, [trackingToolResult(BASH, "exit code 1")]),
+        success(),
+      ]) {
+        harness.query.emit(message);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events
+          .filter((event) => event.type === "task.completed")
+          .map((event) => `${taskIdOf(event)}:${String(payloadRecord(event).summary)}`),
+        ["task-reported:Reported."],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

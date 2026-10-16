@@ -84,6 +84,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "thread.markUnread",
   "chat.visible.next",
   "chat.visible.previous",
+  "chat.attention.next",
   "threadTab.next",
   "threadTab.previous",
   "editor.openFavorite",

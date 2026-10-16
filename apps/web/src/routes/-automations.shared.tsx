@@ -31,7 +31,6 @@ import {
   ComposerPickerMenuSubPopup,
 } from "~/components/chat/ComposerPickerMenuPopup";
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
-import { RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
@@ -1500,10 +1499,7 @@ export function AutomationDialog({
                         ? "shield-access"
                         : "brain"
                   }
-                  className={cn(
-                    "size-4",
-                    form.runtimeMode === "auto" && RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME,
-                  )}
+                  className="size-4"
                 />
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" className="w-48">
@@ -1514,10 +1510,7 @@ export function AutomationDialog({
                   <MenuRadioItem value="approval-required">Approval required</MenuRadioItem>
                   {selectedModelSupportsAuto ? (
                     <MenuRadioItem value="auto">
-                      <CentralIcon
-                        name="shield-code"
-                        className={cn("size-4", RUNTIME_AUTO_ICON_ACCENT_CLASS_NAME)}
-                      />
+                      <CentralIcon name="shield-code" className="size-4" />
                       Auto
                     </MenuRadioItem>
                   ) : null}

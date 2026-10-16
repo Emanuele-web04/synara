@@ -37,6 +37,7 @@ import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
+  extractMcpServerName,
   isGenericToolTitle,
   normalizeCompactToolLabel,
   normalizeToolTextForComparison,
@@ -70,6 +71,7 @@ const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 // Mirror the same-thread Hand off activities in ProviderCommandReactor.ts.
 export const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
 export const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+export const PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON = "background-tasks";
 
 export interface ProviderHandoffInfo {
   status: "completed" | "failed";
@@ -84,6 +86,8 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** The failure was the source's live background tasks, which the user may stop. */
+  blockedByBackgroundTasks?: boolean;
   /** Set when that side requested fast mode but its session was not serving it. */
   sourceFastModeNotice?: FastModeNotice | null;
   targetFastModeNotice?: FastModeNotice | null;
@@ -148,6 +152,8 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   toolName?: string;
+  /** MCP server that served the call; picks the row's icon (connector, brand). */
+  mcpServer?: string;
   toolCallId?: string;
   toolStatus?: SynaraMcpToolStatus;
   liveActivity?: WorkLogLiveActivity;
@@ -1484,7 +1490,7 @@ function asHandoffModelSelection(
   return fallback as ModelSelection;
 }
 
-function extractProviderHandoffInfo(
+export function extractProviderHandoffInfo(
   payload: Record<string, unknown> | null,
   status: ProviderHandoffInfo["status"],
 ): ProviderHandoffInfo | null {
@@ -1511,6 +1517,9 @@ function extractProviderHandoffInfo(
     }),
     contextText: asTrimmedString(payload?.contextText),
     failureDetail: asTrimmedString(payload?.detail),
+    ...(status === "failed" && payload?.reason === PROVIDER_HANDOFF_BACKGROUND_TASKS_REASON
+      ? { blockedByBackgroundTasks: true }
+      : {}),
   };
 }
 
@@ -1731,6 +1740,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const toolName = extractToolName(payload);
+  const mcpServer = extractMcpServerName(toolName, payload);
   const toolCallId = extractToolCallId(payload);
   const toolStatus = deriveToolLifecycleStatus(activity.kind, payload);
   const entry: DerivedWorkLogEntry = {
@@ -1742,6 +1752,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     tone: activity.tone === "approval" ? "info" : activity.tone,
     activityKind: activity.kind,
     ...(toolName ? { toolName } : {}),
+    ...(mcpServer ? { mcpServer } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
   };
@@ -2473,6 +2484,7 @@ function mergeDerivedWorkLogEntries(
   const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
+  const mcpServer = next.mcpServer ?? previous.mcpServer;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const preservePreviousTerminalState =
     previous.liveActivity !== undefined &&
@@ -2507,6 +2519,7 @@ function mergeDerivedWorkLogEntries(
     ...(synaraThreadCreation ? { synaraThreadCreation } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
+    ...(mcpServer ? { mcpServer } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
     ...(liveActivity ? { liveActivity } : {}),
