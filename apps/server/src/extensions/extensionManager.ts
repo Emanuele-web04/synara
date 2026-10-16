@@ -353,6 +353,26 @@ export class ExtensionManager {
     const combined = signal
       ? AbortSignal.any([signal, this.shutdown.signal])
       : this.shutdown.signal;
+    // Discovery does not own the mutation queue: a slow catalog request cannot
+    // prevent an owner from revoking trust, cancelling uploads or removing code.
+    if (input.operation === "catalog" || input.operation === "details") {
+      return (async () => {
+        const readSignal = AbortSignal.any([combined, AbortSignal.timeout(35_000)]);
+        readSignal.throwIfAborted();
+        await this.load();
+        const result =
+          input.operation === "catalog"
+            ? await this.registry.catalog(input, readSignal)
+            : {
+                registryDetails: await this.registry.details(
+                  extensionId(required(input.id, "Extension identifier")),
+                  readSignal,
+                ),
+              };
+        readSignal.throwIfAborted();
+        return { ...(await this.snapshot()), ...result };
+      })();
+    }
     const operation = this.queue.then(async () => {
       combined.throwIfAborted();
       await this.load();

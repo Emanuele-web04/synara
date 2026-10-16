@@ -25,12 +25,18 @@ export const EditorRegistryExtension = Schema.Struct({
   version: Schema.String,
   displayName: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
+  downloadCount: Schema.optional(NonNegativeInt),
+  categories: Schema.optional(Schema.Array(Schema.String)),
+  license: Schema.optional(Schema.String),
+  apiRange: Schema.optional(Schema.String),
 });
 export const EditorExtensionsInput = Schema.Struct({
   operation: Schema.Literals([
     "list",
     "inspect",
     "search",
+    "catalog",
+    "details",
     "install",
     "remove",
     "setEnabled",
@@ -45,6 +51,10 @@ export const EditorExtensionsInput = Schema.Struct({
   id: Schema.optional(ExtensionId),
   version: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
   query: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  category: Schema.optional(
+    Schema.Literals(["Programming Languages", "Formatters", "Linters", "Debuggers"]),
+  ),
+  sortBy: Schema.optional(Schema.Literals(["relevance", "downloadCount", "timestamp"])),
   cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
   enabled: Schema.optional(Schema.Boolean),
   trusted: Schema.optional(Schema.Boolean),
@@ -60,6 +70,9 @@ export const EditorExtensionsResult = Schema.Struct({
   apiVersion: Schema.String,
   extensions: Schema.Array(EditorExtensionSummary),
   registryResults: Schema.Array(EditorRegistryExtension),
+  registryTotal: Schema.optional(NonNegativeInt),
+  registryNextOffset: Schema.optional(NonNegativeInt),
+  registryDetails: Schema.optional(EditorRegistryExtension),
   trustedWorkspaces: Schema.Array(Schema.String),
   runtime: Schema.Literals([
     "not-built",

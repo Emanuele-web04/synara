@@ -43,6 +43,7 @@ test("local VSIX validation, explicit approval, configuration, replacement and r
   try {
     await openEditorAcceptanceApp(page);
     await page.goto("/settings?section=extensions");
+    await page.getByRole("radio", { name: /^Installed/ }).click();
     await expect(page.getByText("No editor extensions installed.", { exact: true })).toBeVisible();
     await capture(page, info, "before-local-vsix-native-settings");
     await chooseVsix(page, "invalid.vsix", Buffer.from("Not a ZIP archive."));

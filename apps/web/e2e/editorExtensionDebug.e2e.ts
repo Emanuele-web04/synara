@@ -60,9 +60,10 @@ test("real debugger extension uses the existing Synara debug panel", async ({ pa
     await page.goto("/settings?section=extensions");
     await page.getByRole("textbox", { name: "Search Open VSX" }).fill("webfreak.debug");
     await page.getByRole("button", { name: "Search", exact: true }).click();
-    const result = page.locator('[data-slot="settings-row"]').filter({ hasText: "webfreak.debug" });
+    const result = page.getByTestId("extension-card").filter({ hasText: "webfreak.debug" });
     await expect(result).toHaveCount(1, { timeout: 35_000 });
-    await result.getByRole("button", { name: "Install compatible version" }).click();
+    await result.getByRole("button", { name: "Install", exact: true }).click();
+    await page.getByRole("radio", { name: /^Installed/ }).click();
     const installed = page
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Installed extensions", exact: true }) })
@@ -75,6 +76,7 @@ test("real debugger extension uses the existing Synara debug panel", async ({ pa
     const approval = page.getByRole("alertdialog");
     await approval.getByRole("button", { name: "Enable approved versions" }).click();
     await expect(approval).not.toBeVisible();
+    await page.getByRole("radio", { name: "Permissions", exact: true }).click();
     await page.getByRole("textbox", { name: "Workspace directory" }).fill(cwd);
     await page.getByRole("button", { name: "Trust workspace", exact: true }).click();
     await page
