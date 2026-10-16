@@ -997,3 +997,36 @@ Nineteen guard tests pass, including regressions that fail before the fix.
 A real Electron fixture also confirms initial loading, retry/reload and continued
 containment of an inline visual. Signed installation and MacBook → Mini live
 qualification are the remaining candidate checks.
+
+The `.7` candidate also includes main `d9f1f41`, which makes the installed
+Claude CLI authoritative for effort, adaptive-thinking and fast-mode controls.
+The previous unpublished candidate was cancelled before installation and
+replaced by `6fcae61` (build-only workflow `38824651629`); no public tag or update
+feed was changed. Local checks pass: formatting, lint, typecheck, brand,
+release smoke and Windows runtime boundaries, plus 445 affected adapter,
+composer, shared-model and browser tests.
+
+Native iPhone/iPad branches both include `2e1d75a`: explicit Claude metadata,
+including empty effort lists, overrides fallback controls, and selecting
+Default (CLI) clears the outgoing effort override. Existing stored outbox
+commands are untouched. Both regressions failed before repair; all 314 Core
+tests and 14 model-selection simulator tests pass. Universal build `0.1 (133)`
+passed archive/export and app/widget signing checks with production APNs
+entitlements. Apple processed the upload and the build is available to the
+existing internal Synara Early Access group, with test notes saved. No physical
+phone was used; production push delivery remains unverified on a real device.
+
+Workflow `38824651629` completed successfully on the exact `.7` candidate.
+The downloaded GitHub archive digest, inner artifact hashes, source commit and
+lockfile matched provenance; Developer ID Team `HR24WHR326`, strict signing,
+Gatekeeper notarization and the stapled ticket also passed local verification.
+The Mini was normally quit and updated with `.6` retained for rollback. Its
+existing transcript reopened, and all 47 original threads, 218 messages and 92
+turns were preserved unchanged, together with account and host/device identities.
+
+MacBook replacement and live MacBook → Mini workspace qualification remain
+unverified. The user confirmed a normal app quit, but the Codex control channel
+became unavailable and the existing SSH endpoint refused connection. The last
+verified MacBook version is `.6`; delivery of the final retry handoff was not
+acknowledged. No force quit, trust reset or data replacement was used to work
+around this access blocker.
