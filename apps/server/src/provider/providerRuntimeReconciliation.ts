@@ -22,13 +22,11 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
 /**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. Reconciliation loads
- * `thread.updatedAt` with the latest message activity for the projected
- * in-flight turn, so a legitimately long-running turn keeps resetting this
- * clock and is never affected by unrelated concurrent messages.
+ * Recovery grace period for a lifecycle without authoritative live ownership.
+ * Reconciliation includes the projected in-flight turn's message activity in
+ * `thread.updatedAt`, but age alone cannot revoke an adapter-owned turn.
+ * Its watchdog or interrupt path must stop the live turn before reconciliation
+ * can settle it, regardless of this grace period.
  */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
@@ -143,7 +141,7 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   );
 }
 
-function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
+export function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
   // The later of the session lifecycle timestamp and the reconciliation shell
   // timestamp. The shell opts into message activity for projected in-flight
   // turns, so active streaming does not count as stale even though the session
@@ -255,8 +253,24 @@ export function planProviderRuntimeReconciliation(input: {
     const projectedTurnId = projectedInFlightTurnId(thread);
     const liveTurnId = turnIdOrNull(liveSession?.activeTurnId);
 
-    if (liveSession?.status === "running" && liveTurnId !== null && !abandoned) {
-      if (liveTurnId === projectedTurnId) continue;
+    // A time limit cannot revoke a live turn's ownership: doing so clears its
+    // binding and MCP write authority while the provider keeps executing.
+    if (liveSession?.status === "running" && liveTurnId !== null) {
+      // Completed/error turns are final in the projector. Replaying running
+      // cannot reopen them and would otherwise create a repair on every tick.
+      if (
+        thread.latestTurn?.turnId === liveTurnId &&
+        (thread.latestTurn.state === "completed" || thread.latestTurn.state === "error")
+      )
+        continue;
+      if (
+        liveTurnId === projectedTurnId &&
+        thread.session?.status === "running" &&
+        thread.latestTurn?.turnId === liveTurnId &&
+        thread.latestTurn.state === "running" &&
+        thread.latestTurn.completedAt === null
+      )
+        continue;
       plans.push({
         action: "align-running-turn",
         threadId: thread.id,
