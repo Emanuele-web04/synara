@@ -1146,3 +1146,44 @@ The subsequent user push adds `8db6bbf` (Activity status/hover cards) and `95aa0
 lint and twelve-package typecheck pass. These web presentation changes do not
 change native contracts or require another iPhone/iPad build. They require a
 separate desktop package to reach installed apps; `.9` does not contain them.
+
+### 2026-10-16 — Remote .10 published and installed on both Macs
+
+[Remote .10](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.10),
+source `6b47f9a`, includes `8db6bbf` and `95aa0f5`. Exact-source workflow
+`38898538739` passed every quality/server gate, signed/notarized macOS ARM64
+packaging and packaged startup. Independent verification matched all four public
+asset digests, provenance, lockfile, version and Remote feed; strict app/DMG
+signatures, Developer ID, Gatekeeper and stapled tickets passed. Stable Latest
+remains `v1.0.5`; the tester lane has no website download snapshot change.
+
+Both Macs were normally quit and upgraded from `.9`, with fresh private backups
+and their `.9` bundles retained for rollback. Account, host/device identities,
+pairing trust and original chat content remain intact. The Mini retains all 51
+original chats, 228 messages, 97 turns, eight projects, its plan and 14,579
+orchestration events. Two harmless smoke chats bring it to 53 chats, 232 messages
+and 99 turns; only `updated_at` changed on an original chat and connection times
+advanced on existing trust rows. The MacBook retains all 107 chats, 1,763 messages,
+363 turns and attachment bytes. Its internal runtime-event retention removed one
+older diagnostic event; user history and durable activities remain unchanged.
+
+A real local Mini turn returned `SYNARA_REMOTE10_MINI_OK` in 5.2 seconds and
+survived reload and app restart. MacBook → Mini created chat
+`f9361dba-3cd3-4e5b-8357-dfc320b6e14d`, received
+`SYNARA_REMOTE10_MACBOOK_TO_MINI_OK`, and retained it after reopen and reload.
+The existing MacBook tunnel responds HTTP 200. The build 135 simulator shows one
+Mini and one MacBook, both Connected, and reads this fresh remote reply. Both
+desktop apps remain running; temporary simulator preview and its listener are
+closed. No physical phone, new login, re-pairing or production APNs test was used.
+No permanent tunnel root-cause fix is claimed: the earlier interruption correlates
+with sleep/app lifecycle, but retained logs do not establish cloudflared's cause.
+
+TestFlight 135 remains compatible; these web presentation commits require no
+native binary or API change. The later user push `43d11d5` arrived after `.10`
+publication and is synchronized on the feature branch, not in the immutable
+public package. It escapes remote hover-anchor selectors and adds the existing
+hover card to classic remote rows; distributing it requires a subsequent desktop
+release. The `.10` tag and artifacts were not overwritten.
+The post-tag branch passes 115 affected unit/guard tests, 35 browser tests,
+formatting, lint and twelve-package typecheck; this is source verification,
+not qualification or installation of a package containing `43d11d5`.

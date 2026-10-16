@@ -114,3 +114,18 @@ describe.each(["thread", "project"] as const)("sidebar %s hover cards", (kind) =
     },
   );
 });
+
+it("anchors a remote chat's hover card although its id carries quotes and brackets", async () => {
+  const remoteId = 'activity:workspace:["remote-env","thread-71"]';
+  const mounted = await render(
+    <div data-slot="sidebar-container" style={{ width: 288 }}>
+      <div style={{ height: 40 }} />
+      <div data-thread-hover-anchor={remoteId} style={{ height: 36 }} />
+    </div>,
+  );
+  const rect = createThreadHoverCardAnchor(remoteId).getBoundingClientRect();
+  // Found the row: a real vertical position and height, not the empty fallback rect.
+  expect(rect.height).toBe(36);
+  expect(rect.top).toBeGreaterThan(0);
+  await mounted.unmount();
+});
