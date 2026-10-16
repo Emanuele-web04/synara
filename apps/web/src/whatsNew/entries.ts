@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.10",
+    date: "Oct 16",
+    features: [
+      {
+        id: "consistent-remote-activity",
+        title: "Consistent local and remote Activity rows",
+        description:
+          "Chats on another computer show the same hover cards as local chats. Status indicators align with the row and the remote globe keeps its place when actions appear.",
+      },
+      {
+        id: "continuous-ascii-background",
+        title: "A continuous empty-chat background",
+        description:
+          "The ASCII pattern continues beneath the composer, which keeps its own surface. Reduced motion and pause-when-hidden behavior stay in place.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.9",
     date: "Oct 16",
     features: [

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.6-remote.10 — 2026-10-16
+
+### Fixed
+
+- Local and remote Activity rows share hover cards, aligned status indicators and a steady remote globe while row actions appear.
+- The empty-chat ASCII pattern continues beneath the composer's own surface. Existing reduced-motion, resize and hidden-owner behavior remain intact.
+
+### Verification
+
+- Includes both subsequent feature-branch commits, `8db6bbf` and `95aa0f5`. Native contracts, account/pairing behavior and provider choices are unchanged; TestFlight 135 remains compatible.
+- The complete candidate requires exact-source release CI, signed/notarized macOS ARM64 packaging and packaged startup qualification before publication. Remote keeps its separate identity, data and update feed.
+
 ## 1.0.6-remote.9 — 2026-10-16
 
 ### Added
