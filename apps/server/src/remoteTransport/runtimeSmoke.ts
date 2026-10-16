@@ -20,7 +20,9 @@ export async function verifyRemoteTlsRuntime(): Promise<void> {
   try {
     const file = path.join(directory, "identity.json");
     const identity = await initializeRemoteTlsIdentity(file, "bundled-fixture");
-    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    // Windows reports DOS file attributes through stat.mode, not NTFS ACLs.
+    // Keep the POSIX permission assertion on hosts where those bits are meaningful.
+    if (process.platform !== "win32") assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
     const renewed = await loadRemoteTlsIdentity(
       file,
       "bundled-fixture",

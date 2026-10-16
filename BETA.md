@@ -31,6 +31,13 @@ qualifies startup without inheriting the operator's account URL. Remote test
 enrollment remains separate from sign-in; the service does not automatically
 grant new accounts remote access.
 
+The hosted Remote app offers Google, Apple and email sign-in. GitHub remains
+available on generic builds for separately configured account services. Remote
+also enables the profile/usage sync path without an operator flag; an explicit
+`SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
+generic/Beta builds still require their existing opt-in. Product analytics remain
+separate and off by default.
+
 Signing out preserves that local database. Signing in as another account on the
 same installation does not create a separate local history: the account profile
 and saved Inbox stay account-scoped, but usage sync backfills the installation's
