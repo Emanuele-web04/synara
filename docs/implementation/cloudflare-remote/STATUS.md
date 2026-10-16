@@ -1293,3 +1293,50 @@ been asked for specific .13 publication/install authorization. Live Vercel renew
 @ suggestion and read-only tool use remain unverified pending that delivery and
 project-scope consent. iPhone/iPad TestFlight 0.1 (136) remains compatible and no
 new mobile binary has been built. No paid service, API key or physical iPhone action.
+
+### Remote .13 delivered; live Vercel on iPhone and iPad
+
+The user authorized publication and installation of `.13` on both Macs. Version
+`1.0.6-remote.13`, source `16c6b1c37e4478e75149f5806309816340536bea`, is
+[public](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.13).
+Exact-source release CI 38929539712 passes every required quality, server,
+packaging and packaged-startup gate. Public asset hashes, source/tag/lockfile
+provenance, Remote feed, Developer ID signature, Gatekeeper and app/DMG staples
+were independently verified. Stable Latest remains v1.0.5; historical v0.4.2
+asset identities and recorded hashes are unchanged.
+
+Both Macs run `.13`, with fresh closed-app backups and `.12` rollback bundles.
+The Mini retains every original checked row, both identities and attachments:
+56 original chats, 240 messages and 103 turns; after three smoke conversations,
+59 chats, 248 messages and 106 turns. Integrity is `ok`; only expected thread
+timestamps and trust last-connected timestamps changed. The MacBook retains
+107 chats, 1,763 messages, 363 turns, identities, pairing and attachments. Its
+bounded runtime log rotated three events, recorded separately from retained user
+history. MacBook-to-Mini chat `a758138a-5af4-4591-ad4d-7c4c3e5d614f`
+returns `SYNARA_REMOTE13_MACBOOK_TO_MINI_OK` after reopen and Reload without Retry;
+the Mini independently displays that reply. MacBook tunnel health is HTTP 200.
+
+The user completed the Mini's fresh Vercel consent. The saved grant is connected,
+has scope `openid offline_access` and a refresh token; only these metadata were
+inspected, never token values. Vercel remains connected after a full desktop
+restart. The MacBook's separate Vercel grant was not renewed or copied.
+
+The existing build-136 iPhone simulator reconnects. A newly signed-in iPad
+simulator was explicitly authorized, paired to the Mini and loaded real projects
+and conversations. Both simulators discover and select `@vercel`, insert the
+connector chip, create a new chat and complete real read-only Vercel
+`list_projects` calls. Both report 51 accessible projects. Completed tool
+activities are present in the native UI and host history. The iPad turn settles
+in 16 seconds and the iPhone turn in 19 seconds; these are single smoke timings,
+not a performance benchmark. No deployment, settings mutation or file edit was
+requested. No new native binary, paid service, API key or physical-phone action.
+
+**Tester distribution:** the signed Remote ARM64 DMG can be downloaded now.
+Cloudflare remote enrollment still requires each tester's account in
+`REMOTE_TEST_USER_IDS` (or its additive Worker setting); downloading alone does
+not enroll an arbitrary account. App Store Connect shows universal 0.1 (136) in
+the existing internal group with one tester and external state Ready to Submit.
+There is no verified public TestFlight invite or approved external Beta Review
+for this build. Physical TestFlight APNs delivery, other live connectors and
+actual refresh after vendor-token expiry were not tested in this pass. The
+earlier five failing native legacy connection cases remain recorded separately.
