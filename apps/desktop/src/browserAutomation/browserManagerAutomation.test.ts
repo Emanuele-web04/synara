@@ -80,8 +80,11 @@ class FakeWebContents extends EventEmitter {
   canGoForward = () => false;
   close = vi.fn();
   loadURL = vi.fn(() => Promise.resolve());
-  setZoomFactor = vi.fn();
-  getZoomFactor = () => 1;
+  zoomFactor = 1;
+  setZoomFactor = vi.fn((value: number) => {
+    this.zoomFactor = value;
+  });
+  getZoomFactor = () => this.zoomFactor;
 }
 
 describe("DesktopBrowserManager tab switching", () => {
@@ -285,6 +288,66 @@ describe("DesktopBrowserManager tab switching", () => {
 });
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("invalidates annotation readiness on same-URL reloads and recovers after a failed load", () => {
+    const manager = new DesktopBrowserManager();
+    const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+    const tabId = state.activeTabId!;
+    const guest = Object.assign(new FakeWebContents(401), {
+      getType: () => "webview",
+      hostWebContents: { id: 41 },
+      session: browserSession,
+      send: vi.fn(),
+    });
+    fromId.mockReturnValue(guest);
+    manager.attachWebview({ threadId: THREAD_ID, tabId, webContentsId: guest.id }, 41);
+    const input = {
+      threadId: THREAD_ID,
+      tabId,
+      theme: {
+        mode: "light" as const,
+        accent: "rgb(82, 111, 255)",
+        surface: "rgb(255, 255, 255)",
+        text: "rgb(23, 23, 23)",
+        mutedText: "rgb(113, 113, 122)",
+        border: "rgb(212, 212, 216)",
+        focusBorder: "rgb(82, 111, 255)",
+        primary: "rgb(23, 23, 23)",
+        primaryText: "rgb(255, 255, 255)",
+      },
+    };
+    const ready = (documentToken: string) =>
+      manager.handleAnnotationGuestMessage(guest as unknown as WebContents, {
+        version: 1,
+        kind: "ready",
+        documentToken,
+        source: { url: guest.getURL(), pageTitle: "Example" },
+      });
+
+    try {
+      ready("before-reload");
+      manager.startAnnotation(input);
+      guest.emit("did-start-navigation", {}, guest.getURL(), true, true);
+      guest.emit("did-start-navigation", {}, guest.getURL(), false, false);
+      expect(manager.isAnnotationInteractive(THREAD_ID)).toBe(true);
+
+      guest.emit("did-start-navigation", {}, guest.getURL(), false, true);
+      expect(manager.isAnnotationInteractive(THREAD_ID)).toBe(false);
+      expect(() => manager.startAnnotation(input)).toThrow(/not ready/i);
+
+      guest.emit("did-fail-load", {}, -102, "ERR_CONNECTION_REFUSED", guest.getURL(), true);
+      expect(guest.send).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ kind: "refresh-document", documentToken: "before-reload" }),
+      );
+      expect(() => manager.startAnnotation(input)).toThrow(/not ready/i);
+
+      ready("after-reload");
+      expect(manager.startAnnotation(input).document.token).toBe("after-reload");
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it.each([false, true])(
     "keeps opaque native-view backdrops current through theme changes and reuse (initial dark: %s)",
     (initialDark) => {
@@ -2284,5 +2347,60 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it("does not classify a zoomed agent click as human when Electron reports widget DIPs", () => {
+    const manager = new DesktopBrowserManager();
+    const prepared = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const tabId = prepared.activeTabId!;
+    const webContents = new FakeWebContents();
+    webContents.zoomFactor = 0.25;
+    const runtime = {
+      key: `${THREAD_ID}:${tabId}`,
+      threadId: THREAD_ID,
+      tabId,
+      webContents: webContents as unknown as WebContents,
+      view: null,
+      ownsWebContents: false as const,
+      listenerDisposers: [] as Array<() => void>,
+    };
+    const access = manager as unknown as {
+      runtimes: Map<string, typeof runtime>;
+      configureRuntimeWebContents(value: typeof runtime): void;
+    };
+    access.runtimes.set(runtime.key, runtime);
+    access.configureRuntimeWebContents(runtime);
+    const visible = manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId });
+
+    const releasePointer = visible.expectAgentInput!({
+      kind: "mouse",
+      type: "mouseDown",
+      button: "left",
+      x: 640,
+      y: 400,
+    });
+    webContents.emit(
+      "before-mouse-event",
+      {},
+      {
+        type: "mouseDown",
+        button: "left",
+        x: 160,
+        y: 100,
+      },
+    );
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
+    releasePointer();
+
+    webContents.emit(
+      "before-mouse-event",
+      {},
+      {
+        type: "mouseDown",
+        button: "left",
+        x: 40,
+        y: 40,
+      },
+    );
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(1);
   });
 });

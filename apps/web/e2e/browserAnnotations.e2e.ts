@@ -215,6 +215,20 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         },
         { threadId, tabId, script },
       );
+    // sendInputEvent returns before Electron necessarily delivers the pointer event to
+    // the guest. Only type after the real closed-shadow annotation editor owns focus;
+    // otherwise a fast host can send the comment to the page and lose the commit.
+    const waitForAnnotationCommentFocus = async (): Promise<void> => {
+      await expect
+        .poll(
+          () =>
+            runInGuest(
+              "(() => { const host = document.querySelector('[data-synara-browser-annotations]'); return host?.hasAttribute('data-interactive') === true && document.activeElement === host; })()",
+            ),
+          { timeout: 5_000, intervals: [25, 50, 100] },
+        )
+        .toBe(true);
+    };
     /**
      * Calls a method on the main-process browser manager. Rejects when the call
      * throws, so a caller that expects a not-ready failure has to say so.
@@ -307,6 +321,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       targetRect.x + targetRect.width / 2,
       targetRect.y + targetRect.height / 2,
     );
+    await waitForAnnotationCommentFocus();
     await insertNativeText("Make this action clearer");
     await pressNativeKey("Tab");
     await pressNativeKey("Enter");
@@ -331,6 +346,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       sensitiveContainerRect.x + 6,
       sensitiveContainerRect.y + sensitiveContainerRect.height / 2,
     );
+    await waitForAnnotationCommentFocus();
     await pressNativeKey("Tab");
     await pressNativeKey("Enter");
     await expect
@@ -359,6 +375,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       await clickNativePoint(staleRect.x + staleRect.width / 2, staleRect.y + staleRect.height / 2);
     };
     await clickStaleTarget();
+    await waitForAnnotationCommentFocus();
     await insertNativeText("Kept through a stale target");
     // Dropping the id leaves only the structural selector, which this chain is
     // far too deep to fit inside the contract's bound.
@@ -403,6 +420,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       );
     };
     await clickCollapsingTarget();
+    await waitForAnnotationCommentFocus();
     await insertNativeText("Kept through a collapsed target");
     await runInGuest(
       "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
@@ -439,6 +457,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       fallbackSelectorRect.x + fallbackSelectorRect.width / 2,
       fallbackSelectorRect.y + fallbackSelectorRect.height / 2,
     );
+    await waitForAnnotationCommentFocus();
     await insertNativeText("Fallback selector and shortcut");
     await pressNativeKey("Enter", [process.platform === "darwin" ? "meta" : "control"]);
     await expect

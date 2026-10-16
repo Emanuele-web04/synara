@@ -3,13 +3,36 @@ import { describe, expect, it } from "vitest";
 import {
   clampFloatingBrowserPanelRect,
   floatingBrowserComposerClearancePx,
+  initialFloatingBrowserPanelRect,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
+  restoreFloatingBrowserPanelRect,
   shouldRenderFloatingBrowserPanel,
   isFloatingBrowserDragGesture,
 } from "./floatingBrowserPanel.logic";
 
 describe("floating browser panel geometry", () => {
+  it("starts compact in the bottom-right of its host", () => {
+    expect(initialFloatingBrowserPanelRect({ width: 1_000, height: 700 })).toEqual({
+      left: 668,
+      top: 488,
+      width: 320,
+      height: 200,
+    });
+  });
+
+  it("restores a saved rect instead of the default bottom-right placement", () => {
+    const host = { width: 1_000, height: 700 };
+    const saved = { left: 48, top: 64, width: 480, height: 300 };
+    expect(restoreFloatingBrowserPanelRect(host, undefined)).toEqual(
+      initialFloatingBrowserPanelRect(host),
+    );
+    expect(restoreFloatingBrowserPanelRect(host, saved)).toEqual(saved);
+    expect(restoreFloatingBrowserPanelRect({ width: 400, height: 300 }, saved)).toEqual(
+      clampFloatingBrowserPanelRect(saved, { width: 400, height: 300 }),
+    );
+  });
+
   it("clamps movement and size inside a small host", () => {
     expect(
       clampFloatingBrowserPanelRect(
