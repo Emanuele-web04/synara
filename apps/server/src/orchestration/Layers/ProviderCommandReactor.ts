@@ -6646,9 +6646,10 @@ const make = Effect.gen(function* () {
         updatedAt: new Date().toISOString(),
       });
     }
-    const originalThread = payload.retryFrom
+    const originalThreadWithActivities = payload.retryFrom
       ? Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(payload.threadId))
-      : yield* resolveThread(payload.threadId);
+      : undefined;
+    const originalThread = originalThreadWithActivities ?? (yield* resolveThread(payload.threadId));
     const originalMessage = originalThread?.messages.find(
       (message) => message.id === payload.messageId,
     );
@@ -6725,7 +6726,10 @@ const make = Effect.gen(function* () {
             assistantMessageText: sourceAssistant?.text ?? "",
             assistantMessageCreatedAt: sourceAssistant?.createdAt ?? payload.createdAt,
             sourceMetrics: {
-              ...deriveRetryAttemptMetrics(originalThread.activities, payload.retryFrom.turnId),
+              ...deriveRetryAttemptMetrics(
+                originalThreadWithActivities?.activities ?? [],
+                payload.retryFrom.turnId,
+              ),
             },
             checkpointTurnCount: payload.retryFrom.checkpointTurnCount,
             checkpointRef: payload.retryFrom.checkpointRef,
