@@ -170,7 +170,7 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("offers only native Claude steps, commits Low from an unset slider and clears overrides on reset", async () => {
+  it("keeps the existing slider behavior with native efforts and an old cached Default entry", async () => {
     await using _ = await mountClaudePicker({
       model: "runtime-fixture-model",
       slider: true,
@@ -189,14 +189,8 @@ describe("TraitsPicker (Claude)", () => {
     });
     const slider = page.getByRole("slider", { name: "Reasoning effort" });
     await expect.element(slider).toHaveAttribute("max", "1");
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Select effort");
-    await slider.element().focus();
-    await userEvent.keyboard("{Home}");
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
-    expect(
-      useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
-        .claudeAgent?.options,
-    ).toEqual({ effort: "low" });
+    await slider.element().focus();
     await userEvent.keyboard("{End}");
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Max");
     expect(
@@ -204,15 +198,6 @@ describe("TraitsPicker (Claude)", () => {
         .claudeAgent?.options,
     ).toEqual({ effort: "max" });
     await page.getByRole("button", { name: "Reset effort and speed" }).click();
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Select effort");
-    expect(
-      useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
-        .claudeAgent?.options,
-    ).toBeUndefined();
-    // The thumb rests on Low while unset; clicking it must select Low, not do nothing.
-    const thumb = slider.element().closest('[data-slot="slider-thumb"]');
-    if (!thumb) throw new Error("Effort thumb is missing");
-    await userEvent.click(thumb);
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
     expect(
       useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider

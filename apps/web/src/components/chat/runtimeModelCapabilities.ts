@@ -110,6 +110,7 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
+  // Ignore the synthetic choice left in catalogs from the previous adapter.
   const runtimeEfforts =
     input.provider === "claudeAgent"
       ? input.runtimeModel?.supportedReasoningEfforts?.filter(
@@ -142,17 +143,13 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   const staticDefaultEffort = getDefaultEffort(staticCapabilities);
   const reportedDefaultEffort = trimOrNull(input.runtimeModel?.defaultReasoningEffort);
-  // A native Claude ladder does not advertise a default; do not infer one from the static table.
   const runtimeDefaultEffort =
-    input.provider === "claudeAgent"
-      ? runtimeEfforts.some((effort) => effort.value === reportedDefaultEffort)
-        ? reportedDefaultEffort
-        : null
-      : (reportedDefaultEffort ??
-        (staticDefaultEffort &&
-        runtimeEfforts.some((effort) => effort.value === staticDefaultEffort)
-          ? staticDefaultEffort
-          : null));
+    (input.provider === "claudeAgent" && reportedDefaultEffort === "default"
+      ? null
+      : reportedDefaultEffort) ??
+    (staticDefaultEffort && runtimeEfforts.some((effort) => effort.value === staticDefaultEffort)
+      ? staticDefaultEffort
+      : null);
 
   const runtimeOptions: EffortOption[] = runtimeEfforts.map((effort) => {
     const description = trimOrNull(effort.description);

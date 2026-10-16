@@ -258,7 +258,7 @@ describe("CLI-discovered Claude effort", () => {
       },
     );
     expect(selection.effortLevels.map((level) => level.value)).toEqual(["low", "max"]);
-    expect(selection.defaultEffort).toBeNull();
+    expect(selection.defaultEffort).toBe("low");
     expect(selection.effort).toBe("max");
     expect(
       planComposerEffortChange({

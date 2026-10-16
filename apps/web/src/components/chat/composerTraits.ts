@@ -126,9 +126,7 @@ export function getComposerTraitSelection(
   const contextWindowOptions = selectOptions(contextWindowDescriptor);
   const defaultEffort =
     primarySelectDescriptor?.options.find((option) => option.isDefault)?.id ??
-    (provider === "claudeAgent" && runtimeModel?.supportedReasoningEfforts !== undefined
-      ? null
-      : primarySelectDescriptor?.options[0]?.id) ??
+    primarySelectDescriptor?.options[0]?.id ??
     null;
   const defaultContextWindow =
     contextWindowDescriptor?.options.find((option) => option.isDefault)?.id ??
