@@ -1234,18 +1234,19 @@ was used. No force quit, new login, trust reset or physical-phone operation was
 needed. Native contracts and APIs are unchanged, so TestFlight 135 remains
 compatible and no additional iPhone/iPad build was uploaded for this fix.
 
-### Native composer update — build 136 uploaded, tester assignment pending
+### Native composer update — build 136 available in TestFlight
 
 The later iOS commits `6823429` and `4909297` add the runtime capsule and
 connector/plugin/file mention discovery. Both native branches now include them
 and the cancellation/reconnect footer repair in `6270958`. Universal version
 `0.1 (136)` passed archive, distribution signing, iPhone/iPad device-family and
 production APNs checks; Xcode uploaded it successfully and Apple's email confirms
-processing completed at 14:57:51 UTC. Chrome's App Store Connect login remains
-blank with `authResult=FAILED`; the integrated browser loads the form and awaits
-the user's sign-in. Group assignment and tester availability are not yet confirmed.
-Build 135 is still the
-last confirmed assigned build; no App Store Connect API key was created.
+processing completed at 14:57:51 UTC. After the user restored the Apple browser
+login, build 136 was assigned to the existing Synara Early Access internal group
+(one tester), with test notes saved. App Store Connect confirms the assignment:
+install `0.1 (136)` in TestFlight on iPhone or iPad. No new tester, App Store
+Connect API key, paid service or agreement was added. External Beta Review remains
+separate.
 
 Core: 319 tests pass; desktop contracts: 86 fixtures pass. The iPad simulator
 focused pass has 41 passes and one isolated-fixture skip. The extended iPhone
