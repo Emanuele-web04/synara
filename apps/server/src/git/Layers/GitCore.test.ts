@@ -979,6 +979,23 @@ it.layer(TestLayer)("git integration", (it) => {
   // ── listGitBranches ──
 
   describe("listGitBranches", () => {
+    it.effect("keeps non-repository diagnostics stable in a localized environment", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        const result = yield* core.execute({
+          operation: "GitCore.test.localizedBranch",
+          cwd: tmp,
+          args: ["branch", "--no-color"],
+          env: { LC_ALL: "it_IT.UTF-8", LANGUAGE: "it" },
+          allowNonZeroExit: true,
+        });
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("not a git repository");
+        expect((yield* core.listBranches({ cwd: tmp })).isRepo).toBe(false);
+      }),
+    );
+
     it.effect("returns isRepo: false for non-git directory", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
