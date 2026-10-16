@@ -1039,3 +1039,47 @@ to leave the window steady. The completed `after` snapshot command exited
 successfully, but its detailed comparison report has not yet been retrieved.
 No force quit, trust reset or data replacement was used to work around these
 verification blockers.
+
+### 2026-10-16 — Computer identity during reconnect and Remote .8
+
+The mobile computer list previously depended on a machine id learned after a
+successful connection. Local and account routes for the same saved server could
+therefore appear separately during reconnect, and cached snapshot recency could
+prefer an expired pairing. The existing presentation owner now also uses the
+verified server identity already saved with each route and prefers a usable
+connection. Conflicting known physical ids remain distinct, including copied
+server identities. Same-named expired pairings without physical evidence remain
+in Previous connections while a current route connects; this does not establish
+physical identity or transfer trust, cached messages, outbox commands or command
+ownership. No pairing, account API or migration changes are needed on desktop.
+
+Both native branches include `ccd8fed`. The initial duplicate regression failed
+before repair, and an additional unidentified earlier-install case also failed
+before its follow-up. All 314 Core tests and 28 simulator checks pass; one real
+two-desktop integration case remains skipped because its isolated fixtures were
+not running. On the iPhone simulator, Activity lists the Mini and MacBook once
+each, the Mini's existing transcript opens and app restart preserves account and
+connections. The MacBook's public tunnel currently returns HTTP 530 / Cloudflare
+1033, so fresh live reading from that computer remains unverified. No physical
+iPhone was used. Universal build 134 uploaded but remains unassigned; final
+build 135 includes the extra earlier-install repair and has passed archive,
+export, app/widget signing, device-family and production APNs entitlement checks.
+Apple processed build 135; it is available to the existing internal Synara Early
+Access group (one tester), with test notes saved. Physical-device production push
+delivery remains unverified.
+
+Desktop main `f2614e5` is merged as `779dbdf`. Remote candidate `5ec191d`, tag
+`v1.0.6-remote.8`, includes the three new Claude effort-control fixes and curated
+release notes. The native catalog also removes synthetic Default options from
+older cached Claude catalogs; that regression failed before repair. Local Node
+24 checks pass: format, lint, twelve-package typecheck, brand, release smoke and
+413 affected adapter/model/composer/browser tests. Publication workflow
+`38833509163` completed successfully, including all quality/server gates, signed
+macOS ARM64 packaging and packaged startup qualification. The public ZIP, DMG and
+Remote feed matched GitHub asset digests, source provenance and the exact lockfile;
+Developer ID, strict signatures, Gatekeeper and app/DMG stapled tickets passed
+local verification. [Remote .8](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.8)
+is a prerelease with curated notes; GitHub Latest remains Stable `v1.0.5`. The
+installed Macs were not replaced during this publication. Remote retains its
+separate identity/data/feed;
+Stable/Beta download pages do not need a change for this tester-only lane.
