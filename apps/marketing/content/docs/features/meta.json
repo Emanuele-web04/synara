@@ -11,6 +11,8 @@
     "project-import",
     "multi-folder-projects",
     "composer",
+    "inline-visuals",
+    "connectors",
     "subagents",
     "conversation-history",
     "thread-goals",

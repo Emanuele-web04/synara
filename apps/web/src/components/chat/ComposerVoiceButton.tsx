@@ -4,9 +4,13 @@
 // Depends on: shared button styling and caller-owned voice recording state callbacks.
 
 import { Loader2Icon, MicIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { COMPOSER_ACTION_CIRCLE_CLASS_NAME } from "./composerPickerStyles";
 
 export const ComposerVoiceButton = function ComposerVoiceButton(props: {
+  /** `circle`: filled circle beside a prominent send button (chat composers). */
+  appearance?: "circle" | "ghost";
   disabled?: boolean;
   isRecording: boolean;
   isStarting?: boolean;
@@ -15,6 +19,7 @@ export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   onClick: () => void;
 }) {
   const isBusy = props.isTranscribing || props.isStarting === true;
+  const circle = props.appearance === "circle";
   const label = props.isTranscribing
     ? "Transcribing voice note"
     : props.isStarting
@@ -26,17 +31,23 @@ export const ComposerVoiceButton = function ComposerVoiceButton(props: {
   return (
     <Button
       size="icon-sm"
-      variant="ghost"
-      className="shrink-0 rounded-md"
+      variant={circle ? "circle" : "ghost"}
+      className={circle ? COMPOSER_ACTION_CIRCLE_CLASS_NAME : "shrink-0 rounded-md"}
       disabled={props.disabled || isBusy}
       aria-label={label}
       title={label}
       onClick={props.onClick}
     >
       {isBusy ? (
-        <Loader2Icon aria-hidden="true" className="size-4 animate-spin text-primary" />
+        <Loader2Icon
+          aria-hidden="true"
+          className={cn("animate-spin text-primary", circle ? "size-3.5" : "size-4")}
+        />
       ) : (
-        <MicIcon aria-hidden="true" className="size-4 text-primary" />
+        <MicIcon
+          aria-hidden="true"
+          className={cn("text-primary", circle ? "size-3.5" : "size-4")}
+        />
       )}
     </Button>
   );

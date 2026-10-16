@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  makeAgentGatewayConnectorRegistry,
   makeAgentGatewayEndpoint,
   makeAgentGatewayStdioBootstrapRegistry,
   resolveAgentGatewayEndpointHost,
@@ -68,5 +69,44 @@ describe("makeAgentGatewayStdioBootstrapRegistry", () => {
     now += 50;
 
     expect(registry.exchange(bootstrap!)).toBeNull();
+  });
+});
+
+describe("makeAgentGatewayConnectorRegistry", () => {
+  const supabase = { name: "supabase_connector", connectorId: "mcp_conn_1" };
+  const linear = { name: "linear_connector", connectorId: "mcp_conn_2" };
+
+  it("lets a bearer reach only the connectors it was issued with", () => {
+    const live = new Set(["early", "late", "pi"]);
+    const registry = makeAgentGatewayConnectorRegistry({ sessionIsActive: (t) => live.has(t) });
+
+    registry.set([supabase]);
+    expect(registry.grant("early", "codex")).toEqual([supabase]);
+    registry.set([supabase, linear]);
+    expect(registry.grant("late", "claudeAgent")).toEqual([supabase, linear]);
+
+    // A session keeps the set it started with.
+    expect(registry.canUse("early", "mcp_conn_1")).toBe(true);
+    expect(registry.canUse("early", "mcp_conn_2")).toBe(false);
+    expect(registry.canUse("late", "mcp_conn_2")).toBe(true);
+  });
+
+  it("gives providers without connector support no grant", () => {
+    const registry = makeAgentGatewayConnectorRegistry({ sessionIsActive: () => true });
+    registry.set([supabase]);
+    expect(registry.grant("pi", "pi")).toEqual([]);
+    expect(registry.canUse("pi", "mcp_conn_1")).toBe(false);
+  });
+
+  it("refuses revoked and inactive bearers", () => {
+    const live = new Set(["a", "b"]);
+    const registry = makeAgentGatewayConnectorRegistry({ sessionIsActive: (t) => live.has(t) });
+    registry.set([supabase]);
+    registry.grant("a", "codex");
+    registry.grant("b", "codex");
+    registry.revokeSession("a");
+    expect(registry.canUse("a", "mcp_conn_1")).toBe(false);
+    live.delete("b");
+    expect(registry.canUse("b", "mcp_conn_1")).toBe(false);
   });
 });

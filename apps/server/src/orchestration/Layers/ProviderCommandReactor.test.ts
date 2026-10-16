@@ -30,6 +30,7 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
+  RuntimeItemId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -1575,6 +1576,108 @@ describe("ProviderCommandReactor", () => {
           } as ProviderRuntimeEvent),
     );
   }
+
+  // #1900: a full thread detail read (every message plus the whole activity
+  // timeline) once ran 18+ times per turn and took seconds on long threads.
+  // Drive one scripted turn through command dispatch and runtime ingestion and
+  // count the detail reads, so the next hot-path caller that regresses fails here.
+  it("drives a scripted turn without full thread detail reads", async () => {
+    const harness = await createHarness({ ingestRuntimeEvents: true });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const detailReads = vi.spyOn(harness.projectionSnapshotQuery, "getThreadDetailById");
+    const activityFreeDetailReads = vi.spyOn(
+      harness.projectionSnapshotQuery,
+      "getThreadDetailWithoutActivitiesById",
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "scripted-turn-message",
+      text: "Refactor the session store",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+
+    const turnId = asTurnId("scripted-turn");
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: turnId,
+    });
+    const eventBase = (eventId: string) =>
+      ({
+        eventId: asEventId(`scripted-turn-${eventId}`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        providerRefs: {},
+      }) as const;
+    await harness.emitRuntimeEvent({ ...eventBase("started"), type: "turn.started", payload: {} });
+    const assistantItems = 5;
+    for (let index = 0; index < assistantItems; index += 1) {
+      const itemId = RuntimeItemId.makeUnsafe(`scripted-assistant-${index}`);
+      await harness.emitRuntimeEvent({
+        ...eventBase(`assistant-delta-${index}`),
+        type: "content.delta",
+        itemId,
+        payload: { streamKind: "assistant_text", delta: `Step ${index}.` },
+      });
+      await harness.emitRuntimeEvent({
+        ...eventBase(`assistant-completed-${index}`),
+        type: "item.completed",
+        itemId,
+        payload: { itemType: "assistant_message", status: "completed" },
+      });
+    }
+    // Codex emits a turn diff after every patch, so each file change gets one.
+    // Several diff events keep a diff-path regression above the bound below.
+    for (let index = 0; index < 3; index += 1) {
+      await harness.emitRuntimeEvent({
+        ...eventBase(`file-change-${index}`),
+        type: "item.completed",
+        itemId: RuntimeItemId.makeUnsafe(`scripted-file-change-${index}`),
+        payload: {
+          itemType: "file_change",
+          status: "completed",
+          title: "Edited file",
+          detail: `src/file-${index}.ts`,
+          data: { changes: [{ path: `src/file-${index}.ts`, kind: "update" }] },
+        },
+      });
+      await harness.emitRuntimeEvent({
+        ...eventBase(`diff-${index}`),
+        type: "turn.diff.updated",
+        payload: {
+          unifiedDiff: [
+            `diff --git a/src/file-${index}.ts b/src/file-${index}.ts`,
+            `--- a/src/file-${index}.ts`,
+            `+++ b/src/file-${index}.ts`,
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "",
+          ].join("\n"),
+        },
+      });
+    }
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      ...eventBase("completed"),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    await waitFor(
+      async () => (await readHarnessThread(harness))?.latestTurn?.state === "completed",
+    );
+    await harness.drain();
+
+    expect(detailReads).not.toHaveBeenCalled();
+    // Turn dispatch builds its bootstrap from messages (1); ingestion reads
+    // messages for each assistant completion (K) and the terminal event (1).
+    // No slack: one more read per diff event or file change must fail here.
+    expect(activityFreeDetailReads.mock.calls.length).toBeGreaterThan(0);
+    expect(activityFreeDetailReads.mock.calls.length).toBeLessThanOrEqual(assistantItems + 2);
+  });
 
   describe("Claude cache review", () => {
     function expiredCacheObservation(): ClaudeCacheObservation {
@@ -15766,9 +15869,16 @@ describe("ProviderCommandReactor", () => {
       await harness.startReactor();
       await harness.drain();
       expect(harness.sendTurn).toHaveBeenCalled();
-      if (manualTitle !== null || extraMessages > 0) {
+      if (manualTitle !== null) {
         expect(harness.generateThreadTitle).not.toHaveBeenCalled();
-        expect((await readHarnessThread(harness))?.title).toBe(manualTitle ?? "New thread");
+        expect((await readHarnessThread(harness))?.title).toBe(manualTitle);
+      } else if (extraMessages > 0) {
+        // Turn start reads the sent message by id (#1900), not from the newest
+        // 2000-message detail window, so the replayed first send still starts
+        // its turn and owns naming. The later prompt never does.
+        await waitFor(async () => (await readHarnessThread(harness))?.title === "Server recovery");
+        expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+        expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(firstPrompt);
       } else {
         await waitFor(async () => (await readHarnessThread(harness))?.title === "Server recovery");
         expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
@@ -18711,6 +18821,129 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
     });
 
+    it.each(["successful", "timed-out"] as const)(
+      "settles a %s handoff after its durable write exceeds the provider deadline",
+      async (result) => {
+        const harness = await createHarness({
+          threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+          commandEventTimeout: Duration.millis(300),
+        });
+        await runFirstGrokTurn(harness);
+        if (result === "timed-out") {
+          harness.startSession.mockImplementationOnce(() => Effect.never);
+        }
+        const settlementEntered = Deferred.makeUnsafe<void>();
+        const releaseSettlement = Deferred.makeUnsafe<void>();
+        const dispatch = harness.engine.dispatch;
+        const settlementCommandId =
+          result === "successful"
+            ? "server:provider-handoff-meta:cmd-handoff-to-claude"
+            : "server:provider-handoff-revert:cmd-handoff-to-claude";
+        harness.interceptEngineDispatch((command) => {
+          if (command.commandId !== settlementCommandId) return undefined;
+          // Hold the real engine write after the bounded native phase. The
+          // claim cannot be acknowledged or quarantined while this known
+          // handoff outcome is still waiting for durable settlement.
+          return Deferred.succeed(settlementEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSettlement)),
+            Effect.andThen(Effect.suspend(() => dispatch(command))),
+          );
+        });
+        const handoff = await dispatchHandoff(harness);
+        const deliveryKey = {
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: handoff.sequence,
+        };
+        try {
+          await waitFor(() => Effect.runPromise(Deferred.isDone(settlementEntered)));
+          // Cross the configured 300ms provider deadline after the settlement
+          // has begun; this does not grant more time to provider startup.
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          const pending = Option.getOrThrow(
+            await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+          );
+          expect(pending).toMatchObject({ state: "inflight", attemptCount: 1 });
+          const cursor = Option.getOrThrow(
+            await Effect.runPromise(
+              harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+            ),
+          );
+          expect(cursor.lastAckedSequence).toBeLessThan(handoff.sequence);
+        } finally {
+          await Effect.runPromise(Deferred.succeed(releaseSettlement, undefined));
+        }
+        await waitFor(async () => {
+          const delivery = Option.getOrThrow(
+            await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+          );
+          return delivery.state === "succeeded";
+        });
+        const thread = await readHarnessThread(harness);
+        const expectedProvider = result === "successful" ? "claudeAgent" : "grok";
+        expect(thread?.modelSelection.provider).toBe(expectedProvider);
+        expect(
+          thread?.activities.filter((activity) => activity.kind.startsWith("provider.handoff")),
+        ).toMatchObject([
+          {
+            kind: result === "successful" ? "provider.handoff" : "provider.handoff.failed",
+          },
+        ]);
+        await sendSecondTurn(harness);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+        expect(harness.sendTurn.mock.calls[1]?.[0].modelSelection?.provider).toBe(expectedProvider);
+        expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+      },
+    );
+
+    it("does not replay a handoff when its durable outcome cannot be persisted", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      let settlementAttempts = 0;
+      harness.interceptEngineDispatch((command) => {
+        if (command.commandId !== "server:provider-handoff-meta:cmd-handoff-to-claude") {
+          return undefined;
+        }
+        settlementAttempts += 1;
+        return Effect.fail(
+          new PersistenceSqlError({
+            operation: "provider-handoff-outcome",
+            detail: "Injected durable outcome write failure.",
+          }),
+        );
+      });
+      const handoff = await dispatchHandoff(harness);
+      const deliveryKey = {
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: handoff.sequence,
+      };
+      await waitFor(async () => {
+        const delivery = Option.getOrUndefined(
+          await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+        );
+        return (
+          delivery?.state === "uncertain" ||
+          delivery?.state === "dead" ||
+          delivery?.state === "succeeded"
+        );
+      });
+      await harness.drain();
+      expect(
+        Option.getOrThrow(
+          await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+        ),
+      ).toMatchObject({ state: "uncertain", attemptCount: 1 });
+      expect(settlementAttempts).toBe(1);
+      expect(harness.startSession).toHaveBeenCalledTimes(2);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledTimes(1);
+      expect(
+        (await readHarnessThread(harness))?.activities.some((activity) =>
+          activity.kind.startsWith("provider.handoff"),
+        ),
+      ).toBe(false);
+    });
+
     it("keeps the source runtime while background tasks are still active", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
@@ -18739,7 +18972,65 @@ describe("ProviderCommandReactor", () => {
       expect(harness.startSession.mock.calls).toHaveLength(1);
       expect(
         thread?.activities.find((activity) => activity.kind === "provider.handoff.failed"),
-      ).toMatchObject({ payload: { detail: expect.stringMatching(/background tasks/) } });
+      ).toMatchObject({
+        payload: {
+          reason: "background-tasks",
+          detail: "Grok still has background tasks running in this thread.",
+        },
+      });
+    });
+
+    it("stops the source's background tasks when the user agrees to switch now", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          providerHandoff: true,
+          providerHandoffStopsBackgroundTasks: true,
+        }),
+      );
+
+      // Clearing the source continuation stops its runtime and the tasks in it.
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({ threadId });
+      await waitFor(async () =>
+        Boolean(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.handoff",
+          ),
+        ),
+      );
+      expect((await readHarnessThread(harness))?.modelSelection).toMatchObject({
+        provider: "claudeAgent",
+      });
+    });
+
+    it("rejects stopping background tasks outside a provider handoff", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+
+      await expect(
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-stop-tasks-without-handoff"),
+            threadId,
+            modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+            providerHandoffStopsBackgroundTasks: true,
+          }),
+        ),
+      ).rejects.toThrow(/only allowed as part of a provider handoff/);
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
     });
 
     it("refuses a handoff while a turn is running", async () => {

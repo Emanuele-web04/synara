@@ -19,6 +19,7 @@ import {
   gitRunStackedActionMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
+  refreshGitQueriesForCwdsAfterActivity,
   refreshGitWorkingTreeDiffsForCwd,
   refreshGitAfterFileWrite,
 } from "./gitReactQuery";
@@ -435,6 +436,53 @@ describe("git query invalidation", () => {
     await detailsRefresh;
     expect(calls).toEqual(["status", "stats", "status", "patch"]);
     for (const unsubscribe of unsubscribes) unsubscribe();
+  });
+});
+
+describe("activity-driven git refresh", () => {
+  it("refreshes each checkout at most once per window and still reads the final state", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient();
+    const fetchedCwds: string[] = [];
+    const observe = (cwd: string) =>
+      new QueryObserver(queryClient, {
+        queryKey: gitQueryKeys.status(cwd),
+        queryFn: async () => {
+          fetchedCwds.push(cwd);
+          return {};
+        },
+        staleTime: Number.POSITIVE_INFINITY,
+      }).subscribe(() => undefined);
+    const unsubscribers = [observe("/repo/a"), observe("/repo/b")];
+    const fetchCount = (cwd: string) => fetchedCwds.filter((entry) => entry === cwd).length;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      fetchedCwds.length = 0;
+
+      refreshGitQueriesForCwdsAfterActivity(queryClient, ["/repo/a"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchedCwds).toEqual(["/repo/a"]);
+
+      // A burst of tool completions inside the window queues one trailing pass per
+      // checkout instead of one refresh per event.
+      for (let index = 0; index < 4; index += 1) {
+        refreshGitQueriesForCwdsAfterActivity(queryClient, ["/repo/a", "/repo/b"]);
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      expect(fetchCount("/repo/a")).toBe(1);
+      expect(fetchCount("/repo/b")).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fetchCount("/repo/a")).toBe(2);
+      expect(fetchCount("/repo/b")).toBe(2);
+
+      // Quiet afterwards: no further refresh runs on its own.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchedCwds).toHaveLength(4);
+    } finally {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      vi.useRealTimers();
+    }
   });
 });
 

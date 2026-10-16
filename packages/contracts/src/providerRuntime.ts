@@ -398,8 +398,12 @@ const TurnCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
   tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
+  // Claude SDK result versus a synthetic UI completion without a result.
+  claudeResultObserved: Schema.optional(Schema.Boolean),
   // Per-turn main-loop usage, including observed usage when no result arrives.
   mainLoopTokens: Schema.optional(NonNegativeInt),
+  // The part of mainLoopTokens read from the prompt cache.
+  mainLoopCacheReadTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),

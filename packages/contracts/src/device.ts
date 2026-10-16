@@ -39,7 +39,7 @@ const DEVICE_UDID_MAX_LENGTH = 128;
 const DEVICE_TEXT_MAX_LENGTH = 4_096;
 const DEVICE_PATH_MAX_LENGTH = 1_024;
 const DEVICE_URL_MAX_LENGTH = 8_192;
-const DEVICE_MESSAGE_MAX_LENGTH = 2_048;
+export const DEVICE_MESSAGE_MAX_LENGTH = 2_048;
 
 /**
  * Simulator UDIDs are UUIDs today; the charset is widened so an Android
@@ -256,6 +256,9 @@ export const DeviceAttachPhase = Schema.Literals([
 ]);
 export type DeviceAttachPhase = typeof DeviceAttachPhase.Type;
 
+/** Most devices one thread state can list; a machine can have more simulators than this. */
+export const DEVICE_THREAD_STATE_MAX_DEVICES = 64;
+
 export const ThreadDeviceState = Schema.Struct({
   threadId: ThreadId,
   /** Monotonic per thread; lets the pane drop out-of-order pushes. */
@@ -269,7 +272,9 @@ export const ThreadDeviceState = Schema.Struct({
    */
   attachPhase: Schema.optional(Schema.NullOr(DeviceAttachPhase)),
   /** Devices the pane may show: booted devices plus anything Synara is booting. */
-  devices: Schema.Array(DeviceDescriptor).check(Schema.isMaxLength(64)),
+  devices: Schema.Array(DeviceDescriptor).check(
+    Schema.isMaxLength(DEVICE_THREAD_STATE_MAX_DEVICES),
+  ),
   /** True while an agent tool is driving input, so the pane can show the badge. */
   agentActive: Schema.Boolean,
   availability: DeviceAvailability,
@@ -551,6 +556,25 @@ export interface DeviceUiNode {
    * it. Tap this instead of the frame centre whenever it is present.
    */
   readonly activationPoint: DeviceUiPoint | null;
+  /**
+   * `accessibilityIdentifier`: the stable, locale-independent handle a test
+   * should target, when the app sets one. Labels change with language and copy.
+   */
+  readonly identifier?: string | null | undefined;
+  /** False for a disabled control; absent is treated as enabled. */
+  readonly enabled?: boolean | undefined;
+  /** Holds keyboard focus: where typed text lands. */
+  readonly focused?: boolean | undefined;
+  /** A selected tab, segment, or row. */
+  readonly selected?: boolean | undefined;
+  /** Placeholder text of an empty field, which iOS also reports as its value. */
+  readonly placeholder?: string | null | undefined;
+  /**
+   * The element reported no usable frame (NaN or infinite, typical of
+   * off-screen SwiftUI content). Its `frame` is zeroed and it is never a tap
+   * target.
+   */
+  readonly unframed?: boolean | undefined;
   readonly children: readonly DeviceUiNode[];
 }
 
@@ -561,6 +585,12 @@ export const DeviceUiNode: Schema.Schema<DeviceUiNode> = Schema.Struct({
   value: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   frame: DeviceUiFrame,
   activationPoint: Schema.NullOr(DeviceUiPoint),
+  identifier: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(512)))),
+  enabled: Schema.optional(Schema.Boolean),
+  focused: Schema.optional(Schema.Boolean),
+  selected: Schema.optional(Schema.Boolean),
+  placeholder: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024)))),
+  unframed: Schema.optional(Schema.Boolean),
   children: Schema.Array(Schema.suspend((): Schema.Schema<DeviceUiNode> => DeviceUiNode)).check(
     Schema.isMaxLength(512),
   ),

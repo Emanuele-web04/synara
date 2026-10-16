@@ -308,16 +308,20 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-HTML visuals execute only in the Beta desktop app, where native subframe navigation is blocked.
+Connectors (`mcp-connectors`) are Beta-only: Stable refuses their RPCs, OAuth callback, and
+proxy routes, hides Settings → Connectors, and never reads the saved `mcp-connectors` secret.
+See [Connectors](docs/mcp-connectors.md).
+
+HTML visuals execute only in the desktop apps (Stable and Beta), where native subframe navigation is blocked.
 HTTP-hosted clients retain native component visuals but never execute HTML. The trusted
 bootstrap removes WebRTC capabilities before page scripts and stops parsing if that boundary
 cannot be enforced. HTML messages cannot open external URLs through the host.
 
-The list currently holds `inline-visuals`: the `synara_show_visual` agent tool,
-its transcript rows, and the `orchestration.getInlineVisual` read. A Stable server
-leaves the tool out of the gateway catalog and the harness policy, refuses the
-read, and the Stable web ignores `visual.shown` activities. Nothing is migrated;
-visual pages and component specs live under the attachments folder of the Beta data home.
+The list currently holds `mcp-connectors`. Inline visuals are available in Stable and Beta:
+the `synara_show_visual` agent tool, its transcript rows, and the `orchestration.getInlineVisual`
+read all use the shared policy. Both native component specs and sandboxed HTML retain their
+existing rendering and interactions. Nothing is migrated; each app keeps visual documents
+under its own attachments directory, without importing Beta data into Stable.
 
 Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi, the rail sidebar layout, and message
 trail sound are available in both apps.

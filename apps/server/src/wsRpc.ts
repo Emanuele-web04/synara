@@ -185,6 +185,7 @@ import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { type McpConnectorError, McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { KeepAwakeService } from "./keepAwake";
@@ -504,6 +505,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const mcpConnectors = yield* McpConnectors;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1291,16 +1293,50 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
-      const requireOwner = Effect.gen(function* () {
-        yield* requireWsOwnerSession;
-        if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+      const requireLoopbackOwner = (message: string) =>
+        Effect.gen(function* () {
+          yield* requireWsOwnerSession;
+          if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+            return yield* Effect.fail(new WsRpcError({ message }));
+          }
+        });
+      const requireOwner = requireLoopbackOwner(
+        "External MCP management is available only on a loopback-only instance.",
+      );
+      // Connectors (Beta): refused on Stable. Sign-in redirects to this
+      // machine's loopback port, so only a loopback-only instance can finish it.
+      const requireConnectorsOwner = Effect.gen(function* () {
+        if (!mcpConnectors.enabled) {
           return yield* Effect.fail(
             new WsRpcError({
-              message: "External MCP management is available only on a loopback-only instance.",
+              message: "Connectors are unavailable on this server.",
+              code: "mcp-connectors-unavailable",
+              retryable: false,
             }),
           );
         }
+        yield* requireLoopbackOwner(
+          "Connectors can be managed only on the computer running Synara.",
+        );
       });
+      const connectorRpc = <A>(
+        effect: Effect.Effect<A, McpConnectorError>,
+        fallbackMessage: string,
+      ) =>
+        requireConnectorsOwner.pipe(
+          Effect.andThen(
+            effect.pipe(
+              Effect.mapError(
+                (error) =>
+                  new WsRpcError({
+                    message: error.message,
+                    ...(error.code ? { code: error.code } : {}),
+                  }),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)),
+        );
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: ({ command }) =>
@@ -2300,6 +2336,19 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.serverListMcpConnectors]: () =>
+          connectorRpc(mcpConnectors.list(), "Failed to list connectors"),
+        [WS_METHODS.serverConnectMcpConnector]: (input) =>
+          connectorRpc(mcpConnectors.connect(input), "Failed to connect"),
+        [WS_METHODS.serverGetMcpConnectorSetup]: () =>
+          connectorRpc(mcpConnectors.setup(), "Failed to read connector setup"),
+        [WS_METHODS.serverDisconnectMcpConnector]: (input) =>
+          connectorRpc(
+            mcpConnectors
+              .disconnect(input.connectorId)
+              .pipe(Effect.map((disconnected) => ({ disconnected }))),
+            "Failed to disconnect",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

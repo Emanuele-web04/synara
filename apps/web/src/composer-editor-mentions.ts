@@ -6,6 +6,7 @@ import {
 import {
   createComposerMentionTokenRegex,
   extractComposerMentionPath,
+  findConnectorProviderMentionReferenceForToken,
   findThreadProviderMentionReferenceForToken,
   isPluginProviderMentionReference,
   providerMentionMatchesToken,
@@ -27,7 +28,7 @@ export type ComposerPromptSegment =
   | {
       type: "mention";
       path: string;
-      kind?: "path" | "plugin" | "thread";
+      kind?: "path" | "plugin" | "thread" | "connector";
       threadId?: string;
       /**
        * Raw token length in the source text (`@name` vs `@"name with spaces"`).
@@ -340,18 +341,24 @@ function splitTextIntoPromptSegments(
         ) ?? false;
       const tokenLength = match.end - match.start;
       const threadId = threadMention ? threadIdFromThreadMentionPath(threadMention.path) : null;
+      const isConnectorMention =
+        !threadMention &&
+        findConnectorProviderMentionReferenceForToken(match.value, options.mentionReferences) !==
+          undefined;
       segments.push(
-        threadMention
-          ? {
-              type: "mention",
-              path: match.value,
-              kind: "thread",
-              ...(threadId !== null ? { threadId } : {}),
-              tokenLength,
-            }
-          : isPluginMention
-            ? { type: "mention", path: match.value, kind: "plugin", tokenLength }
-            : { type: "mention", path: match.value, tokenLength },
+        isConnectorMention
+          ? { type: "mention", path: match.value, kind: "connector", tokenLength }
+          : threadMention
+            ? {
+                type: "mention",
+                path: match.value,
+                kind: "thread",
+                ...(threadId !== null ? { threadId } : {}),
+                tokenLength,
+              }
+            : isPluginMention
+              ? { type: "mention", path: match.value, kind: "plugin", tokenLength }
+              : { type: "mention", path: match.value, tokenLength },
       );
     } else if (match.kind === "slash-command") {
       segments.push({ type: "slash-command", command: match.command });

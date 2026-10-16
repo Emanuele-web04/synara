@@ -43,6 +43,13 @@ export interface OrchestrationThreadMentionContext {
   readonly totalMessageCount: number;
 }
 
+/**
+ * A full thread detail without its activity timeline. The field is removed at
+ * runtime and in the type, so a caller that needs activities fails to compile
+ * instead of silently reading an empty list.
+ */
+export type OrchestrationThreadWithoutActivities = Omit<OrchestrationThread, "activities">;
+
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
   readonly threadCount: number;
@@ -50,6 +57,12 @@ export interface ProjectionSnapshotCounts {
 
 export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
+}
+
+/** Stable ordering key returned by the bounded runtime-reconciliation query. */
+export interface ProjectionStaleInFlightThreadCursor {
+  readonly observedAt: string;
+  readonly threadId: ThreadId;
 }
 
 export interface ProjectionThreadCheckpointContext {
@@ -146,6 +159,22 @@ export interface ProjectionSnapshotQueryShape {
     readonly updatedBefore: string;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
+   * Read the next bounded candidate page in (observedAt, threadId) order.
+   * Carry the returned key even when the planner finds no repair on this page.
+   */
+  readonly listStaleInFlightThreadPage: (input: {
+    readonly updatedBefore: string;
+    readonly limit: number;
+    readonly after?: ProjectionStaleInFlightThreadCursor;
+  }) => Effect.Effect<
+    {
+      readonly threadIds: ReadonlyArray<ThreadId>;
+      readonly nextCursor: ProjectionStaleInFlightThreadCursor | null;
+    },
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read only the columns managed-worktree retention needs, for every thread that
@@ -279,6 +308,20 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+
+  /**
+   * Read the same active thread detail as `getThreadDetailById` (messages,
+   * plans, pending interactions, checkpoints, session, latest turn and summary
+   * flags) without loading the activity timeline, the most expensive part of a
+   * detail read on long threads. Summary flags stay identical because pending
+   * interactions, not activity replay, decide them.
+   */
+  readonly getThreadDetailWithoutActivitiesById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Option.Option<OrchestrationThreadWithoutActivities>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * The bounded slice a `thread://` mention needs: the thread row plus its

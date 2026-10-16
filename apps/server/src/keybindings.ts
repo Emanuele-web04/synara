@@ -229,6 +229,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+shift+u", command: "thread.markUnread", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  // Codex's chord for the same jump; Cmd+Option+Shift+A stays Archive.
+  { key: "mod+alt+a", command: "chat.attention.next", when: "!terminalFocus || isMac" },
   // Open thread tabs, browser-style: Cmd+Ctrl+Left/Right on macOS (Cmd+Shift+Left/Right
   // selects to the line edge in the composer, Cmd+Option+Arrow switches spaces, and
   // xterm never sees a Cmd-chord), and

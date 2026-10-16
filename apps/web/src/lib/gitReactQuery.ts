@@ -10,6 +10,7 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
+import { createActivityRefreshThrottle } from "./activityRefreshThrottle";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
 import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache";
 import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
@@ -406,6 +407,13 @@ export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iter
   const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
   return Promise.all(uniqueCwds.map((cwd) => refreshGitQueriesForCwd(queryClient, cwd)));
 }
+
+/** Event-driven refresh for checkouts that running agents just touched; see activityRefreshThrottle. */
+export const refreshGitQueriesForCwdsAfterActivity = createActivityRefreshThrottle(
+  (queryClient, cwd) => {
+    void refreshGitQueriesForCwd(queryClient, cwd).catch(() => undefined);
+  },
+);
 
 /**
  * Refreshes the given checkouts and resolves once they are fresh; every other cached

@@ -103,3 +103,9 @@ The file contains an ordered JSON array. The last matching rule whose `when` exp
 ```
 
 Supported context keys currently include `terminalFocus`, `terminalOpen`, and `composerFocus`. Expressions support `!`, `&&`, `||`, and parentheses. Invalid rules are ignored and logged by the local server.
+
+## Next chat needing attention
+
+`mod+alt+a` runs `chat.attention.next`: cycle through chats waiting for approval, answers or plan review, then unseen results and reminders. It uses the same attention tiers as Activity. The default binding is available outside focused terminals, or on macOS. Customize it through the normal keybindings settings.
+
+Source evidence: feature head `4b2441d`; `apps/web/src/keybindings.ts`, `apps/server/src/keybindings.ts` and `apps/web/src/components/Sidebar.tsx`.

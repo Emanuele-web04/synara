@@ -150,6 +150,38 @@ describe("DesktopBrowserManager tab switching", () => {
     }
   });
 
+  it.each([false, true])(
+    "restores tab URLs after replacing the window (closed first: %s)",
+    async (closedFirst) => {
+      const pages = [1, 2, 3, 4].map((index) => makeView(420 + index));
+      for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+      const { manager } = makeManager();
+      try {
+        const first = manager.open({ threadId: THREAD_ID, initialUrl: "http://127.0.0.1:8801/" });
+        manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
+        const second = manager.newTab({ threadId: THREAD_ID, url: "http://127.0.0.1:8802/" });
+        await Promise.resolve();
+
+        if (closedFirst) manager.setWindow(null);
+        manager.setWindow({
+          isDestroyed: () => false,
+          contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+        } as never);
+        await Promise.resolve();
+        expect(pages[2]!.contents.getURL()).toBe("http://127.0.0.1:8802/");
+        manager.selectTab({ threadId: THREAD_ID, tabId: first.activeTabId! });
+        await Promise.resolve();
+        expect(pages[3]!.contents.getURL()).toBe("http://127.0.0.1:8801/");
+        expect(manager.getState({ threadId: THREAD_ID }).tabs.map((tab) => tab.id)).toEqual([
+          first.activeTabId,
+          second.activeTabId,
+        ]);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
   it("reveals the incoming page before hiding the outgoing one", () => {
     const pages = [1, 2].map((index) => makeView(410 + index));
     for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);

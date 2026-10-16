@@ -32,13 +32,22 @@ static BOOL SynaraBoolAttribute(id element, NSString *selectorName) {
   return ((BOOL (*)(id, SEL))objc_msgSend)(element, selector);
 }
 
+static BOOL SynaraRectIsFinite(NSRect rect) {
+  return isfinite(rect.origin.x) && isfinite(rect.origin.y) && isfinite(rect.size.width) &&
+         isfinite(rect.size.height);
+}
+
 // `accessibilityValue` is genuinely `id`; anything not JSON-representable is
 // rendered with -description so the tree never fails to serialize.
 static id SynaraJSONValue(id value) {
   if (value == nil) {
     return NSNull.null;
   }
-  if ([value isKindOfClass:NSString.class] || [value isKindOfClass:NSNumber.class]) {
+  if ([value isKindOfClass:NSNumber.class]) {
+    // A NaN or infinite slider value would make the whole tree invalid JSON.
+    return isfinite([value doubleValue]) ? value : [value description];
+  }
+  if ([value isKindOfClass:NSString.class]) {
     return value;
   }
   return [value description] ?: NSNull.null;
@@ -136,6 +145,64 @@ static id SynaraJSONValue(id value) {
 #pragma mark - Tree
 
 - (nullable NSDictionary *)frontmostTreeWithMaxDepth:(NSInteger)maxDepth error:(NSError **)error {
+  id element = [self frontmostElementWithError:error];
+  if (element == nil) {
+    return nil;
+  }
+  return [self serializeElement:element depth:0 maxDepth:maxDepth];
+}
+
+- (nullable NSDictionary *)setFocusedValue:(NSString *)value error:(NSError **)error {
+  id root = [self frontmostElementWithError:error];
+  if (root == nil) {
+    return nil;
+  }
+  id focused = [self focusedElementUnder:root depth:0];
+  if (focused == nil) {
+    if (error) {
+      *error = [NSError errorWithDomain:@"dev.synara.device-helper.ax"
+                                   code:4
+                               userInfo:@{NSLocalizedDescriptionKey: @"no focused element; tap a text field first"}];
+    }
+    return nil;
+  }
+  SEL setter = NSSelectorFromString(@"setAccessibilityValue:");
+  if (![focused respondsToSelector:setter]) {
+    if (error) {
+      *error = [NSError errorWithDomain:@"dev.synara.device-helper.ax"
+                                   code:5
+                               userInfo:@{NSLocalizedDescriptionKey: @"the focused element does not accept a value"}];
+    }
+    return nil;
+  }
+  ((void (*)(id, SEL, id))objc_msgSend)(focused, setter, value);
+  NSString *role = SynaraStringAttribute(focused, @"accessibilityRole");
+  return @{@"role": role ?: @"Unknown"};
+}
+
+/// Depth-first search for the element holding keyboard focus. Bounded like the
+/// serializer so a pathological tree cannot run away.
+- (nullable id)focusedElementUnder:(id)element depth:(NSInteger)depth {
+  if (SynaraBoolAttribute(element, @"isAccessibilityFocused")) {
+    return element;
+  }
+  if (depth >= 40) {
+    return nil;
+  }
+  id children = SynaraMsgSend0(element, @"accessibilityChildren");
+  if (![children isKindOfClass:NSArray.class]) {
+    return nil;
+  }
+  for (id child in (NSArray *)children) {
+    id found = [self focusedElementUnder:child depth:depth + 1];
+    if (found != nil) {
+      return found;
+    }
+  }
+  return nil;
+}
+
+- (nullable id)frontmostElementWithError:(NSError **)error {
   if (_translator == nil) {
     if (error) {
       *error = [NSError errorWithDomain:@"dev.synara.device-helper.ax"
@@ -187,7 +254,7 @@ static id SynaraJSONValue(id value) {
     return nil;
   }
 
-  return [self serializeElement:element depth:0 maxDepth:maxDepth];
+  return element;
 }
 
 - (NSDictionary *)serializeElement:(id)element depth:(NSInteger)depth maxDepth:(NSInteger)maxDepth {
@@ -221,12 +288,19 @@ static id SynaraJSONValue(id value) {
   SEL frameSelector = NSSelectorFromString(@"accessibilityFrame");
   if ([element respondsToSelector:frameSelector]) {
     NSRect frame = ((NSRect (*)(id, SEL))objc_msgSend)(element, frameSelector);
-    node[@"frame"] = @{
-      @"x": @(frame.origin.x),
-      @"y": @(frame.origin.y),
-      @"width": @(frame.size.width),
-      @"height": @(frame.size.height),
-    };
+    // Off-screen and lazily laid-out elements (SwiftUI especially) report NaN
+    // or infinite frames. Those are not JSON, and they are not a place to tap
+    // either, so the frame is omitted and the node is marked unframed.
+    if (SynaraRectIsFinite(frame)) {
+      node[@"frame"] = @{
+        @"x": @(frame.origin.x),
+        @"y": @(frame.origin.y),
+        @"width": @(frame.size.width),
+        @"height": @(frame.size.height),
+      };
+    } else {
+      node[@"unframed"] = @YES;
+    }
   }
 
   // UIKit merges a settings row and the control it contains into ONE element
@@ -236,7 +310,8 @@ static id SynaraJSONValue(id value) {
   SEL activationSelector = NSSelectorFromString(@"accessibilityActivationPoint");
   if ([element respondsToSelector:activationSelector]) {
     NSPoint point = ((NSPoint (*)(id, SEL))objc_msgSend)(element, activationSelector);
-    if (!CGPointEqualToPoint(NSPointToCGPoint(point), CGPointZero)) {
+    if (isfinite(point.x) && isfinite(point.y) &&
+        !CGPointEqualToPoint(NSPointToCGPoint(point), CGPointZero)) {
       node[@"activationPoint"] = @{@"x": @(point.x), @"y": @(point.y)};
     }
   }
@@ -251,6 +326,18 @@ static id SynaraJSONValue(id value) {
   }
 
   node[@"enabled"] = @(SynaraBoolAttribute(element, @"isAccessibilityEnabled"));
+  // Sent only when set, to keep the tree small: a focused field is where typed
+  // text lands, and a selected tab or segment is state an agent must verify.
+  if (SynaraBoolAttribute(element, @"isAccessibilityFocused")) {
+    node[@"focused"] = @YES;
+  }
+  if (SynaraBoolAttribute(element, @"isAccessibilitySelected")) {
+    node[@"selected"] = @YES;
+  }
+  NSString *placeholder = SynaraStringAttribute(element, @"accessibilityPlaceholderValue");
+  if (placeholder.length > 0) {
+    node[@"placeholder"] = placeholder;
+  }
 
   if (depth >= maxDepth) {
     // Depth-capped rather than dropped, so a pathological tree still returns.

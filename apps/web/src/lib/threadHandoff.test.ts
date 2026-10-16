@@ -14,6 +14,8 @@ import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   canContinueThreadHandoff,
+  deriveBlockedProviderHandoff,
+  ProviderHandoffBackgroundTasksError,
   resolveAvailableHandoffTargets,
   resolveProviderHandoffOutcome,
   resolveThreadHandoffAvailability,
@@ -58,6 +60,124 @@ describe("threadHandoff", () => {
         "cmd-1",
       ),
     ).toEqual({ status: "failed", detail: "Claude could not start." });
+    expect(
+      resolveProviderHandoffOutcome(
+        {
+          activities: [
+            activity("provider-handoff-failed:cmd-1", {
+              detail: "Claude still has background tasks running in this thread.",
+              reason: "background-tasks",
+            }),
+          ],
+        },
+        "cmd-1",
+      ),
+    ).toEqual({
+      status: "failed",
+      detail: "Claude still has background tasks running in this thread.",
+      blockedByBackgroundTasks: true,
+    });
+  });
+
+  describe("deriveBlockedProviderHandoff", () => {
+    const claude: ModelSelection = { provider: "claudeAgent", model: "claude-sonnet-4-6" };
+    const codex: ModelSelection = { provider: "codex", model: "gpt-5.5" };
+    const handoffActivity = (
+      id: string,
+      kind: "provider.handoff" | "provider.handoff.failed",
+      createdAt: string,
+      extra: Record<string, unknown> = {},
+    ) =>
+      ({
+        id: EventId.makeUnsafe(id),
+        tone: kind === "provider.handoff" ? "info" : "error",
+        kind,
+        summary: "Handoff summary",
+        payload: {
+          sourceProvider: "claudeAgent",
+          sourceModel: claude.model,
+          targetProvider: "codex",
+          targetModel: codex.model,
+          sourceModelSelection: claude,
+          targetModelSelection: codex,
+          ...extra,
+        },
+        turnId: null,
+        createdAt,
+      }) as Thread["activities"][number];
+    const blocked = handoffActivity(
+      "provider-handoff-failed:cmd-1",
+      "provider.handoff.failed",
+      "2026-10-14T10:00:00.000Z",
+      { reason: "background-tasks", detail: "Claude still has background tasks running." },
+    );
+    const latestTurn = (requestedAt: string) =>
+      ({
+        turnId: "turn-1",
+        state: "error",
+        requestedAt,
+        startedAt: requestedAt,
+        completedAt: requestedAt,
+        assistantMessageId: null,
+      }) as unknown as Thread["latestTurn"];
+
+    it("surfaces the latest handoff refused by background tasks", () => {
+      const result = deriveBlockedProviderHandoff({
+        activities: [blocked],
+        latestTurn: latestTurn("2026-10-14T09:59:00.000Z"),
+        modelSelection: claude,
+      });
+      expect(result?.activityId).toBe("provider-handoff-failed:cmd-1");
+      expect(result?.info.targetModelSelection).toEqual(codex);
+    });
+
+    it("ignores other failures, later handoffs, newer turns, and a moved thread", () => {
+      const otherFailure = handoffActivity(
+        "provider-handoff-failed:cmd-2",
+        "provider.handoff.failed",
+        "2026-10-14T10:00:00.000Z",
+        { detail: "Codex could not start." },
+      );
+      const completed = handoffActivity(
+        "provider-handoff:cmd-3",
+        "provider.handoff",
+        "2026-10-14T10:01:00.000Z",
+      );
+      expect(
+        deriveBlockedProviderHandoff({
+          activities: [otherFailure],
+          latestTurn: null,
+          modelSelection: claude,
+        }),
+      ).toBeNull();
+      expect(
+        deriveBlockedProviderHandoff({
+          activities: [blocked, completed],
+          latestTurn: null,
+          modelSelection: claude,
+        }),
+      ).toBeNull();
+      expect(
+        deriveBlockedProviderHandoff({
+          activities: [blocked],
+          latestTurn: latestTurn("2026-10-14T10:05:00.000Z"),
+          modelSelection: claude,
+        }),
+      ).toBeNull();
+      expect(
+        deriveBlockedProviderHandoff({
+          activities: [blocked],
+          latestTurn: null,
+          modelSelection: codex,
+        }),
+      ).toBeNull();
+    });
+
+    it("names both providers in the refusal error", () => {
+      expect(new ProviderHandoffBackgroundTasksError("claudeAgent", "codex").message).toBe(
+        "Claude still has background tasks running in this thread, so it cannot switch to Codex yet.",
+      );
+    });
   });
 
   it("continues in the same thread only when the provider changes", () => {

@@ -37,6 +37,9 @@ enum SymbolKind {
   case objcProtocol
   /// A C function in SimulatorKit, via `dlsym`.
   case simulatorKitFunction
+  /// A C function already loaded in this process (libxpc), via
+  /// `dlsym(RTLD_DEFAULT)`.
+  case processFunction
   /// A selector that must exist on a resolved class.
   case selector(onClass: String)
   /// A selector declared by a protocol. The concrete display classes are
@@ -45,12 +48,23 @@ enum SymbolKind {
   case protocolSelector(onProtocol: String)
 }
 
+/// The HID path a symbol belongs to; see `DTUHIDTransport.h`.
+enum HIDTransportKind {
+  case indigo
+  case dtuhid
+}
+
 struct RuntimeSymbol {
   let name: String
   let kind: SymbolKind
   let capability: HelperCapability
   /// Why the helper needs it, surfaced in diagnostics.
   let purpose: String
+  /// Set for a HID symbol only one transport uses. A toolchain needs the
+  /// symbols of the transport it selects, not both: Xcode 27 still ships the
+  /// Indigo builders, and passing a probe on them is how input looked healthy
+  /// while every event was dropped.
+  var transport: HIDTransportKind? = nil
 }
 
 /// Every runtime-resolved symbol, grouped by the capability it supports.
@@ -90,13 +104,23 @@ enum SymbolManifest {
         + "HID client would otherwise swallow input silently"),
     RuntimeSymbol(
       name: "IndigoHIDMessageForButton", kind: .simulatorKitFunction, capability: .hid,
-      purpose: "builds hardware button events"),
+      purpose: "builds hardware button events", transport: .indigo),
     RuntimeSymbol(
       name: "IndigoHIDMessageForKeyboardArbitrary", kind: .simulatorKitFunction, capability: .hid,
-      purpose: "builds key events from USB HID usage codes"),
+      purpose: "builds key events from USB HID usage codes", transport: .indigo),
     RuntimeSymbol(
       name: "IndigoHIDMessageForMouseNSEvent", kind: .simulatorKitFunction, capability: .hid,
-      purpose: "seeds the touch event the helper rewrites into a digitizer message"),
+      purpose: "seeds the touch event the helper rewrites into a digitizer message",
+      transport: .indigo),
+    RuntimeSymbol(
+      name: "lookup:error:", kind: .selector(onClass: "SimDevice"), capability: .hid,
+      purpose: "finds the guest's dtuhidd HID service", transport: .dtuhid),
+    RuntimeSymbol(
+      name: "xpc_endpoint_create_mach_port_4sim", kind: .processFunction, capability: .hid,
+      purpose: "wraps the guest service port in an XPC endpoint", transport: .dtuhid),
+    RuntimeSymbol(
+      name: "xpc_connection_enable_sim2host_4sim", kind: .processFunction, capability: .hid,
+      purpose: "lets dtuhidd accept payloads from the host", transport: .dtuhid),
 
     // ── Accessibility ────────────────────────────────────────────────
     RuntimeSymbol(
@@ -119,7 +143,8 @@ enum SymbolManifest {
   ]
 
   static func symbols(for capability: HelperCapability) -> [RuntimeSymbol] {
-    all.filter { $0.capability == capability }
+    let transport: HIDTransportKind = SynaraCoreSimulatorUsesDTUHID() ? .dtuhid : .indigo
+    return all.filter { $0.capability == capability && ($0.transport ?? transport) == transport }
   }
 }
 

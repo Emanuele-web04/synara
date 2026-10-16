@@ -513,6 +513,26 @@ function readPersistedContinuationResetRequested(
   return runtimePayloadRecord(runtimePayload).continuationResetRequested === true;
 }
 
+// Claude launch options that only change how the runtime behaves. They never
+// decide which native session store or account owns a resume cursor, so
+// changing one in Settings (Artifacts, for example) must keep existing threads
+// resumable. Home, binary, and environment still have to match.
+function continuationOwningProviderOptions(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): unknown {
+  if (provider !== "claudeAgent" || options?.claudeAgent === undefined) {
+    return options?.[provider];
+  }
+  const {
+    enableArtifacts: _enableArtifacts,
+    maxThinkingTokens: _maxThinkingTokens,
+    permissionMode: _permissionMode,
+    ...owning
+  } = options.claudeAgent;
+  return Object.keys(owning).length > 0 ? owning : undefined;
+}
+
 function providerStartOptionsEqualForProvider(
   provider: ProviderKind,
   credentialsFingerprintKey: Uint8Array,
@@ -529,7 +549,10 @@ function providerStartOptionsEqualForProvider(
     | ProviderStartOptions
     | undefined;
   return (
-    isDeepStrictEqual(persistedOptions?.[provider], currentOptions?.[provider]) &&
+    isDeepStrictEqual(
+      continuationOwningProviderOptions(provider, persistedOptions),
+      continuationOwningProviderOptions(provider, currentOptions),
+    ) &&
     persisted.credentialsFingerprint ===
       credentialsFingerprintForProvider(provider, current, credentialsFingerprintKey)
   );

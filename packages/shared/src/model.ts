@@ -564,12 +564,26 @@ export function getProviderOptionDescriptors(input: {
   const descriptors =
     input.caps.optionDescriptors?.map(cloneProviderOptionDescriptor) ??
     legacyCapabilityDescriptors(input.provider, input.caps);
-  return descriptors.map((descriptor) =>
-    withProviderOptionCurrentValue(
-      descriptor,
+  return descriptors.map((descriptor) => {
+    let resolvedDescriptor = descriptor;
+    // Remove the synthetic default also from catalogs cached by the old Claude adapter.
+    if (
+      input.provider === "claudeAgent" &&
+      descriptor.type === "select" &&
+      descriptor.id === "effort"
+    ) {
+      const { currentValue, ...rest } = descriptor;
+      resolvedDescriptor = {
+        ...rest,
+        options: descriptor.options.filter((option) => option.id !== "default"),
+        ...(currentValue && currentValue !== "default" ? { currentValue } : {}),
+      };
+    }
+    return withProviderOptionCurrentValue(
+      resolvedDescriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
-    ),
-  );
+    );
+  });
 }
 
 export function getProviderOptionCurrentValue(
@@ -853,8 +867,8 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
+  caps: ModelCapabilities = getModelCapabilities("claudeAgent", model),
 ): ClaudeModelOptions | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
   const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
@@ -920,12 +934,10 @@ interface ClaudeSpawnProfile {
 // Claude's live flag settings do not refresh the runtime auto-compaction window.
 // Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
-  const caps = getModelCapabilities("claudeAgent", selection.model);
+  // Max is spawn-fixed even for models first discovered by a newer CLI.
+  // The adapter/CLI validates support; the static catalog must not hide a restart.
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
-  const effort =
-    requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
-      ? requestedEffort
-      : null;
+  const effort = requestedEffort && isClaudeCodeEffort(requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
     autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
