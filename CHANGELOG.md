@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.6-remote.14 — 2026-10-16
+
+### Added
+
+- Dedicated Windows x64 installer and Linux x64 AppImage alongside the macOS Apple Silicon app. Remote has its own Windows installer registration and Linux executable, data home and update feeds, separate from Stable and Beta.
+
+### Fixed
+
+- Fresh Remote installations use the working hosted account service automatically. The previous default returned 404 for email and social sign-in; operator launch overrides on our Macs masked the problem. Self-hosted overrides and the issuer of existing saved sessions are preserved.
+
+### Verification
+
+- Packaging/configuration tests cover isolated app identities, complete three-platform publication, feed isolation and exact-source artifact checkpoints. Startup qualification removes any inherited account URL override.
+- Publication requires exact-tag quality/server gates, signed/notarized macOS packaging, native Windows/Linux startup and Windows Defender qualification. Windows uses the existing exact-version unsigned policy; an unsigned installer may show SmartScreen. These checks do not establish Windows publisher reputation or qualify every Linux distribution.
+- Product analytics remain opt-in and collect no chat content. Desktop provider buckets are Codex, Claude and Other; native provider/token and completion coverage is still incomplete. TestFlight 0.1 (136) is unchanged and remains compatible. Remote account enrollment is still required separately from login.
+
 ## 1.0.6-remote.13 — 2026-10-16
 
 ### Fixed

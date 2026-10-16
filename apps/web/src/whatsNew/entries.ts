@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.14",
+    date: "Oct 16",
+    features: [
+      {
+        id: "hosted-sign-in",
+        title: "Sign in on a fresh install",
+        description:
+          "Remote now reaches its hosted account service automatically, fixing sign-in errors on freshly installed apps. Existing account sessions and local chats are preserved.",
+      },
+      {
+        id: "windows-linux-remote",
+        title: "Remote for Windows and Linux",
+        description:
+          "Windows x64 and Linux x64 join Mac Apple Silicon with separate Remote installers, app data and update feeds. Windows installers are unsigned and may show a system warning.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.13",
     date: "Oct 16",
     features: [
