@@ -228,6 +228,7 @@ import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagno
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
 import { requireWsOwnerSession } from "./wsOwnerAuthorization";
+import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
@@ -1439,7 +1440,7 @@ const makeWsRpcHandlersLayer = () =>
       );
       // Connectors (Beta): refused on Stable. Sign-in redirects to this
       // machine's loopback port, so only a loopback-only instance can finish it.
-      const requireConnectorsOwner = Effect.gen(function* () {
+      const requireConnectorsEnabled = Effect.gen(function* () {
         if (!mcpConnectors.enabled) {
           return yield* Effect.fail(
             new WsRpcError({
@@ -1449,10 +1450,37 @@ const makeWsRpcHandlersLayer = () =>
             }),
           );
         }
-        yield* requireLoopbackOwner(
-          "Connectors can be managed only on the computer running Synara.",
-        );
       });
+      const requireConnectorsOwner = requireConnectorsEnabled.pipe(
+        Effect.andThen(
+          requireLoopbackOwner("Connectors can be managed only on the computer running Synara."),
+        ),
+      );
+      // Paired devices may read the list to mention a connector; managing one stays
+      // with the owner here. Anyone else sees each URL cut to its origin.
+      const listConnectorsForSession = requireConnectorsEnabled.pipe(
+        Effect.andThen(
+          requireLoopbackOwner("").pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          ),
+        ),
+        Effect.flatMap((isOwner) =>
+          mcpConnectors.list().pipe(
+            Effect.map((connectors) =>
+              isOwner ? connectors : connectorsForPairedClient(connectors),
+            ),
+            Effect.mapError(
+              (error) =>
+                new WsRpcError({
+                  message: error.message,
+                  ...(error.code ? { code: error.code } : {}),
+                }),
+            ),
+          ),
+        ),
+        Effect.mapError((cause) => toWsRpcError(cause, "Failed to list connectors")),
+      );
       const connectorRpc = <A>(
         effect: Effect.Effect<A, McpConnectorError>,
         fallbackMessage: string,
@@ -2502,8 +2530,7 @@ const makeWsRpcHandlersLayer = () =>
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
           ),
-        [WS_METHODS.serverListMcpConnectors]: () =>
-          connectorRpc(mcpConnectors.list(), "Failed to list connectors"),
+        [WS_METHODS.serverListMcpConnectors]: () => listConnectorsForSession,
         [WS_METHODS.serverConnectMcpConnector]: (input) =>
           connectorRpc(mcpConnectors.connect(input), "Failed to connect"),
         [WS_METHODS.serverGetMcpConnectorSetup]: () =>

@@ -1187,3 +1187,76 @@ release. The `.10` tag and artifacts were not overwritten.
 The post-tag branch passes 115 affected unit/guard tests, 35 browser tests,
 formatting, lint and twelve-package typecheck; this is source verification,
 not qualification or installation of a package containing `43d11d5`.
+
+### 2026-10-16 — Remote .11 published and installed on both Macs
+
+[Remote .11](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.11),
+source `94d1a95`, now includes `43d11d5`. Quoted/bracketed remote chat identifiers
+are escaped before hover-anchor lookup, and classic Projects, Pinned and Chats
+reuse the existing local/Activity preview. The candidate passes 121 unit/guard
+and 35 browser tests plus formatting, lint, twelve-package typecheck, brand and
+release smoke. Workflow `38902469458` passed every quality/server gate,
+signed/notarized macOS ARM64 packaging and packaged startup. All four public
+asset digests, provenance, source and lockfile match; strict app/DMG signatures,
+Developer ID, Gatekeeper and stapled tickets pass independent verification.
+Stable Latest stays `v1.0.5`, and historical `v0.4.2` release metadata is unchanged.
+No Stable/Beta website download snapshot changes are needed for the Remote lane.
+
+The Mini runs `.11` after a normal shutdown and a fresh `.10` backup, with the
+`.10` bundle retained for rollback. All 53 original chats, 232 messages, 99 turns,
+eight projects, its plan and 14,667 orchestration events remain intact. The local
+smoke adds one chat, two messages and one turn; its exact reply
+`SYNARA_REMOTE11_MINI_OK` completes in 4.4 seconds, survives Reload and is persisted
+after normal quit. Identity bytes and trust authorizations are unchanged; only
+an original chat's `updated_at` and a trust connection timestamp advanced.
+
+After the user unlocked the MacBook, its independently verified `.11` package
+was installed after a normal quit, with a new consistent `.10` backup and
+rollback bundle. All 107 chats, 1,763 messages, 363 turns, attachments, account,
+identity bytes and pairing authorizations are retained. Three older events were
+removed by the bounded runtime log and internal checkpoints advanced; these are
+recorded separately from the unchanged user history. Both desktop apps are left
+running.
+
+MacBook reconnects to Mini over Cloudflare and creates chat
+`0bad5420-971e-48af-b44f-88cd416c05ff`. Its exact reply
+`SYNARA_REMOTE11_MACBOOK_TO_MINI_OK` survives reopening and is independently read
+from the Mini. The first MacBook Reload encountered a handshake error and
+recovered with the existing Retry action; the second Reload succeeded without
+intervention. The cause of the first failure is not established, so this is not
+an unconditional reload-reliability claim. MacBook tunnel health is HTTP 200,
+also independently verified from Mini after installation.
+
+The browser hover regression passes, including remote ids containing quotes and
+brackets. Manual hover remains unverified because the available computer-use
+controls expose no hover action; no unsupported input or JavaScript injection
+was used. No force quit, new login, trust reset or physical-phone operation was
+needed. Native contracts and APIs are unchanged, so TestFlight 135 remains
+compatible and no additional iPhone/iPad build was uploaded for this fix.
+
+### Native composer update — build 136 available in TestFlight
+
+The later iOS commits `6823429` and `4909297` add the runtime capsule and
+connector/plugin/file mention discovery. Both native branches now include them
+and the cancellation/reconnect footer repair in `6270958`. Universal version
+`0.1 (136)` passed archive, distribution signing, iPhone/iPad device-family and
+production APNs checks; Xcode uploaded it successfully and Apple's email confirms
+processing completed at 14:57:51 UTC. After the user restored the Apple browser
+login, build 136 was assigned to the existing Synara Early Access internal group
+(one tester), with test notes saved. App Store Connect confirms the assignment:
+install `0.1 (136)` in TestFlight on iPhone or iPad. No new tester, App Store
+Connect API key, paid service or agreement was added. External Beta Review remains
+separate.
+
+Core: 319 tests pass; desktop contracts: 86 fixtures pass. The iPad simulator
+focused pass has 41 passes and one isolated-fixture skip. The extended iPhone
+pass has 62 passes, one skip and five failing legacy connection cases (six
+assertions), recorded explicitly in the native handoff. The two repaired footer
+regressions pass. A real paired iPhone simulator reconnects to both Macs,
+discovers and selects README from the Mini, and receives `SYNARA136_IPHONE_OK`.
+iPad launch/onboarding was checked, but that simulator has no real host paired.
+No physical iPhone or production push-delivery test was performed.
+
+The native connector list needs desktop `d322f6e`, which is newer than installed
+Remote `.11`. Older hosts omit connector suggestions safely. No new desktop
+release was published as part of this native build.
