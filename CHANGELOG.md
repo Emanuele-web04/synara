@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.6 — 2026-10-16
+
+**Faster long conversations, smoother parallel work and safer provider recovery.**
+
+This Stable patch covers all 16 commits after `v1.0.5` through `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`, including the intervening Beta notes. Connectors and diagnostics remain Beta-only; application identities, data homes and update feeds remain separate.
+
+### Added
+
+- Claude model controls can use effort, adaptive-thinking and fast-mode metadata from the installed CLI, including models newer than the fallback catalog. Unset effort leaves Claude Code's default in charge; older CLIs retain fallbacks for omitted fields.
+
+### Changed
+
+- Long conversations avoid repeated activity-history scans and full-detail reads on streaming and checkpoint paths. Full history, outstanding requests and the latest task snapshots remain available.
+- Parallel streams avoid redundant replay polls while live events arrive. Repository and workspace-file refreshes are throttled with a final trailing read. RPCs wait in bounded FIFO queues by request class before consuming server capacity; cancellation, deadlines and uncertain-delivery safeguards remain enforced.
+- The misleading server-busy popup and client heartbeat are removed. Reconnect notices, local event-loop monitoring, health probes and operator status remain.
+
+### Fixed
+
+- Runtime reconciliation keeps the actual live turn owner, serializes reconciliation passes and pages through stale candidates rather than repeatedly inspecting only the first batch.
+- Provider handoffs settle known durable outcomes beyond the native-call deadline without replaying stop/start side effects. Post-native persistence failures remain uncertain.
+- Partial or fallback model catalogs no longer overwrite or persist over complete discovery. They retry on demand after a thirty-second cooldown. The cache format upgrade discards the old catalog snapshot once; accounts, selected models and sessions remain intact.
+- Antigravity quota lookup uses the matching OAuth client and quota-summary endpoint, with legacy fallback.
+- The ASCII pattern fades around the composer and stays out of the input during ripples; command menus remain opaque.
+- Git diff and worktree-transfer commands pin `a/` and `b/` path prefixes despite user Git configuration.
+- Codex internal moderation metadata no longer creates chat activity rows. Native logs retain it when enabled; real provider errors and historical rows remain.
+- Release migration-lineage checks isolate unrelated Remote prerelease history.
+
+### Verification
+
+The complete candidate is qualified by the local release preparation checks and one publication workflow on the exact tag SHA. Public release notes record their actual results after publication; pending native signing, notarization, startup, Defender and provenance gates are not presented as passed.
+
+The documentation audit updates provider controls, model-cache recovery, parallel request behavior and public troubleshooting. See [source audit](docs/releases/1.0.6-source-audit.md). Source tests and packaged startup do not establish manual installed-app upgrades, live-provider behavior, microphone behavior or browser-download reputation.
+
 ## 1.0.6-beta.1 — 2026-10-15
 
 **Connectors, a compact composer, clearer Activity and the full reliability work since the previous Beta.**
