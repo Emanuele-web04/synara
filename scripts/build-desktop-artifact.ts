@@ -329,9 +329,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
   });
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
-  if (flavor === "remote" && arch !== "arm64") {
+  if (flavor === "remote" && (platform === "mac" ? arch !== "arm64" : arch !== "x64")) {
     return yield* new BuildScriptError({
-      message: "Synara Remote artifacts are currently supported on macOS ARM64 only.",
+      message: "Synara Remote supports macOS ARM64 and Windows/Linux x64 artifacts.",
     });
   }
   const version = mergeOptions(input.buildVersion, env.version, undefined);

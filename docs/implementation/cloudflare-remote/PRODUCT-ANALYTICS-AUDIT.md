@@ -1,4 +1,24 @@
-# Product analytics implementation — 5 October 2026
+# Product analytics implementation
+
+## Audit — 16 October 2026
+
+- The common Electron sender supports macOS, Windows and Linux. Analytics remain
+  **off by default** on every installation; the Settings switch is required.
+- Desktop records accepted/failed chat requests and observed live terminal turns,
+  including available input/output/cache-read tokens. Provider buckets are Codex,
+  Claude and Other: other runtimes cannot be distinguished yet, and specific model
+  names are not collected. Request acknowledgement is not a completed response.
+- iPhone/iPad currently send request outcomes, feature, connection and startup
+  observations. Their sender has no provider/token fields and no terminal-turn
+  observer. Native usage breakdowns are therefore **not complete**. This release
+  does not silently enable analytics or claim to close that native gap.
+- Counts are consent-dependent client observations, not globally unique messages:
+  two installations observing one execution can each report it. Retries of the
+  same event UUID deduplicate in D1. Prompt/reply text is never part of this path.
+- Account profile/Inbox usage in Supabase is separate from product analytics in
+  Cloudflare D1. The existing Beta-only crash/usage diagnostic rules are unchanged.
+
+## Initial implementation — 5 October 2026
 
 Default-off product analytics for desktop Stable/Beta and native iPhone/iPad,
 using the existing Cloudflare service. Existing Beta crash diagnostics remain

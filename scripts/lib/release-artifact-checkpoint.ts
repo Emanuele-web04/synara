@@ -131,8 +131,7 @@ export async function verifyReleaseArtifactCheckpoint(
     (input.platform !== "mac" && input.arch !== "x64") ||
     !["production", "beta", "remote"].includes(input.flavor) ||
     (input.flavor === "remote" &&
-      (input.platform !== "mac" ||
-        input.arch !== "arm64" ||
+      ((input.platform === "mac" && input.arch !== "arm64") ||
         !/^\d+\.\d+\.\d+-remote(?:\.|$)/.test(input.version))) ||
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(input.version) ||
     !/^[0-9a-f]{40}$/i.test(input.sourceCommit) ||

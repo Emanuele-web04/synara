@@ -299,6 +299,8 @@ export function createPackagedDesktopSmokeEnvironment(
     ELECTRON_ENABLE_LOGGING: "1",
   };
   delete env.SYNARA_AUTH_TOKEN;
+  // Qualify the installer's account default, not the release operator's override.
+  delete env.SYNARA_ACCOUNT_URL;
   delete env.ELECTRON_RUN_AS_NODE;
   for (const path of [
     env.HOME,

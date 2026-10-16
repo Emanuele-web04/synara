@@ -62,6 +62,8 @@ export interface SynaraDesktopIdentity {
   readonly entryUrl: string;
   readonly userDataDirectoryName: string;
   readonly defaultHomeDirectoryName: string;
+  /** Hosted account service for this flavor, unless the operator explicitly overrides it. */
+  readonly defaultAccountUrl?: string;
   readonly usesScriptedUpdates: boolean;
 }
 
@@ -182,6 +184,7 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
       entryUrl: SYNARA_REMOTE_DESKTOP_ENTRY_URL,
       userDataDirectoryName: "synara-remote",
       defaultHomeDirectoryName: ".synara-remote",
+      defaultAccountUrl: "https://synara-account-api-trial.synara-orgs.workers.dev",
       usesScriptedUpdates: false,
     };
   }

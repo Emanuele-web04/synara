@@ -4080,6 +4080,7 @@ function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
   const migrationDivergenceConsent = migrationConsentHandoff.take();
+  const accountUrl = process.env.SYNARA_ACCOUNT_URL?.trim() || desktopIdentity.defaultAccountUrl;
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -4106,12 +4107,9 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-    // Remote-host wiring is operator configuration, not app state: the account
-    // service to sign in against and the bundled remote connector. Passed
-    // through only when set so a plain launch keeps the defaults.
-    ...(process.env.SYNARA_ACCOUNT_URL
-      ? { SYNARA_ACCOUNT_URL: process.env.SYNARA_ACCOUNT_URL }
-      : {}),
+    // Remote must reach its account service on a normal Finder/Explorer launch;
+    // an explicit self-hosted URL still wins and saved sessions keep their issuer.
+    ...(accountUrl ? { SYNARA_ACCOUNT_URL: accountUrl } : {}),
     ...(app.isPackaged
       ? {
           SYNARA_CLOUDFLARED_PATH: Path.join(

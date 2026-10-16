@@ -647,8 +647,15 @@ jobs:
           files: |
             release-assets/Synara-Remote-*.dmg
             release-assets/Synara-Remote-*.zip
+            release-assets/Synara-Remote-*.exe
+            release-assets/Synara-Remote-*.exe.blockmap
+            release-assets/Synara-Remote-*.AppImage
             release-assets/remote-mac.yml
+            release-assets/remote.yml
+            release-assets/remote-linux.yml
             release-assets/artifact-mac-arm64.provenance.json
+            release-assets/artifact-win-x64.provenance.json
+            release-assets/artifact-linux-x64.provenance.json
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed

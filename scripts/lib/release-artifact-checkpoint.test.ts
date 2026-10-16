@@ -21,7 +21,7 @@ function checkpoint(
   const assetsDirectory = mkdtempSync(join(tmpdir(), "synara-checkpoint-"));
   roots.push(assetsDirectory);
   const version = flavor === "production" ? "1.2.3" : `1.2.3-${flavor}.1`;
-  const arch = flavor === "remote" ? "arm64" : "x64";
+  const arch = flavor === "remote" && platform === "mac" ? "arm64" : "x64";
   // Electron Builder's AppImage target emits x86_64 while provenance records x64.
   const nativeFileArch = platform === "linux" ? "x86_64" : arch;
   const productName = { production: "Synara", beta: "Synara-Beta", remote: "Synara-Remote" }[
@@ -138,11 +138,13 @@ describe("same-run release artifact checkpoint", () => {
   it.each([
     ["linux", "production"],
     ["linux", "beta"],
+    ["linux", "remote"],
     ["mac", "production"],
     ["mac", "beta"],
     ["mac", "remote"],
     ["win", "production"],
     ["win", "beta"],
+    ["win", "remote"],
   ] as const)(
     "accepts the native producer's %s %s payload and its full inventory",
     async (platform, flavor) => {
@@ -158,11 +160,7 @@ describe("same-run release artifact checkpoint", () => {
       await expect(verifyReleaseArtifactCheckpoint({ ...input, flavor })).rejects.toThrow(
         "unexpected or duplicate artifact name",
       );
-    for (const change of [
-      { arch: "x64" },
-      { platform: "win" as const, target: "nsis", arch: "x64" },
-      { version: "1.2.3", sourceTag: "v1.2.3" },
-    ])
+    for (const change of [{ arch: "x64" }, { version: "1.2.3", sourceTag: "v1.2.3" }])
       await expect(verifyReleaseArtifactCheckpoint({ ...input, ...change })).rejects.toThrow(
         "Invalid expected release checkpoint identity",
       );

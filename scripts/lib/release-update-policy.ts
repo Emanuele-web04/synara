@@ -121,9 +121,7 @@ export function channelManifestNames(channel: string): readonly string[] {
   if (!CHANNEL_PATTERN.test(channel) || channel === "latest") {
     throw new Error(`Invalid dedicated update channel: ${channel}`);
   }
-  return channel === "remote"
-    ? ["remote-mac.yml"]
-    : [`${channel}-mac.yml`, `${channel}.yml`, `${channel}-linux.yml`];
+  return [`${channel}-mac.yml`, `${channel}.yml`, `${channel}-linux.yml`];
 }
 
 function copyChannelManifests(
@@ -154,20 +152,16 @@ export function prepareReleaseUpdateManifests(
   const normalizedConfig = validateReleaseUpdatePolicyConfig(config);
   const channel = channelOverride ?? normalizedConfig.channel;
   if (channel === "remote") {
-    // Remote currently ships only Mac ARM64. Never publish Latest aliases or
-    // accidentally mix another platform's feed into this isolated prerelease.
+    // Remote requires all supported platforms, with no Latest/Stable aliases.
     if (normalizedConfig.lane !== "clean")
       throw new Error("Remote releases require the clean release lane.");
-    const sourceName = "latest-mac.yml";
-    if (!existsSync(resolve(assetDirectory, sourceName)))
-      throw new Error("Remote release is missing update manifest: latest-mac.yml");
-    if (
-      ["latest.yml", "latest-linux.yml"].some((name) => existsSync(resolve(assetDirectory, name)))
-    )
-      throw new Error("Remote releases support macOS ARM64 assets only.");
+    const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"];
+    const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
+    if (missing.length > 0)
+      throw new Error(`Remote release is missing update manifests: ${missing.join(", ")}`);
     const destinationNames = channelManifestNames("remote");
-    copyChannelManifests(assetDirectory, [sourceName], destinationNames);
-    unlinkSync(resolve(assetDirectory, sourceName));
+    copyChannelManifests(assetDirectory, sourceNames, destinationNames);
+    for (const sourceName of sourceNames) unlinkSync(resolve(assetDirectory, sourceName));
     return destinationNames;
   }
   const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;

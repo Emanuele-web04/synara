@@ -14,13 +14,22 @@ inherited `SYNARA_HOME` and `SYNARA_BETA_HOME` cannot redirect it.
 
 `vX.Y.Z-remote.N` selects the `remote` updater lane. Remote accepts only Remote
 updates, never replaces Stable/Beta, never becomes GitHub Latest and does not
-publish the CLI. Initial distribution targets macOS Apple Silicon only. It uses
+publish the CLI. From Remote .14, distribution targets macOS Apple Silicon,
+Windows x64 and Linux x64. Windows has its own NSIS registration, and Linux
+uses `synara-remote` for its executable and window class. It uses
 the existing Synara artwork; Beta's blue artwork remains specific to Beta.
 Remote enables the existing non-Stable feature gates but does not enable Beta
 diagnostics. It starts with its own local data: no Stable/Beta import or
 Try Beta installation/removal action runs from Remote. Signing in to the same
 account preserves access to account-owned cloud data and paired computers;
 local conversations remain owned by their original app home.
+
+Remote .14 also supplies its hosted account API on a normal launch; no shell
+environment setup is needed. An explicit `SYNARA_ACCOUNT_URL` still overrides
+that default. Saved account sessions retain their original issuer. The release
+qualifies startup without inheriting the operator's account URL. Remote test
+enrollment remains separate from sign-in; the service does not automatically
+grant new accounts remote access.
 
 Signing out preserves that local database. Signing in as another account on the
 same installation does not create a separate local history: the account profile
