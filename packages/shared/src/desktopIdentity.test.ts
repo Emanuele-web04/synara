@@ -101,7 +101,7 @@ describe("desktopIdentity", () => {
     });
   });
 
-  it("gives Remote its own app, protocol, storage and updater identity", () => {
+  it("gives Remote its own app, account service, protocol, storage and updater identity", () => {
     expect(synaraDesktopIdentity("remote")).toEqual({
       flavor: "remote",
       displayName: "Synara Remote",
@@ -111,6 +111,7 @@ describe("desktopIdentity", () => {
       entryUrl: "synara-remote://app/index.html",
       userDataDirectoryName: "synara-remote",
       defaultHomeDirectoryName: ".synara-remote",
+      defaultAccountUrl: "https://synara-account-api-trial.synara-orgs.workers.dev",
       usesScriptedUpdates: false,
     });
     expect(SYNARA_REMOTE_BUNDLE_ID).toBe("com.emanueledipietro.synara.remote");

@@ -23,11 +23,27 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("refuses Remote Windows packaging before it can reuse Stable's installer GUID", () => {
-    assert.throws(
-      () => createDesktopPlatformBuildConfig({ platform: "win", target: "nsis", flavor: "remote" }),
-      /macOS ARM64 only/,
-    );
+  it("isolates Remote's Windows installer registration and Linux executable", () => {
+    const remote = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+      flavor: "remote",
+    });
+    const beta = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+      flavor: "beta",
+    });
+    assert.match(String(remote.nsis?.guid), /^[0-9a-f-]{36}$/);
+    assert.notEqual(remote.nsis?.guid, WINDOWS_INSTALLER_GUID);
+    assert.notEqual(remote.nsis?.guid, beta.nsis?.guid);
+    const linux = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage",
+      flavor: "remote",
+    });
+    assert.equal(linux.linux?.executableName, "synara-remote");
+    assert.deepStrictEqual(linux.linux?.desktop, { entry: { StartupWMClass: "synara-remote" } });
   });
   it("names every packaged Icon Composer asset for CFBundleIconName", () => {
     for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {

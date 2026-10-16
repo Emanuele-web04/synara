@@ -36,6 +36,8 @@ export const MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH =
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
+// Remote must install alongside Stable and Beta without owning their uninstaller.
+const REMOTE_WINDOWS_INSTALLER_GUID = "7639a24e-c753-4f4c-b4e3-37b259bdc793";
 // Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
 // CFBundleIconName out of Assets.car and renders that layered icon with the
 // Liquid Glass material; older releases ignore it and keep using the ICNS.
@@ -102,10 +104,6 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  // Remote has no Windows installer registration or Linux release qualification.
-  if (input.flavor === "remote" && input.platform !== "mac") {
-    throw new Error("Synara Remote artifacts are currently supported on macOS ARM64 only.");
-  }
   const report =
     process.platform === "linux"
       ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
@@ -235,12 +233,12 @@ export function createDesktopPlatformBuildConfig(
       ],
       linux: {
         target: [input.target],
-        executableName: "synara",
+        executableName: input.flavor === "remote" ? "synara-remote" : "synara",
         icon: "icon.png",
         category: "Development",
         desktop: {
           entry: {
-            StartupWMClass: "synara",
+            StartupWMClass: input.flavor === "remote" ? "synara-remote" : "synara",
           },
         },
       },
@@ -252,7 +250,12 @@ export function createDesktopPlatformBuildConfig(
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {
-      guid: input.flavor === "beta" ? SYNARA_BETA_WINDOWS_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
+      guid:
+        input.flavor === "remote"
+          ? REMOTE_WINDOWS_INSTALLER_GUID
+          : input.flavor === "beta"
+            ? SYNARA_BETA_WINDOWS_INSTALLER_GUID
+            : WINDOWS_INSTALLER_GUID,
     },
     win: {
       target: [input.target],

@@ -46,15 +46,15 @@ export function resolveReleaseBuildScope(
 ) {
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
-  if (flavor === "remote" && platform !== "all" && platform !== "mac-arm64")
-    throw new Error("Synara Remote currently supports mac-arm64 only.");
+  if (flavor === "remote" && !["all", "mac-arm64", "linux-x64", "win-x64"].includes(platform))
+    throw new Error("Synara Remote supports mac-arm64, linux-x64 and win-x64.");
   const selected = platforms.filter(
     (entry) =>
       (platform === "all" || platform === entry.id) &&
-      (flavor !== "remote" || entry.id === "mac-arm64"),
+      (flavor !== "remote" || entry.id !== "mac-x64"),
   );
   if (selected.length === 0) throw new Error(`Unknown build platform: ${platform}`);
-  if (publish && ((flavor !== "remote" && platform !== "all") || stage !== "artifact"))
+  if (publish && (platform !== "all" || stage !== "artifact"))
     throw new Error("Publication requires all platforms and the complete artifact stage.");
   if (stage === "icon" && selected.every((entry) => entry.platform !== "mac"))
     throw new Error("Icon validation requires a macOS platform or all.");

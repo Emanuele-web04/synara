@@ -113,11 +113,13 @@ describe("packaged desktop startup verification", () => {
         {
           PATH: process.env.PATH,
           SYNARA_AUTH_TOKEN: "must-not-leak",
+          SYNARA_ACCOUNT_URL: "https://operator-only.example",
           ELECTRON_RUN_AS_NODE: "1",
         },
       );
 
       expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+      expect(env.SYNARA_ACCOUNT_URL).toBeUndefined();
       expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
       for (const name of [
         "HOME",

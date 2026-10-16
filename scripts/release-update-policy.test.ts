@@ -71,17 +71,20 @@ describe("release update policy", () => {
     });
   });
 
-  it("publishes only the Remote macOS feed and refuses mixed platform manifests", () => {
+  it("publishes all Remote platform feeds without exposing Latest or Stable aliases", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-remote-release-policy-"));
     try {
-      writeFileSync(resolve(root, "latest-mac.yml"), "version: 1.0.6-remote.1\n");
-      writeFileSync(resolve(root, "latest.yml"), "unexpected Windows feed");
+      for (const name of defaultManifestNames)
+        writeFileSync(resolve(root, name), "version: 1.0.6-remote.1\n");
+      rmSync(resolve(root, "latest-linux.yml"));
       expect(() => prepareReleaseUpdateManifests(root, cleanConfig, "remote")).toThrow(
-        "macOS ARM64 assets only",
+        "missing update manifests",
       );
-      rmSync(resolve(root, "latest.yml"));
+      writeFileSync(resolve(root, "latest-linux.yml"), "version: 1.0.6-remote.1\n");
       expect(prepareReleaseUpdateManifests(root, cleanConfig, "remote")).toEqual([
         "remote-mac.yml",
+        "remote.yml",
+        "remote-linux.yml",
       ]);
       expect(readFileSync(resolve(root, "remote-mac.yml"), "utf8")).toBe(
         "version: 1.0.6-remote.1\n",
