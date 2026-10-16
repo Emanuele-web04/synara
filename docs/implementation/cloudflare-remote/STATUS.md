@@ -1,5 +1,58 @@
 # Cloudflare Remote — execution state
 
+## Remote .14 delivery — 2026-10-16
+
+Version **1.0.6-remote.14**, source
+`55ded6c1543a98679f8ac503c447d19cfb3906e9`, is
+[public](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14).
+[Exact-tag CI](https://github.com/Emanuele-web04/synara/actions/runs/38939586124)
+passes every required quality, server shard, Mac ARM64, Windows x64 and Linux x64
+packaging/startup gate, including Windows Defender. The release contains eleven
+assets and three separate Remote updater feeds. Stable Latest remains v1.0.5;
+v0.4.2 asset identities, hashes and sizes are unchanged.
+
+The fresh-install sign-in failure came from Remote inheriting the generic account
+API default. Operator environment overrides on the test Macs hid the missing
+packaged default. Remote now supplies the working hosted API itself; explicit
+overrides and saved account issuers still win. The packaged smoke drops inherited
+account URL configuration. Remote's existing account/profile sync also works
+without a shell opt-in, while explicit opt-out and Stable/Beta policy remain.
+Hosted Remote offers only the configured Google, Apple and email flows.
+
+The first unpublished .14 candidate failed Windows TLS smoke because `stat.mode`
+reports DOS attributes rather than POSIX permissions. The correction limits that
+POSIX assertion to POSIX platforms; the Windows TLS/SDK smoke, key persistence,
+Defender and packaged-startup gates remain required and now pass. NTFS ACLs and
+live provider execution on testers' Windows/Linux machines are not qualified by
+that smoke. Windows uses the exact-version unsigned release policy and may show
+SmartScreen. macOS still requires Developer ID signing and Apple notarization.
+
+App Store Connect now shows universal **0.1 (136)** waiting for external Beta
+Review, superseding the earlier Ready to Submit checkpoint below. Its tester
+instructions now link to .14. The compiled account URL and iPhone/iPad device
+families were checked; this desktop fix does not require another mobile binary.
+Account enrollment for remote access is still separate from downloading or a
+TestFlight invitation. Physical-device TestFlight APNs delivery remains open.
+
+The [analytics audit](PRODUCT-ANALYTICS-AUDIT.md) distinguishes account usage from
+default-off product telemetry. The live Cloudflare receiver and authenticated
+aggregate reads work. Native provider/token/terminal-turn coverage is still
+incomplete; client observations are not globally unique execution counts. No
+private metrics, credentials or new paid services are included in this release.
+
+All eleven public assets match their published sizes and SHA-256 digests. Each
+platform receipt matches the exact tag, commit and lockfile; Remote feed aliases
+match the packaged manifests. The downloaded Mac app/DMG pass Developer ID
+signature, Gatekeeper and stapled notarization checks. A verified .14 copy was
+launched with a disposable home, database and Electron profile and no account URL
+override. After the Mini was unlocked, its real sign-in dialog displayed Google,
+Apple and email and successfully sent an email code through the default service,
+reaching **Check your email** without the obsolete-service error. The code was
+not redeemed: this proves the packaged request path, not a completed fresh login.
+The temporary app was closed; installed apps and their account data were not
+replaced for this isolated probe. Final handoff checks pass formatting and brand
+identity; code qualification remains the exact-tag CI above.
+
 ## Pairing follow-up — 2026-10-15, evening
 
 - A concurrent token refresh could make an older successful `/me` response report

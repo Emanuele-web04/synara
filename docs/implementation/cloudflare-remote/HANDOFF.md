@@ -1,5 +1,31 @@
 # Remote connections — punto di ripartenza
 
+## Remote .14 e stato TestFlight — 16 ottobre 2026
+
+- Pubblicata [Remote 1.0.6-remote.14](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14),
+  commit `55ded6c1543a98679f8ac503c447d19cfb3906e9`: Mac Apple Silicon,
+  Windows x64 e Linux x64. CI completa verde, hash/provenienza dei download e
+  firma/notarizzazione Mac verificati. Windows usa la policy unsigned della sola
+  versione .14. Stable Latest e feed storici invariati.
+- Corretti il default API mancante nelle installazioni pulite e l'opt-in shell
+  superfluo della sincronizzazione profilo Remote. Restano validi gli override
+  espliciti, l'opt-out e l'issuer degli account salvati. Nel login Remote compaiono
+  Google, Apple ed email; GitHub resta disponibile nei build generici configurati.
+- TestFlight universale **0.1 (136)** compatibile: ora **in attesa di revisione
+  Apple** per gli esterni. Aggiornato il link desktop nelle istruzioni dei tester.
+  Invito TestFlight e abilitazione dell'account alle connessioni restano distinti.
+- Analytics Cloudflare verificati senza leggere contenuti: default off;
+  copertura nativa provider/token/turni completati ancora incompleta. Non usare
+  gli eventi client come conteggio globale univoco o contatore di fatturazione.
+- Prova visiva della .14 scaricata, con dati temporanei e senza override API:
+  Google/Apple/email corretti; invio reale del codice riuscito e schermata
+  **Check your email** raggiunta. Codice non consumato e copia temporanea chiusa.
+  Nessun nuovo login completato, aggiornamento delle app installate, intervento
+  sul telefono fisico o servizio a pagamento in questa consegna.
+
+Dettagli e limiti: [checkpoint di consegna](STATUS.md#remote-14-delivery--2026-10-16)
+e [audit analytics](PRODUCT-ANALYTICS-AUDIT.md).
+
 ## Main 1.0.5 / 1.0.6 Beta — 15 ottobre 2026
 
 Integrato main `34a6aef` nel branch pubblico con un merge, senza riscrivere i
