@@ -1,5 +1,35 @@
 # Remote connections — punto di ripartenza
 
+## Recupero dopo il vecchio rifiuto — 17 ottobre 2026
+
+- Remote .14 ha accesso pubblico alle funzionalità Remote, senza pagamento o
+  abilitazione manuale degli account. Verifica live ripetuta con un account fuori
+  dalla vecchia lista: grant, creazione codice QR e autorizzazione host riusciti;
+  invito temporaneo annullato senza abbinare dispositivi.
+- Riprodotto un ulteriore bug desktop: il rifiuto di enrollment veniva trattato
+  come revoca permanente dell'host, fermando i controlli e revocando i device
+  locali. Il sorgente ora sospende subito l'accesso e continua i controlli per
+  quella risposta specifica, conservando la fiducia. Revoche vere e account
+  diversi restano bloccati. Questo fix richiede una futura release desktop;
+  non ripristina automaticamente fiducia già revocata dalle vecchie versioni.
+- L'E2E ha trovato anche un crash presente nella .14: entrando nella home remota
+  con chat già esistenti, `/` diventava un ID chat vuoto. Corretto il controllo
+  della selezione, senza cambiare layout o controlli. Aggiornato l'E2E del QR ai
+  dialog attuali e all'approvazione tramite grant del proprietario, verificando
+  la chiave esatta del dispositivo registrato.
+- Per chi è rimasto sul vecchio rifiuto nella .14: uscita completa dall'app e
+  riapertura, poi codice nuovo. Se la fiducia era già stata revocata, normale
+  nuovo abbinamento. Reinstallare la stessa .14 non corregge il crash né ripara
+  la fiducia revocata; non cancellare i dati locali. I due fix desktop restano
+  da includere in una release successiva; nessuna nuova build iOS necessaria.
+- Verifica finale: E2E completo 18/18 sulla build corretta, con PostgreSQL
+  temporaneo e due home isolate; 16/16 test autorizzazione/ingress/connectivity;
+  web 5.669 passati / 3 saltati. Build, formatting, lint e typecheck passano.
+  Suite repository dopo il fix enrollment: 18.278 passati / 278 saltati; il
+  successivo controllo della home remota è coperto dalla web suite e dall'E2E
+  finali. API live verificata separatamente; Cloudflare/WorkOS/provider nell'E2E
+  sono fixture. Nessun dato delle app installate modificato.
+
 ## Accesso beta pubblico e aggiornamento main — 16 ottobre 2026
 
 - Integrati i 7 commit di main fino a `7cfd65d`, inclusa la preparazione Stable

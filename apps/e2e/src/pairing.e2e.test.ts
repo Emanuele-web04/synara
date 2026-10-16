@@ -9,7 +9,7 @@ import type { HostConnection } from "@synara/contracts";
 import { requestLocalRemoteAccess } from "../../server/src/remotePairing/cli";
 
 async function settings(page: Page, origin: string) {
-  for (const name of ["Skip setup", "Not now"]) {
+  for (const name of ["Skip setup", "Not now", "Skip tour"]) {
     await page.addLocatorHandler(
       page.getByRole("button", { name, exact: true }),
       async (button) => {
@@ -18,11 +18,11 @@ async function settings(page: Page, origin: string) {
     );
   }
   await page.goto(`${origin}/settings?section=connections`);
-  await page.getByRole("button", { name: "Create pairing code", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Add", exact: true }).waitFor();
 }
 
 it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
-  "retries pairing after a connector outage through both browser screens and exact key approval",
+  "retries pairing after a connector outage through both browser screens and owner-verified approval",
   async () => {
     if (!process.env.TEST_DATABASE_URL) throw new Error("Isolated TEST_DATABASE_URL required");
     await using fixture = await createE2eFixture(process.env.TEST_DATABASE_URL);
@@ -43,29 +43,32 @@ it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
       });
       await settings(hostPage, host.origin);
       await settings(controllerPage, controller.origin);
-      await hostPage.getByRole("button", { name: "Create pairing code", exact: true }).click();
-      const code = hostPage.locator('[aria-label="Pairing code"]');
+      await hostPage.getByRole("button", { name: "Add", exact: true }).click();
+      await hostPage.getByRole("radio", { name: "Computer", exact: true }).click();
+      const code = hostPage.getByText(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
       await code.waitFor();
       const text = await code.innerText();
       expect(text).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
       await fixture.waitReady();
-      await controllerPage.getByLabel("Pairing code from the other computer").fill(text);
+      await controllerPage
+        .getByRole("radio", { name: "Control other devices", exact: true })
+        .click();
+      await controllerPage.getByRole("button", { name: "Add", exact: true }).click();
+      await controllerPage.getByLabel("Pairing code", { exact: true }).fill(text);
       await controllerPage.getByRole("button", { name: "Find computer", exact: true }).click();
       await controllerPage
-        .getByRole("checkbox", { name: "All identity groups match on both computers" })
+        .getByRole("checkbox", { name: "The identity matches on both computers" })
         .waitFor();
       const state = await requestLocalRemoteAccess(host.baseDir, { operation: "list" });
       if (state.kind !== "host-state" || !state.rootFingerprint) throw new Error("Missing root");
-      await controllerPage
-        .getByText(state.rootFingerprint.match(/.{1,8}/g)!.join(" "), { exact: true })
-        .waitFor();
+      await controllerPage.getByText(state.rootFingerprint, { exact: true }).waitFor();
       expect(
         await controllerPage
           .getByRole("button", { name: "Request access", exact: true })
           .isDisabled(),
       ).toBe(true);
       await controllerPage
-        .getByRole("checkbox", { name: "All identity groups match on both computers" })
+        .getByRole("checkbox", { name: "The identity matches on both computers" })
         .click();
       const evidence = process.env.SYNARA_E2E_EVIDENCE;
       if (evidence) {
@@ -95,17 +98,30 @@ it.skipIf(process.env.SYNARA_E2E_WORKSPACE !== "1")(
         operation: "device-info",
       });
       if (device.kind !== "device-info") throw new Error("Missing device key");
-      await hostPage.getByText(device.deviceJkt, { exact: true }).waitFor();
+      await expect
+        .poll(async () => {
+          const state = await requestLocalRemoteAccess(host.baseDir, { operation: "list" });
+          if (state.kind !== "host-state") throw new Error("Missing host state");
+          return state.devices
+            .filter((entry) => entry.revokedAt === null)
+            .map((entry) => ({ deviceJkt: entry.deviceJkt, enrolledVia: entry.enrolledVia }));
+        })
+        .toEqual([{ deviceJkt: device.deviceJkt, enrolledVia: "qr" }]);
+      await hostPage
+        .getByRole("heading", { name: `${device.label} is connected`, exact: true })
+        .waitFor();
       if (evidence)
         await hostPage.screenshot({
           path: path.join(evidence, "pairing-exact-device-approval.png"),
           fullPage: true,
         });
-      await hostPage.getByRole("button", { name: "Approve this device", exact: true }).click();
       await controllerPage
-        .getByText("Device approved. You can now connect to this computer.", { exact: true })
+        .getByText(/approved this computer\. You can connect to it now\./)
         .waitFor();
       await controllerPage.reload();
+      await controllerPage
+        .getByRole("radio", { name: "Control other devices", exact: true })
+        .click();
       await controllerPage.getByRole("button", { name: "Connect", exact: true }).first().click();
       await using rpc = await workspaceRpc(controller.origin);
       await expect

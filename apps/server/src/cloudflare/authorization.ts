@@ -43,7 +43,18 @@ export function startRemoteAuthorization(options: {
           expired = false;
         } catch (error) {
           if (options.signal.aborted) break;
-          if (error instanceof AccountApiError && [401, 403, 404].includes(error.status)) {
+          // Enrollment replies reuse the ownership code. Deny immediately,
+          // but keep checking: enabling access must not require new device trust.
+          const enrollmentUnavailable =
+            error instanceof AccountApiError &&
+            error.status === 403 &&
+            error.code === "not_host_owner" &&
+            error.message === "Remote test access is not enabled for this account";
+          if (enrollmentUnavailable) {
+            validUntil = 0;
+            expired = true;
+            await options.unavailable(false);
+          } else if (error instanceof AccountApiError && [401, 403, 404].includes(error.status)) {
             permanentlyDenied = true;
             validUntil = 0;
             await options.unavailable(true);

@@ -1,5 +1,63 @@
 # Cloudflare Remote — execution state
 
+## Enrollment refusal recovery — 2026-10-17
+
+The hosted API still has public Remote access enabled for every authenticated
+account, without an account allowlist or paid plan. A fresh live probe with the
+separate account outside the old test list succeeds both on owner grant and the
+exact pairing-code publication route shown in the tester screenshot. The host
+authorization snapshot also succeeds; the temporary invitation was cancelled
+without approving a device. The previous Remote account endpoint still proxies
+to the current API. Remote .14 can use these backend changes without a download.
+
+A separate desktop recovery defect was reproduced: its authorization poll treated
+the old enrollment refusal (403 `not_host_owner` with the specific enrollment
+message) as permanent host revocation. That disabled the local scope, revoked
+approved device trust and stopped polling, so later server enrollment alone could
+not revive that host. The repair refuses admission immediately but keeps polling
+without destroying trust for this one enrollment response. Proof refusal, owner
+removal and every other 401/403/404 retain their permanent fence. Re-admission
+still requires a fresh successful snapshot and durable revocation application.
+This runtime repair is source work until included in a new desktop release;
+it does not retroactively restore trust already revoked by an older app.
+
+The built-browser E2E run also reproduced a Remote .14 workspace crash: opening
+the remote home (`/`) with existing threads passed an empty string to the branded
+thread-ID constructor. The sidebar now treats that route as having no selected
+thread. The existing E2E scenarios cover both that home route and subsequent
+chat navigation; no new controls, layout or styling were added.
+
+The pairing E2E was still waiting for controls from the previous Connections UI
+and a manual approval step. It now uses the shipped Add dialogs and verifies that
+the owner's grant records exactly the requesting device key with `enrolledVia:
+"qr"` before connecting. Manual-approval fallback remains covered by the gateway
+and control-plane tests; no authentication or approval policy changed.
+
+For a .14 client left on the old enrollment error, fully quit the application
+and reopen it before requesting a fresh code. Closing only its window may leave
+the old host process alive. If the previous denial already revoked local device
+trust, use normal pairing again. Reinstalling the same .14 neither repairs the
+workspace bug nor restores revoked trust; do not erase the app's data directory.
+
+Verification on the combined candidate (macOS arm64, Node 24.21.0 / Bun 1.4.2):
+
+| Check                                                                                 | Result                                                                                                                            |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Final built E2E, disposable PostgreSQL and separate host/controller homes             | 18/18 passed in 133.07 seconds, including QR retry, exact-device enrollment, chat/automation recovery and remote-home navigation. |
+| Final authorization/ingress/connectivity tests                                        | 16/16 passed. The enrollment regression fails on the old implementation for the permanent-revocation callback.                    |
+| Final web suite                                                                       | 5,669 passed / 3 skipped.                                                                                                         |
+| Formatting, lint, typecheck and desktop build                                         | Passed; lint has 0 errors / 1,011 existing warnings, typecheck 12/12 tasks.                                                       |
+| Repository suite after the enrollment repair, before the additional remote-home guard | 18,278 passed / 278 skipped, 11/11 tasks. The final E2E run separately enables its database/build opt-ins.                        |
+
+Both failures were reproduced before correction. The final E2E uses a local
+Cloudflare-boundary proxy and fixture WorkOS/provider processes, with production
+inner TLS, account coordinator, persistence, RPC and reconnect paths. The public
+API grant/QR/authorization probe above is separate live evidence; this does not
+claim a new signed release or a test on every tester's physical computer. The
+new production diff is two files, +14/-2 lines; three test files are +89/-18.
+No migrations, dependencies, credentials or production deployment changed in
+this recovery batch. No changes were made to installed app data.
+
 ## Public beta enrollment — 2026-10-16
 
 The operator authorized remote beta enrollment for every authenticated account.

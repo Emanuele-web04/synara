@@ -941,6 +941,11 @@ it
         await page.screenshot({ path: path.join(evidenceDir, "workspace-local-recovery.png") });
     } catch (error) {
       console.error("Original browser failure", error);
+      for (const detail of await page
+        .locator("details pre")
+        .allTextContents()
+        .catch(() => []))
+        console.error("Browser error details:", detail);
       if (process.env.SYNARA_E2E_EVIDENCE)
         await fs
           .copyFile(

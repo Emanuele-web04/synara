@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AccountApiError } from "@synara/shared/account";
-import type { HostAuthorizationSnapshot } from "@synara/contracts";
+import { AccountApiError, createAccountClient } from "@synara/shared/account";
+import type { AccountErrorCode, HostAuthorizationSnapshot } from "@synara/contracts";
 import { startRemoteAuthorization } from "./authorization";
 
 const snapshot: HostAuthorizationSnapshot = {
@@ -40,11 +40,16 @@ describe("remote authorization lease", () => {
     abort.abort();
     await poll.done;
   });
-  it.each([401, 403, 404])("permanently fences a host whose proof returns %s", async (status) => {
+  it.each<[number, AccountErrorCode, string]>([
+    [401, "unauthorized", "denied"],
+    [403, "unauthorized", "denied"],
+    [403, "not_host_owner", "Only the host owner may do that"],
+    [404, "host_not_found", "denied"],
+  ])("permanently fences a host whose proof returns %s %s", async (status, code, message) => {
     const unavailable = vi.fn(async () => {});
     const poll = startRemoteAuthorization({
       refresh: async () => {
-        throw new AccountApiError({ status, code: "unauthorized", message: "denied" });
+        throw new AccountApiError({ status, code, message });
       },
       apply: async () => {},
       unavailable,
@@ -54,6 +59,51 @@ describe("remote authorization lease", () => {
     expect(poll.available()).toBe(false);
     expect(unavailable).toHaveBeenCalledExactlyOnceWith(true);
   });
+  it("recovers from enrollment refusal without revoking approved devices or retaining admission", async () => {
+    let enrolled = false;
+    const client = createAccountClient({
+      baseUrl: "https://account.example.test",
+      fetch: (async () =>
+        Response.json(
+          enrolled
+            ? snapshot
+            : {
+                error: "not_host_owner",
+                message: "Remote test access is not enabled for this account",
+              },
+          { status: enrolled ? 200 : 403 },
+        )) as unknown as typeof fetch,
+    });
+    const abort = new AbortController();
+    const unavailable = vi.fn(async () => {});
+    const apply = vi.fn(async () => {});
+    const poll = startRemoteAuthorization({
+      refresh: () => client.getHostAuthorization("fixture-host-proof", "fixture-host"),
+      apply,
+      unavailable,
+      signal: abort.signal,
+    });
+    try {
+      await vi.waitFor(() => expect(unavailable).toHaveBeenCalledExactlyOnceWith(false));
+      expect(poll.available()).toBe(false);
+
+      enrolled = true;
+      await vi.waitFor(() => expect(poll.available()).toBe(true), { timeout: 15_000 });
+      expect(apply).toHaveBeenCalledExactlyOnceWith(snapshot);
+
+      enrolled = false;
+      await vi.waitFor(() => expect(unavailable).toHaveBeenCalledTimes(2), { timeout: 15_000 });
+      expect(poll.available()).toBe(false);
+      expect(unavailable.mock.calls).toEqual([[false], [false]]);
+
+      enrolled = true;
+      await vi.waitFor(() => expect(poll.available()).toBe(true), { timeout: 15_000 });
+      expect(apply).toHaveBeenCalledTimes(2);
+    } finally {
+      abort.abort();
+      await poll.done;
+    }
+  }, 45_000);
   it("does not turn an API outage or failed tombstone write into permanent revocation or fresh admission", async () => {
     const abort = new AbortController();
     const unavailable = vi.fn(async () => {});
