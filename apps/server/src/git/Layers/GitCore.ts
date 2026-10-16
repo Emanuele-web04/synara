@@ -31,6 +31,7 @@ import {
   DEFAULT_GIT_RECENT_COMMIT_LIMIT,
   GIT_READ_FILE_AT_REV_MAX_BYTES,
   type GitBlameLineResult,
+  type GitFileChangeType,
   type GitRecentCommit,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
@@ -44,6 +45,7 @@ import {
   countTextFileLines,
   normalizeConfiguredMergeBranch,
   parseGitStatusPorcelain,
+  resolveGitStatusChangeType,
   summarizeGitNumstatOutputs,
 } from "../gitStatusParsing.ts";
 import {
@@ -1091,6 +1093,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const readMoveAwareWorkingTreeSummary = (
       cwd: string,
+      changeTypesByPath: ReadonlyMap<string, GitFileChangeType>,
     ): Effect.Effect<WorkingTreeStatSummary | null, never> =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1140,7 +1143,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             },
           );
 
-          return summarizeGitNumstatOutputs([numstatStdout]);
+          return summarizeGitNumstatOutputs([numstatStdout], changeTypesByPath, true);
         }),
       ).pipe(
         Effect.catch((cause) =>
@@ -1641,6 +1644,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           hasUntrackedDirectory,
           changedFilesWithoutNumstat,
           untrackedFilesWithoutNumstat,
+          changeTypesByPath,
         } = parsedStatus;
 
         if (branch && upstreamRef) {
@@ -1700,7 +1704,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           hasWorkingTreeChanges &&
           untrackedFilesWithoutNumstat.size > 0 &&
           (hasTrackedDeletion || hasUntrackedDirectory)
-            ? yield* readMoveAwareWorkingTreeSummary(cwd)
+            ? yield* readMoveAwareWorkingTreeSummary(cwd, changeTypesByPath)
             : null;
         if (moveAwareWorkingTree) {
           return {
@@ -1738,10 +1742,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
-        const workingTree = summarizeGitNumstatOutputs([
-          stagedNumstatStdout,
-          unstagedNumstatStdout,
-        ]);
+        const workingTree = summarizeGitNumstatOutputs(
+          [stagedNumstatStdout, unstagedNumstatStdout],
+          changeTypesByPath,
+        );
         const files = [...workingTree.files];
         const numstatFilePaths = new Set(files.map((file) => file.path));
         const filePathsWithStats = new Set(numstatFilePaths);
@@ -1758,7 +1762,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               )
             : 0;
 
-          files.push({ path: filePath, insertions, deletions: 0 });
+          const changeType = resolveGitStatusChangeType(filePath, changeTypesByPath);
+          files.push({
+            path: filePath,
+            insertions,
+            deletions: 0,
+            ...(changeType ? { changeType } : {}),
+          });
           filePathsWithStats.add(filePath);
         }
         files.sort((a, b) => a.path.localeCompare(b.path));
