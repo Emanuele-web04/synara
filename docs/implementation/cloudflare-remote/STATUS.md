@@ -1233,3 +1233,27 @@ controls expose no hover action; no unsupported input or JavaScript injection
 was used. No force quit, new login, trust reset or physical-phone operation was
 needed. Native contracts and APIs are unchanged, so TestFlight 135 remains
 compatible and no additional iPhone/iPad build was uploaded for this fix.
+
+### Native composer update — build 136 uploaded, tester assignment pending
+
+The later iOS commits `6823429` and `4909297` add the runtime capsule and
+connector/plugin/file mention discovery. Both native branches now include them
+and the cancellation/reconnect footer repair in `6270958`. Universal version
+`0.1 (136)` passed archive, distribution signing, iPhone/iPad device-family and
+production APNs checks; Xcode uploaded it successfully and Apple began processing.
+App Store Connect's web login remains blank with `authResult=FAILED`, so group
+assignment and tester availability are not yet confirmed. Build 135 is still the
+last confirmed assigned build; no App Store Connect API key was created.
+
+Core: 319 tests pass; desktop contracts: 86 fixtures pass. The iPad simulator
+focused pass has 41 passes and one isolated-fixture skip. The extended iPhone
+pass has 62 passes, one skip and five failing legacy connection cases (six
+assertions), recorded explicitly in the native handoff. The two repaired footer
+regressions pass. A real paired iPhone simulator reconnects to both Macs,
+discovers and selects README from the Mini, and receives `SYNARA136_IPHONE_OK`.
+iPad launch/onboarding was checked, but that simulator has no real host paired.
+No physical iPhone or production push-delivery test was performed.
+
+The native connector list needs desktop `d322f6e`, which is newer than installed
+Remote `.11`. Older hosts omit connector suggestions safely. No new desktop
+release was published as part of this native build.
