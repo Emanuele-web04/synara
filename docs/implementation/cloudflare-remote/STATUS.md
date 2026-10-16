@@ -1260,3 +1260,36 @@ No physical iPhone or production push-delivery test was performed.
 The native connector list needs desktop `d322f6e`, which is newer than installed
 Remote `.11`. Older hosts omit connector suggestions safely. No new desktop
 release was published as part of this native build.
+
+### Remote .12 two-Mac completion and Vercel renewal finding
+
+Remote .12 (`5d0471a`, CI 38922338763) is public, signed/notarized, independently
+verified against public hashes and provenance, and installed on both Macs. Stable
+Latest v1.0.5 and the v0.4.2 compatibility assets are unchanged. The Mini's fresh
+backup retained every original row across the checked history/trust tables, both
+identities and attachments: 55 pre-upgrade chats, 238 messages and 102 turns. The
+MacBook retained 107 chats, 1,763 messages and 363 turns. Backups and .11 rollback
+bundles remain on each machine. MacBook-to-Mini thread
+`dbdedc8a-8f11-43fd-8051-3b46b61d35a0` returned
+`SYNARA_REMOTE12_MACBOOK_TO_MINI_OK`, retained after reopen and Reload without Retry.
+
+Build 136's simulator still omits Vercel because the actual connector is now
+needs-auth on both Macs. The Mini's old grant has only `openid`, no refresh token,
+and expired at 14:30:54 UTC. Public Vercel documentation and its advertised scopes
+confirm that `offline_access` is required for a refresh token. No live token was
+printed or transferred. The pending OAuth attempt timed out without authorization
+and its stale browser tab was closed. Project-scope consent remains with the user.
+
+Source fix `22c3591` requests renewable access only for the official Vercel MCP
+origin and preserves the server-requested scopes. A real MCP OAuth SDK regression
+fails on the old scope and passes after the fix, including persisted reload,
+simulated expiry and refresh. All 108 focused tests pass; the first broader
+sandbox run could not open fixture loopback listeners (EPERM), and the qualified
+rerun passes. Formatting, lint, twelve-package typecheck and brand checks pass.
+
+Remote .13 is prepared with this follow-up fix, curated notes, frozen dependencies,
+release smoke and final local checks passed, but is not published: the user has
+been asked for specific .13 publication/install authorization. Live Vercel renewal,
+@ suggestion and read-only tool use remain unverified pending that delivery and
+project-scope consent. iPhone/iPad TestFlight 0.1 (136) remains compatible and no
+new mobile binary has been built. No paid service, API key or physical iPhone action.
