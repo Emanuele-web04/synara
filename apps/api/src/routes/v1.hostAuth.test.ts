@@ -73,7 +73,10 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
     };
   }
 
-  function buildApp(tunnels?: Parameters<typeof createV1Routes>[0]["tunnels"]) {
+  function buildApp(
+    tunnels?: Parameters<typeof createV1Routes>[0]["tunnels"],
+    remoteBetaAccessEnabled = false,
+  ) {
     const { db } = database;
     const { verifier, grants } = createWorkosIdentityProvider(config);
     const app = new Hono();
@@ -90,6 +93,8 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
             ),
         }),
         remoteTestUserIds,
+        remoteBetaAccessEnabled,
+        apiIssuer: config.apiPublicUrl,
         ...(tunnels ? { tunnels } : {}),
         verifier,
         grants,
@@ -1249,6 +1254,97 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
   });
 
   describe("managed remote token isolation", () => {
+    it.each([false, true])(
+      "allows unlisted beta owners without relaxing account, device or membership checks (beta: %s)",
+      async (beta) => {
+        const provision = vi.fn(async () => ({
+          hostname: "beta.example.test",
+          tunnelId: randomUUID(),
+          connectorToken: "fixture-beta-connector-token",
+        }));
+        const { app } = buildApp(
+          {
+            provision,
+            disable: async () => {},
+            cleanup: async () => {},
+            endpoints: async () => new Map(),
+          },
+          beta,
+        );
+        const owner = await signIn();
+        const host = await linkHost(app, owner, { environmentId: randomUUID() });
+        const device = await registerDevice(app, owner);
+        remoteTestUserIds.splice(remoteTestUserIds.indexOf(owner.userId), 1);
+        const hostRequest = async (suffix: string, body?: unknown) =>
+          app.request(`/api/v1/hosts/${host.id}/${suffix}`, {
+            method: body === undefined ? "GET" : "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `HostProof ${await hostProof(host.key, host)}`,
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+        const grantRequest = (token: string, deviceJkt: string) =>
+          app.request(`/api/v1/hosts/${host.id}/grant`, {
+            method: "POST",
+            headers: authHeaders(token),
+            body: JSON.stringify({ deviceJkt }),
+          });
+        const expected = beta ? 200 : 403;
+        expect((await hostRequest("authorization")).status).toBe(expected);
+        expect((await hostRequest("tunnel", { originPort: 34567 })).status).toBe(expected);
+        expect(provision).toHaveBeenCalledTimes(beta ? 1 : 0);
+        expect((await grantRequest(owner.token, device.jkt)).status).toBe(expected);
+        const bundle = {
+          v: 2,
+          environmentId: host.environmentId,
+          rootFingerprint: "a".repeat(64),
+          accountAuthority: config.apiPublicUrl,
+          userId: owner.userId,
+          organizationId: owner.orgId,
+          channel: "dev",
+          rootCertificate: "fixture root",
+          hostId: host.id,
+          label: "Beta host",
+          inviteId: randomUUID(),
+          secret: "s".repeat(43),
+          expiresAt: new Date(Date.now() + 590_000).toISOString(),
+        };
+        const published = await hostRequest("pairing-codes", bundle);
+        expect(published.status).toBe(expected);
+        if (!beta) return;
+        const { code } = (await published.json()) as { code: string };
+        const proof = await new SignJWT({ code })
+          .setProtectedHeader({ alg: "ES256", typ: "synara-pairing-code+jwt" })
+          .setIssuer("synara-device")
+          .setSubject(owner.userId)
+          .setAudience(config.apiPublicUrl)
+          .setIssuedAt()
+          .setExpirationTime("60s")
+          .setJti(randomUUID())
+          .sign(device.key.privateKey);
+        const redeem = (token: string) =>
+          app.request("/api/v1/remote/pairing-codes/redeem", {
+            method: "POST",
+            headers: authHeaders(token),
+            body: JSON.stringify({ code, deviceJkt: device.jkt, proof }),
+          });
+        expect((await redeem("")).status).toBe(401);
+        const foreign = await signIn();
+        expect((await grantRequest(foreign.token, device.jkt)).status).toBe(404);
+        expect((await redeem(foreign.token)).status).toBe(400);
+        const paired = await redeem(owner.token);
+        expect(paired.status).toBe(200);
+        expect(await paired.json()).toEqual(bundle);
+        expect((await grantRequest(owner.token, "unregistered-device")).status).toBe(403);
+        workos.removeMembership(owner.orgId, owner.userId);
+        expect((await hostRequest("tunnel", { originPort: 34567 })).status).toBe(403);
+        const authorization = await hostRequest("authorization");
+        expect(await authorization.json()).toMatchObject({ ownerInOrg: false });
+        expect(provision).toHaveBeenCalledTimes(1);
+      },
+    );
+
     it("delivers connector credentials only to the current host proof and publishes only the URL", async () => {
       const provision = vi.fn(async () => ({
         hostname: "managed.example.test",

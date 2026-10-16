@@ -57,7 +57,8 @@ port 8788 and one trusted proxy hop.
 Optional Worker secrets are forwarded only by explicit name:
 `API_SIGNING_KEY_PREVIOUS`, `WORKOS_IDENTITY_MAP`, `PROFILE_PROXY_SECRET`, and the existing `S3_*`
 avatar configuration, plus `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`,
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_DOMAIN` and `REMOTE_TEST_USER_IDS`
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNNEL_DOMAIN`, `REMOTE_TEST_USER_IDS` and
+`REMOTE_BETA_ACCESS_ENABLED`
 for remote access. Configure the complete avatar set or leave all of it
 unset; the API rejects a partial set. The deployed trial now has all five
 required S3 settings as secrets and a bucket-scoped R2 token. Restart the API
@@ -70,8 +71,16 @@ leave all four unset. A partial tunnel configuration prevents API startup.
 The runtime API token must grant Tunnel Edit for the selected account and DNS
 Edit for the selected zone; it is separate from Wrangler's deployment login.
 It stays in Worker secrets and the API Container, never in the desktop app.
-Set `REMOTE_TEST_USER_IDS` to the comma-separated WorkOS IDs of the enrolled
-test users; an empty list denies remote access. When its existing value is unavailable,
+The trial deployment enables `REMOTE_BETA_ACCESS_ENABLED=true` for public beta
+enrollment: every authenticated account can pair its own computers. Host ownership,
+fresh organization membership, registered device proof, pairing approval, revocation
+and rate limits remain enforced. This is not a subscription entitlement. Other
+deployments default to closed enrollment; only literal `true`/`false` values are
+accepted. To close the beta, set this variable to `false`, deploy and restart the
+Container, then verify that an unlisted account is refused.
+
+For closed enrollment, set `REMOTE_TEST_USER_IDS` to the comma-separated WorkOS IDs
+of enrolled test users; an empty list denies remote access. When its existing value is unavailable,
 `REMOTE_TEST_ADDITIONAL_USER_IDS` appends explicitly approved WorkOS IDs without
 replacing the primary secret. Remove a user's ID from both lists to revoke enrollment.
 Restart the Container after

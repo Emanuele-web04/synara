@@ -1,5 +1,29 @@
 # Cloudflare Remote — execution state
 
+## Public beta enrollment — 2026-10-16
+
+The operator authorized remote beta enrollment for every authenticated account.
+`REMOTE_BETA_ACCESS_ENABLED=true` now admits accounts outside the internal test
+list at all five enrollment gates. The deployment setting defaults to closed and
+rejects malformed values. Host ownership, fresh membership, device proof, pairing
+consent, revocation and rate limits remain authoritative; no identity mappings,
+existing lists or subscription checks were changed.
+
+All 374 API tests pass against disposable PostgreSQL, including the new unlisted
+owner's tunnel, pairing publication/redemption and grant, with foreign-account,
+unregistered-device and membership-revocation controls. The full workspace suite
+passes 18,276 tests (278 skipped; the 222 PostgreSQL cases skipped by that command
+are covered in the separate API run). Formatting, lint and typecheck pass.
+
+Worker `c47de4c3-12dc-470a-9cae-147c0d89b04a` and Container image
+`4767b8d17cb21018fc92907cea5f34c63a6f7dfc9d4a11c62911f492b2beef16` are deployed,
+with existing Worker secrets preserved. Supabase already matches migration 0022;
+no new migration was required. A separate real account signed in successfully,
+but its live grant still returns the old enrollment refusal: the Container needs
+to reload startup environment. Do not call beta enrollment live-qualified until
+that account receives a grant. A downloaded desktop update or new mobile binary
+is not required for this backend change.
+
 ## Main Codex reliability sync — 2026-10-16
 
 Integrated the six commits through main `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`

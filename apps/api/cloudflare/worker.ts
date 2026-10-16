@@ -14,6 +14,7 @@ type OptionalSecrets = Partial<
     | "CLOUDFLARE_TUNNEL_DOMAIN"
     | "REMOTE_TEST_USER_IDS"
     | "REMOTE_TEST_ADDITIONAL_USER_IDS"
+    | "REMOTE_BETA_ACCESS_ENABLED"
     | "S3_ENDPOINT"
     | "S3_BUCKET"
     | "S3_ACCESS_KEY_ID"
@@ -61,6 +62,7 @@ export class AccountApi extends Container<Cloudflare.Env & OptionalSecrets> {
           "CLOUDFLARE_API_TOKEN",
           "CLOUDFLARE_TUNNEL_DOMAIN",
           "REMOTE_TEST_USER_IDS",
+          "REMOTE_BETA_ACCESS_ENABLED",
           "S3_ENDPOINT",
           "S3_BUCKET",
           "S3_ACCESS_KEY_ID",

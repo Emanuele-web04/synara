@@ -373,6 +373,7 @@ export function createV1Routes(deps: {
   tunnels?: TunnelCoordinator;
   apiIssuer?: string;
   remoteTestUserIds?: readonly string[];
+  remoteBetaAccessEnabled?: boolean;
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
   signing: ApiSigningService;
@@ -439,6 +440,9 @@ export function createV1Routes(deps: {
       setTimeout(() => void task(), delayMs).unref?.();
     });
   const v1 = new Hono();
+  // Enrollment is separate from authentication, host ownership and pairing consent.
+  const hasRemoteAccess = (userId: string): boolean =>
+    deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true;
 
   /**
    * Deletes a replaced avatar object AFTER the profiles app's response cache
@@ -1789,7 +1793,7 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      if (!deps.remoteTestUserIds?.includes(host.ownerUserId))
+      if (!hasRemoteAccess(host.ownerUserId))
         return errorResponse(
           c,
           403,
@@ -1825,7 +1829,7 @@ export function createV1Routes(deps: {
       return errorResponse(c, 429, "rate_limited", "Too many pairing attempts; wait a minute");
     const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
-    if (!deps.remoteTestUserIds?.includes(session.userId))
+    if (!hasRemoteAccess(session.userId))
       return errorResponse(
         c,
         403,
@@ -1859,7 +1863,7 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (host) => host,
       );
-      if (!deps.remoteTestUserIds?.includes(host.ownerUserId))
+      if (!hasRemoteAccess(host.ownerUserId))
         return errorResponse(
           c,
           403,
@@ -1973,7 +1977,7 @@ export function createV1Routes(deps: {
         c.req.param("id"),
         async (authenticated) => authenticated,
       );
-      if (!deps.remoteTestUserIds?.includes(host.ownerUserId))
+      if (!hasRemoteAccess(host.ownerUserId))
         return errorResponse(
           c,
           403,
@@ -2094,7 +2098,7 @@ export function createV1Routes(deps: {
     }
     const session = await requireOrgSession(c, { freshMembership: true });
     if (session instanceof Response) return session;
-    if (!deps.remoteTestUserIds?.includes(session.userId))
+    if (!hasRemoteAccess(session.userId))
       return errorResponse(
         c,
         403,

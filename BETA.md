@@ -27,9 +27,10 @@ local conversations remain owned by their original app home.
 Remote .14 also supplies its hosted account API on a normal launch; no shell
 environment setup is needed. An explicit `SYNARA_ACCOUNT_URL` still overrides
 that default. Saved account sessions retain their original issuer. The release
-qualifies startup without inheriting the operator's account URL. Remote test
-enrollment remains separate from sign-in; the service does not automatically
-grant new accounts remote access.
+qualifies startup without inheriting the operator's account URL. The hosted API's
+`REMOTE_BETA_ACCESS_ENABLED=true` setting opens beta enrollment to all authenticated
+accounts, with host ownership, registered device proof and pairing consent still
+required. Private deployments leave it unset/`false` and enroll selected users.
 
 The published Remote .14 app offers Google, Apple and email sign-in. GitHub is
 now configured in the hosted WorkOS Production environment; the next desktop

@@ -102,6 +102,7 @@ export async function createApp(
       ...(tunnels ? { tunnels } : {}),
       ...(liveActivities ? { liveActivities } : {}),
       ...(config.remoteTestUserIds ? { remoteTestUserIds: config.remoteTestUserIds } : {}),
+      remoteBetaAccessEnabled: config.remoteBetaAccessEnabled === true,
       verifier: identity.verifier,
       grants: identity.grants,
       signing: identity.signing,

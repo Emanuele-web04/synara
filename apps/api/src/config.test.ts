@@ -20,6 +20,21 @@ const base = {
 };
 
 describe("loadApiConfig", () => {
+  it("opens remote beta access only through an explicit valid deployment setting", () => {
+    expect(loadWorkosConfig(base).remoteBetaAccessEnabled).not.toBe(true);
+    for (const value of ["true", "false"]) {
+      expect(
+        loadWorkosConfig({ ...base, REMOTE_BETA_ACCESS_ENABLED: value }).remoteBetaAccessEnabled ===
+          true,
+      ).toBe(value === "true");
+    }
+    for (const value of ["", "1", "yes", "TRUE"]) {
+      expect(() => loadWorkosConfig({ ...base, REMOTE_BETA_ACCESS_ENABLED: value })).toThrow(
+        /REMOTE_BETA_ACCESS_ENABLED/,
+      );
+    }
+  });
+
   it("accepts only destination-bound, one-to-one identity migration pairs", () => {
     const mapping = {
       clientId: base.WORKOS_CLIENT_ID,

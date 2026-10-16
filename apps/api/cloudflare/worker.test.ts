@@ -111,9 +111,10 @@ describe("Cloudflare account API container configuration", () => {
   const ctx = {} as ConstructorParameters<typeof AccountApi>[0];
 
   it.each([
-    [undefined, "user_mini, user_macbook"],
-    ["user_simulator", "user_mini, user_macbook,user_simulator"],
-  ])("preserves existing enrollment when adding trial users (%s)", (additional, expected) => {
+    [undefined, "user_mini, user_macbook", undefined],
+    ["user_simulator", "user_mini, user_macbook,user_simulator", "true"],
+    ["user_simulator", "user_mini, user_macbook,user_simulator", "false"],
+  ])("preserves enrollment and forwards beta policy (%s)", (additional, expected, beta) => {
     const { env } = setup();
     const container = new AccountApi(ctx, {
       ...env,
@@ -126,6 +127,7 @@ describe("Cloudflare account API container configuration", () => {
       APNS_PRODUCTION_PRIVATE_KEY: "test-production-private-key",
       APNS_PRODUCTION_KEY_ID: "PROD123456",
       ...(additional ? { REMOTE_TEST_ADDITIONAL_USER_IDS: additional } : {}),
+      ...(beta ? { REMOTE_BETA_ACCESS_ENABLED: beta } : {}),
     });
 
     expect(container.envVars).toMatchObject({
@@ -140,6 +142,8 @@ describe("Cloudflare account API container configuration", () => {
       APNS_PRODUCTION_PRIVATE_KEY: "test-production-private-key",
       APNS_PRODUCTION_KEY_ID: "PROD123456",
     });
+    if (beta) expect(container.envVars).toHaveProperty("REMOTE_BETA_ACCESS_ENABLED", beta);
+    else expect(container.envVars).not.toHaveProperty("REMOTE_BETA_ACCESS_ENABLED");
   });
 
   it("keeps remote access unconfigured and unrelated bindings out of the container", () => {
@@ -151,6 +155,7 @@ describe("Cloudflare account API container configuration", () => {
     expect(container.envVars).not.toHaveProperty("CLOUDFLARE_API_TOKEN");
     expect(container.envVars).not.toHaveProperty("CLOUDFLARE_TUNNEL_DOMAIN");
     expect(container.envVars).not.toHaveProperty("REMOTE_TEST_USER_IDS");
+    expect(container.envVars).not.toHaveProperty("REMOTE_BETA_ACCESS_ENABLED");
     expect(container.envVars).not.toHaveProperty("MIGRATION_PROXY_SECRET");
     expect(container.envVars).not.toHaveProperty("ACCOUNT_API");
     expect(container.envVars).not.toHaveProperty("APNS_PRODUCTION_PRIVATE_KEY");
