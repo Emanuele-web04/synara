@@ -19,6 +19,10 @@ import { type Thread } from "../../types";
 import { resolveCycledModelSlug } from "../ChatView.logic";
 import { collectForegroundRunningSubagentStripItems } from "./ComposerSubagentStrip.logic";
 import { eventTargetsInAppBrowser, shouldCaptureChatFindShortcut } from "./threadFind.logic";
+import {
+  markWorkspaceFileFindShortcutResolved,
+  WORKSPACE_FILE_PREVIEW_FIND_EVENT,
+} from "./workspaceFileFind.logic";
 import { useChatProjectScripts } from "./useChatProjectScripts";
 import { useChatProviderModels } from "./useChatProviderModels";
 import { useChatTerminalController } from "./useChatTerminalController";
@@ -34,6 +38,15 @@ function eventTargetsComposer(
   if (!composerForm) return false;
   const target = event.target;
   return target instanceof Node ? composerForm.contains(target) : false;
+}
+
+function eventTargetsWorkspaceFilePreview(event: globalThis.KeyboardEvent): boolean {
+  const target = event.target;
+  return (
+    target instanceof Element &&
+    target.closest('[data-workspace-file-preview][data-workspace-file-find-enabled="true"]') !==
+      null
+  );
 }
 
 function canHandleComposerPickerShortcut(
@@ -252,11 +265,15 @@ export function useChatKeyboardShortcuts({
         terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
         terminalWorkspaceTerminalTabActive,
         terminalWorkspaceChatTabActive,
+        filePreviewFocus: eventTargetsWorkspaceFilePreview(event),
       };
 
       const command = resolveShortcutCommand(event, keybindings, {
         context: shortcutContext,
       });
+      if (shortcutContext.filePreviewFocus) {
+        markWorkspaceFileFindShortcutResolved(event);
+      }
       if (!command) return;
 
       if (command === "model.effort.next") {
@@ -280,6 +297,21 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         toggleComposerFocus();
+        return;
+      }
+
+      if (
+        command === "file.find" ||
+        (command === "chat.find" && shortcutContext.filePreviewFocus)
+      ) {
+        if (!shortcutContext.filePreviewFocus) return;
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(
+          new CustomEvent(WORKSPACE_FILE_PREVIEW_FIND_EVENT, {
+            detail: { target: event.target },
+          }),
+        );
         return;
       }
 
