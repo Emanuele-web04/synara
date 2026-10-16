@@ -6,13 +6,15 @@ import {
   TurnId,
   WS_METHODS,
   RemoteAgentCall,
+  SynaraCreateThreadsResult,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
 import { parseComputerInvocation } from "@synara/shared/computerInvocation";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { ServerEnvironmentShape } from "../environment/Services/ServerEnvironment";
 import type { HostConnectionRegistry } from "../hostConnections/registry";
 import { controllerProtocol } from "../hostConnections/dialer";
+import type { ThreadCreationRecapInput } from "./creationCoordinator";
 import { stableGatewayDigest } from "./creationUtils";
 import { mcpToolResultJson, type McpToolCallResult } from "./protocol";
 import { errorText, readStringArg } from "./toolInput";
@@ -69,8 +71,38 @@ function qualifyGatewayResult(result: McpToolCallResult, environmentId: string):
   });
 }
 
+/** A forwarded creation as a batch result, or null when nothing was created. */
+function forwardedCreationResult(
+  toolName: string,
+  result: McpToolCallResult,
+): SynaraCreateThreadsResult | null {
+  if (
+    (toolName !== "synara_create_thread" && toolName !== "synara_create_threads") ||
+    result.isError ||
+    result.content.length !== 1 ||
+    result.content[0]?.type !== "text"
+  )
+    return null;
+  const value = JSON.parse(result.content[0].text);
+  // synara_create_thread flattens its single thread into the result.
+  const batch =
+    toolName === "synara_create_threads"
+      ? value
+      : {
+          operationId: value.operationId,
+          requestId: value.requestId,
+          requestedCount: 1,
+          createdCount: 1,
+          threadIds: [value.threadId],
+          threads: [value],
+        };
+  const decoded = Option.getOrNull(Schema.decodeUnknownOption(SynaraCreateThreadsResult)(batch));
+  return decoded && decoded.threads.length > 0 ? decoded : null;
+}
+
 export interface RemoteGatewayDependencies {
   readonly assertRemoteWriteAllowed: (callerThreadId: string) => Effect.Effect<void, unknown>;
+  readonly appendThreadCreationRecap: (input: ThreadCreationRecapInput) => Effect.Effect<void>;
   readonly tools: readonly ToolEntry[];
   readonly environment: ServerEnvironmentShape;
   readonly connections: Pick<
@@ -233,13 +265,23 @@ export function makeRemoteAwareTools(input: RemoteGatewayDependencies): readonly
             );
             yield* assertCurrent();
             const decoded = Schema.decodeUnknownSync(RemoteAgentResult)(result);
-            return qualifyGatewayResult(
+            const qualified = qualifyGatewayResult(
               {
                 content: decoded.content,
                 ...(decoded.isError !== undefined ? { isError: decoded.isError } : {}),
               },
               targetId,
             );
+            // The remote host skips the recap because the caller lives here.
+            const created = forwardedCreationResult(tool.definition.name, qualified);
+            if (created && context.callerTurnId !== null)
+              yield* input.appendThreadCreationRecap({
+                callerThreadId: context.callerThreadId,
+                callerTurnId: context.callerTurnId,
+                result: created,
+                remote: { environmentId: targetId, hostName: connection.hostName },
+              });
+            return qualified;
           }).pipe(
             Effect.catch((error) =>
               Effect.succeed(

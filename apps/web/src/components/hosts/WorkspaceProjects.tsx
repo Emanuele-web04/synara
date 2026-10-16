@@ -28,7 +28,7 @@ import {
   type WorkspaceSession,
 } from "../../lib/hosts/workspaceSessions";
 import type { WorkspaceSidebarActions } from "../../lib/hosts/workspaceFrame";
-import { openWorkspacePath } from "./WorkspacePanels";
+import { openWorkspacePath } from "../../lib/hosts/workspaceCommands";
 import { resolveProjectStatusIndicator, resolveSidebarRootThreadId } from "../Sidebar.logic";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 import { ProjectEmojiGlyph } from "../ProjectSidebarIcon";

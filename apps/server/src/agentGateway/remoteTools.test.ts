@@ -6,9 +6,11 @@ import {
   TurnId,
   type ExecutionEnvironmentDescriptor,
   type HostConnection,
+  type OrchestrationCommand,
   type RemoteAgentCall,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
+import { appendThreadCreationRecap } from "./creationCoordinator";
 import { makeRemoteAwareTools, receiveRemoteTool } from "./remoteTools";
 import { GatewayToolError, type ToolContext, type ToolEntry } from "./toolRuntime";
 import { mcpToolResultJson, type McpToolCallResult } from "./protocol";
@@ -85,8 +87,28 @@ function tool(name = "synara_read_thread", write = false): ToolEntry {
     handler: vi.fn(() => Effect.succeed(mcpToolResultJson({ threadId: "same-id", side: "local" }))),
   };
 }
+const createdThread = (threadId: string) => ({
+  index: 0,
+  threadId,
+  projectId: "project",
+  title: "Say hi",
+  target: { provider: "codex", model: "gpt-5.6-terra" },
+  provider: "codex",
+  model: "gpt-5.6-terra",
+  runtimeMode: "approval-required",
+  environment: "local",
+  branch: null,
+  worktreePath: null,
+  link: `thread://${threadId}`,
+  status: "task_dispatched",
+});
 function setup(entry = tool()) {
   const lifetime = new AbortController();
+  const dispatched: OrchestrationCommand[] = [];
+  const engine = {
+    dispatch: (command: OrchestrationCommand) =>
+      Effect.sync(() => ({ sequence: dispatched.push(command) })),
+  };
   const connections = {
     connectionSignal: () => lifetime.signal,
     lifecycleGeneration: 0,
@@ -97,6 +119,7 @@ function setup(entry = tool()) {
   const tools = makeRemoteAwareTools({
     tools: [entry],
     assertRemoteWriteAllowed: () => Effect.void,
+    appendThreadCreationRecap: (input) => appendThreadCreationRecap(engine, input),
     environment: remoteTestEnvironment("book"),
     connections,
     requireThreadShell: () =>
@@ -108,6 +131,8 @@ function setup(entry = tool()) {
   return {
     entry,
     connections,
+    dispatched,
+    engine,
     lifetime,
     run: (args: Record<string, unknown>, ctx = context) =>
       Effect.runPromise(tools[1]!.handler(args, ctx)),
@@ -226,6 +251,73 @@ describe("remote Synara agent tools", () => {
         },
       ],
     });
+  });
+  it.each([
+    [
+      "synara_create_thread",
+      { operationId: "op-remote", requestId: "hi", ...createdThread("remote-thread") },
+    ],
+    [
+      "synara_create_threads",
+      {
+        operationId: "op-remote",
+        requestId: "hi",
+        requestedCount: 1,
+        createdCount: 1,
+        threadIds: ["remote-thread"],
+        threads: [createdThread("remote-thread")],
+      },
+    ],
+  ])("records one recap for %s on the local caller turn", async (name, remoteResult) => {
+    const { run, connections, dispatched, engine } = setup(tool(name, true));
+    connections.call.mockResolvedValue(mcpToolResultJson(remoteResult));
+    await run({ environmentId: "mini", requestId: "hi" });
+    expect(dispatched).toHaveLength(1);
+    const recap = dispatched[0]!;
+    if (recap.type !== "thread.activity.append") throw new Error(recap.type);
+    expect(recap.threadId).toBe("same-id");
+    expect(recap.activity).toMatchObject({
+      kind: "synara.threads.created",
+      turnId: "turn",
+      payload: {
+        source: "synara_mcp",
+        environmentId: "mini",
+        hostName: "Mini",
+        operationId: "op-remote",
+        requestedCount: 1,
+        createdCount: 1,
+        threads: [{ threadId: "remote-thread", title: "Say hi", environmentId: "mini" }],
+      },
+    });
+    // A replayed result reuses the ids; a same-id local operation cannot collide.
+    await run({ environmentId: "mini", requestId: "hi" });
+    expect(dispatched[1]?.commandId).toBe(recap.commandId);
+    await Effect.runPromise(
+      appendThreadCreationRecap(engine, {
+        callerThreadId: "same-id",
+        callerTurnId: "turn",
+        result: {
+          operationId: "op-remote",
+          requestId: "hi",
+          requestedCount: 1,
+          createdCount: 0,
+          threadIds: [],
+          threads: [],
+        },
+      }),
+    );
+    expect(dispatched[2]?.commandId).not.toBe(recap.commandId);
+  });
+  it("records no recap when a forwarded creation fails", async () => {
+    const { run, connections, dispatched } = setup(tool("synara_create_threads", true));
+    connections.call.mockResolvedValueOnce({
+      ...mcpToolResultJson({ error: { code: "creation_limit_exceeded", message: "no" } }),
+      isError: true,
+    });
+    expect((await run({ environmentId: "mini", requestId: "hi" })).isError).toBe(true);
+    connections.call.mockRejectedValueOnce(new Error("socket closed"));
+    expect((await run({ environmentId: "mini", requestId: "hi" })).isError).toBe(true);
+    expect(dispatched).toEqual([]);
   });
   it("never inherits a colliding remote caller's local identity or project", async () => {
     const entry = tool();

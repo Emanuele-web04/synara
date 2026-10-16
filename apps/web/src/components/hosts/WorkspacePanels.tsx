@@ -66,7 +66,6 @@ import {
 import {
   readWorkspaceSessions,
   restoreConnectedWorkspaces,
-  readAvailableWorkspaceNavigation,
   subscribeWorkspaceSessions,
   removeWorkspaceSession,
   updateWorkspaceSession,
@@ -90,12 +89,6 @@ function selection(
   const environmentId = params.get("environment");
   const path = params.get("path") ?? "/";
   return environmentId && isWorkspacePath(path) ? { environmentId, path } : null;
-}
-
-export function openWorkspacePath(owner: string | WorkspaceSession, path: string): void {
-  if (typeof owner !== "string" && !readAvailableWorkspaceNavigation(owner)) return;
-  const environmentId = typeof owner === "string" ? owner : owner.host.executionScope.environmentId;
-  appHistory.push(workspaceRoute(environmentId, path));
 }
 
 function WorkspacePanel({

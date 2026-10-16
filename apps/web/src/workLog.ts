@@ -273,6 +273,9 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+  /** Paired computer that owns the threads; absent when they live on this one. */
+  environmentId?: string;
+  hostName?: string;
 }
 
 export interface WorkLogSynaraWorkerNoticeThread {
@@ -1375,7 +1378,15 @@ function extractWorkLogSynaraThreadCreation(
     typeof payload.createdCount === "number" && Number.isInteger(payload.createdCount)
       ? payload.createdCount
       : threads.length;
-  return { operationId, requestedCount, createdCount, threads };
+  const environmentId = asTrimmedString(payload.environmentId);
+  const hostName = asTrimmedString(payload.hostName);
+  return {
+    operationId,
+    requestedCount,
+    createdCount,
+    threads,
+    ...(environmentId ? { environmentId, ...(hostName ? { hostName } : {}) } : {}),
+  };
 }
 
 function extractWorkLogSynaraWorkerNotice(

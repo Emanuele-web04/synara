@@ -340,6 +340,7 @@ export {
   DashboardCircleIcon as HubIcon,
   Download01Icon as UpdateDownloadIcon,
   ExpandIcon as PanelExpandIcon,
+  EraserIcon as ClearReadIcon,
   Folder02Icon as FolderOpenIcon,
   FolderAddIcon,
   FolderClosedIcon as FolderIcon,

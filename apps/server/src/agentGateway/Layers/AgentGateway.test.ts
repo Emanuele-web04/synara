@@ -3030,6 +3030,112 @@ describe("AgentGateway", () => {
     });
   }
 
+  it.effect("records a remote creation recap on the local caller turn", () => {
+    const connection: HostConnection = {
+      hostId: "paired-book",
+      environmentId: "book",
+      hostName: "Book",
+      state: "connected",
+      transport: "cloudflare",
+      startedAt: NOW,
+      credentialExpiresAt: "2027-01-01T00:00:00.000Z",
+      wsPath: "/unused",
+      executionScope: {
+        environmentId: "book",
+        accountAuthority: "https://example.invalid",
+        userId: "user",
+        organizationId: "org",
+        channel: "dev",
+      },
+    };
+    const lifetime = new AbortController();
+    let failRemote = false;
+    class TestConnections extends HostConnectionRegistry {
+      override list() {
+        return [connection];
+      }
+      override get() {
+        return connection;
+      }
+      override connectionSignal() {
+        return lifetime.signal;
+      }
+      override async call() {
+        if (failRemote)
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ error: { code: "operation_failed" } }) },
+            ],
+            isError: true,
+          };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                operationId: "gateway:create:remote",
+                requestId: "remote-hi",
+                index: 0,
+                threadId: "remote-thread",
+                projectId: "remote-project",
+                title: "Say hi",
+                target: { provider: "codex", model: "gpt-5.6-terra" },
+                provider: "codex",
+                model: "gpt-5.6-terra",
+                runtimeMode: "approval-required",
+                environment: "local",
+                branch: null,
+                worktreePath: null,
+                status: "task_dispatched",
+              }),
+            },
+          ],
+        };
+      }
+    }
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      remoteEnvironment: true,
+      remoteConnections: new TestConnections(),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const create = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_create_thread",
+          args: {
+            environmentId: "book",
+            requestId: "remote-hi",
+            prompt: "hi",
+            projectId: "remote-project",
+            target: { provider: "codex", model: "gpt-5.6-terra" },
+          },
+        });
+      const created = yield* create();
+      assert.isFalse(isToolError(created.result), toolErrorText(created.result));
+      const recaps = harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.threads.created",
+      );
+      assert.lengthOf(recaps, 1);
+      const recap = recaps[0];
+      if (recap?.type !== "thread.activity.append") throw new Error("missing recap");
+      assert.equal(recap.threadId, ThreadId.makeUnsafe("thread-parent"));
+      assert.equal(recap.activity.turnId, TurnId.makeUnsafe("turn-parent-active"));
+      assert.deepInclude(recap.activity.payload as Record<string, unknown>, {
+        source: "synara_mcp",
+        environmentId: "book",
+        hostName: "Book",
+        operationId: "gateway:create:remote",
+        createdCount: 1,
+      });
+      failRemote = true;
+      assert.isTrue(isToolError((yield* create()).result));
+      assert.lengthOf(harness.dispatched, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect(
     "delegates creation durably without using a colliding local caller or its privileges",
     () => {
