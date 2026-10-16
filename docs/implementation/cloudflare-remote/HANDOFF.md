@@ -1,5 +1,17 @@
 # Remote connections — punto di ripartenza
 
+## Login GitHub Production — 16 ottobre 2026
+
+- Provider GitHub configurato, abilitato e validato in WorkOS Production. Callback
+  Supabase e segreto precedenti conservati; aggiunto il callback esatto WorkOS e
+  salvato il nuovo segreto solo in WorkOS. Nessun permesso repository o pagamento.
+- Ripristinato nel sorgente il pulsante GitHub esistente, sul percorso SSO comune
+  a Google e Apple. Passano 7 test browser, formattazione, lint, typecheck e build
+  desktop. Le warning lint preesistenti restano.
+- La copia con dati temporanei arriva al consenso GitHub; consenso finale e
+  ritorno nell'app ancora da verificare. Account dei Mac e dati esistenti intatti.
+  Nessuna nuova release: la .14 pubblicata continua a mostrare Google/Apple/email.
+
 ## Remote .14 e stato TestFlight — 16 ottobre 2026
 
 - Pubblicata [Remote 1.0.6-remote.14](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14),

@@ -31,9 +31,11 @@ qualifies startup without inheriting the operator's account URL. Remote test
 enrollment remains separate from sign-in; the service does not automatically
 grant new accounts remote access.
 
-The hosted Remote app offers Google, Apple and email sign-in. GitHub remains
-available on generic builds for separately configured account services. Remote
-also enables the profile/usage sync path without an operator flag; an explicit
+The published Remote .14 app offers Google, Apple and email sign-in. GitHub is
+now configured in the hosted WorkOS Production environment; the next desktop
+build restores its existing GitHub button. Release qualification requires a
+completed browser login and callback, not only an enabled provider. Remote also
+enables the profile/usage sync path without an operator flag; an explicit
 `SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
 generic/Beta builds still require their existing opt-in. Product analytics remain
 separate and off by default.

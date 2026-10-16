@@ -1,5 +1,26 @@
 # Cloudflare Remote — execution state
 
+## GitHub Production sign-in follow-up — 2026-10-16
+
+GitHub OAuth is enabled and validated in WorkOS Production. The existing Synara
+GitHub OAuth app now includes the exact WorkOS callback alongside its existing
+Supabase callback; both use exact matching. An additional client secret is stored
+only in WorkOS. The old secret and callback remain intact. The flow requests
+`user:email`, without repository scopes or provider-token return to Synara.
+
+The source restores the existing GitHub button for Remote through the same SSO
+handler as Google and Apple. The common provider/cancellation/recovery browser
+suite passes (7 tests), as do formatting, lint, twelve-package typecheck and the
+desktop source build. Existing lint warnings remain. The hosted instance and
+GitHub authorize API respond successfully. The live source app reaches GitHub's
+consent page; final consent and callback verification are still pending. No new
+release or tag has been published.
+
+The live probe uses a disposable Synara home and Electron profile. GitHub's own
+account email differs from the existing Mac login, so the test must remain a
+separate identity: do not relink or merge the existing Mac account to make it
+pass. No existing account, chat history or cloud identity mapping was modified.
+
 ## Remote .14 delivery — 2026-10-16
 
 Version **1.0.6-remote.14**, source

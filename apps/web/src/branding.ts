@@ -5,14 +5,9 @@ export const APP_BASE_NAME = "Synara";
 const isCanaryDesktop =
   typeof window !== "undefined" && window.location?.protocol === "synara-canary:";
 const isBetaDesktop = typeof window !== "undefined" && window.location?.protocol === "synara-beta:";
-/** Shared flavor check for app branding and hosted Remote sign-in choices. */
-export function isRemoteDesktop(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.location?.protocol === `${SYNARA_REMOTE_DESKTOP_SCHEME}:`
-  );
-}
-export const APP_DISPLAY_NAME = isRemoteDesktop()
+const isRemoteDesktop =
+  typeof window !== "undefined" && window.location?.protocol === `${SYNARA_REMOTE_DESKTOP_SCHEME}:`;
+export const APP_DISPLAY_NAME = isRemoteDesktop
   ? "Synara Remote"
   : isCanaryDesktop
     ? "Synara Canary"
