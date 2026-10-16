@@ -4563,13 +4563,14 @@ export default function Sidebar() {
     const { groupThreads: chats, nonGroupThreads: projectThreads } =
       partitionSidebarThreadsByProjectIds(visibleNonGroupSidebarThreads, chatProjectIds);
     const needsAttention = (threads: readonly SidebarThreadSummary[]) =>
-      hasUnreadActivityOutsideActiveThread(threads, activeSidebarThreadId) ||
+      hasActivityNeedingAttention(threads, activeSidebarThreadId, resolveActivityPriorityTierForSidebar) ||
       countNeedsYouActions(threads, activeSidebarThreadId, dismissedThreadStatusKeyByThreadId) > 0;
     return { projects: needsAttention(projectThreads), chats: needsAttention(chats) };
   }, [
     activeSidebarThreadId,
     chatProjects,
     dismissedThreadStatusKeyByThreadId,
+    resolveActivityPriorityTierForSidebar,
     visibleNonGroupSidebarThreads,
   ]);
   const groupProjects = useMemo(
