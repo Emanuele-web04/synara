@@ -11,47 +11,22 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 7fb4a362e1224898f0d35493949690320a306696
+          ref: 75c55fa5250b8bf0646c53e350d73d95c38d0cb5
           persist-credentials: false
-      - uses: ./.github/actions/setup-workspace
-      - name: Archive pinned validation tools without credentials
+      - name: Archive pinned source without credentials or local state
         run: |
-          mkdir -p "$RUNNER_TEMP/notion-ux-workspace/bin"
-          cp "$(command -v bun)" "$RUNNER_TEMP/notion-ux-workspace/bin/bun"
-          cp "$(command -v node)" "$RUNNER_TEMP/notion-ux-workspace/bin/node"
-          tar -czf "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules
-          split -b 350M -d "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" "$RUNNER_TEMP/notion-ux-workspace/dependencies.part"
-          sha256sum "$RUNNER_TEMP/notion-ux-workspace/dependencies.tar.gz" > "$RUNNER_TEMP/notion-ux-workspace/bin/dependencies.sha256"
-          git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-workspace/bin/source-commit.txt"
+          mkdir -p "$RUNNER_TEMP/notion-ux-source"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/notion-ux-source/source.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-source/source-commit.txt"
+          sha256sum "$RUNNER_TEMP/notion-ux-source/source.tar.gz" > "$RUNNER_TEMP/notion-ux-source/source.sha256"
       - uses: actions/upload-artifact@v7
         with:
-          name: notion-ux-tools-binaries
-          path: ${{ runner.temp }}/notion-ux-workspace/bin
-          retention-days: 2
-          compression-level: 0
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: notion-ux-tools-part00
-          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part00
-          retention-days: 2
-          compression-level: 0
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: notion-ux-tools-part01
-          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part01
-          retention-days: 2
-          compression-level: 0
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: notion-ux-tools-part02
-          path: ${{ runner.temp }}/notion-ux-workspace/dependencies.part02
+          name: notion-ux-source
+          path: ${{ runner.temp }}/notion-ux-source
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
