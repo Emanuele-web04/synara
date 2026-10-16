@@ -1083,3 +1083,66 @@ is a prerelease with curated notes; GitHub Latest remains Stable `v1.0.5`. The
 installed Macs were not replaced during this publication. Remote retains its
 separate identity/data/feed;
 Stable/Beta download pages do not need a change for this tester-only lane.
+
+### 2026-10-16 — Remote .9 includes the feature-branch updates
+
+The final desktop branch push exposed three pre-existing commits not included
+in the `.8` cut: `6341df0` (compact remote Activity metadata), `e85ab15` (clear
+read chats from Priority), and `c33a532` (created-thread cards for remote chat
+creation). They were merged normally with the latest main and local delivery
+notes as `802b7f1`; no ref or existing public release was overwritten. The `.9`
+candidate `41bd27e` contains all three, main `f2614e5` and the workspace startup
+repair. The remote feature-branch head was checked before tagging.
+
+All 447 affected gateway, work-log, timeline and browser checks pass with Node
+24, along with format, lint, twelve-package typecheck, brand and release smoke.
+All 86 shared Swift fixtures validate against this desktop; there is no new
+WebSocket method/schema or migration. The existing native work-log handles the
+recap summary, and Clear read from Priority already exists in its Activity menu.
+TestFlight 135 remains the current compatible iPhone/iPad build; no additional
+mobile binary is needed for these desktop updates.
+
+Publication workflow `38835973834` completed successfully: all quality and server
+gates, signed/notarized macOS ARM64 packaging and packaged startup qualification.
+The public ZIP, DMG, provenance and Remote feed match GitHub asset digests, source
+`41bd27e` and its exact lockfile. Strict app/DMG signatures, Developer ID,
+Gatekeeper and both stapled tickets passed independent local verification.
+[Remote .9](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.9)
+is public with curated notes and its own updater feed; GitHub Stable Latest stays
+`v1.0.5`. The installed desktop bundles were not replaced. The final MacBook
+tunnel availability probe still failed (HTTP 502, after the earlier Cloudflare
+1033); fresh two-Mac transcript/reload qualification remains open. Native branches
+are aligned with TestFlight 135 and the release handoff. No account, application
+database, pairing trust or physical-phone state was reset.
+
+### 2026-10-16 — Remote .9 installed on both Macs and live-qualified
+
+Both Macs now run the signed/notarized `.9` bundle, with `.7` retained for
+rollback. The Mini was quit normally with zero active turns; its private backup
+passed integrity checks. All 49 original chat ids, 224 message rows, 95 turn rows,
+eight projects and the existing plan remain intact. After the two harmless smoke
+chats it has 51 chats, 228 messages and 97 turns. Original message/turn/project
+rows, host/device identities and pairing trust match the backup; the only change
+to an original chat is `updated_at`. The MacBook's comparison retained all 107
+original chats, 1,761 messages and 362 turns, plus account, identities, attachments
+and authorizations. The later native smoke follow-up adds a new turn to its
+existing test chat, rather than replacing any original history.
+
+The existing MacBook tunnel recovered after the normal app restart; its public
+`/health` returns HTTP 200, independently confirmed from the Mini. No new tunnel
+identity, enrollment, credentials or account login was needed. A Mini local Codex
+turn completed in 4.4 seconds and remained readable after reload. The MacBook
+created a new chat on the Mini, received its real response and reopened it; its
+own existing local transcript also opens. The native build 135 simulator shows
+one Mini and one MacBook, both Connected, reads the newly created Mini response
+and the MacBook history, and successfully sends/receives a harmless MacBook
+follow-up. The temporary simulator mirror was stopped. No physical iPhone or
+production APNs delivery test was performed.
+
+The subsequent user push adds `8db6bbf` (Activity status/hover cards) and `95aa0f5`
+(ASCII pattern beneath the composer) on the feature branch; main is still
+`f2614e5`. The checkout fast-forwards to these commits without altering the public
+`.9` tag or installed apps. All 34 affected browser tests and 47 unit/guard tests,
+lint and twelve-package typecheck pass. These web presentation changes do not
+change native contracts or require another iPhone/iPad build. They require a
+separate desktop package to reach installed apps; `.9` does not contain them.

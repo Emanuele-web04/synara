@@ -2,7 +2,6 @@ import "../../index.css";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { createRef } from "react";
 
 import { AsciiWaveBackground } from "./AsciiWaveBackground";
 
@@ -118,57 +117,4 @@ it("publishes complete glyph layers after resize without a partial top-down wipe
   host.style.height = "800px";
   await expect.poll(() => bottomCoverage.length, { timeout: 5000 }).toBeGreaterThan(0);
   expect(bottomCoverage.every(Boolean)).toBe(true);
-});
-
-it("keeps the composer clear during ripples and after it grows", async () => {
-  motion.reduced = true;
-  const exclusionRef = createRef<HTMLDivElement>();
-  const view = await render(
-    <div data-testid="landing" style={{ position: "relative", width: 800, height: 600 }}>
-      <AsciiWaveBackground exclusionRef={exclusionRef} />
-      <div
-        ref={exclusionRef}
-        style={{ position: "absolute", left: 100, top: 220, width: 600, height: 160 }}
-      />
-    </div>,
-  );
-  const host = document.querySelector<HTMLDivElement>('[data-testid="landing"]')!;
-  const canvas = host.querySelector("canvas")!;
-  const isComposerClear = () => {
-    const rect = exclusionRef.current!.getBoundingClientRect();
-    const bounds = canvas.getBoundingClientRect();
-    const scale = canvas.width / bounds.width;
-    return canvas
-      .getContext("2d")!
-      .getImageData(
-        Math.ceil((rect.left - bounds.left) * scale),
-        Math.ceil((rect.top - bounds.top) * scale),
-        Math.floor(rect.width * scale),
-        Math.floor(rect.height * scale),
-      )
-      .data.every((byte) => byte === 0);
-  };
-  await expect.poll(() => pixels(canvas).some((byte) => byte > 0), { timeout: 5000 }).toBe(true);
-  expect(isComposerClear()).toBe(true);
-  const rect = host.getBoundingClientRect();
-  for (const type of ["pointerdown", "pointerup"]) {
-    host.dispatchEvent(
-      new PointerEvent(type, {
-        bubbles: true,
-        button: 0,
-        isPrimary: true,
-        pointerId: 1,
-        clientX: rect.left + 400,
-        clientY: rect.top + 200,
-      }),
-    );
-  }
-  await wait(300);
-  expect(isComposerClear()).toBe(true);
-  await wait(2800);
-  exclusionRef.current!.style.height = "260px";
-  await wait(500);
-  expect(isComposerClear()).toBe(true);
-  expect(pixels(canvas).some((byte) => byte > 0)).toBe(true);
-  await view.unmount();
 });

@@ -3,7 +3,7 @@
 // Layer: Chat presentation
 // Depends on: the active theme's ink and accent colors.
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useTheme } from "~/hooks/useTheme";
@@ -30,8 +30,6 @@ const RIPPLE_WOBBLE_PX = 34;
 const PATCH_THRESHOLD_LOW = 0.4;
 const PATCH_THRESHOLD_HIGH = 0.78;
 const INK_ALPHA_MAX = 0.18;
-const COMPOSER_CLEARANCE_PX = 12;
-const COMPOSER_FADE_PX = 48;
 // The field cycles through these looks, cross-fading from one to the next.
 const PATTERN_DURATION_MS = 20_000;
 const PATTERN_CROSSFADE_MS = 4_000;
@@ -246,11 +244,7 @@ function buildAtlas(fontFamily: string, cellW: number, cellH: number, dpr: numbe
   return canvas;
 }
 
-export function AsciiWaveBackground({
-  exclusionRef,
-}: {
-  exclusionRef?: RefObject<HTMLElement | null>;
-}) {
+export function AsciiWaveBackground() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ripplesRef = useRef<Ripple[]>([]);
@@ -497,26 +491,6 @@ export function AsciiWaveBackground({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       composite(field, field.inkMask, null);
       if (hasAccent) composite(field, field.accentMask, accent);
-
-      // Remove the decoration itself, so translucent/glass composers stay clear in
-      // every theme. Apply after both passes so click ripples respect the same gap.
-      const exclusion = exclusionRef?.current;
-      if (exclusion) {
-        const rect = exclusion.getBoundingClientRect();
-        const bounds = container.getBoundingClientRect();
-        ctx.save();
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.fillStyle = "#000";
-        ctx.shadowColor = "#000";
-        ctx.shadowBlur = COMPOSER_FADE_PX * dpr;
-        ctx.fillRect(
-          (rect.left - bounds.left - COMPOSER_CLEARANCE_PX) * dpr,
-          (rect.top - bounds.top - COMPOSER_CLEARANCE_PX) * dpr,
-          (rect.width + 2 * COMPOSER_CLEARANCE_PX) * dpr,
-          (rect.height + 2 * COMPOSER_CLEARANCE_PX) * dpr,
-        );
-        ctx.restore();
-      }
     };
 
     let timerId = 0;
@@ -623,8 +597,6 @@ export function AsciiWaveBackground({
       if (started) rebuildWhenIdle();
     });
     resizeObserver.observe(container);
-    // Reduced motion has no idle redraw loop, so composer growth must also wake it.
-    if (exclusionRef?.current) resizeObserver.observe(exclusionRef.current);
     document.addEventListener("visibilitychange", wake);
 
     return () => {
@@ -637,7 +609,7 @@ export function AsciiWaveBackground({
       if (frameId !== 0) cancelAnimationFrame(frameId);
       window.clearTimeout(timerId);
     };
-  }, [ink, accent, reduceMotion, exclusionRef]);
+  }, [ink, accent, reduceMotion]);
 
   return (
     <div
