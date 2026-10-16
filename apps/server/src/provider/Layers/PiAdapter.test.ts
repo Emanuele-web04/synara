@@ -26,12 +26,12 @@ import {
   makePiBashProcessSupervisor,
   makePiExtensionModeCoordinator,
   makePiRuntimeEventBase,
-  makePiStoragePaths,
   makePiUserInputOptions,
   toPiProviderModelDescriptor,
   resolvePiStartInstanceId,
   resolvePiExtensionMode,
 } from "./PiAdapter";
+import { makePiStoragePaths } from "../piStoragePaths.ts";
 
 describe("makePiStoragePaths", () => {
   it("resolves modelSelection-only account identity before Pi storage setup", () => {

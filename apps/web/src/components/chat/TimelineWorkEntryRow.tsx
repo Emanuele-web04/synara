@@ -31,7 +31,7 @@ import {
   ContextCompactionIcon,
   ComputerUseIcon,
   EyeIcon,
-  FileIcon,
+  FileReadIcon,
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
@@ -70,6 +70,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { SynaraLogo } from "../SynaraLogo";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
@@ -232,7 +233,7 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
 }
 
 // Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the file icon
+// without a `file-read` requestKind, so match their tool name to surface the read icon
 // instead of the generic tool/wrench fallback.
 function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
@@ -247,13 +248,13 @@ function isSearchToolEntry(workEntry: TimelineWorkEntry): boolean {
 }
 
 // Command rows reuse toolCallLabel's wrapper-aware classifier so reads wear the
-// file glyph, searches the magnifier, wrapped git/gh commands the GitHub mark,
+// open book, searches the magnifier, wrapped git/gh commands the GitHub mark,
 // and ordinary commands keep the terminal icon.
 function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   const command = workEntry.command ?? workEntry.rawCommand;
   switch (command ? resolveCommandVisualKind(command) : "terminal") {
     case "read":
-      return FileIcon;
+      return FileReadIcon;
     case "search":
       return SearchIcon;
     case "git":
@@ -295,7 +296,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   }
 
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
-  if (workEntry.requestKind === "file-read") return FileIcon;
+  if (workEntry.requestKind === "file-read") return FileReadIcon;
   if (workEntry.requestKind === "file-change") return PencilIcon;
   if (workEntry.requestKind === "tool") return McpIcon;
 
@@ -308,7 +309,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
-  if (isFileReadToolEntry(workEntry)) return FileIcon;
+  if (isFileReadToolEntry(workEntry)) return FileReadIcon;
   if (isSearchToolEntry(workEntry)) return SearchIcon;
 
   switch (workEntry.itemType) {
@@ -408,7 +409,7 @@ export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolea
     EntryIcon === SkillCubeIcon ||
     // File-read and search rows (e.g. `Read …`) have no disclosure chevron; keep
     // them at the same compact height as command rows.
-    EntryIcon === FileIcon ||
+    EntryIcon === FileReadIcon ||
     EntryIcon === SearchIcon
   );
 }
@@ -900,6 +901,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 >
                   {webFetchUrl ? (
                     <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                  ) : isMcpToolRow && LeftIcon === McpIcon && workEntry.mcpServer ? (
+                    <McpServerIcon
+                      serverName={workEntry.mcpServer}
+                      className={compact ? "size-3.5" : "size-4"}
+                    />
                   ) : (
                     renderWorkEntryIcon(LeftIcon, compact ? "size-3.5" : "size-4")
                   )}

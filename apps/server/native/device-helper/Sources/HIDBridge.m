@@ -205,6 +205,25 @@ static uint32_t SynaraUsageForCharacter(unichar c, BOOL *outShift) {
 
 static const uint32_t kUsageLeftShift = 225;
 
+// How long one input call waits for `dtuhidd` before reporting that nothing was
+// sent. Inside the server's 15 s RPC deadline; the connection keeps warming in
+// the background, so the next call usually finds it ready.
+static const NSTimeInterval kDTUHIDReadyTimeout = 9.0;
+static const NSTimeInterval kDTUHIDFlushTimeout = 2.0;
+
+// Consumer-page usages for the hardware buttons on the DTUHID transport.
+static uint16_t SynaraConsumerUsageForButton(SynaraHardwareButton button) {
+  switch (button) {
+    case SynaraHardwareButtonHome: return 0x40;        // Menu
+    case SynaraHardwareButtonLock: return 0x30;        // Power
+    case SynaraHardwareButtonSide: return 0x30;        // Power: same physical button
+    case SynaraHardwareButtonSiri: return 0xcf;        // Voice Command
+    case SynaraHardwareButtonVolumeUp: return 0xe9;    // Volume Increment
+    case SynaraHardwareButtonVolumeDown: return 0xea;  // Volume Decrement
+  }
+  return 0x40;
+}
+
 @implementation SynaraHIDBridge {
   id _client;
   dispatch_queue_t _sendQueue;
@@ -213,6 +232,35 @@ static const uint32_t kUsageLeftShift = 225;
   SynaraIndigoMouseFn _mouseFn;
   SynaraIndigoArbitraryFn _arbitraryFn;
   NSInteger _undelivered;
+  NSString *_undeliveredReason;
+  SynaraDTUHIDTransport *_dtuhid;
+  NSInteger _sentEvents;
+  NSTimeInterval _inputDeadline;
+
+}
+
+// Reserve two seconds inside the server's 15s RPC deadline for the response.
+- (void)beginInput {
+  _sentEvents = 0;
+  _undeliveredReason = nil;
+  _inputDeadline = NSProcessInfo.processInfo.systemUptime + 13.0;
+}
+
+- (NSTimeInterval)remainingInputTime {
+  return MAX(0, _inputDeadline - NSProcessInfo.processInfo.systemUptime);
+}
+
+- (NSString *)transportName {
+  return _dtuhid != nil ? @"dtuhid" : @"indigo";
+}
+
+- (nullable NSString *)undeliveredReason {
+  @synchronized(self) {
+    NSString *detail = _undeliveredReason ?: @"input was not delivered";
+    return _sentEvents == 0
+      ? [NSString stringWithFormat:@"nothing was sent: %@", detail]
+      : [NSString stringWithFormat:@"input may have been partially delivered; do not replay: %@", [detail stringByReplacingOccurrencesOfString:@"nothing was sent" withString:@"delivery unknown"]];
+  }
 }
 
 - (NSInteger)undeliveredEventCount {
@@ -224,12 +272,54 @@ static const uint32_t kUsageLeftShift = 225;
 /// Record an event that never reached the guest. Every early return in the
 /// injection paths below funnels through here, so no failure stays invisible.
 - (void)noteUndelivered {
+  [self noteUndeliveredBecause:nil];
+}
+
+- (void)noteUndeliveredBecause:(nullable NSString *)reason {
   @synchronized(self) {
     _undelivered += 1;
+    _undeliveredReason = [reason copy];
+  }
+}
+
+/// Waits for the DTUHID connection; NO (with the reason recorded) when input
+/// cannot be sent, so the caller stops before emitting half a gesture.
+- (BOOL)dtuhidReady {
+  NSTimeInterval remaining = [self remainingInputTime];
+  if (remaining <= 0) {
+    [self noteUndeliveredBecause:@"input deadline reached"];
+    return NO;
+  }
+  NSError *error = nil;
+  if ([_dtuhid waitUntilReadyWithTimeout:MIN(kDTUHIDReadyTimeout, remaining) error:&error]) {
+    return YES;
+  }
+  [self noteUndeliveredBecause:error.localizedDescription];
+  return NO;
+}
+
+- (void)dtuhidSent:(BOOL)sent {
+  if (!sent) {
+    [self noteUndeliveredBecause:@"the dtuhidd connection closed while sending"];
+  } else {
+    _sentEvents += 1;
+  }
+}
+
+- (void)dtuhidFlush {
+  if (![_dtuhid flushWithTimeout:MIN(kDTUHIDFlushTimeout, [self remainingInputTime])]) {
+    [self noteUndeliveredBecause:@"dtuhidd did not take the events in time"];
   }
 }
 
 - (BOOL)attachToDevice:(id)device error:(NSError **)error {
+  // From Xcode 27 the guest ignores Indigo input while accepting the send, so a
+  // legacy client there only produces taps that are acked and never land.
+  if (SynaraCoreSimulatorUsesDTUHID()) {
+    [_dtuhid invalidate];
+    _dtuhid = [[SynaraDTUHIDTransport alloc] initWithDevice:device];
+    return YES;
+  }
   NSString *developerDir = NSProcessInfo.processInfo.environment[@"SYNARA_DEVELOPER_DIR"];
   if (developerDir.length == 0) {
     developerDir = @"/Applications/Xcode.app/Contents/Developer";
@@ -312,11 +402,18 @@ static const uint32_t kUsageLeftShift = 225;
   void (^completion)(NSError *) = ^(NSError *sendError) {
     // Errors here are per-event and non-fatal; the stream keeps going.
   };
+  _sentEvents += 1;
   ((void (*)(id, SEL, SynaraIndigoMessage *, BOOL, dispatch_queue_t, void (^)(NSError *)))objc_msgSend)(
       _client, selector, message, YES, _sendQueue, completion);
 }
 
 - (void)sendTouchAtX:(double)x y:(double)y down:(BOOL)down {
+  if (_dtuhid != nil) {
+    if (![self dtuhidReady]) return;
+    [self dtuhidSent:[_dtuhid sendTouchAtX:x y:y down:down edge:SynaraTouchEdgeNone]];
+    if (!down) [self dtuhidFlush];
+    return;
+  }
   if (_mouseFn == NULL) {
     [self noteUndelivered];
     return;
@@ -358,6 +455,11 @@ static const uint32_t kUsageLeftShift = 225;
 }
 
 - (void)tapAtX:(double)x y:(double)y holdMs:(NSInteger)holdMs {
+  if (_dtuhid != nil && ![self dtuhidReady]) return;
+  if ((double)holdMs / 1000.0 + kDTUHIDFlushTimeout >= [self remainingInputTime]) {
+    [self noteUndeliveredBecause:@"long press cannot finish inside the input deadline"];
+    return;
+  }
   [self sendTouchAtX:x y:y down:YES];
   usleep((useconds_t)(MAX(holdMs, 1) * 1000));
   [self sendTouchAtX:x y:y down:NO];
@@ -367,10 +469,32 @@ static const uint32_t kUsageLeftShift = 225;
                 y:(double)startY
               toX:(double)endX
              endY:(double)endY
-       durationMs:(NSInteger)durationMs {
+       durationMs:(NSInteger)durationMs
+             edge:(SynaraTouchEdge)edge {
   NSInteger duration = MAX(durationMs, 1);
   // ~120Hz of interpolation, bounded so a long drag stays cheap.
   NSInteger steps = MIN(MAX(duration / 8, 2), 240);
+
+  if (_dtuhid != nil) {
+    if (![self dtuhidReady]) return;
+    if ((double)duration / 1000.0 + kDTUHIDFlushTimeout >= [self remainingInputTime]) {
+      [self noteUndeliveredBecause:@"gesture cannot finish inside the input deadline"];
+      return;
+    }
+    [self dtuhidSent:[_dtuhid sendTouchAtX:startX y:startY down:YES edge:edge]];
+    useconds_t stepDelay = (useconds_t)((duration * 1000) / steps);
+    for (NSInteger step = 1; step <= steps; step++) {
+      double progress = (double)step / (double)steps;
+      usleep(stepDelay);
+      [self dtuhidSent:[_dtuhid sendTouchAtX:startX + (endX - startX) * progress
+                                           y:startY + (endY - startY) * progress
+                                        down:YES
+                                        edge:edge]];
+    }
+    [self dtuhidSent:[_dtuhid sendTouchAtX:endX y:endY down:NO edge:edge]];
+    [self dtuhidFlush];
+    return;
+  }
 
   [self sendTouchAtX:startX y:startY down:YES];
   useconds_t stepDelay = (useconds_t)((duration * 1000) / steps);
@@ -386,6 +510,12 @@ static const uint32_t kUsageLeftShift = 225;
 }
 
 - (void)sendKeyUsage:(uint32_t)usage down:(BOOL)down {
+  if (_dtuhid != nil) {
+    if (![self dtuhidReady]) return;
+    [self dtuhidSent:[_dtuhid sendKeyUsage:usage down:down]];
+    if (!down) [self dtuhidFlush];
+    return;
+  }
   if (_keyboardFn == NULL) {
     [self noteUndelivered];
     return;
@@ -401,30 +531,69 @@ static const uint32_t kUsageLeftShift = 225;
 }
 
 - (NSInteger)typeText:(NSString *)text {
+  if (_dtuhid != nil && ![self dtuhidReady]) return 0;
   NSInteger skipped = 0;
-  NSUInteger length = text.length;
-  for (NSUInteger index = 0; index < length; index++) {
-    unichar character = [text characterAtIndex:index];
+  NSInteger droppedBefore = self.undeliveredEventCount;
+  BOOL shiftHeld = NO;
+  uint32_t heldKey = 0;
+  for (NSUInteger index = 0; index < text.length; index++) {
+    if (self.undeliveredEventCount != droppedBefore) break;
+    if ([self remainingInputTime] <= 0) {
+      [self noteUndeliveredBecause:@"text input deadline reached"];
+      break;
+    }
     BOOL needsShift = NO;
-    uint32_t usage = SynaraUsageForCharacter(character, &needsShift);
-    if (usage == 0) {
-      skipped++;
-      continue;
-    }
+    uint32_t usage = SynaraUsageForCharacter([text characterAtIndex:index], &needsShift);
+    if (usage == 0) { skipped++; continue; }
     if (needsShift) {
+      NSInteger sent = _sentEvents;
       [self sendKeyUsage:kUsageLeftShift down:YES];
+      shiftHeld = _sentEvents > sent;
     }
-    [self tapKeyUsage:usage];
+    if (self.undeliveredEventCount != droppedBefore) break;
+    NSInteger sent = _sentEvents;
+    [self sendKeyUsage:usage down:YES];
+    if (_sentEvents > sent) heldKey = usage;
+    if (self.undeliveredEventCount != droppedBefore) break;
+    usleep(12000);
+    sent = _sentEvents;
+    [self sendKeyUsage:usage down:NO];
+    if (_sentEvents > sent) heldKey = 0;
+    if (self.undeliveredEventCount != droppedBefore) break;
     if (needsShift) {
+      sent = _sentEvents;
       [self sendKeyUsage:kUsageLeftShift down:NO];
+      if (_sentEvents > sent) shiftHeld = NO;
     }
-    // Paced so the guest's keyboard stack does not coalesce keystrokes.
     usleep(18000);
+  }
+  // A failed key-up must not leave Shift or the last character held. Reserve
+  // at most one extra second for releases; 13s input + 1s cleanup < 15s RPC.
+  if (heldKey != 0 || shiftHeld) {
+    if (_dtuhid != nil) {
+      NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 1.0;
+      NSError *error = nil;
+      if ([_dtuhid waitUntilReadyWithTimeout:1.0 error:&error]) {
+        if (heldKey != 0) [self dtuhidSent:[_dtuhid sendKeyUsage:heldKey down:NO]];
+        if (shiftHeld) [self dtuhidSent:[_dtuhid sendKeyUsage:kUsageLeftShift down:NO]];
+        if (![_dtuhid flushWithTimeout:MAX(0, deadline - NSProcessInfo.processInfo.systemUptime)])
+          [self noteUndeliveredBecause:@"could not confirm released keys"];
+      } else [self noteUndeliveredBecause:@"could not release keys on the unavailable input service"];
+    } else {
+      if (heldKey != 0) [self sendKeyUsage:heldKey down:NO];
+      if (shiftHeld) [self sendKeyUsage:kUsageLeftShift down:NO];
+    }
   }
   return skipped;
 }
 
 - (void)sendButton:(SynaraHardwareButton)button down:(BOOL)down {
+  if (_dtuhid != nil) {
+    if (![self dtuhidReady]) return;
+    [self dtuhidSent:[_dtuhid sendConsumerUsage:SynaraConsumerUsageForButton(button) down:down]];
+    if (!down) [self dtuhidFlush];
+    return;
+  }
   int op = down ? kButtonOpDown : kButtonOpUp;
   uint32_t consumerUsage = SynaraConsumerUsage(button);
 
@@ -442,6 +611,11 @@ static const uint32_t kUsageLeftShift = 225;
     return;
   }
   [self sendMessage:_buttonFn(SynaraButtonSource(button), op, kButtonTargetHardware)];
+}
+
+- (void)invalidate {
+  [_dtuhid invalidate];
+  _dtuhid = nil;
 }
 
 - (void)tapButton:(SynaraHardwareButton)button {

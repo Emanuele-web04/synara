@@ -1,0 +1,34 @@
+---
+title: Connectors (Beta)
+description: Connect remote MCP tools to supported agent sessions, with sign-in and provider-specific limits.
+---
+
+Connectors are available in **Synara Beta 1.0.6-beta.1**. Open **Settings → Connectors**, select a catalog entry or a custom public HTTPS MCP URL, and complete any required sign-in in your browser. This lets an agent use another service's tools. [External MCP](/docs/workflows/external-mcp) works in the other direction, allowing outside agents to call Synara.
+
+## Start a connected session
+
+After connecting, start a new provider session to receive the connector's tools. Existing sessions keep the set they started with. Mention a connected service in the composer to point the agent toward it; the provider still decides how to use its available tools. Third-party tool calls retain the provider's normal approval flow.
+
+| Provider                      | Availability                                          |
+| ----------------------------- | ----------------------------------------------------- |
+| Claude, Codex, OpenCode       | Remote HTTP MCP connectors are supported.             |
+| Cursor, Grok, Droid, Oh My Pi | Requires the agent to advertise ACP HTTP MCP support. |
+| Pi, Devin, Antigravity        | Connectors are unavailable.                           |
+
+Codex keeps user-configured servers: a connector with a conflicting server name is omitted. If its effective configuration cannot be checked, connectors are omitted for that session. OpenCode skips a connector that fails to start. A catalog entry does not guarantee that the service accepts your account or client registration.
+
+## Sign-in and recovery
+
+Sign-in requires Synara to listen only on loopback, because the callback returns to this machine. Custom endpoints must use public HTTPS and cannot embed credentials. Services that require a pre-registered OAuth application may reject automatic registration.
+
+Slack requires your own OAuth application's client ID and secret. Copy the redirect URL shown in the dialog into that application. The desktop port changes after restart, so update the registered redirect URL before reconnecting.
+
+When a service rejects refreshed credentials, the connector shows **needs sign-in**. Reconnect it from Settings. Disconnect removes locally saved tokens, invalidates pending sign-ins and attempts revocation when the service advertises it; already-running sessions then receive errors from that connector.
+
+## Data and channel boundaries
+
+Connector credentials stay in the server's local secret store and are not passed to provider processes or the web interface. Tool requests and their arguments are sent to the selected remote service. Review the service and the requested action before approving it.
+
+Stable hides Connectors and refuses their RPCs, OAuth callbacks and proxy routes. It does not read saved connector secrets. Stable and Beta keep their own data homes; see [Synara Beta](/docs/features/synara-beta).
+
+Source evidence: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`; `docs/mcp-connectors.md`, `packages/shared/src/mcpConnectors.ts`, `apps/server/src/mcpConnectors/runtime.ts`, `apps/server/src/mcpConnectors/proxy.ts`, `apps/server/src/agentGateway/mcpInjection.ts` and `apps/web/src/components/settings/McpConnectorsSettingsPanel.tsx`.
