@@ -1600,6 +1600,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         >
           <ChatMarkdown
             text={item.message.text}
+            tone="subtle"
             cwd={markdownCwd}
             directionMode="auto-blocks"
             isStreaming={false}
@@ -2022,6 +2023,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 >
                   <ChatMarkdown
                     text={segmentText}
+                    tone="subtle"
                     cwd={markdownCwd}
                     directionMode="auto-blocks"
                     isStreaming={false}
