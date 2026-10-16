@@ -23,13 +23,8 @@ jobs:
           fetch-depth: 20
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
-      # Diagnostics only: the ordinary CI Format lane checks the pristine commit.
-      # No formatter result is pushed by this job. Any patch must be reviewed and
-      # published through the connector before the candidate is considered verified.
-      - name: Report formatting adjustments for the changed slice
-        run: |
-          bun run fmt -- apps/web/src/components/tasks/taskFilters.ts apps/web/src/components/tasks/taskFilters.test.ts apps/web/src/components/tasks/TaskListFilters.tsx apps/web/src/components/tasks/TaskListItem.tsx apps/web/src/components/tasks/TasksView.tsx apps/web/src/components/notion/NotionWorkspaceLauncher.tsx apps/web/scripts/notion-tasks-fixture.mjs apps/web/scripts/notion-tasks-evidence.mjs
-          git diff -- apps/web/src/components/tasks apps/web/src/components/notion/NotionWorkspaceLauncher.tsx apps/web/scripts/notion-tasks-fixture.mjs apps/web/scripts/notion-tasks-evidence.mjs
+      - name: Check pristine source formatting
+        run: bun run fmt:check
       - name: Focused Tasks and Notion checks
         run: |
           bun run test:web:focused src/components/tasks/taskFilters.test.ts src/components/tasks/tasks.logic.test.ts src/components/notion/notionDrafts.test.ts src/components/notion/notionWrites.test.ts
@@ -41,11 +36,14 @@ jobs:
       - name: Capture actual component journeys
         env:
           NOTION_EVIDENCE_DIR: ${{ runner.temp }}/notion-tasks-evidence
-        run: node apps/web/scripts/notion-tasks-evidence.mjs
+        run: |
+          git diff --exit-code
+          node apps/web/scripts/notion-tasks-evidence.mjs
+          git diff --exit-code
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: notion-tasks-before-after
           path: ${{ runner.temp }}/notion-tasks-evidence
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

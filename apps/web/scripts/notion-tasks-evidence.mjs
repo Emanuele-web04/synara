@@ -25,13 +25,16 @@ execFileSync("tar", ["-x", "-C", before], {
   }),
 });
 const native = path.join(temp, "native.ts");
-await fs.writeFile(native, `
+await fs.writeFile(
+  native,
+  `
 export const ensureNativeApi = () => globalThis.__notionApi;
 export const getNativeApi = ensureNativeApi;
 export const readNativeApi = ensureNativeApi;
 export const readNativeApiServerCapability = () => true;
 export const onNativeApiServerCapabilitiesChange = () => () => {};
-`);
+`,
+);
 const entry = path.join(temp, "entry.tsx");
 await fs.writeFile(entry, taskFixture);
 let html = "";
@@ -54,20 +57,22 @@ const evidence = {
 };
 try {
   for (const version of ["before", "after"]) {
-    const source = version === "before"
-      ? path.join(before, "apps/web/src")
-      : path.join(web, "src");
+    const source = version === "before" ? path.join(before, "apps/web/src") : path.join(web, "src");
     const bundle = await build({
       configFile: false,
       root: web,
       logLevel: "warn",
-      plugins: [{
-        name: "notion-fixture-transport",
-        enforce: "pre",
-        resolveId(id) {
-          if (/(?:^|\/)nativeApi(?:\.ts)?$/.test(id)) return native;
+      plugins: [
+        {
+          name: "notion-fixture-transport",
+          enforce: "pre",
+          resolveId(id) {
+            if (/(?:^|\/)nativeApi(?:\.ts)?$/.test(id)) return native;
+          },
         },
-      }, react(), tailwind()],
+        react(),
+        tailwind(),
+      ],
       resolve: { alias: [{ find: "~", replacement: source }] },
       define: { "process.env.NODE_ENV": JSON.stringify("production") },
       build: {
@@ -78,12 +83,20 @@ try {
       },
     });
     const output = Array.isArray(bundle) ? bundle.flatMap((item) => item.output) : bundle.output;
-    const script = output.filter((item) => item.type === "chunk").map((item) => item.code).join("\n");
-    const css = output.filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
-      .map((item) => String(item.source)).join("\n");
-    html = '<!doctype html><html><head><meta charset="utf-8"><style>' + css +
+    const script = output
+      .filter((item) => item.type === "chunk")
+      .map((item) => item.code)
+      .join("\n");
+    const css = output
+      .filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
+      .map((item) => String(item.source))
+      .join("\n");
+    html =
+      '<!doctype html><html><head><meta charset="utf-8"><style>' +
+      css +
       '</style></head><body><div id="root"></div><script>' +
-      script.replaceAll("</script", "<\\/script") + '</script></body></html>';
+      script.replaceAll("</script", "<\\/script") +
+      "</script></body></html>";
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(15_000);
     const errors = [];
@@ -96,7 +109,9 @@ try {
       await page.evaluate(() => globalThis.__setTheme("dark"));
     };
     const shot = async (name) => {
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      );
       const file = version + "-" + name + ".png";
       await page.screenshot({ path: path.join(out, file), fullPage: true });
       evidence.screenshots.push(file);
@@ -111,7 +126,9 @@ try {
       await page.getByLabel("Task source", { exact: true }).click();
       await page.getByRole("option", { name: "Local Synara tasks", exact: true }).click();
       await page.getByText("1 of 2 tasks match these filters.", { exact: true }).waitFor();
-      assert(await page.getByRole("button", { name: "Edit task properties", exact: true }).isVisible());
+      assert(
+        await page.getByRole("button", { name: "Edit task properties", exact: true }).isVisible(),
+      );
       evidence.checks.push("Source filtering retains the selected imported task card.");
       await shot("filtered-open-task");
       await page.getByRole("button", { name: "Clear filters", exact: true }).click();
@@ -126,7 +143,9 @@ try {
       await page.getByRole("button", { name: /Engineering tasks/ }).click();
       await page.getByRole("heading", { name: "Engineering tasks", exact: true }).waitFor();
       await shot("mapped-database");
-      evidence.checks.push("The Tasks launcher opens the existing mapped database workspace without Settings.");
+      evidence.checks.push(
+        "The Tasks launcher opens the existing mapped database workspace without Settings.",
+      );
     }
     await ready();
     await page.setViewportSize({ width: 390, height: 844 });

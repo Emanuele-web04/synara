@@ -101,7 +101,9 @@ describe("Notion task discovery filters", () => {
   });
 
   it("does not infer the current Notion user from a display name", () => {
-    expect(accepts(reference(), { assignee: notionAssigneeKey("workspace-a", "Alex") })).toBe(false);
+    expect(accepts(reference(), { assignee: notionAssigneeKey("workspace-a", "Alex") })).toBe(
+      false,
+    );
   });
 
   it("keeps remote status independent of local completion", () => {
