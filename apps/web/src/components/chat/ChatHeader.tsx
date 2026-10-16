@@ -25,7 +25,6 @@ import {
   LayoutAlignRightIcon,
   LayoutRightIcon,
   PlusIcon,
-  PlusSignIcon,
   TerminalIcon,
   WorkflowIcon,
   XIcon,
@@ -150,8 +149,6 @@ interface ChatHeaderProps {
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
-  // Creates a thread in the active workspace, replacing the header's old "Add action" slot.
-  onNewThread: () => void;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
   onCreateHandoff: (target: ThreadHandoffTarget) => void;
@@ -463,7 +460,6 @@ export function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
-  onNewThread,
   onToggleDiff,
   onRegisterCommitAndPushTrigger,
   onCreateHandoff,
@@ -787,35 +783,19 @@ export function ChatHeader({
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
-        {!minimalChrome && activeProjectScripts ? (
-          <>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <ChatHeaderIconButton
-                    type="button"
-                    tone="surface"
-                    label="New thread in this workspace"
-                    onClick={onNewThread}
-                  />
-                }
-              >
-                <PlusSignIcon className="size-4" />
-              </TooltipTrigger>
-              <TooltipPopup side="bottom">New thread in this workspace</TooltipPopup>
-            </Tooltip>
-            {showHeaderActions && activeProjectScripts.length > 0 ? (
-              <ProjectScriptsControl
-                scripts={activeProjectScripts}
-                keybindings={keybindings}
-                preferredScriptId={preferredScriptId}
-                onRunScript={onRunProjectScript}
-                onAddScript={onAddProjectScript}
-                onUpdateScript={onUpdateProjectScript}
-                onDeleteScript={onDeleteProjectScript}
-              />
-            ) : null}
-          </>
+        {!minimalChrome &&
+        showHeaderActions &&
+        activeProjectScripts &&
+        activeProjectScripts.length > 0 ? (
+          <ProjectScriptsControl
+            scripts={activeProjectScripts}
+            keybindings={keybindings}
+            preferredScriptId={preferredScriptId}
+            onRunScript={onRunProjectScript}
+            onAddScript={onAddProjectScript}
+            onUpdateScript={onUpdateProjectScript}
+            onDeleteScript={onDeleteProjectScript}
+          />
         ) : null}
 
         {!minimalChrome && environment && activeProjectName && showGitActions ? (
