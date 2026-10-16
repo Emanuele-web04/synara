@@ -18,11 +18,21 @@ are covered in the separate API run). Formatting, lint and typecheck pass.
 Worker `c47de4c3-12dc-470a-9cae-147c0d89b04a` and Container image
 `4767b8d17cb21018fc92907cea5f34c63a6f7dfc9d4a11c62911f492b2beef16` are deployed,
 with existing Worker secrets preserved. Supabase already matches migration 0022;
-no new migration was required. A separate real account signed in successfully,
-but its live grant still returns the old enrollment refusal: the Container needs
-to reload startup environment. Do not call beta enrollment live-qualified until
-that account receives a grant. A downloaded desktop update or new mobile binary
-is not required for this backend change.
+no new migration was required. The first live grant still returned the old
+enrollment refusal because the running Container had not loaded the new startup
+environment. Managed rollout `53328200-c9e9-4b42-9a9c-f44dd102e792` subsequently
+completed, moving container version 22 to 23 with the same image and resource
+limits. It applied only `REMOTE_BETA_ACCESS_ENABLED=true`; the Worker idle policy
+remained 30 minutes. No temporary short-timeout Worker or administrative endpoint
+was deployed.
+
+The separate real account outside the old allowlist now receives a signed grant
+(HTTP 200). The same route rejects anonymous requests (401) and an unregistered
+device key (403 `device_not_registered`). This qualifies the live enrollment
+repair; it does not replace full tester pairing/chat or physical TestFlight push
+verification. A downloaded desktop update or new mobile binary is not required
+for this backend change. Remote .14 users can retry their connection. Existing
+Mac identities, account mappings and user databases were not changed.
 
 ## Main Codex reliability sync — 2026-10-16
 

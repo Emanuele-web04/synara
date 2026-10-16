@@ -9,10 +9,13 @@
 - Autorizzata la beta per tutti gli account: aggiunta l'impostazione backend
   `REMOTE_BETA_ACCESS_ENABLED`, senza togliere ownership, prova device e pairing.
   Passano 18.276 test workspace e tutti i 374 test API su PostgreSQL temporaneo.
-- Backend aggiornato, nessuna migrazione necessaria. **Verifica live ancora
-  aperta:** l'account nuovo entra ma il container restituisce ancora il vecchio
-  blocco enrollment. Serve ricaricare la configurazione del container e verificare
-  un grant reale prima di dire ai tester che il problema è risolto.
+- **Accesso beta verificato live:** il rollout gestito Cloudflare
+  `53328200-c9e9-4b42-9a9c-f44dd102e792` ha aggiornato il container alla versione
+  23 mantenendo immagine e risorse. L'account di test esterno alla vecchia lista
+  ora ottiene un grant reale (200); richieste anonime (401) e device non registrati
+  (403) restano rifiutati. Nessuna migrazione o modifica agli account dei Mac.
+  Chi ha già Remote .14 non deve riscaricare l'app: riprovare la connessione.
+  Nessuna nuova build iOS/iPadOS necessaria per questo cambio backend.
 
 ## Login GitHub Production — 16 ottobre 2026
 

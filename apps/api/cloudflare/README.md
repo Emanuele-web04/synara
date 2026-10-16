@@ -79,6 +79,17 @@ deployments default to closed enrollment; only literal `true`/`false` values are
 accepted. To close the beta, set this variable to `false`, deploy and restart the
 Container, then verify that an unlisted account is refused.
 
+Worker deployment success alone does not qualify a changed enrollment policy.
+Use a [managed container rollout](https://developers.cloudflare.com/containers/configuration/rollouts/)
+to replace a warm instance when needed, preserving its image and resource limits;
+verify rollout completion before probing a real account outside the old list.
+The [rollout API](https://developers.cloudflare.com/api/resources/containers/subresources/applications/subresources/rollouts/methods/create/)
+accepts `target_configuration.environment_variables` for the non-secret beta
+flag. Keep credentials in Worker secrets and preserve any existing application
+environment settings. Confirm both an authenticated grant and rejection of
+anonymous/unregistered-device requests. Do not shorten `sleepAfter` to force an
+idle shutdown or add a public restart endpoint.
+
 For closed enrollment, set `REMOTE_TEST_USER_IDS` to the comma-separated WorkOS IDs
 of enrolled test users; an empty list denies remote access. When its existing value is unavailable,
 `REMOTE_TEST_ADDITIONAL_USER_IDS` appends explicitly approved WorkOS IDs without
