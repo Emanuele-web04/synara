@@ -742,7 +742,8 @@ function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadAc
       });
     }
     const task = tasks.get(taskId);
-    if (!task || task.status !== "running") continue;
+    const reconcilesStop = payload?.reconcilesStop === true && task?.status === "stopped";
+    if (!task || (task.status !== "running" && !reconcilesStop)) continue;
     if (activity.kind === "task.updated" || activity.kind === "task.completed") {
       const outcome = backgroundTaskOutcome(payload?.status);
       if (!outcome) continue;
@@ -1061,7 +1062,7 @@ function deriveTurnFailureEntries(
 }
 
 // A background task completion or Monitor event wakes an idle agent into a new
-// response. One that arrives while its turn is already working (the agent
+// response. One that arrives while the agent is already working (the agent
 // stopped its own server, or a build finished between tool calls) is only a
 // status update inside that response. A turn is working once it has run a tool
 // or launched a task, until it completes; a response woken by the notification
@@ -1073,17 +1074,17 @@ function deriveMidTurnNotificationIds(
   const ids = new Set<string>();
   for (const activity of ordered) {
     const turnId = activity.turnId;
-    if (!turnId) continue;
-    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
+    if (turnId && (activity.kind === "turn.completed" || activity.kind === "turn.aborted")) {
       workingTurnIds.delete(turnId);
     } else if (
-      activity.kind.startsWith("tool.") ||
-      activity.kind.startsWith("approval.") ||
-      activity.kind === "task.started"
+      turnId &&
+      (activity.kind.startsWith("tool.") ||
+        activity.kind.startsWith("approval.") ||
+        activity.kind === "task.started")
     ) {
       workingTurnIds.add(turnId);
     } else if (
-      workingTurnIds.has(turnId) &&
+      workingTurnIds.size > 0 &&
       (activity.kind === "task.completed" ||
         (activity.kind === "runtime.warning" &&
           asRecord(activity.payload)?.nativeEventType === "monitor_event"))

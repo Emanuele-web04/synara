@@ -161,6 +161,8 @@ const fakeDevinAdapter: DevinAdapterShape = {
   startSession: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),
+  stopTask: vi.fn(),
+  backgroundTask: vi.fn(),
   respondToRequest: vi.fn(),
   respondToUserInput: vi.fn(),
   stopSession: vi.fn(),

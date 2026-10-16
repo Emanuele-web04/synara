@@ -659,7 +659,13 @@ describe("deriveWorkLogEntries", () => {
         turnId: "turn-bg",
         payload: { taskId, taskType: "local_bash", toolUseId, detail: `Run ${taskId}` },
       });
-    const taskCompleted = (taskId: string, status: string, detail: string, at: string) =>
+    const taskCompleted = (
+      taskId: string,
+      status: string,
+      detail: string,
+      at: string,
+      reconcilesStop = false,
+    ) =>
       makeActivity({
         id: `${taskId}-${status}`,
         createdAt: at,
@@ -667,7 +673,7 @@ describe("deriveWorkLogEntries", () => {
         summary: "Task completed",
         tone: "info",
         turnId: "turn-bg",
-        payload: { taskId, status, detail },
+        payload: { taskId, status, detail, ...(reconcilesStop ? { reconcilesStop: true } : {}) },
       });
     const turnCompleted = (at: string) =>
       makeActivity({
@@ -806,6 +812,45 @@ describe("deriveWorkLogEntries", () => {
       ).toEqual(["failed", "finished", "stopped"]);
     });
 
+    it("lets a late provider completion correct a local stopped result", () => {
+      const entries = deriveWorkLogEntries(
+        [
+          launchCall("launch", "toolu_late", "bun run build", "2026-10-10T00:09:57.000Z"),
+          taskStarted("task-late", "toolu_late", "2026-10-10T00:09:57.100Z"),
+          makeActivity({
+            id: "task-late-background",
+            createdAt: "2026-10-10T00:09:57.200Z",
+            kind: "task.updated",
+            summary: "Task running in background",
+            tone: "info",
+            turnId: "turn-bg",
+            payload: { taskId: "task-late", status: "running", isBackgrounded: true },
+          }),
+          taskCompleted("task-late", "stopped", "Build stopped", "2026-10-10T00:09:58.000Z"),
+          taskCompleted(
+            "task-late",
+            "completed",
+            "Build finished",
+            "2026-10-10T00:09:59.000Z",
+            true,
+          ),
+        ],
+        undefined,
+        options,
+      );
+
+      expect(entries.filter((entry) => entry.backgroundTask)).toMatchObject([
+        {
+          id: "launch",
+          backgroundTask: {
+            taskId: "task-late",
+            status: "finished",
+            completedAt: "2026-10-10T00:09:59.000Z",
+          },
+        },
+      ]);
+    });
+
     it("treats completions and Monitor events inside a working turn as updates, not wake-ups", () => {
       const entries = deriveWorkLogEntries(
         [
@@ -842,6 +887,61 @@ describe("deriveWorkLogEntries", () => {
         ["monitor-after-turn", false],
       ]);
     });
+
+    it.each(["original turn", "unscoped"] as const)(
+      "updates an older task during a newer working turn without waking a response (%s)",
+      (scope) => {
+        const originalTurnId = scope === "unscoped" ? null : TurnId.makeUnsafe("turn-bg");
+        const priorWork = [
+          launchCall("old-launch", "old-tool", "bun run build", "2026-10-10T00:15:00.000Z"),
+          notice("old-moved", [["old-task", "Build"]], "2026-10-10T00:15:00.100Z"),
+          taskStarted("old-task", "old-tool", "2026-10-10T00:15:00.200Z"),
+          turnCompleted("2026-10-10T00:15:10.000Z"),
+        ].map((activity) => ({ ...activity, turnId: originalTurnId }));
+        const entries = deriveWorkLogEntries(
+          [
+            ...priorWork,
+            {
+              ...launchCall("new-work", "new-tool", "Read code", "2026-10-10T00:16:00.000Z"),
+              turnId: TurnId.makeUnsafe("turn-current"),
+            },
+            {
+              ...taskCompleted(
+                "old-task",
+                "completed",
+                "Build finished",
+                "2026-10-10T00:16:01.000Z",
+              ),
+              turnId: originalTurnId,
+            },
+            {
+              ...turnCompleted("2026-10-10T00:16:02.000Z"),
+              turnId: TurnId.makeUnsafe("turn-current"),
+            },
+            {
+              ...monitorEvent("idle-notification", "2026-10-10T00:17:00.000Z"),
+              turnId: originalTurnId,
+            },
+          ],
+          undefined,
+          scope === "unscoped"
+            ? {}
+            : {
+                visibleTurnIds: new Set([
+                  TurnId.makeUnsafe("turn-bg"),
+                  TurnId.makeUnsafe("turn-current"),
+                ]),
+              },
+        );
+        expect(entries.filter((entry) => entry.backgroundTaskCompletion)).toEqual([]);
+        expect(entries.find((entry) => entry.backgroundTask)?.backgroundTask?.status).toBe(
+          "finished",
+        );
+        expect(
+          entries.find((entry) => entry.id === "idle-notification")?.monitorNotification?.midTurn,
+        ).toBeUndefined();
+      },
+    );
 
     it("anchors the row at the notice when the launching call is not visible", () => {
       const entries = deriveWorkLogEntries(

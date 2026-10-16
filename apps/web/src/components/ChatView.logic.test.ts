@@ -2407,6 +2407,28 @@ describe("resolveWorkingLabel", () => {
       resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
     ).toBe("Thinking");
   });
+
+  it("does not show Starting after provider output proves the turn is running", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Devin",
+        hasProviderActivity: true,
+      }),
+    ).toBe("Thinking");
+  });
+
+  it("keeps a new send on Loading while an earlier background task is still active", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        hasProviderActivity: true,
+      }),
+    ).toBe("Loading");
+  });
 });
 
 describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {

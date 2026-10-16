@@ -1838,6 +1838,12 @@ export default function ChatView({
     () => collectRunningSubagentStripItems(composerSubagentStripItems).length > 0,
     [composerSubagentStripItems],
   );
+  const hasProviderActivity =
+    hasStreamingAssistantText ||
+    hasRunningSubagents ||
+    latestTurnLive ||
+    hasLiveTurnTail ||
+    (activeBackgroundTasks?.activeCount ?? 0) > 0;
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
   const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
@@ -6850,6 +6856,7 @@ export default function ChatView({
                       turnTakenOver,
                       isConnecting,
                       providerName: providerDisplayName,
+                      hasProviderActivity,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}

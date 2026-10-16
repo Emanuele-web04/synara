@@ -7806,6 +7806,13 @@ describe("ProviderCommandReactor", () => {
         expect(
           harness.sendTurn.mock.calls.filter(([request]) => request.threadId === threadId),
         ).toHaveLength(0);
+        await waitFor(async () =>
+          Boolean(
+            (await readHarnessThread(harness))?.session?.lastError?.includes(
+              PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            ),
+          ),
+        );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
         );
@@ -13882,6 +13889,8 @@ describe("ProviderCommandReactor", () => {
       .fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void)
       .mockImplementationOnce(() => Effect.promise(() => captureGate));
     const harness = await createHarness({
+      // Keep the held checkpoint pending while the fixture writes its 600-event backlog.
+      preTurnBaselineTimeout: Duration.minutes(1),
       checkpointStore: {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint,
@@ -16259,7 +16268,8 @@ describe("ProviderCommandReactor", () => {
 
   it("releases a timed-out promoted turn when its live provider turn settles", async () => {
     const harness = await createHarness({
-      commandEventTimeout: Duration.millis(25),
+      // Admission must finish before the deliberately non-returning provider call times out.
+      commandEventTimeout: Duration.seconds(1),
     });
     await seedQueuedTurnBehindLiveTurn(harness, {
       liveTurnId: asTurnId("turn-running-timeout"),
@@ -18316,6 +18326,135 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("claudeAgent");
   });
 
+  it("passes unresolved Devin stop outcomes and live tasks into provider session startup", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const appendActivity = (
+      id: string,
+      taskId: string,
+      status: string,
+      createdAt: string,
+      extra: Record<string, unknown> = {},
+      ownerId = threadId,
+      turnId: TurnId | null = null,
+      kind = "task.completed",
+    ) =>
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`cmd-${id}`),
+        threadId: ownerId,
+        activity: {
+          id: EventId.makeUnsafe(id),
+          kind,
+          tone: "info",
+          summary: `Task ${status}`,
+          payload: { taskId, status, ...extra },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      });
+
+    await Effect.runPromise(
+      appendActivity("pending-stop-1", "shell-pending", "stopped", "2026-10-11T00:00:01.000Z", {
+        awaitingProviderConfirmation: true,
+      }),
+    );
+    await Effect.runPromise(
+      appendActivity("ordinary-stop-2", "shell-ordinary", "stopped", "2026-10-11T00:00:02.000Z"),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "already-corrected-3",
+        "shell-corrected",
+        "completed",
+        "2026-10-11T00:00:03.000Z",
+        { reconcilesStop: true },
+      ),
+    );
+
+    for (const [id, parentId, agentId] of [
+      ["nested-parent", "thread-1", "parent-agent"],
+      ["nested-owner", "nested-parent", "nested-agent"],
+      ["unrelated-owner", null, "unrelated-agent"],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe(`create-${id}`),
+          threadId: ThreadId.makeUnsafe(id),
+          projectId: asProjectId("project-1"),
+          title: id,
+          modelSelection: { provider: "devin", model: "swe-1.7" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          parentThreadId: parentId ? ThreadId.makeUnsafe(parentId) : null,
+          subagentAgentId: agentId,
+          creationSource: "provider_native",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }
+    await Effect.runPromise(
+      appendActivity(
+        "nested-stop",
+        "nested-task",
+        "stopped",
+        "2026-10-11T00:00:04.000Z",
+        { awaitingProviderConfirmation: true, toolUseId: "nested-tool" },
+        ThreadId.makeUnsafe("nested-owner"),
+        asTurnId("original-nested-turn"),
+      ),
+    );
+    await Effect.runPromise(
+      appendActivity(
+        "unrelated-stop",
+        "unrelated-task",
+        "stopped",
+        "2026-10-11T00:00:05.000Z",
+        { awaitingProviderConfirmation: true },
+        ThreadId.makeUnsafe("unrelated-owner"),
+      ),
+    );
+
+    await Effect.runPromise(
+      appendActivity(
+        "still-running",
+        "live-agent",
+        "running",
+        "2026-10-11T00:00:06.000Z",
+        { toolUseId: "live-tool" },
+        threadId,
+        asTurnId("live-launch-turn"),
+        "task.started",
+      ),
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "message-devin-pending-stop",
+      text: "resume Devin",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: "devin",
+      pendingTaskReconciliations: [
+        { taskId: "shell-pending" },
+        { taskId: "live-agent", toolUseId: "live-tool", turnId: "live-launch-turn" },
+        {
+          taskId: "nested-task",
+          turnId: "original-nested-turn",
+          toolUseId: "nested-tool",
+          parentAgentId: "nested-agent",
+        },
+      ],
+    });
+  });
+
   it("clears a stale Claude resume cursor surfaced asynchronously and retries fresh once", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
@@ -18797,7 +18936,8 @@ describe("ProviderCommandReactor", () => {
     it("settles a timed-out target start and keeps the thread usable", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
-        commandEventTimeout: Duration.millis(300),
+        // Handoff consumes 90% of this budget; leave time for durable recovery writes.
+        commandEventTimeout: Duration.seconds(2),
       });
       await runFirstGrokTurn(harness);
       harness.startSession.mockImplementationOnce(() => Effect.never);

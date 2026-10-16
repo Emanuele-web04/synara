@@ -44,6 +44,8 @@ export interface AcpToolCallState {
   readonly status?: "pending" | "inProgress" | "completed" | "failed";
   readonly command?: string;
   readonly detail?: string;
+  /** ACP extension metadata is kept separate from the provider-visible tool data. */
+  readonly metadata?: Record<string, unknown>;
   readonly data: Record<string, unknown>;
 }
 
@@ -89,6 +91,7 @@ export type AcpParsedSessionEvent =
       readonly itemId?: string;
       readonly text: string;
       readonly streamKind?: AcpTextStreamKind;
+      readonly metadata?: Record<string, unknown>;
       readonly rawPayload: unknown;
     }
   | {
@@ -446,6 +449,7 @@ function makeToolCallState(
     readonly rawOutput?: unknown;
     readonly content?: ReadonlyArray<Acp.ToolCallContent> | null | undefined;
     readonly locations?: ReadonlyArray<Acp.ToolCallLocation> | null | undefined;
+    readonly metadata?: Record<string, unknown> | null | undefined;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -571,6 +575,9 @@ function makeToolCallState(
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
     ...(presentation?.detail ? { detail: presentation.detail } : {}),
+    ...(input.metadata && Object.keys(input.metadata).length > 0
+      ? { metadata: input.metadata }
+      : {}),
     data,
   };
 }
@@ -591,6 +598,7 @@ function parseTypedToolCallState(
       rawOutput: event.rawOutput,
       content: event.content,
       locations: event.locations,
+      metadata: event._meta,
     },
     options,
   );
@@ -624,6 +632,9 @@ export function mergeToolCallState(
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
     ...(detail ? { detail } : {}),
+    ...(next.metadata || previous?.metadata
+      ? { metadata: { ...previous?.metadata, ...next.metadata } }
+      : {}),
     data: {
       ...previous?.data,
       ...next.data,
@@ -726,6 +737,7 @@ export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
           ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "assistant_text",
+          ...(upd._meta ? { metadata: upd._meta } : {}),
           rawPayload: params,
         });
       }
@@ -739,6 +751,7 @@ export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
           ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "reasoning_text",
+          ...(upd._meta ? { metadata: upd._meta } : {}),
           rawPayload: params,
         });
       }

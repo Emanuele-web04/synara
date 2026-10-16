@@ -1436,11 +1436,13 @@ export function resolveWorkingLabel(input: {
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
+  hasProviderActivity?: boolean;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
     return "Loading";
   }
+  if (input.hasProviderActivity) return "Thinking";
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }
