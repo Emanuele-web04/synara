@@ -1188,7 +1188,7 @@ The post-tag branch passes 115 affected unit/guard tests, 35 browser tests,
 formatting, lint and twelve-package typecheck; this is source verification,
 not qualification or installation of a package containing `43d11d5`.
 
-### 2026-10-16 — Remote .11 published; Mini installed, MacBook awaits unlock
+### 2026-10-16 — Remote .11 published and installed on both Macs
 
 [Remote .11](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.11),
 source `94d1a95`, now includes `43d11d5`. Quoted/bracketed remote chat identifiers
@@ -1210,12 +1210,26 @@ smoke adds one chat, two messages and one turn; its exact reply
 after normal quit. Identity bytes and trust authorizations are unchanged; only
 an original chat's `updated_at` and a trust connection timestamp advanced.
 
-The MacBook independently verified the public package but cannot be normally
-quit through computer use while its screen is locked. Its `.10` installation
-has not been replaced, and the existing tunnel still returns HTTP 200. The user
-has been asked to unlock it. Installation with a new `.10` backup, a fresh
-MacBook-to-Mini chat/reload and any supported manual hover check remain open.
-No force quit, new login, trust reset or physical-phone operation was used.
-The browser hover regression passes; it is not a manual installed-MacBook claim.
-Native contracts and APIs are unchanged, so TestFlight 135 remains compatible
-and no additional iPhone/iPad build was uploaded for this desktop-only fix.
+After the user unlocked the MacBook, its independently verified `.11` package
+was installed after a normal quit, with a new consistent `.10` backup and
+rollback bundle. All 107 chats, 1,763 messages, 363 turns, attachments, account,
+identity bytes and pairing authorizations are retained. Three older events were
+removed by the bounded runtime log and internal checkpoints advanced; these are
+recorded separately from the unchanged user history. Both desktop apps are left
+running.
+
+MacBook reconnects to Mini over Cloudflare and creates chat
+`0bad5420-971e-48af-b44f-88cd416c05ff`. Its exact reply
+`SYNARA_REMOTE11_MACBOOK_TO_MINI_OK` survives reopening and is independently read
+from the Mini. The first MacBook Reload encountered a handshake error and
+recovered with the existing Retry action; the second Reload succeeded without
+intervention. The cause of the first failure is not established, so this is not
+an unconditional reload-reliability claim. MacBook tunnel health is HTTP 200,
+also independently verified from Mini after installation.
+
+The browser hover regression passes, including remote ids containing quotes and
+brackets. Manual hover remains unverified because the available computer-use
+controls expose no hover action; no unsupported input or JavaScript injection
+was used. No force quit, new login, trust reset or physical-phone operation was
+needed. Native contracts and APIs are unchanged, so TestFlight 135 remains
+compatible and no additional iPhone/iPad build was uploaded for this fix.
