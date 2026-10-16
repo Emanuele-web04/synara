@@ -101,7 +101,7 @@ export interface OrchestrationEngineShape {
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 
-  /** Capture the latest durable event sequence that assigned one thread's title. */
+  /** Capture the latest durable sequence affecting one thread's title or refresh policy. */
   readonly getThreadTitleHighWaterSequence: (
     threadId: string,
   ) => Effect.Effect<number, OrchestrationEventStoreError>;
