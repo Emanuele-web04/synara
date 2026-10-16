@@ -188,7 +188,7 @@ describe("TraitsPicker (Claude)", () => {
       },
     });
     const slider = page.getByRole("slider", { name: "Reasoning effort" });
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default (CLI)");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default");
     await slider.element().focus();
     await userEvent.keyboard("{End}");
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Max");
@@ -197,7 +197,7 @@ describe("TraitsPicker (Claude)", () => {
         .claudeAgent?.options,
     ).toEqual({ effort: "max" });
     await page.getByRole("button", { name: "Reset effort and speed" }).click();
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default (CLI)");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default");
     expect(
       useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
         .claudeAgent?.options,

@@ -250,7 +250,7 @@ describe("CLI-discovered Claude effort", () => {
         name: "Runtime fixture",
         supportsThinkingToggle: false,
         supportedReasoningEfforts: [
-          { value: "default", label: "Default (CLI)" },
+          { value: "default", label: "Default" },
           { value: "low" },
           { value: "max" },
         ],

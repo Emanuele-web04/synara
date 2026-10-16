@@ -1199,7 +1199,7 @@ function claudeModelCapabilities(model: ModelInfo): ModelCapabilities {
           reasoningEffortLevels:
             nativeEfforts.length > 0
               ? [
-                  { value: "default", label: "Default (CLI)", isDefault: true },
+                  { value: "default", label: "Default", isDefault: true },
                   ...nativeEfforts,
                   ...modes,
                 ]

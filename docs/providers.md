@@ -199,7 +199,7 @@ advertised alias.
 
 Claude effort levels, adaptive-thinking support and fast-mode availability come from the installed
 CLI when it supplies that metadata, including for models newer than Synara’s fallback catalog.
-“Default (CLI)” leaves effort unset so Claude Code chooses its own default; explicit levels are
+“Default” leaves effort unset so Claude Code chooses its own default; explicit levels are
 validated against the session’s native catalog. Older CLIs retain fallback behavior for metadata
 fields they omit.
 

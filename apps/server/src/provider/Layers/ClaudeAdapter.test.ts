@@ -6470,6 +6470,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           ["default", "low", "xhigh", "max"],
         );
         assert.equal(model.defaultReasoningEffort, "default");
+        assert.equal(model.supportedReasoningEfforts?.[0]?.label, "Default");
         assert.equal(model.supportsThinkingToggle, false);
         assert.equal(model.supportsFastMode, false);
         yield* adapter.startSession({

@@ -566,7 +566,15 @@ export function getProviderOptionDescriptors(input: {
     legacyCapabilityDescriptors(input.provider, input.caps);
   return descriptors.map((descriptor) =>
     withProviderOptionCurrentValue(
-      descriptor,
+      // Cached Claude catalogs may still carry the old technical label.
+      input.provider === "claudeAgent" && descriptor.type === "select" && descriptor.id === "effort"
+        ? {
+            ...descriptor,
+            options: descriptor.options.map((option) =>
+              option.id === "default" ? { ...option, label: "Default" } : option,
+            ),
+          }
+        : descriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
     ),
   );
