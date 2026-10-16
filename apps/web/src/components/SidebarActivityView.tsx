@@ -22,6 +22,7 @@ import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
   AddPlusIcon,
   CircleCheckIcon,
+  ClearReadIcon,
   ClockIcon,
   GitBranchIcon,
   GlobeIcon,
@@ -818,6 +819,7 @@ export function SidebarActivityView({
   const clearReadPriorityDisabled = !priorityThreads.some(
     (thread) => resolveActivityPriorityTier(resolveRowStatus(thread)) === null,
   );
+  const clearReadPriority = () => setPriorityGeneration((generation) => generation + 1);
   // Coarse clock so the date bucketing memo stays effective across renders that
   // happen within the same minute; buckets are day-granular anyway.
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
@@ -1108,7 +1110,7 @@ export function SidebarActivityView({
           markAllReadDisabled={!unreadThreads.some((thread) => !externalRows?.has(thread.id))}
           onMarkAllRead={markAllRead}
           clearReadPriorityDisabled={clearReadPriorityDisabled}
-          onClearReadPriority={() => setPriorityGeneration((generation) => generation + 1)}
+          onClearReadPriority={clearReadPriority}
         />
       </div>
 
@@ -1162,7 +1164,20 @@ export function SidebarActivityView({
         <>
           {priorityThreads.length > 0 ? (
             <div>
-              <SidebarSectionLabel label="Priority" />
+              <SidebarSectionLabel
+                label="Priority"
+                action={
+                  clearReadPriorityDisabled ? null : (
+                    <SidebarIconButton
+                      icon={ClearReadIcon}
+                      label="Clear read from Priority"
+                      tooltip="Clear read from Priority"
+                      size="sm"
+                      onClick={clearReadPriority}
+                    />
+                  )
+                }
+              />
               <div className="flex flex-col gap-0.5">{priorityThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
