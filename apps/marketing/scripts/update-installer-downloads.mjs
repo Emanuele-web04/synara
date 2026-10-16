@@ -6,6 +6,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findReleaseAssetUrl, isInstallerAsset } from "../src/lib/release-assets.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
@@ -13,8 +14,6 @@ const downloadsOutputPath = resolve(projectRoot, "src/data/installer-downloads.j
 const latestOutputPath = resolve(projectRoot, "src/data/latest-release-downloads.json");
 const releasesApiUrl = "https://api.github.com/repos/Emanuele-web04/synara/releases";
 const latestReleaseApiUrl = `${releasesApiUrl}/latest`;
-const installerFilePattern = /\.(dmg|exe|AppImage)$/i;
-
 function createGitHubHeaders() {
   const headers = {
     Accept: "application/vnd.github+json",
@@ -82,7 +81,7 @@ function countInstallerDownloads(releases) {
   return releases.reduce((total, release) => {
     const releaseTotal =
       release.assets?.reduce((assetTotal, asset) => {
-        if (!asset.name || !installerFilePattern.test(asset.name)) {
+        if (!isInstallerAsset(asset.name)) {
           return assetTotal;
         }
 
@@ -97,9 +96,7 @@ function getReleaseDownloads(release, source) {
   const assets = release.assets ?? [];
   const releasesUrl =
     release.html_url ?? `https://github.com/Emanuele-web04/synara/releases/tag/${release.tag_name}`;
-  const urlFor = (pattern) =>
-    assets.find((asset) => asset.name && pattern.test(asset.name))?.browser_download_url ??
-    releasesUrl;
+  const urlFor = (pattern) => findReleaseAssetUrl(assets, pattern) ?? releasesUrl;
 
   const downloads = {
     version: release.tag_name ?? null,
@@ -109,17 +106,23 @@ function getReleaseDownloads(release, source) {
       x64: urlFor(/x64\.dmg$/i),
     },
     windows: urlFor(/\.exe$/i),
-    linux: urlFor(/\.AppImage$/i),
+    linux: {
+      appImage: urlFor(/\.AppImage$/i),
+      deb: findReleaseAssetUrl(assets, /\.deb$/i),
+      rpm: findReleaseAssetUrl(assets, /\.rpm$/i),
+    },
     updatedAt: new Date().toISOString(),
     source,
   };
 
+  // deb/rpm are absent on releases cut before they shipped, so only the
+  // long-standing AppImage asset is required for a usable snapshot.
   if (
     !downloads.version ||
     downloads.mac.arm64 === releasesUrl ||
     downloads.mac.x64 === releasesUrl ||
     downloads.windows === releasesUrl ||
-    downloads.linux === releasesUrl
+    downloads.linux.appImage === releasesUrl
   ) {
     throw new Error(
       `Latest release ${release.tag_name ?? "unknown"} is missing an installer asset.`,

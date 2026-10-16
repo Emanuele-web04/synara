@@ -5,7 +5,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { writeReleaseArtifactProvenance } from "./release-artifact-provenance.ts";
+import {
+  linuxPackageArtifacts,
+  writeReleaseArtifactProvenance,
+} from "./release-artifact-provenance.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -15,11 +18,35 @@ afterEach(() => {
   }
 });
 
+function writeLinuxManifest(root: string, fileName = "Synara-1.2.3-x64.AppImage") {
+  const bytes = readFileSync(join(root, fileName));
+  const sha512 = createHash("sha512").update(bytes).digest("base64");
+  writeFileSync(
+    join(root, "latest-linux.yml"),
+    `version: 1.2.3\nfiles:\n  - url: ${fileName}\n    sha512: ${sha512}\n    size: ${bytes.length}\npath: ${fileName}\nsha512: ${sha512}\n`,
+  );
+}
+
+function linuxInput(assetsDirectory: string, target = "AppImage,deb,rpm") {
+  return {
+    assetsDirectory,
+    platform: "linux",
+    arch: "x64",
+    target,
+    version: "1.2.3",
+    sourceCommit: "a".repeat(40),
+    sourceTag: null,
+    lockfileSha256: "b".repeat(64),
+    publication: false,
+    signed: false,
+  } as const;
+}
+
 function createAssets(): string {
   const root = mkdtempSync(join(tmpdir(), "synara-artifact-provenance-test-"));
   temporaryRoots.push(root);
   writeFileSync(join(root, "Synara-1.2.3-x64.AppImage"), "app-image-bytes");
-  writeFileSync(join(root, "latest-linux.yml"), "version: 1.2.3\n");
+  writeLinuxManifest(root);
   return root;
 }
 
@@ -65,6 +92,139 @@ describe("release artifact provenance", () => {
       )?.sha256,
     ).toBe(createHash("sha256").update("app-image-bytes").digest("hex"));
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual(result.manifest);
+  });
+
+  it("proves every Linux package format the release leg claims to build", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-linux-packages-provenance-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.AppImage"), "app-image-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.deb"), "deb-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.rpm"), "rpm-bytes");
+    writeLinuxManifest(root, "Synara-1.2.3-x86_64.AppImage");
+
+    const result = await writeReleaseArtifactProvenance({
+      assetsDirectory: root,
+      platform: "linux",
+      arch: "x64",
+      target: "AppImage,deb,rpm",
+      version: "1.2.3",
+      sourceCommit: "a".repeat(40),
+      sourceTag: null,
+      lockfileSha256: "b".repeat(64),
+      publication: false,
+      signed: false,
+    });
+
+    expect(result.manifest.signing.checks).toEqual([
+      "AppImage payload present",
+      "deb payload present",
+      "rpm payload present",
+    ]);
+  });
+
+  it("fails a combined Linux leg that shipped no rpm", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-linux-missing-rpm-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.AppImage"), "app-image-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.deb"), "deb-bytes");
+    writeLinuxManifest(root, "Synara-1.2.3-x86_64.AppImage");
+
+    await expect(
+      writeReleaseArtifactProvenance({
+        assetsDirectory: root,
+        platform: "linux",
+        arch: "x64",
+        target: "AppImage,deb,rpm",
+        version: "1.2.3",
+        sourceCommit: "a".repeat(40),
+        sourceTag: null,
+        lockfileSha256: "b".repeat(64),
+        publication: false,
+        signed: false,
+      }),
+    ).rejects.toThrow("Expected exactly one .rpm artifact, found 0.");
+  });
+
+  it("rejects an unknown Linux package target instead of skipping it", () => {
+    expect(() => linuxPackageArtifacts("AppImage,snap")).toThrow(
+      "Unsupported Linux package target: snap.",
+    );
+    expect(linuxPackageArtifacts("AppImage, deb ,rpm")).toEqual([".AppImage", ".deb", ".rpm"]);
+  });
+
+  it.each(["", "AppImage,", ",rpm", "AppImage,,deb", "deb,deb", "rpm, rpm"])(
+    "rejects malformed target %j before recording provenance",
+    async (target) => {
+      await expect(
+        writeReleaseArtifactProvenance(linuxInput(createAssets(), target)),
+      ).rejects.toThrow(/empty|unique/);
+    },
+  );
+
+  it.each(["deb", "rpm"])("requires a single nonempty %s payload", async (target) => {
+    const root = createAssets();
+    writeFileSync(join(root, `one.${target}`), "");
+    await expect(
+      writeReleaseArtifactProvenance(linuxInput(root, `AppImage,${target}`)),
+    ).rejects.toThrow("payload must not be empty");
+    writeFileSync(join(root, `two.${target}`), "second");
+    await expect(
+      writeReleaseArtifactProvenance(linuxInput(root, `AppImage,${target}`)),
+    ).rejects.toThrow("found 2");
+  });
+
+  it.each(["deb", "rpm", "deb,rpm"])("does not give %s updater authority", async (target) => {
+    const root = createAssets();
+    rmSync(join(root, "Synara-1.2.3-x64.AppImage"));
+    for (const format of target.split(","))
+      writeFileSync(join(root, `Synara.${format}`), "payload");
+    await expect(writeReleaseArtifactProvenance(linuxInput(root, target))).rejects.toThrow(
+      "must not own Linux updater metadata",
+    );
+    rmSync(join(root, "latest-linux.yml"));
+    const result = await writeReleaseArtifactProvenance(linuxInput(root, target));
+    expect(result.manifest.signing.checks).toEqual(
+      target.split(",").map((format) => `${format} payload present`),
+    );
+  });
+
+  it.each([
+    "missing",
+    "extra-manifest",
+    "wrong-version",
+    "deb-authority",
+    "rpm-authority",
+    "wrong-hash",
+    "wrong-size",
+    "extra-rpm",
+  ])("rejects %s in AppImage updater metadata", async (change) => {
+    const root = createAssets();
+    const path = join(root, "latest-linux.yml");
+    const original = readFileSync(path, "utf8");
+    if (change === "missing") rmSync(path);
+    else if (change === "extra-manifest")
+      writeFileSync(join(root, "latest-linux-rpm.yml"), original);
+    else
+      writeFileSync(
+        path,
+        change === "wrong-version"
+          ? original.replace("version: 1.2.3", "version: 1.2.4")
+          : change === "deb-authority"
+            ? original.replaceAll(".AppImage", ".deb")
+            : change === "rpm-authority"
+              ? original.replaceAll(".AppImage", ".rpm")
+              : change === "wrong-hash"
+                ? original.replace(/sha512: .+/g, "sha512: wrong")
+                : change === "wrong-size"
+                  ? original.replace("size: 15", "size: 16")
+                  : original.replace(
+                      "path:",
+                      "  - url: Synara.rpm\n    sha512: rpm\n    size: 7\npath:",
+                    ),
+      );
+    await expect(writeReleaseArtifactProvenance(linuxInput(root, "AppImage"))).rejects.toThrow(
+      /Linux updater/,
+    );
   });
 
   it("rejects publication without an exact source tag", async () => {

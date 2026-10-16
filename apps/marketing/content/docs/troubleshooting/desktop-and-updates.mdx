@@ -22,6 +22,33 @@ On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On 
 chmod +x Synara*.AppImage
 ```
 
+## The AppImage will not start on Linux
+
+The AppImage mounts itself with FUSE 2 before it can run. If FUSE is missing, the launch fails
+immediately or reports a mount error.
+
+1. Install FUSE 2. On Arch and Omarchy: `sudo pacman -S fuse2`. On Ubuntu 24.04:
+   `sudo apt install libfuse2t64`; older Debian/Ubuntu versions may call it `libfuse2`.
+   See the [AppImage FUSE guide](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+   for your distribution's package name.
+2. Log out and back in so the FUSE device permissions apply to your session.
+3. Retry the AppImage.
+
+If you cannot install FUSE, run the AppImage without mounting it:
+
+```bash
+./Synara*.AppImage --appimage-extract-and-run
+```
+
+If neither works, use the distribution package (`.deb` or `.rpm`) from the
+[download page](/install). It installs as a normal application and does not need FUSE.
+
+<Callout type="info" title="Deb and RPM installs do not update themselves">
+  Synara only updates the AppImage from inside the app. For a `.deb` or `.rpm` install, download the
+  newer package and install it with `apt` or `dnf` again. A downloaded installer does not configure
+  a Synara repository for automatic updates through the system package manager.
+</Callout>
+
 <Callout type="warn" title="Do not delete data as a first step">
   Replacing the application bundle and deleting Synara’s local data are different operations. As a
   rule, reinstall the application first. Preserve repositories, uncommitted changes, task evidence,
