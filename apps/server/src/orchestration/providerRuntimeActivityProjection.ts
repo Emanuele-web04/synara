@@ -1359,7 +1359,17 @@ export function projectProviderRuntimeActivities(
             state,
             ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
             ...(event.payload.tokenAccountingVersion === 1
-              ? { tokenAccountingVersion: 1, mainLoopTokens: event.payload.mainLoopTokens }
+              ? {
+                  tokenAccountingVersion: 1,
+                  mainLoopTokens: event.payload.mainLoopTokens,
+                  ...(event.payload.mainLoopCacheReadTokens !== undefined
+                    ? { mainLoopCacheReadTokens: event.payload.mainLoopCacheReadTokens }
+                    : {}),
+                }
+              : {}),
+            ...(event.provider === "claudeAgent" &&
+            typeof event.payload.claudeResultObserved === "boolean"
+              ? { claudeResultObserved: event.payload.claudeResultObserved }
               : {}),
             ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"

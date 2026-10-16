@@ -92,6 +92,8 @@ const COMPUTER_AUDIT_SENSITIVE_ARGS: ReadonlySet<string> = new Set([
   "value",
   "arguments",
   "files",
+  "image_path",
+  "file_path",
   "clipboard",
   "contents",
   "data",

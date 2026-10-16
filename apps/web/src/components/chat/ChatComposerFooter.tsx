@@ -10,8 +10,14 @@ import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { ComposerVoiceButton } from "./ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./ComposerVoiceRecorderBar";
-import { COMPOSER_FOOTER_ROW_CLASS_NAME } from "./composerPickerStyles";
+import {
+  COMPOSER_ACTION_CIRCLE_CLASS_NAME,
+  COMPOSER_FOOTER_ROW_CLASS_NAME,
+} from "./composerPickerStyles";
 interface ChatComposerFooterProps {
+  /** `row`: the single-row composer. The footer box becomes `display: contents` so its
+   *  leading and trailing clusters sit beside the editor in the surface's grid. */
+  layout?: "row" | "block";
   isComposerFooterCompact: boolean;
   leadingControls: ReactNode;
   composerPickerControls: ReactNode;
@@ -54,6 +60,7 @@ interface ChatComposerFooterProps {
 }
 
 export function ChatComposerFooter({
+  layout: layoutProp,
   isComposerFooterCompact,
   leadingControls,
   composerPickerControls,
@@ -65,24 +72,32 @@ export function ChatComposerFooter({
   pendingInput,
   submission,
 }: ChatComposerFooterProps) {
+  const row = (layoutProp ?? "block") === "row";
+  const voiceActive = voice.recording || voice.transcribing;
   return (
     <div
-      data-chat-composer-footer="true"
+      data-chat-composer-footer={row ? undefined : "true"}
       className={cn(
-        "@container",
-        COMPOSER_FOOTER_ROW_CLASS_NAME,
-        isComposerFooterCompact ? "gap-1.5" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+        row
+          ? "contents"
+          : [
+              "@container",
+              COMPOSER_FOOTER_ROW_CLASS_NAME,
+              isComposerFooterCompact ? "gap-1.5" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+            ],
       )}
     >
       <div
         data-chat-composer-leading="true"
         className={cn(
           "flex items-center",
-          voice.recording || voice.transcribing
-            ? "min-w-0 shrink-0 gap-1"
-            : isComposerFooterCompact
-              ? "min-w-0 flex-1 gap-1 overflow-hidden"
-              : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+          row
+            ? "col-start-1 row-start-1 shrink-0 gap-0.5"
+            : voiceActive
+              ? "min-w-0 shrink-0 gap-1"
+              : isComposerFooterCompact
+                ? "min-w-0 flex-1 gap-1 overflow-hidden"
+                : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
         )}
       >
         {leadingControls}
@@ -103,7 +118,7 @@ export function ChatComposerFooter({
                 ) : (
                   <BugIcon className="size-3.5" />
                 )}
-                <span className="sr-only sm:not-sr-only">
+                <span className={row ? "sr-only" : "sr-only sm:not-sr-only"}>
                   {interactionMode === "plan" ? "Plan" : "Debug"}
                 </span>
               </Button>
@@ -112,7 +127,10 @@ export function ChatComposerFooter({
             {sidebarAction ? (
               <Button
                 variant="ghost"
-                className="shrink-0 whitespace-nowrap px-2 text-ui-sm sm:text-ui-sm font-normal sm:px-3"
+                className={cn(
+                  "shrink-0 whitespace-nowrap text-ui-sm sm:text-ui-sm font-normal",
+                  row ? COMPOSER_ACTION_CIRCLE_CLASS_NAME : "px-2 sm:px-3",
+                )}
                 size="sm"
                 type="button"
                 onClick={sidebarAction.onClick}
@@ -120,7 +138,9 @@ export function ChatComposerFooter({
                 aria-label={sidebarAction.title}
               >
                 <LayoutSidebarIcon className="size-3.5" />
-                <span className="sr-only sm:not-sr-only">{sidebarAction.label}</span>
+                <span className={row ? "sr-only" : "sr-only sm:not-sr-only"}>
+                  {sidebarAction.label}
+                </span>
               </Button>
             ) : null}
           </>
@@ -129,9 +149,16 @@ export function ChatComposerFooter({
 
       <div
         data-chat-composer-actions="right"
+        data-chat-composer-footer={row ? "true" : undefined}
         className={cn(
           "flex items-center gap-2",
-          voice.recording || voice.transcribing ? "min-w-0 flex-1" : "shrink-0",
+          row
+            ? voiceActive
+              ? "col-start-2 col-end-4 row-start-1 min-w-0"
+              : "col-start-3 row-start-1 shrink-0"
+            : voiceActive
+              ? "min-w-0 flex-1"
+              : "shrink-0",
         )}
       >
         {contextMeter}
@@ -178,6 +205,7 @@ export function ChatComposerFooter({
             !voice.transcribing &&
             !submission.hasPendingUserInputs ? (
               <ComposerVoiceButton
+                appearance="circle"
                 disabled={submission.busy || submission.expired}
                 isRecording={false}
                 isStarting={voice.starting}
@@ -194,7 +222,7 @@ export function ChatComposerFooter({
                 type="button"
                 variant="prominent"
                 size="icon-xs"
-                className="sm:size-[26px]"
+                className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
                 onClick={submission.onInterrupt}
                 aria-label="Stop generation"
                 title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -273,6 +301,7 @@ export function ChatComposerFooter({
             <>
               {voice.enabled ? (
                 <ComposerVoiceButton
+                  appearance="circle"
                   disabled={submission.connecting || submission.busy || submission.expired}
                   isRecording={voice.recording}
                   isStarting={voice.starting}
@@ -285,7 +314,7 @@ export function ChatComposerFooter({
                 type="submit"
                 variant="prominent"
                 size="icon-xs"
-                className="size-7 rounded-full sm:size-7"
+                className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
                 disabled={
                   submission.busy ||
                   submission.connecting ||

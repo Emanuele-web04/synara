@@ -2,7 +2,16 @@
 // Purpose: Verifies filesystem checkpoint store behavior around expensive Git capture work.
 // Layer: Checkpointing tests.
 // Exports: Vitest coverage for CheckpointStoreLive.
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,7 +22,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckpointStoreLive } from "./CheckpointStore.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { GitCommandError } from "../../git/Errors.ts";
+import { ServerConfig } from "../../config.ts";
 import { CheckpointRef } from "@synara/contracts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
@@ -288,6 +299,52 @@ describe("CheckpointStoreLive", () => {
         expect(captureArgs(`update-ref ${missingRef} commit-oid`)).toHaveLength(1);
       }),
     );
+  });
+
+  it("keeps a/ and b/ prefixes on turn diffs and file undo under diff.noprefix", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-checkpoint-prefix-test-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test User"]);
+      git(["config", "core.autocrlf", "false"]);
+      git(["config", "diff.noprefix", "true"]);
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src", "file.ts"), "before\n");
+      git(["add", "."]);
+      git(["commit", "-m", "Initial"]);
+      runtime = ManagedRuntime.make(
+        CheckpointStoreLive.pipe(
+          Layer.provide(
+            GitCoreLive.pipe(
+              Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-checkpoint-prefix-" })),
+            ),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      );
+      const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
+      const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
+
+      const diff = await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          yield* store.captureCheckpoint({ cwd, checkpointRef: fromRef });
+          writeFileSync(join(cwd, "src", "file.ts"), "after\n");
+          yield* store.captureCheckpoint({ cwd, checkpointRef: toRef });
+          const range = { cwd, fromCheckpointRef: fromRef, toCheckpointRef: toRef };
+          const diff = yield* store.diffCheckpoints({ ...range, ignoreWhitespace: false });
+          yield* store.reverseCheckpointDiff(range);
+          return diff;
+        }),
+      );
+
+      expect(diff).toContain("diff --git a/src/file.ts b/src/file.ts");
+      expect(readFileSync(join(cwd, "src", "file.ts"), "utf8")).toBe("before\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("restores the worktree patch when resetting the index fails during file undo", async () => {
