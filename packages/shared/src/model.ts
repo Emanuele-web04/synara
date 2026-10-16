@@ -453,12 +453,26 @@ export function getProviderOptionDescriptors(input: {
   const descriptors =
     input.caps.optionDescriptors?.map(cloneProviderOptionDescriptor) ??
     legacyCapabilityDescriptors(input.provider, input.caps);
-  return descriptors.map((descriptor) =>
-    withProviderOptionCurrentValue(
-      descriptor,
+  return descriptors.map((descriptor) => {
+    let resolvedDescriptor = descriptor;
+    // Remove the synthetic default also from catalogs cached by the old Claude adapter.
+    if (
+      input.provider === "claudeAgent" &&
+      descriptor.type === "select" &&
+      descriptor.id === "effort"
+    ) {
+      const { currentValue, ...rest } = descriptor;
+      resolvedDescriptor = {
+        ...rest,
+        options: descriptor.options.filter((option) => option.id !== "default"),
+        ...(currentValue && currentValue !== "default" ? { currentValue } : {}),
+      };
+    }
+    return withProviderOptionCurrentValue(
+      resolvedDescriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
-    ),
-  );
+    );
+  });
 }
 
 export function getProviderOptionCurrentValue(

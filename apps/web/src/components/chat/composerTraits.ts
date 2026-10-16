@@ -290,10 +290,6 @@ export function planComposerEffortChange(input: {
     };
   }
   const optionId = selection.primarySelectDescriptor?.id ?? fallbackEffortOptionId(provider);
-  // The CLI default is an absence of an override, never a fabricated effort level.
-  if (provider === "claudeAgent" && nextOption.value === "default") {
-    return { kind: "options", patch: { [optionId]: undefined } };
-  }
   return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
 }
 

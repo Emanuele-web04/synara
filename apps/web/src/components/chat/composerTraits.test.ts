@@ -239,7 +239,7 @@ describe("resolveComposerEffortLadderIndex", () => {
 });
 
 describe("CLI-discovered Claude effort", () => {
-  it("uses a runtime-only ladder and resets to the CLI default without sending a sentinel", () => {
+  it("uses only native levels and rejects the synthetic default from a cached catalog", () => {
     const selection = getComposerTraitSelection(
       "claudeAgent",
       "runtime-fixture-model",
@@ -250,14 +250,15 @@ describe("CLI-discovered Claude effort", () => {
         name: "Runtime fixture",
         supportsThinkingToggle: false,
         supportedReasoningEfforts: [
-          { value: "default", label: "Default (CLI)" },
+          { value: "default", label: "Default" },
           { value: "low" },
           { value: "max" },
         ],
         defaultReasoningEffort: "default",
       },
     );
-    expect(selection.effortLevels.map((level) => level.value)).toEqual(["default", "low", "max"]);
+    expect(selection.effortLevels.map((level) => level.value)).toEqual(["low", "max"]);
+    expect(selection.defaultEffort).toBe("low");
     expect(selection.effort).toBe("max");
     expect(
       planComposerEffortChange({
@@ -266,6 +267,6 @@ describe("CLI-discovered Claude effort", () => {
         prompt: "",
         value: "default",
       }),
-    ).toEqual({ kind: "options", patch: { effort: undefined } });
+    ).toBeNull();
   });
 });

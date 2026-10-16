@@ -170,7 +170,7 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("uses CLI-discovered slider steps and restores the native default without persisting a fake level", async () => {
+  it("keeps the existing slider behavior with native efforts and an old cached Default entry", async () => {
     await using _ = await mountClaudePicker({
       model: "runtime-fixture-model",
       slider: true,
@@ -188,7 +188,8 @@ describe("TraitsPicker (Claude)", () => {
       },
     });
     const slider = page.getByRole("slider", { name: "Reasoning effort" });
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default (CLI)");
+    await expect.element(slider).toHaveAttribute("max", "1");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
     await slider.element().focus();
     await userEvent.keyboard("{End}");
     await expect.element(slider).toHaveAttribute("aria-valuetext", "Max");
@@ -197,11 +198,11 @@ describe("TraitsPicker (Claude)", () => {
         .claudeAgent?.options,
     ).toEqual({ effort: "max" });
     await page.getByRole("button", { name: "Reset effort and speed" }).click();
-    await expect.element(slider).toHaveAttribute("aria-valuetext", "Default (CLI)");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
     expect(
       useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
         .claudeAgent?.options,
-    ).toBeUndefined();
+    ).toEqual({ effort: "low" });
   });
 
   it("flips the fast mode toggle in place without closing the menu", async () => {
