@@ -359,11 +359,20 @@ export class McpConnectorRuntime {
       ...(ownClient ? { clientInformation: ownClient } : {}),
     };
     const { auth } = await loadMcpAuth();
+    // Vercel issues a refresh token only with offline_access. Preserve its
+    // requested scopes so a saved connection can renew after the desktop restarts.
+    const requestedScope = probe.kind === "oauth" ? probe.scope : undefined;
+    const authorizationScope =
+      new URL(target.url).origin === "https://mcp.vercel.com"
+        ? [
+            ...new Set([...(requestedScope?.trim() || "openid").split(/\s+/), "offline_access"]),
+          ].join(" ")
+        : requestedScope;
     let result: Awaited<ReturnType<typeof auth>>;
     try {
       result = await auth(makeConnectorOAuthProvider(authorization), {
         serverUrl: target.url,
-        ...(probe.kind === "oauth" && probe.scope ? { scope: probe.scope } : {}),
+        ...(authorizationScope ? { scope: authorizationScope } : {}),
         ...(probe.kind === "oauth" && probe.resourceMetadataUrl
           ? { resourceMetadataUrl: new URL(probe.resourceMetadataUrl) }
           : {}),

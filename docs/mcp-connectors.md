@@ -79,6 +79,21 @@ The paired view includes names, status and URL origins only; URL credentials,
 paths and queries are removed. OAuth setup, connecting and disconnecting remain
 local-owner operations. No connector token is transferred to the phone.
 
+## Vercel sign-in renewal
+
+Vercel requires the OAuth `offline_access` scope to issue a refresh token.
+Synara includes it when connecting to `https://mcp.vercel.com`, preserving the
+scopes the server requested. The grant stays on the execution computer and uses
+the existing refresh path after token expiry or a desktop restart. Other
+connectors keep their existing scope selection.
+
+Older Vercel grants with only `openid` have no refresh token and need one new
+sign-in after this fix is installed. The user chooses project access in Vercel’s
+consent page; Synara does not silently expand that project selection. A source
+fix is not an upgrade to an already-issued grant.
+
+See [Vercel’s scope reference](https://vercel.com/docs/sign-in-with-vercel/scopes-and-permissions).
+
 ## Limits
 
 - Connecting needs a loopback-only instance, because the OAuth redirect targets this machine's
