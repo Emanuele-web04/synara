@@ -280,6 +280,15 @@ submitting changed bytes. Recovery checks Apple's status and retains signature,
 stapling, Gatekeeper and final update-ZIP validation. Startup smoke and release
 provenance checks must still pass before publication.
 
+Ticket stapling and validation retry only the observed Apple transport failure:
+exit 68 accompanied by `NSURLErrorDomain Code=-1005` (connection lost). The same
+command and payload are attempted at most four times, with waits of 5, 15 and
+30 seconds. This applies during app/DMG finalization and provenance validation.
+Every attempt retains its diagnostics. Exhausted retries, other validation errors,
+signals and process-launch errors still fail the job; notarization is not
+resubmitted and no signature, Gatekeeper or startup check is skipped. The bounded
+backoff follows [Apple's guidance for CloudKit network failures](https://developer.apple.com/documentation/cloudkit/ckerror/code/networkfailure).
+
 ### macOS release toolchains
 
 Both native macOS release runners use macOS 15. Native helpers and the pinned
@@ -488,6 +497,10 @@ full subject distinguished name.
    `bun run lint`, `bun run typecheck`, `bun run release:smoke`, and affected
    Vitest tests. Include `bun run windows-runtime:check`, `bun run migrations:check`
    and relevant browser/native checks when their boundaries change.
+   Migration history is checked for the family selected by matching server and
+   desktop package versions: Stable and Beta share history; Remote checks its own
+   releases because its data home and updater are isolated. Legacy shared tags
+   remain protected. An unknown or mismatched package version fails the check.
    The single tag workflow supplies the final full workspace test suite through
    `quality` plus all three `server_tests` shards, and the desktop build through
    `build_portable` and the native platform jobs. Do not require an additional

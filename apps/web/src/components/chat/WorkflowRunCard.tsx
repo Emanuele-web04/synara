@@ -1,6 +1,6 @@
 // FILE: WorkflowRunCard.tsx
-// Purpose: Workflow run panel stacked above the composer (Claude dynamic
-// workflows): workflow name/description header with running counts and
+// Purpose: Workflow run capsule above the composer (Claude dynamic workflows) and
+// the panel it opens in a popover: workflow name/description header with running counts and
 // pause/stop actions, a clickable phase rail (auto-follows the current phase
 // until the user picks one) whose right pane shows only the selected phase's
 // agents, and one expandable row per agent (status dot, label, model, effort,
@@ -8,7 +8,7 @@
 // tool activity. Settled runs keep the card with the persisted script
 // path/runId and a resume action.
 // Layer: Chat composer UI
-// Exports: WorkflowRunCard
+// Exports: WorkflowRunCard, WorkflowRunCapsule
 
 import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
@@ -23,8 +23,6 @@ import {
 import {
   CheckIcon,
   CopyIcon,
-  PanelCollapseIcon,
-  PanelExpandIcon,
   PauseIcon,
   PlayIcon,
   StopIcon,
@@ -50,7 +48,7 @@ import {
   ComposerStackedPanelRowLabel,
   ComposerStackedPanelRowMain,
 } from "./ComposerStackedPanelContent";
-import { ComposerStackedPanel } from "./ComposerStackedPanel";
+import { ComposerCapsulePopover } from "./ComposerCapsule";
 import {
   COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
@@ -60,14 +58,11 @@ import {
 
 interface WorkflowRunCardProps {
   workflowRun: WorkflowRunState;
-  compact: boolean;
-  onCompactChange: (compact: boolean) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onStop: () => void;
   onPause: () => void;
   onResume: () => void;
   onDismiss: () => void;
-  attachedToPrevious?: boolean;
 }
 
 function settledWorkflowPresentation(workflowRun: WorkflowRunState): {
@@ -274,18 +269,14 @@ function WorkflowAgentRowView({
 
 export function WorkflowRunCard({
   workflowRun,
-  compact,
-  onCompactChange,
   onOpenThread,
   onStop,
   onPause,
   onResume,
   onDismiss,
-  attachedToPrevious: attachedToPreviousProp,
 }: WorkflowRunCardProps) {
   // Keep elapsed-time ticks local to the card instead of rerendering ChatView.
   const nowMs = useNowMs(!workflowRun.settled);
-  const attachedToPrevious = attachedToPreviousProp ?? false;
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   // Default view lists every phase's agents (grouped); a pill click narrows to
   // one phase, clicking it again returns to the full list.
@@ -347,18 +338,10 @@ export function WorkflowRunCard({
   };
 
   return (
-    <ComposerStackedPanel
-      passthroughSideMargins
-      attachedToPrevious={attachedToPrevious}
-      data-testid="workflow-run-card"
-    >
+    <div data-testid="workflow-run-card">
       <ComposerStackedPanelHeaderRow>
         <ComposerStackedPanelRowMain title={workflowRun.description ?? undefined}>
-          {compact && workflowRun.runningCount > 0 ? (
-            <LiveStatusSpinner className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          ) : (
-            <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          )}
+          <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           <ComposerStackedPanelRowLabel tone="meta">
             <span className="font-medium text-foreground/80">{workflowRun.name}</span>
             {settledPresentation ? (
@@ -424,25 +407,10 @@ export function WorkflowRunCard({
               </Button>
             </>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
-            onClick={() => onCompactChange(!compact)}
-            aria-label={compact ? "Expand workflow panel" : "Collapse workflow panel"}
-            title={compact ? "Expand workflow panel" : "Collapse workflow panel"}
-          >
-            {compact ? (
-              <PanelExpandIcon className="size-3" strokeWidth={2} />
-            ) : (
-              <PanelCollapseIcon className="size-3" strokeWidth={2} />
-            )}
-          </Button>
         </div>
       </ComposerStackedPanelHeaderRow>
 
-      <DisclosureRegion open={!compact && (workflowRun.agents.length > 0 || savedLine.length > 0)}>
+      <DisclosureRegion open={workflowRun.agents.length > 0 || savedLine.length > 0}>
         <div className={COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME}>
           {showPhasePills ? (
             <div
@@ -544,6 +512,42 @@ export function WorkflowRunCard({
           ) : null}
         </div>
       </DisclosureRegion>
-    </ComposerStackedPanel>
+    </div>
+  );
+}
+
+/** Capsule label: name plus running count (or settled state); opens the full card. */
+export function WorkflowRunCapsule(props: WorkflowRunCardProps) {
+  const { workflowRun } = props;
+  const settledPresentation = workflowRun.settled ? settledWorkflowPresentation(workflowRun) : null;
+  const totalCount = workflowRun.agents.length;
+  return (
+    <ComposerCapsulePopover
+      icon={
+        workflowRun.runningCount > 0 ? (
+          <LiveStatusSpinner className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+        ) : (
+          <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+        )
+      }
+      label={
+        <>
+          {workflowRun.name}
+          {settledPresentation ? (
+            <span className={cn("ml-1.5", settledPresentation.toneClassName)}>
+              {settledPresentation.label}
+            </span>
+          ) : totalCount > 0 ? (
+            <span className="ml-1.5 tabular-nums text-muted-foreground">
+              {workflowRun.runningCount}/{totalCount} running
+            </span>
+          ) : null}
+        </>
+      }
+      title={workflowRun.description ?? undefined}
+      testId="workflow-run-capsule"
+    >
+      <WorkflowRunCard {...props} />
+    </ComposerCapsulePopover>
   );
 }

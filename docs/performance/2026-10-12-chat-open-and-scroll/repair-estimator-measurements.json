@@ -1,0 +1,21 @@
+{
+  "runtime": "1.4.2",
+  "engine": "Bun",
+  "workload": "Identical 2000 rows; fresh estimator each sample; alternating five samples; no remembered measurements",
+  "results": [
+    {
+      "rows": 2000,
+      "charsPerRow": 10000,
+      "textMB": 20,
+      "before": [40.35, 40.12, 35.98, 36.08, 37.5],
+      "after": [17.82, 16.63, 13.87, 13.59, 16.3]
+    },
+    {
+      "rows": 2000,
+      "charsPerRow": 100000,
+      "textMB": 200,
+      "before": [373.69, 345.56, 345.33, 354.19, 337.56],
+      "after": [16.18, 15.74, 16.01, 17.4, 14.33]
+    }
+  ]
+}

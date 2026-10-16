@@ -398,6 +398,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
     expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("grok", "grok-4.7-build-fast")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 });
 
@@ -449,11 +450,38 @@ describe("resolveGrokEffortFamily", () => {
     expect(resolveGrokEffortFamily("grok-4.5")).toBe("4.5");
     expect(resolveGrokEffortFamily("grok-4.6")).toBe("4.6");
     expect(resolveGrokEffortFamily("grok-4.7")).toBe("4.6");
+    expect(resolveGrokEffortFamily("grok-4.7-build-fast")).toBe("4.6");
+    expect(resolveGrokEffortFamily("grok-4.3-build")).toBe("build");
     expect(resolveGrokEffortFamily("custom/grok-fast")).toBe("build");
   });
 });
 
 describe("provider option descriptor helpers", () => {
+  it("removes the synthetic Claude default choice from an older cached catalog", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps: {
+        ...getModelCapabilities("claudeAgent", "runtime-fixture-model"),
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [
+              { id: "default", label: "Default (CLI)", isDefault: true },
+              { id: "high", label: "High" },
+            ],
+            currentValue: "default",
+          },
+        ],
+      },
+    });
+    expect(descriptors[0]).toMatchObject({
+      options: [{ id: "high", label: "High" }],
+    });
+    expect(descriptors[0]).not.toHaveProperty("currentValue");
+  });
+
   it("projects legacy Codex capability flags into generic option descriptors", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
@@ -891,6 +919,15 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
+  it("restarts for max on a CLI-only model without relying on a catalog release", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("runtime-fixture-model", { effort: "low" }),
+        selection("runtime-fixture-model", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not restart for a model-only change", () => {
     expect(
       claudeSelectionRequiresRestart(
@@ -900,22 +937,22 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when a model switch makes a persisted max effort effective", () => {
+  it("keeps CLI-owned max spawn-fixed when switching from a legacy catalog model", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-haiku-4-5", { effort: "max" }),
         selection("claude-sonnet-5", { effort: "max" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("restarts when a model switch makes a persisted max effort unsupported", () => {
+  it("leaves max support validation to the CLI when switching to a legacy catalog model", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-sonnet-5", { effort: "max" }),
         selection("claude-haiku-4-5", { effort: "max" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("still restarts when spawn-fixed options change together with the model", () => {
@@ -1017,6 +1054,9 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toBeUndefined();
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "high" })).toBeUndefined();
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "xhigh" })).toEqual({
+      reasoningEffort: "xhigh",
+    });
+    expect(normalizeGrokModelOptions("grok-4.7-build-fast", { reasoningEffort: "xhigh" })).toEqual({
       reasoningEffort: "xhigh",
     });
     expect(normalizeGrokModelOptions("grok-4.6", { reasoningEffort: "none" })).toBeUndefined();

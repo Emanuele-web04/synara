@@ -172,3 +172,13 @@ Like Claude Code, Synara resumes a large conversation after a long pause without
 To publish Claude Artifacts with `/design` or `/slides`, enable **Artifacts, /design and /slides** in Settings → Providers → Claude, then start a new session. This integration is off by default and requires a compatible Claude Code version and eligible claude.ai account. Synara explains when the session cannot use it; enabling the toggle does not grant account eligibility.
 
 You can also [import local Claude projects and conversations](/docs/features/project-import) and try [Computer Use beta on macOS](/docs/features/computer-use).
+
+## Permissions, resume and usage in 1.0.5
+
+**Ask for approval** explicitly selects Claude Code's `default` permission mode rather than inheriting a configured automatic mode. **Auto** uses Claude's classifier; **Full access** bypasses permission prompts. These are provider modes, and configured tool rules still belong to Claude. The menu explains the provider's behavior.
+
+Changing behavior-only options such as Artifacts, the thinking limit or permission mode preserves an eligible resume cursor. Changes to the account, home, executable or environment still participate in session ownership checks.
+
+The first result after resuming can contain restored cumulative totals. Synara uses it as a baseline and counts observed main-loop work instead of adding the restored totals again. Child usage remains separate unless a real parent result covers it. Inbox splits observed cache reads from **other** tokens; other can include unclassified cache usage. Historical records missing process identity or request evidence remain incomplete, and totals are not an independent billing statement.
+
+Source evidence: feature head `4b2441d`; `apps/server/src/provider/Layers/ClaudeAdapter.ts`, `ProviderService.ts`, `apps/server/src/claudeTokenStats.ts`, `apps/server/src/recapStats.ts` and `docs/claude-token-accounting.md`.

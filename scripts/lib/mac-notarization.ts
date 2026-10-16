@@ -38,10 +38,44 @@ function credentialsArgs(credentials: MacDmgNotaryCredentials): string[] {
 
 export function runMacCommand(command: string, args: readonly string[], stage: string): void {
   timeBuildStage(stage, () => {
-    const result = spawnSync(command, [...args], { stdio: "inherit" });
-    if (result.error) throw result.error;
-    if (result.status !== 0)
-      throw new Error(`${stage} failed with exit code ${result.status ?? "unknown"}.`);
+    const isStapler =
+      command === "xcrun" &&
+      args[0] === "stapler" &&
+      (args[1] === "staple" || args[1] === "validate");
+    const retryDelaysMs = [5_000, 15_000, 30_000];
+    for (let attempt = 0; ; attempt += 1) {
+      // Capture only credential-free ticket commands so retries require the
+      // observed transport failure, not exit 68 or a validation failure alone.
+      const result = spawnSync(
+        command,
+        [...args],
+        isStapler
+          ? { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["inherit", "pipe", "pipe"] }
+          : { stdio: "inherit" },
+      );
+      if (isStapler) {
+        if (result.stdout) process.stdout.write(result.stdout);
+        if (result.stderr) process.stderr.write(result.stderr);
+      }
+      if (result.error) throw result.error;
+      if (result.status === 0) return;
+      const delayMs = retryDelaysMs[attempt];
+      if (
+        !isStapler ||
+        result.signal ||
+        result.status !== 68 ||
+        !/NSURLErrorDomain\s+Code=-1005\b/.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}`) ||
+        delayMs === undefined
+      ) {
+        throw new Error(`${stage} failed with exit code ${result.status ?? "unknown"}.`);
+      }
+      console.warn(
+        `[notarization] ${stage}: ticket connection lost; retry ${attempt + 1}/3 in ${delayMs / 1000}s.`,
+      );
+      // This build-only command runner is synchronous. Wait without starting a
+      // second subprocess or resubmitting/rebuilding the signed payload.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
   });
 }
 

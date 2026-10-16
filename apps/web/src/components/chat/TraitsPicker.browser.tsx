@@ -11,11 +11,12 @@ import {
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { TraitsPicker } from "./TraitsPicker";
+import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   ComposerThreadDraftState,
@@ -31,6 +32,8 @@ const CLAUDE_THREAD_ID = ThreadId.makeUnsafe("thread-claude-traits");
 function ClaudeTraitsPickerHarness(props: {
   model: string;
   fallbackModelSelection: ModelSelection | null;
+  runtimeModel?: ProviderModelDescriptor;
+  slider?: boolean;
 }) {
   const prompt = useComposerThreadDraft(CLAUDE_THREAD_ID).prompt;
   const setPrompt = useComposerDraftStore((store) => store.setPrompt);
@@ -56,20 +59,24 @@ function ClaudeTraitsPickerHarness(props: {
     setPrompt(CLAUDE_THREAD_ID, nextPrompt);
   };
 
+  const Control = props.slider ? ComposerEffortSliderCard : TraitsPicker;
   return (
-    <TraitsPicker
+    <Control
       provider="claudeAgent"
       threadId={CLAUDE_THREAD_ID}
       model={selectedModel ?? props.model}
       prompt={prompt}
       modelOptions={modelOptions?.claudeAgent}
       onPromptChange={handlePromptChange}
+      {...(props.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
     />
   );
 }
 
 async function mountClaudePicker(props?: {
   model?: string;
+  runtimeModel?: ProviderModelDescriptor;
+  slider?: boolean;
   prompt?: string;
   options?: ClaudeModelOptions;
   fallbackModelOptions?: {
@@ -132,7 +139,12 @@ async function mountClaudePicker(props?: {
         } satisfies ModelSelection)
       : null;
   const screen = await render(
-    <ClaudeTraitsPickerHarness model={model} fallbackModelSelection={fallbackModelSelection} />,
+    <ClaudeTraitsPickerHarness
+      model={model}
+      fallbackModelSelection={fallbackModelSelection}
+      {...(props?.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+      {...(props?.slider ? { slider: true } : {})}
+    />,
     { container: host },
   );
 
@@ -156,6 +168,41 @@ describe("TraitsPicker (Claude)", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
     });
+  });
+
+  it("keeps the existing slider behavior with native efforts and an old cached Default entry", async () => {
+    await using _ = await mountClaudePicker({
+      model: "runtime-fixture-model",
+      slider: true,
+      runtimeModel: {
+        slug: "runtime-fixture-model",
+        name: "Runtime fixture",
+        supportsThinkingToggle: false,
+        supportsFastMode: false,
+        supportedReasoningEfforts: [
+          { value: "default", label: "Default (CLI)" },
+          { value: "low", label: "Low" },
+          { value: "max", label: "Max" },
+        ],
+        defaultReasoningEffort: "default",
+      },
+    });
+    const slider = page.getByRole("slider", { name: "Reasoning effort" });
+    await expect.element(slider).toHaveAttribute("max", "1");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
+    await slider.element().focus();
+    await userEvent.keyboard("{End}");
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Max");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
+        .claudeAgent?.options,
+    ).toEqual({ effort: "max" });
+    await page.getByRole("button", { name: "Reset effort and speed" }).click();
+    await expect.element(slider).toHaveAttribute("aria-valuetext", "Low");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
+        .claudeAgent?.options,
+    ).toEqual({ effort: "low" });
   });
 
   it("flips the fast mode toggle in place without closing the menu", async () => {
