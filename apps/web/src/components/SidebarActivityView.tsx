@@ -87,6 +87,7 @@ import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "./sidebarHoverCardStyles";
 import {
   createSidebarThreadRowGestures,
   type SidebarRowContextMenuPosition,
+  type SidebarThreadRowGestureProps,
 } from "./sidebarThreadRowGestures";
 import { SidebarIconButton } from "./SidebarIconButton";
 import {
@@ -236,10 +237,14 @@ export function ActivityThreadRow({
         <span
           className={cn(
             "flex min-w-0 items-center gap-1.5 overflow-hidden transition-[padding] duration-150 ease-out",
-            !threadJumpLabel && "pr-5",
-            // Yield the title row to the hover action cluster (pin + archive + done).
-            (!external || external.entry) &&
+            // Room for the status glyph only when there is one, so a remote row's globe
+            // otherwise sits at the edge.
+            trailingStatus && !threadJumpLabel && "pr-4",
+            // Yield the title row to the hover actions: pin + archive + done here, the
+            // single menu button on a remote row (in the status glyph's place).
+            !external &&
               "group-hover/activity-row:pr-[4.25rem] group-focus-within/activity-row:pr-[4.25rem]",
+            external?.entry && "group-hover/activity-row:pr-4 group-focus-within/activity-row:pr-4",
           )}
         >
           <ProviderIcon
@@ -327,7 +332,7 @@ export function ActivityThreadRow({
         <span
           data-slot="activity-completion-status"
           className={cn(
-            "pointer-events-none absolute top-1 right-1 inline-flex size-5 items-center justify-center",
+            "pointer-events-none absolute top-2 right-1 inline-flex size-5 items-center justify-center",
             sidebarHoverRevealHideClassName("activity-row"),
           )}
         >
@@ -336,7 +341,7 @@ export function ActivityThreadRow({
       ) : null}
       {!external ? (
         <span
-          className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
+          className="absolute top-2 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
           // Double-clicking an action button toggles it twice; it must not also open
           // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
           // so keep action taps out of that detector too.
@@ -374,27 +379,8 @@ export function ActivityThreadRow({
       ) : null}
     </>
   );
-  if (external) {
-    if (external.entry)
-      return (
-        <WorkspaceThreadActions entry={external.entry}>
-          {({ rowEvents, menuButton }) => (
-            <div className="group/activity-row relative" data-thread-item {...rowEvents}>
-              {rowContent}
-              <span className="absolute top-1 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
-                {menuButton}
-              </span>
-            </div>
-          )}
-        </WorkspaceThreadActions>
-      );
-    return (
-      <div className="group/activity-row relative" data-thread-item>
-        {rowContent}
-      </div>
-    );
-  }
-  return (
+  // Every row, local or on another computer, opens the same hover card.
+  const withHoverCard = (children: ReactNode, rowProps?: SidebarThreadRowGestureProps) => (
     <Tooltip>
       <TooltipTrigger
         {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
@@ -403,15 +389,33 @@ export function ActivityThreadRow({
             data-thread-hover-anchor={hoverAnchorId}
             className="group/activity-row relative"
             data-thread-item
-            {...rowGestures}
+            {...rowProps}
           />
         }
       >
-        {rowContent}
+        {children}
       </TooltipTrigger>
       {renderHoverCard(hoverAnchorId)}
     </Tooltip>
   );
+  if (external?.entry) {
+    return (
+      <WorkspaceThreadActions entry={external.entry}>
+        {({ rowEvents, menuButton }) =>
+          withHoverCard(
+            <>
+              {rowContent}
+              <span className="absolute top-2 right-1 inline-flex opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100">
+                {menuButton}
+              </span>
+            </>,
+            rowEvents,
+          )
+        }
+      </WorkspaceThreadActions>
+    );
+  }
+  return withHoverCard(rowContent, external ? undefined : rowGestures);
 }
 
 /** The same accessible Snoozed section serves Activity and the classic sidebar. */

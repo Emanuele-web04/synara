@@ -5,7 +5,7 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -92,6 +92,7 @@ function renderActivity(input: {
     { hostName: string; onOpen: () => void; status: ThreadStatusPill | null }
   >;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+  renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
   onReturnSnoozedThread?: (threadId: ThreadId) => void;
@@ -143,7 +144,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onThreadRenamePointerUp={input.onThreadRenamePointerUp ?? (() => {})}
       onThreadContextMenu={input.onThreadContextMenu ?? (() => {})}
       onProjectContextMenu={input.onProjectContextMenu ?? (() => {})}
-      renderThreadHoverCard={() => null}
+      renderThreadHoverCard={input.renderThreadHoverCard ?? (() => null)}
       onCreateChat={() => {}}
       onAddProject={() => {}}
     />
@@ -194,9 +195,11 @@ describe("SidebarActivityView", () => {
     const onRenameThread = vi.fn();
     const onThreadContextMenu = vi.fn();
     const onVisibleThreadIdsChange = vi.fn();
+    const renderThreadHoverCard = vi.fn(() => null);
     const mounted = await render(
       renderActivity({
         threads: [local, remote],
+        renderThreadHoverCard,
         projects: [makeProject(PROJECT_A, "Project A"), makeProject(PROJECT_B, "Project B")],
         pinnedThreadIdSet: new Set([remote.id]),
         externalRows: new Map([
@@ -216,6 +219,12 @@ describe("SidebarActivityView", () => {
     // The computer is named by the hover card and the accessible label, not the meta line.
     expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
     expect(remoteRow.element().textContent).not.toContain("Studio Mac");
+    // Remote rows open the same hover card as local ones.
+    expect(remoteRow.element().closest("[data-thread-hover-anchor]")).not.toBeNull();
+    expect(renderThreadHoverCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: remote.id }),
+      expect.any(String),
+    );
     expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
     await remoteRow.click();
     expect(onRemoteOpen).toHaveBeenCalledOnce();
