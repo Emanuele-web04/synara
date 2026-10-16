@@ -1240,9 +1240,11 @@ The later iOS commits `6823429` and `4909297` add the runtime capsule and
 connector/plugin/file mention discovery. Both native branches now include them
 and the cancellation/reconnect footer repair in `6270958`. Universal version
 `0.1 (136)` passed archive, distribution signing, iPhone/iPad device-family and
-production APNs checks; Xcode uploaded it successfully and Apple began processing.
-App Store Connect's web login remains blank with `authResult=FAILED`, so group
-assignment and tester availability are not yet confirmed. Build 135 is still the
+production APNs checks; Xcode uploaded it successfully and Apple's email confirms
+processing completed at 14:57:51 UTC. Chrome's App Store Connect login remains
+blank with `authResult=FAILED`; the integrated browser loads the form and awaits
+the user's sign-in. Group assignment and tester availability are not yet confirmed.
+Build 135 is still the
 last confirmed assigned build; no App Store Connect API key was created.
 
 Core: 319 tests pass; desktop contracts: 86 fixtures pass. The iPad simulator
