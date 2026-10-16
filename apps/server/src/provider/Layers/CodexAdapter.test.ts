@@ -719,7 +719,7 @@ turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
 });
 
 it.effect(
-  "keeps automatic approval review starts in native logs and preserves completion warnings",
+  "keeps internal Codex notifications in native logs and preserves completion warnings",
   () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-auto-approval-review-"));
@@ -751,6 +751,16 @@ it.effect(
           emit("item/autoApprovalReview/completed", "approved");
           emit("item/autoApprovalReview/completed", "denied");
           emit("item/autoApprovalReview/completed", "aborted");
+          manager.emit("event", {
+            id: asEventId("moderation-metadata-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "turn/moderationMetadata",
+            threadId: asThreadId("review-thread"),
+            turnId: asTurnId("review-turn"),
+            payload: { threadId: "review-thread", turnId: "review-turn", moderationMetadata: {} },
+          } satisfies ProviderEvent);
           emit("session/started", "ready");
 
           const events = Array.from(yield* Fiber.join(eventsFiber));
@@ -777,6 +787,7 @@ it.effect(
         const nativeLog = fs.readFileSync(path.join(tempDir, "review-thread.log"), "utf8");
         assert.ok(nativeLog.includes('"method":"item/autoApprovalReview/started"'));
         assert.ok(nativeLog.includes('"status":"inProgress"'));
+        assert.ok(nativeLog.includes('"method":"turn/moderationMetadata"'));
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -2799,10 +2810,10 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("keeps routine Codex startup notifications out of the activity stream", () =>
+  it.effect("keeps routine Codex notifications out of the activity stream", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
-      const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -2821,18 +2832,21 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       emit("remoteControl/status/changed");
       emit("skills/changed");
       emit("session/threadOpenRequested", "session");
+      emit("turn/moderationMetadata");
+      emit("turn/moderationMetadata");
       // Real errors and useful unknown events must survive the filter.
       emit("session/threadOpenRequested", "error");
+      emit("turn/moderationMetadata", "error");
       emit("item/future/completed");
       emit("session/started", "session");
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
       assert.deepEqual(
         events.map((event) => event.type),
-        ["runtime.error", "event.unmapped", "session.started"],
+        ["runtime.error", "runtime.error", "event.unmapped", "session.started"],
       );
       assert.equal(
-        events[1]?.type === "event.unmapped" ? events[1].payload.nativeType : undefined,
+        events[2]?.type === "event.unmapped" ? events[2].payload.nativeType : undefined,
         "item/future/completed",
       );
     }),
