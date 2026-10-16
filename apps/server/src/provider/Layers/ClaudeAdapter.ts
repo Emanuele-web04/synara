@@ -1196,14 +1196,7 @@ function claudeModelCapabilities(model: ModelInfo): ModelCapabilities {
     ...base,
     ...(nativeEfforts !== undefined
       ? {
-          reasoningEffortLevels:
-            nativeEfforts.length > 0
-              ? [
-                  { value: "default", label: "Default (CLI)", isDefault: true },
-                  ...nativeEfforts,
-                  ...modes,
-                ]
-              : [],
+          reasoningEffortLevels: [...nativeEfforts, ...modes],
           promptInjectedEffortLevels: modes
             .filter((level) => level.controlSource === "prompt-prefix")
             .map((level) => level.value),
@@ -1241,7 +1234,6 @@ function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"
             value,
             label,
           })),
-          defaultReasoningEffort: "default",
         }
       : {}),
     ...(typeof model.supportsFastMode === "boolean"

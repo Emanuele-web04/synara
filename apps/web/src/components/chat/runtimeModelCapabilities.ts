@@ -110,7 +110,13 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
-  const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  // Ignore the synthetic choice left in catalogs from the previous adapter.
+  const runtimeEfforts =
+    input.provider === "claudeAgent"
+      ? input.runtimeModel?.supportedReasoningEfforts?.filter(
+          (effort) => effort.value !== "default",
+        )
+      : input.runtimeModel?.supportedReasoningEfforts;
   // Providers with dynamic catalogs, including Droid, expose model-specific effort ladders here.
   if (
     (input.provider !== "claudeAgent" &&
@@ -136,8 +142,11 @@ export function getRuntimeAwareModelCapabilities(input: {
   }
 
   const staticDefaultEffort = getDefaultEffort(staticCapabilities);
+  const reportedDefaultEffort = trimOrNull(input.runtimeModel?.defaultReasoningEffort);
   const runtimeDefaultEffort =
-    trimOrNull(input.runtimeModel?.defaultReasoningEffort) ??
+    (input.provider === "claudeAgent" && reportedDefaultEffort === "default"
+      ? null
+      : reportedDefaultEffort) ??
     (staticDefaultEffort && runtimeEfforts.some((effort) => effort.value === staticDefaultEffort)
       ? staticDefaultEffort
       : null);

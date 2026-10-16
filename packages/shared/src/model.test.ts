@@ -457,6 +457,31 @@ describe("resolveGrokEffortFamily", () => {
 });
 
 describe("provider option descriptor helpers", () => {
+  it("removes the synthetic Claude default choice from an older cached catalog", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "claudeAgent",
+      caps: {
+        ...getModelCapabilities("claudeAgent", "runtime-fixture-model"),
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [
+              { id: "default", label: "Default (CLI)", isDefault: true },
+              { id: "high", label: "High" },
+            ],
+            currentValue: "default",
+          },
+        ],
+      },
+    });
+    expect(descriptors[0]).toMatchObject({
+      options: [{ id: "high", label: "High" }],
+    });
+    expect(descriptors[0]).not.toHaveProperty("currentValue");
+  });
+
   it("projects legacy Codex capability flags into generic option descriptors", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",

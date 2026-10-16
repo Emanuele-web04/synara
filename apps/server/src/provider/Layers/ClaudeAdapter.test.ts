@@ -6467,9 +6467,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         const model = catalog.models[0]!;
         assert.deepEqual(
           model.supportedReasoningEfforts?.map((level) => level.value),
-          ["default", "low", "xhigh", "max"],
+          ["low", "xhigh", "max"],
         );
-        assert.equal(model.defaultReasoningEffort, "default");
+        assert.equal(model.defaultReasoningEffort, undefined);
+        assert.equal(model.supportedReasoningEfforts?.[0]?.label, "Low");
         assert.equal(model.supportsThinkingToggle, false);
         assert.equal(model.supportsFastMode, false);
         yield* adapter.startSession({
