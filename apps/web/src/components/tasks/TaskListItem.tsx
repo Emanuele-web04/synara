@@ -19,6 +19,7 @@ import { TASK_META_TONE_CLASS } from "./TaskCardPrimitives";
 import { TaskPriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs";
 import { TaskRowTitle, useTaskRename } from "./TaskRowTitle";
 import { buildTaskRowContextMenu } from "./taskRowContextMenu";
+import { describeNotionTask } from "./taskFilters";
 import {
   describeTaskMeta,
   formatDueLabel,
@@ -55,6 +56,7 @@ export function TaskListItem({
   const agent = thread && !isDone ? thread.modelSelection : null;
   // Only the priorities worth a mark; the card shows every level.
   const flagsPriority = !isDone && (todo.priority === "urgent" || todo.priority === "high");
+  const external = todo.external;
 
   const toggleDone = (event: MouseEvent) => {
     event.stopPropagation();
@@ -107,17 +109,33 @@ export function TaskListItem({
         <TaskStatusGlyph kind={status.kind} className="size-4.5" />
       </button>
 
-      <div className="flex min-w-0 flex-1 items-baseline gap-2.5 py-2.5">
-        <TaskRowTitle title={todo.title} isDone={isDone} rename={rename} />
-        {meta ? (
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-2.5">
+        <div className="flex min-w-0 items-baseline gap-2.5">
+          <TaskRowTitle title={todo.title} isDone={isDone} rename={rename} />
+          {meta ? (
+            <span
+              className={cn(
+                "max-w-56 shrink-0 truncate text-ui-sm",
+                TASK_META_TONE_CLASS[meta.tone],
+                meta.live && "shimmer",
+              )}
+            >
+              {meta.text}
+            </span>
+          ) : null}
+        </div>
+        {external ? (
           <span
+            title={describeNotionTask(external)}
             className={cn(
-              "max-w-56 shrink-0 truncate text-ui-sm",
-              TASK_META_TONE_CLASS[meta.tone],
-              meta.live && "shimmer",
+              "truncate text-ui-xs text-muted-foreground",
+              (external.syncState === "conflict" || external.syncState === "error") &&
+                "text-destructive",
             )}
           >
-            {meta.text}
+            Notion{external.status ? `: ${external.status}` : ""}
+            {external.assignees.length ? ` · ${external.assignees.join(", ")}` : ""}
+            {external.syncState !== "synced" ? ` · ${external.syncState}` : ""}
           </span>
         ) : null}
       </div>

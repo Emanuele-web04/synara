@@ -12,13 +12,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { useNowMs } from "~/hooks/useNowMs";
 import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
+import { useStore } from "~/store";
 import { useTasksSurfaceEnabled } from "../../tasksSurface";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
+import { NotionWorkspaceLauncher } from "../notion/NotionWorkspaceLauncher";
 import { TaskCardSurface, useTaskSelection } from "./TaskCardSurface";
+import { TaskListFilters } from "./TaskListFilters";
 import { TaskListItem } from "./TaskListItem";
 import { TaskQuickAdd } from "./TaskQuickAdd";
 import { TasksViewSwitch } from "./TasksViewSwitch";
+import { countTaskFilters, EMPTY_TASK_FILTERS, matchesTaskFilters } from "./taskFilters";
 import { buildTaskSections, summarizeTaskList, type TaskRowModel } from "./tasks.logic";
 import { useTaskRows, useTodoList, useTodoMutations } from "./useTodos";
 
@@ -34,16 +38,23 @@ export default function TasksView() {
   }, [navigate, tasksSurfaceEnabled]);
   const { todos, isLoading, isError, refetch } = useTodoList();
   const mutations = useTodoMutations();
+  const projects = useStore((state) => state.projects);
   // Ticks relative times, and lets a just-linked chat settle from Starting to missing.
   const nowMs = useNowMs(true, 15_000);
   const now = useMemo(() => new Date(nowMs), [nowMs]);
   const rows = useTaskRows(todos, now);
+  // Selection belongs to the full store. Filtering must not unmount an open task draft.
+  const selection = useTaskSelection(rows, mutations);
+  const [filters, setFilters] = useState({ ...EMPTY_TASK_FILTERS });
+  const visibleRows = useMemo(
+    () => rows.filter((row) => matchesTaskFilters(row.todo, filters)),
+    [rows, filters],
+  );
   // One list, no headings: the sections' order (needs you, working, to do) is kept.
   const { openRows, completed } = useMemo(() => {
-    const { sections, completed } = buildTaskSections(rows);
+    const { sections, completed } = buildTaskSections(visibleRows);
     return { openRows: sections.flatMap((section) => section.rows), completed };
-  }, [rows]);
-  const selection = useTaskSelection(rows, mutations);
+  }, [visibleRows]);
   const [showsAllDone, setShowsAllDone] = useState(false);
   const quickAddRef = useRef<HTMLInputElement>(null);
 
@@ -82,11 +93,29 @@ export default function TasksView() {
         <TaskCardSurface selection={selection} now={now} mutations={mutations}>
           <div className="mx-auto flex w-full max-w-[36rem] flex-col gap-7 px-6 pt-10 pb-20">
             <header className="flex flex-col gap-1 px-3">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tasks</h1>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tasks</h1>
+                <NotionWorkspaceLauncher
+                  project={filters.project}
+                  disabled={selection.selectedTodoId !== null}
+                />
+              </div>
               <p className="text-ui text-muted-foreground">
                 {isLoading ? "Loading…" : summarizeTaskList(rows)}
               </p>
             </header>
+
+            <TaskListFilters
+              todos={todos}
+              projects={projects}
+              value={filters}
+              onChange={setFilters}
+            />
+            {countTaskFilters(filters) ? (
+              <p role="status" className="px-3 text-ui-sm text-muted-foreground">
+                {visibleRows.length} of {rows.length} tasks match these filters.
+              </p>
+            ) : null}
 
             {isError && rows.length === 0 ? (
               <div className="flex items-center gap-3 px-3">
