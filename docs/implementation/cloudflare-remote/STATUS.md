@@ -1260,3 +1260,12 @@ No physical iPhone or production push-delivery test was performed.
 The native connector list needs desktop `d322f6e`, which is newer than installed
 Remote `.11`. Older hosts omit connector suggestions safely. No new desktop
 release was published as part of this native build.
+
+### Remote .12 connector discovery candidate
+
+The installed .11 still restricts `server.listMcpConnectors` to its local owner,
+which makes native build 136 show an empty @ connector list. Vercel is connected
+in the Mini’s actual Remote app. Candidate .12 includes existing fix `d322f6e`: the
+authenticated paired view exposes origin-only metadata while connector setup and
+management retain owner authorization. No new iOS/iPadOS binary is needed. Public
+release, installation and simulator verification remain pending until recorded.

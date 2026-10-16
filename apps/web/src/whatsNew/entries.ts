@@ -22,6 +22,18 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.12",
+    date: "Oct 16",
+    features: [
+      {
+        id: "paired-connector-discovery",
+        title: "Mention connectors from your phone or iPad",
+        description:
+          "Use @ in a supported chat to find services connected on the computer running it. Connector sign-in and management stay on that computer.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.11",
     date: "Oct 16",
     features: [

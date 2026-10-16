@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.6-remote.12 — 2026-10-16
+
+### Fixed
+
+- Paired iPhone, iPad and desktop clients can discover connected services in the composer’s @ menu on the computer running the chat. Previously only the local desktop owner could read the connector list.
+- Paired clients receive connector names, status and URL origins only. OAuth setup, connecting and disconnecting remain restricted to the local owner; connector tokens stay on the execution computer.
+
+### Verification
+
+- Includes connector discovery fix `d322f6e`. Native TestFlight 0.1 (136) already supports these suggestions; no new mobile binary is required for this change.
+- Publication requires exact-source quality/server gates, signed/notarized macOS ARM64 packaging and packaged startup qualification. Remote retains its separate identity, data and update feed.
+
 ## 1.0.6-remote.11 — 2026-10-16
 
 ### Fixed
