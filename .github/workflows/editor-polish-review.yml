@@ -1,4 +1,4 @@
-# Temporary review runner. Candidate objects do not update repository refs.
+# Temporary review runner. Application refs are published only through the connector.
 name: Editor polish review
 on:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 env:
-  CANDIDATE_BASE: 1b50aacd2acc33151842ab3aacc49dbb5cd8cdd1
+  CANDIDATE_BASE: ea6dfcfb33f377a3938e65bff8f525b4ddec8176
 jobs:
   prepare:
     runs-on: ubuntu-24.04
@@ -22,11 +22,11 @@ jobs:
           ref: ${{ env.CANDIDATE_BASE }}
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
-      - name: Apply the bounded focus repair
+      - name: Apply Strict Mode ownership repair
         run: |
-          node scripts/finish-editor-handoff.mjs
-          ./node_modules/.bin/oxfmt apps/web/src/components/codeEditor/MonacoEditorSurface.tsx apps/web/e2e/editorPresentation.e2e.ts
-      - name: Preserve normalized candidate objects
+          node scripts/retain-editor-handoff.mjs
+          ./node_modules/.bin/oxfmt apps/web/src/components/codeEditor/MonacoEditorSurface.tsx .github/workflows/editor-presentation-acceptance.yml
+      - name: Preserve normalized objects and review the complete change set
         id: objects
         env:
           GH_TOKEN: ${{ github.token }}
@@ -41,7 +41,7 @@ jobs:
             if(!response.ok)throw new Error(`${endpoint}: ${response.status} ${await response.text()}`);
             return response.json();
           }
-          const allowed=new Set(['apps/web/src/components/codeEditor/MonacoEditorSurface.tsx','apps/web/e2e/editorPresentation.e2e.ts']);
+          const allowed=new Set(['apps/web/src/components/codeEditor/MonacoEditorSurface.tsx','.github/workflows/editor-presentation-acceptance.yml']);
           const paths=execFileSync('git',['diff','--name-only','-z','HEAD'],{encoding:'utf8'}).split('\0').filter(Boolean);
           const tree=[];
           for(const file of paths){
@@ -49,15 +49,22 @@ jobs:
             const blob=await api('git/blobs',{content:await readFile(file,'utf8'),encoding:'utf-8'});
             tree.push({path:file,mode:'100644',type:'blob',sha:blob.sha});
           }
-          tree.push({path:'scripts/finish-editor-handoff.mjs',mode:'100644',type:'blob',sha:null});
+          tree.push({path:'scripts/retain-editor-handoff.mjs',mode:'100644',type:'blob',sha:null});
           const parent=await api(`git/commits/${process.env.CANDIDATE_BASE}`);
           const result=await api('git/trees',{base_tree:parent.tree.sha,tree});
           const identity={name:'Commander Chara',email:'249489759+cmdr-chara@users.noreply.github.com'};
-          const commit=await api('git/commits',{message:'fix(editor): preserve text input focus through initial option setup',tree:result.sha,parents:[process.env.CANDIDATE_BASE],author:identity,committer:identity});
+          const commit=await api('git/commits',{message:'fix(editor): retain explicit view handoff until the surviving editor is ready',tree:result.sha,parents:[process.env.CANDIDATE_BASE],author:identity,committer:identity});
           console.log('CANDIDATE_COMMIT',commit.sha);console.log('CANDIDATE_TREE',result.sha);console.log('NORMALIZED_FILES',JSON.stringify(tree));
+          const diff=await api(`compare/bdd2f92f4b1dbcd70aec1d5b0771b7a570cea545...${commit.sha}?per_page=1`);
+          console.log('FINAL_CHANGE_SET',JSON.stringify(diff.files.map(({filename,status,additions,deletions})=>({filename,status,additions,deletions}))));
+          for(const file of diff.files){
+            if(file.status==='removed'|| /(^scripts\/|lock|package\.json|\.env)/.test(file.filename))throw new Error(`Unexpected final path ${file.filename}`);
+            console.log('REVIEW_FILE',file.filename,'\n',file.patch ?? 'No text patch supplied');
+          }
           await appendFile(process.env.GITHUB_OUTPUT,`candidate=${commit.sha}\n`);
           NODE
   checks:
+    name: Checks ${{ needs.prepare.outputs.candidate }}
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -75,7 +82,7 @@ jobs:
       - name: Install browser
         if: ${{ !cancelled() }}
         run: bun run --cwd apps/web test:browser:install > "$RUNNER_TEMP/browser.log" 2>&1 || { tail -30 "$RUNNER_TEMP/browser.log"; exit 1; }
-      - name: Cold-load identity, undo and cancellation regressions
+      - name: Editor lifetime and cancellation regressions
         if: ${{ !cancelled() }}
         run: bun run --cwd apps/web test:browser:ci -- --project=components src/components/codeEditor/editorViewHandoff.browser.tsx src/components/codeEditor/CodeEditorPane.browser.tsx src/components/WorkspaceFilePreview.editing.browser.tsx src/components/chat/RightDockGlassSurface.browser.tsx
   presentation:
@@ -90,7 +97,7 @@ jobs:
       - uses: ./.github/actions/setup-workspace
       - name: Install browser
         run: bun run --cwd apps/web test:browser:install > "$RUNNER_TEMP/browser.log" 2>&1 || { tail -30 "$RUNNER_TEMP/browser.log"; exit 1; }
-      - name: Strict focus, source/editor continuity, themes and real input
+      - name: Strict focus, exact source/editor continuity and real input
         run: cd apps/web && ./node_modules/.bin/playwright test --config playwright.presentation.config.ts
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
