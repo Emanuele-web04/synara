@@ -1,0 +1,41 @@
+name: Native editor presentation acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/editor-presentation-acceptance.yml
+      - apps/web/src/components/codeEditor/**
+      - apps/web/src/components/WorkspaceFilePreview.tsx
+      - apps/web/src/components/chat/WorkspaceFilePreviewHeader.tsx
+      - apps/web/src/components/chat/WorkspaceFileEditorPane.tsx
+      - apps/web/src/lib/workspaceEditorSession.ts
+      - apps/web/src/index.css
+      - apps/web/e2e/editorAcceptanceFixture.ts
+      - apps/web/e2e/editorPresentation.e2e.ts
+      - apps/web/playwright.editor.config.ts
+      - apps/web/playwright.presentation.config.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: editor-presentation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  presentation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Install browser
+        run: bun run --cwd apps/web test:browser:install
+      - name: Real preview to editor handoff, native scrollbars, focus and undo
+        run: cd apps/web && ./node_modules/.bin/playwright test --config playwright.presentation.config.ts
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: native-editor-presentation-evidence
+          path: apps/web/test-results
+          retention-days: 14
+          if-no-files-found: warn

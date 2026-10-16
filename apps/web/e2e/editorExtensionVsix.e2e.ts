@@ -26,9 +26,11 @@ async function extensionState(page: Page) {
 }
 
 async function chooseVsix(page: Page, name: string, buffer: Buffer) {
-  const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Install VSIX", exact: true }).click();
-  await (await chooser).setFiles({ name, mimeType: "application/octet-stream", buffer });
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser", { timeout: 10_000 }),
+    page.getByRole("button", { name: "Install VSIX", exact: true }).click({ timeout: 10_000 }),
+  ]);
+  await chooser.setFiles({ name, mimeType: "application/octet-stream", buffer });
 }
 
 // Real file picker and chunked uploads. No intercepted HTTP/RPC or fake extension host.

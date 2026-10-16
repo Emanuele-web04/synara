@@ -90,8 +90,9 @@ test("inner rail opens real editor tools without replacing documents or starting
   await expect(page.getByRole("dialog", { name: "Run and debug", exact: true })).toBeVisible();
   await capture(page, info, "after-debug-native-actions");
   await page.getByRole("option", { name: /Start debugging/ }).click();
-  await expect(page.getByRole("dialog")).toContainText("Debug a Node.js program");
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  const debugDialog = page.getByRole("dialog", { name: "Debug a Node.js program", exact: true });
+  await expect(debugDialog).toBeVisible();
+  await debugDialog.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await rail.getByRole("button", { name: "Editor commands", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Editor commands", exact: true })).toBeVisible();

@@ -1,3 +1,5 @@
+import { useLayoutEffect } from "react";
+import { rememberEditorView, takeEditorView, type EditorViewHandoff } from "./editorViewHandoff";
 import { useContext } from "react";
 import { EditorToolScopeContext, type EditorTool } from "./editorToolScope";
 import { getEditorExtensionBridge } from "./editorExtensionBridge";
@@ -413,9 +415,10 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     ];
   }
 
+  const viewHandoffRef = useRef<{ key: string; view: EditorViewHandoff } | null>(null);
   const cwd = props.workspaceRoot ?? null;
   const diff = props.original !== undefined;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const initial = current.current.props;
@@ -461,6 +464,59 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     const viewKey = diff ? "diff" : "file";
     const view = entry.viewStates.get(viewKey);
     if (view) editor.restoreViewState(view);
+    const handoffKey = JSON.stringify([cwd, initial.fileName, diff]);
+    const requestedHandoff =
+      !diff && cwd ? takeEditorView(client, cwd, initial.fileName, "editor") : undefined;
+    if (requestedHandoff) viewHandoffRef.current = { key: handoffKey, view: requestedHandoff };
+    const handoff =
+      viewHandoffRef.current?.key === handoffKey ? viewHandoffRef.current.view : undefined;
+    if (handoff) {
+      const line = Math.min(entry.model.getLineCount(), Math.max(1, handoff.lineNumber));
+      if (handoff.selection) {
+        const start = entry.model.getPositionAt(handoff.selection.start);
+        const end = entry.model.getPositionAt(handoff.selection.end);
+        editor.setSelection(
+          new monaco.Selection(start.lineNumber, start.column, end.lineNumber, end.column),
+        );
+      }
+      // Measure the long visible lines before restoring horizontal offset;
+      // otherwise Monaco clamps it against its still-empty initial scroll width.
+      editor.layout();
+      editor.render(true);
+      editor.focus();
+      editor.setScrollPosition(
+        {
+          scrollTop:
+            editor.getTopForLineNumber(line) +
+            handoff.lineFraction * editor.getOption(monaco.editor.EditorOption.lineHeight),
+          scrollLeft: handoff.scrollLeft,
+        },
+        monaco.editor.ScrollType.Immediate,
+      );
+    }
+    // React Strict Mode may set up, clean up, and set up the editor before
+    // the first commit settles. Keep the explicit handoff for the surviving
+    // instance, then release it once. Never reclaim focus from another control.
+    if (handoff)
+      queueMicrotask(() => {
+        if (controllerRef.current !== active || !container.isConnected) return;
+        if (viewHandoffRef.current?.view === handoff) viewHandoffRef.current = null;
+        if (pending) return;
+        const focused = document.activeElement;
+        if (focused !== document.body && focused && !container.contains(focused)) return;
+        editor.focus();
+        editor.setScrollPosition(
+          {
+            scrollTop:
+              editor.getTopForLineNumber(
+                Math.min(entry.model.getLineCount(), Math.max(1, handoff.lineNumber)),
+              ) +
+              handoff.lineFraction * editor.getOption(monaco.editor.EditorOption.lineHeight),
+            scrollLeft: handoff.scrollLeft,
+          },
+          monaco.editor.ScrollType.Immediate,
+        );
+      });
     const pending = takeEditorLocation(entry.model.uri);
     if (pending) {
       editor.setSelection(pending);
@@ -628,6 +684,19 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       }),
     );
     return () => {
+      if (!diff && cwd) {
+        const lineNumber = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
+        const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+        rememberEditorView(client, cwd, initial.fileName, {
+          target: "preview",
+          lineNumber,
+          lineFraction: Math.max(
+            0,
+            (editor.getScrollTop() - editor.getTopForLineNumber(lineNumber)) / lineHeight,
+          ),
+          scrollLeft: editor.getScrollLeft(),
+        });
+      }
       const viewState = editor.saveViewState();
       if (viewState) entry.viewStates.set(viewKey, viewState);
       if (initial.historyControlsRef?.current === controls)

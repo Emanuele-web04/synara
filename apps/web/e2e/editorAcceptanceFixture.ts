@@ -41,6 +41,22 @@ export async function openEditorAcceptanceApp(page: Page): Promise<void> {
     await expect(announcement).toBeVisible();
     await announcement.getByRole("button", { name: "Not now", exact: true }).click();
   }
+  // The import sheet can hand its slot to the feature tour after a quiet interval.
+  // Wait for the actual startup coordinator, not a momentary empty dialog list.
+  await expect
+    .poll(
+      async () => {
+        const skip = page.getByRole("button", { name: "Skip tour", exact: true });
+        if (await skip.isVisible()) await skip.click({ timeout: 5_000 });
+        return page.evaluate(async () => {
+          const modulePath = "/src/components/announcementSheetSlot.ts";
+          const { useAnnouncementSheetSlotStore } = await import(/* @vite-ignore */ modulePath);
+          return useAnnouncementSheetSlotStore.getState().startupSettled;
+        });
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
 

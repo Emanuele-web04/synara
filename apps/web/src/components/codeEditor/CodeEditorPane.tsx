@@ -16,7 +16,16 @@ import { isEditorFileSaveShortcut } from "~/keybindings";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
 
-const MonacoEditorSurface = lazy(() => import("./MonacoEditorSurface"));
+let loadedSurface: typeof import("./MonacoEditorSurface").default | undefined;
+let surfacePromise: Promise<typeof import("./MonacoEditorSurface")> | undefined;
+export function preloadCodeEditorSurface() {
+  surfacePromise ??= import("./MonacoEditorSurface").then((module) => {
+    loadedSurface = module.default;
+    return module;
+  });
+  return surfacePromise;
+}
+const MonacoEditorSurface = lazy(preloadCodeEditorSurface);
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
@@ -73,6 +82,9 @@ export class EditorSurfaceBoundary extends Component<
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+  // Keep the chosen component type for the lifetime of this pane. Switching
+  // from React.lazy to its resolved component on an edit remounts the surface.
+  const Surface = useRef(loadedSurface ?? MonacoEditorSurface).current;
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
@@ -101,7 +113,7 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
             </p>
           }
         >
-          <MonacoEditorSurface {...props} />
+          <Surface {...props} />
         </Suspense>
       </EditorSurfaceBoundary>
     </div>
