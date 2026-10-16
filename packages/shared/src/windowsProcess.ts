@@ -31,6 +31,20 @@ export interface WindowsWslUncPath {
   readonly linuxPath: string;
 }
 
+/** A launch was rejected while validating argv, before any child was created. */
+export class ProcessArgumentValidationError extends Error {
+  readonly _tag = "ProcessArgumentValidationError";
+  readonly kind: "command" | "argument";
+  readonly argumentIndex: number | undefined;
+
+  constructor(kind: "command" | "argument", argumentIndex?: number) {
+    super(`Cannot safely execute Windows batch ${kind} containing cmd.exe control characters.`);
+    this.name = "ProcessArgumentValidationError";
+    this.kind = kind;
+    this.argumentIndex = argumentIndex;
+  }
+}
+
 const WINDOWS_BATCH_EXTENSION_PATTERN = /\.(?:cmd|bat)$/i;
 const WINDOWS_PATH_SEPARATOR_PATTERN = /[\\/]/;
 const WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN = /[\r\n&|<>^%]/;
@@ -65,11 +79,13 @@ export function isWindowsBatchCommand(command: string): boolean {
   return WINDOWS_BATCH_EXTENSION_PATTERN.test(command);
 }
 
-function quoteWindowsBatchToken(token: string, label: string): string {
+function quoteWindowsBatchToken(
+  token: string,
+  label: "command" | "argument",
+  argumentIndex?: number,
+): string {
   if (WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN.test(token)) {
-    throw new Error(
-      `Cannot safely execute Windows batch ${label} containing cmd.exe control characters.`,
-    );
+    throw new ProcessArgumentValidationError(label, argumentIndex);
   }
   return `"${token.replaceAll('"', '""')}"`;
 }
@@ -84,7 +100,7 @@ export function buildWindowsBatchCommandArgs(
   const commandLine = [
     "call",
     quoteWindowsBatchToken(command, "command"),
-    ...args.map((arg) => quoteWindowsBatchToken(arg, "argument")),
+    ...args.map((arg, index) => quoteWindowsBatchToken(arg, "argument", index)),
   ].join(" ");
   return ["/d", "/s", "/v:off", "/c", commandLine];
 }
