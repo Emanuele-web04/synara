@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.6-remote.11 — 2026-10-16
+
+### Fixed
+
+- Hover cards open for remote chat identifiers containing quotes and brackets. Remote rows in Projects, Pinned and Chats reuse the same preview as local conversations and Activity.
+
+### Verification
+
+- Includes feature-branch fix `43d11d5`. Native contracts, account/pairing behavior and provider choices are unchanged; TestFlight 135 remains compatible.
+- Publication requires exact-source quality/server gates, signed/notarized macOS ARM64 packaging and packaged startup qualification. Remote retains its separate identity, data and update feed.
+
 ## 1.0.6-remote.10 — 2026-10-16
 
 ### Fixed

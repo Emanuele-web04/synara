@@ -22,6 +22,18 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.11",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-chat-hover-cards",
+        title: "Preview chats on your other computer",
+        description:
+          "Hover cards now open correctly for remote chats in Activity, Projects, Pinned and Chats, using the same preview as local conversations.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.10",
     date: "Oct 16",
     features: [
