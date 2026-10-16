@@ -1024,9 +1024,18 @@ The Mini was normally quit and updated with `.6` retained for rollback. Its
 existing transcript reopened, and all 47 original threads, 218 messages and 92
 turns were preserved unchanged, together with account and host/device identities.
 
-MacBook replacement and live MacBook → Mini workspace qualification remain
-unverified. The user confirmed a normal app quit, but the Codex control channel
-became unavailable and the existing SSH endpoint refused connection. The last
-verified MacBook version is `.6`; delivery of the final retry handoff was not
-acknowledged. No force quit, trust reset or data replacement was used to work
-around this access blocker.
+After the Codex connection was restored, the MacBook independently verified the
+same ZIP, saved a fresh integrity-checked backup (105 chats, 1,753 messages and
+zero active turns), and installed `.7` with `.6` retained for rollback. Its
+account restored without pairing again. The Mini workspace frame now loads,
+the remote projects appear and the client reports Connected; the Mini also
+observed this MacBook reconnect. The temporary single-file transfer endpoint
+was closed and its listener checked.
+
+Reading an actual message inside a remote transcript and recovery after reload
+remain unverified. Window changes interrupted the first UI attempt, and the
+Codex task/control channel subsequently stalled despite the user's confirmation
+to leave the window steady. The completed `after` snapshot command exited
+successfully, but its detailed comparison report has not yet been retrieved.
+No force quit, trust reset or data replacement was used to work around these
+verification blockers.
