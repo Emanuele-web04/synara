@@ -244,6 +244,7 @@ export function OpenThreadTabStrip(props: {
                   size="icon-xs"
                   aria-label="New thread in this workspace"
                   className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                  onClick={() => props.onNewThread?.()}
                 />
               }
             >
