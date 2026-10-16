@@ -8,6 +8,8 @@
 //      pin and "Edit project" rows are real controls. Spacing/type mirror the
 //      app's menu rows (12px UI font, compact padding) so it reads as native.
 
+import type { ProjectId } from "@synara/contracts";
+
 import { BotIcon, MessageCircleIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
@@ -20,7 +22,7 @@ import {
 
 export type ProjectHoverCardContentProps = {
   name: string;
-  cwd: string;
+  projectId: ProjectId;
   appearance: ProjectAppearance | null;
   isPinned: boolean;
   chatCount: number;
@@ -47,7 +49,7 @@ function formatChatCount(count: number): string {
 
 export function ProjectHoverCardContent({
   name,
-  cwd,
+  projectId,
   appearance,
   isPinned,
   chatCount,
@@ -63,7 +65,7 @@ export function ProjectHoverCardContent({
       <div className={cn(ROW_CLASS_NAME, "gap-2.5")}>
         <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
           <ProjectSidebarIcon
-            cwd={cwd}
+            projectId={projectId}
             expanded
             appearance={appearance}
             glyphClassName="size-3.5"

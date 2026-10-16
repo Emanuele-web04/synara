@@ -1,7 +1,12 @@
 import { Effect, ServiceMap } from "effect";
 
 export interface ProjectFaviconResolverShape {
-  readonly resolvePath: (cwd: string) => Effect.Effect<string | null>;
+  /**
+   * Discover a local image inside an authoritative saved project's absolute workspace root.
+   * Returns the lexical candidate (including confined symlinks), not a grant to read it:
+   * callers must recheck containment and type before serving the current bytes.
+   */
+  readonly resolvePath: (workspaceRoot: string) => Effect.Effect<string | null>;
 }
 
 export class ProjectFaviconResolver extends ServiceMap.Service<
