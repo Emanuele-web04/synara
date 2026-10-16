@@ -72,6 +72,29 @@ function probeReturning(environment: Partial<Record<string, string>>) {
 }
 
 describe("createCachedLoginShellEnvironmentReader", () => {
+  it("does not reuse AppImage mount paths across Linux launches", () => {
+    const fixture = makeFixture();
+    const mount = "/tmp/.mount_SynaraOld";
+    const probe = probeReturning({ PATH: `${mount}:${mount}/usr/sbin:/usr/bin:/opt/tools/bin` });
+    const options = {
+      platform: "linux" as const,
+      homeDirectory: fixture.homeDirectory,
+      cachePath: fixture.cachePath,
+      probe,
+    };
+    const first = createCachedLoginShellEnvironmentReader(options)(fixture.shell, ["PATH"]);
+    expect(first.PATH).toContain(mount);
+    const cached = JSON.parse(FS.readFileSync(fixture.cachePath, "utf8"));
+    expect(cached.environment.PATH).toBe("/usr/bin:/opt/tools/bin");
+
+    // Existing cache files from older builds must also be safe to reuse.
+    cached.environment.PATH = `${mount}/usr/bin:/usr/bin:/opt/tools/bin`;
+    FS.writeFileSync(fixture.cachePath, JSON.stringify(cached));
+    const second = createCachedLoginShellEnvironmentReader(options)(fixture.shell, ["PATH"]);
+    expect(second.PATH).toBe("/usr/bin:/opt/tools/bin");
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
   it("probes once and serves later reads from the cache file", () => {
     const fixture = makeFixture();
     const probe = probeReturning({ PATH: "/opt/homebrew/bin:/usr/bin" });
