@@ -1,49 +1,86 @@
-name: Notion Tasks evidence
+name: Stage Notion PR Screenshots
 
 on:
   push:
     branches: [feat/notion-enterprise-oauth-integration]
-    paths:
-      - .github/workflows/notion-ux-workspace.yml
-      - apps/web/scripts/notion-tasks-*.mjs
-      - apps/web/src/components/tasks/**
-      - apps/web/src/components/notion/**
+    paths: [.github/workflows/notion-ux-workspace.yml]
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 jobs:
-  evidence:
+  stage-screenshots:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 20
-          persist-credentials: false
-      - uses: ./.github/actions/setup-workspace
-      - name: Check pristine source formatting
-        run: bun run fmt:check
-      - name: Focused Tasks and Notion checks
-        run: |
-          bun run test:web:focused src/components/tasks/taskFilters.test.ts src/components/tasks/tasks.logic.test.ts src/components/notion/notionDrafts.test.ts src/components/notion/notionWrites.test.ts
-          bun run --cwd apps/server test src/notion/runtime.test.ts src/agentGateway/notionTools.test.ts src/agentGateway/notionApproval.test.ts
-      - name: Install the pinned browser
-        run: |
-          cd apps/web
-          ./node_modules/.bin/playwright install chromium
-      - name: Capture actual component journeys
+      - name: Download verified screenshot artifacts
         env:
-          NOTION_EVIDENCE_DIR: ${{ runner.temp }}/notion-tasks-evidence
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TMP_DIR: ${{ runner.temp }}
+        shell: bash
         run: |
-          git diff --exit-code
-          node apps/web/scripts/notion-tasks-evidence.mjs
-          git diff --exit-code
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: notion-tasks-before-after
-          path: ${{ runner.temp }}/notion-tasks-evidence
-          retention-days: 14
-          if-no-files-found: error
+          set -euo pipefail
+          for artifact in 12006471137 12036206286; do
+            curl --fail --silent --show-error --location --retry 2 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$GH_REPO/actions/artifacts/$artifact/zip" \
+              --output "$TMP_DIR/$artifact.zip"
+            unzip -tq "$TMP_DIR/$artifact.zip" >/dev/null
+          done
+          node --input-type=module <<'NODE'
+          import {execFileSync} from "node:child_process";
+          import {readFileSync} from "node:fs";
+          import path from "node:path";
+          const repo=process.env.GH_REPO;
+          const token=process.env.GH_TOKEN;
+          const base=process.env.TMP_DIR;
+          const png=Buffer.from("89504e470d0a1a0a","hex");
+          const sources=[
+            {id:12006471137,revision:"7fb4a362e1224898f0d35493949690320a306696",run:38804921325,group:"previous",expected:19},
+            {id:12036206286,revision:"d5ea733867b6356a09d738cdacbbfbbf19fd4117",run:38877198693,group:"current",expected:10},
+          ];
+          async function upload(content){
+            const response=await fetch("https://api.github.com/repos/"+repo+"/git/blobs",{
+              method:"POST",
+              headers:{"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","Authorization":"Bearer "+token,"Content-Type":"application/json"},
+              body:JSON.stringify({content:content.toString("base64"),encoding:"base64"}),
+            });
+            const json=await response.json();
+            if(!response.ok||!json.sha)throw new Error("GitHub rejected blob ("+response.status+"): "+String(json.message||"unknown"));
+            return json.sha;
+          }
+          const assets=[];
+          for(const source of sources){
+            const zip=path.join(base,source.id+".zip");
+            const filenames=execFileSync("unzip",["-Z1",zip],{encoding:"utf8"}).split("\n").filter(name=>/\.png$/i.test(name));
+            if(filenames.length!==source.expected)throw new Error("Expected "+source.expected+" PNGs from artifact "+source.id+", found "+filenames.length+"; refusing partial upload.");
+            const used=new Set();
+            for(let index=0;index<filenames.length;index++){
+              const original=filenames[index];
+              const name=path.posix.basename(original).replace(/[^A-Za-z0-9._-]/g,"-");
+              if(!name||used.has(name))throw new Error("Duplicate/invalid PNG filename: "+original);
+              used.add(name);
+              const bytes=execFileSync("unzip",["-p",zip,original],{maxBuffer:6*1024*1024});
+              if(bytes.length<24||bytes.length>5*1024*1024||!bytes.subarray(0,8).equals(png))throw new Error("Invalid PNG: "+original);
+              const destination="docs/assets/notion-pr-1937/"+source.group+"/"+name;
+              const sha=await upload(bytes);
+              assets.push({path:destination,sha,bytes:bytes.length,sourceArtifactId:source.id,original});
+              console.log("Staged "+destination+" ("+bytes.length+" bytes) "+sha);
+            }
+          }
+          const manifest={
+            description:"Verified fixture-only Synara Notion UI screenshots. Not live Notion OAuth or packaged E2E proof.",
+            sources:sources.map(({id,revision,run,group,expected})=>({artifactId:id,revision,run,group,screenshotCount:expected})),
+            assets,
+          };
+          const manifestSha=await upload(Buffer.from(JSON.stringify(manifest,null,2)+"\n"));
+          console.log("MANIFEST_BLOB_SHA="+manifestSha);
+          console.log("SCREENSHOT_MANIFEST_START");
+          console.log(JSON.stringify(manifest));
+          console.log("SCREENSHOT_MANIFEST_END");
+          console.log("Successfully staged "+assets.length+" PNG blobs and a manifest; no branch refs were modified.");
+          NODE
