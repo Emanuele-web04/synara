@@ -63,6 +63,37 @@ Icons mark, so its icon is the site favicon.
 
 Custom URLs must be public `https://` endpoints without credentials.
 
+## Paired devices
+
+Synara Remote 1.0.6-remote.12 and later let authenticated paired clients read the
+connector list for the computer running their chat. iPhone and iPad build 0.1
+(136) and later use it for @ suggestions, filtered to connected services and
+supported providers. Older desktop hosts can return an empty list.
+
+Connections belong to that computer’s app data home. A service connected on the
+Mini is not automatically connected on the MacBook or in another Synara flavor.
+Connect it in Settings → Connectors on the execution computer, then start a new
+chat so the provider receives its tools.
+
+The paired view includes names, status and URL origins only; URL credentials,
+paths and queries are removed. OAuth setup, connecting and disconnecting remain
+local-owner operations. No connector token is transferred to the phone.
+
+## Vercel sign-in renewal
+
+Vercel requires the OAuth `offline_access` scope to issue a refresh token.
+Synara includes it when connecting to `https://mcp.vercel.com`, preserving the
+scopes the server requested. The grant stays on the execution computer and uses
+the existing refresh path after token expiry or a desktop restart. Other
+connectors keep their existing scope selection.
+
+Older Vercel grants with only `openid` have no refresh token and need one new
+sign-in after this fix is installed. The user chooses project access in Vercel’s
+consent page; Synara does not silently expand that project selection. A source
+fix is not an upgrade to an already-issued grant.
+
+See [Vercel’s scope reference](https://vercel.com/docs/sign-in-with-vercel/scopes-and-permissions).
+
 ## Limits
 
 - Connecting needs a loopback-only instance, because the OAuth redirect targets this machine's
