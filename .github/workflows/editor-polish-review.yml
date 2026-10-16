@@ -1,0 +1,43 @@
+# Temporary review runner. Remove from the application change set after verification.
+name: Editor polish review
+on:
+  push:
+    branches: [feat/synara-code-oss-extensions]
+    paths: [.github/workflows/editor-polish-review.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-extension-application-evidence
+          run-id: 38876847163
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Read bounded failure context and original trace actions
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, zipfile
+          root = pathlib.Path('evidence')
+          for item in root.rglob('error-context.md'):
+            print('\nCONTEXT', item.parent.name, '\n', item.read_text()[-10000:])
+          for item in root.rglob('trace.zip'):
+            if 'editorExtensionDebug' in str(item):
+              continue
+            print('\nTRACE', item.parent.name)
+            with zipfile.ZipFile(item) as z:
+              for name in z.namelist():
+                if not name.endswith('.trace'):
+                  continue
+                events = []
+                for line in z.read(name).decode('utf-8').splitlines():
+                  event = json.loads(line)
+                  if event.get('type') in ['before', 'after', 'log']:
+                    events.append(event)
+                for event in events[-32:]:
+                  print(json.dumps(event, ensure_ascii=True)[:1800])
+          PY
