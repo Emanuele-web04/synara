@@ -14,6 +14,8 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogPanel,
 } from "~/components/ui/dialog";
 import { Select, SelectTrigger, SelectValue, SelectItem } from "~/components/ui/select";
 import {
@@ -92,6 +94,7 @@ type MarketplaceProps = {
   available: boolean;
   pendingId: string | undefined;
   active: boolean;
+  operationError: string | null;
   onInstall: (id: string, version?: string) => void;
   onManage: () => void;
 };
@@ -404,7 +407,7 @@ export function ExtensionMarketplace(props: MarketplaceProps) {
           })}
         </ul>
       )}
-      {(offset > 0 || nextOffset !== undefined) && catalog.data ? (
+      {offset > 0 || nextOffset !== undefined ? (
         <nav
           aria-label="Extension result pages"
           className="flex items-center justify-between gap-3 border-t border-border pt-4"
@@ -447,70 +450,79 @@ export function ExtensionMarketplace(props: MarketplaceProps) {
           if (!open) closeDetails();
         }}
       >
-        <DialogPopup className="max-w-xl">
+        <DialogPopup className="max-w-xl" showCloseButton={false}>
           {selected ? (
-            <div className="space-y-5 p-5">
-              <div className="flex items-start gap-3">
-                <ExtensionGlyph extension={detailsItem ?? selected} />
-                <div className="min-w-0">
-                  <DialogTitle className="break-words">
-                    {selected.displayName || selected.name}
-                  </DialogTitle>
-                  <DialogDescription className="break-all">{idOf(selected)}</DialogDescription>
+            <>
+              <DialogHeader>
+                <div className="flex items-start gap-3">
+                  <ExtensionGlyph extension={detailsItem ?? selected} />
+                  <div className="min-w-0">
+                    <DialogTitle className="break-words">
+                      {selected.displayName || selected.name}
+                    </DialogTitle>
+                    <DialogDescription className="break-all">{idOf(selected)}</DialogDescription>
+                  </div>
                 </div>
-              </div>
-              <p className="whitespace-pre-wrap break-words text-ui text-muted-foreground">
-                {detailsItem?.description ??
-                  selected.description ??
-                  "No description provided by the publisher."}
-              </p>
-              {details.isPending ? (
-                <p role="status" className="text-ui text-muted-foreground">
-                  Checking compatible package details…
+              </DialogHeader>
+              <DialogPanel className="space-y-4">
+                <p className="whitespace-pre-wrap break-words text-ui text-muted-foreground">
+                  {detailsItem?.description ??
+                    selected.description ??
+                    "No description provided by the publisher."}
                 </p>
-              ) : null}
-              {details.error ? (
-                <div role="alert" className="space-y-2 text-ui text-destructive">
-                  <p>{details.error.message}</p>
-                  <Button variant="outline" size="sm" onClick={() => void details.refetch()}>
-                    Retry details
-                  </Button>
-                </div>
-              ) : null}
-              {detailsItem ? (
-                <dl className="grid grid-cols-2 gap-x-5 gap-y-3 rounded-xl border border-border p-4 text-ui">
-                  <div>
-                    <dt className="text-ui-sm text-muted-foreground">Compatible package</dt>
-                    <dd className="mt-1 break-all font-medium">{detailsItem.version}</dd>
+                {details.isPending ? (
+                  <p role="status" className="text-ui text-muted-foreground">
+                    Checking compatible package details…
+                  </p>
+                ) : null}
+                {details.error ? (
+                  <div role="alert" className="space-y-2 text-ui text-destructive">
+                    <p>{details.error.message}</p>
+                    <Button variant="outline" size="sm" onClick={() => void details.refetch()}>
+                      Retry details
+                    </Button>
                   </div>
-                  <div>
-                    <dt className="text-ui-sm text-muted-foreground">Publisher</dt>
-                    <dd className="mt-1 break-all font-medium">{detailsItem.namespace}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-ui-sm text-muted-foreground">VS Code API requirement</dt>
-                    <dd className="mt-1 break-all">{detailsItem.apiRange ?? "Not provided"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-ui-sm text-muted-foreground">License</dt>
-                    <dd className="mt-1 break-words">{detailsItem.license ?? "Not provided"}</dd>
-                  </div>
-                  {detailsItem.categories?.length ? (
-                    <div className="col-span-2">
-                      <dt className="text-ui-sm text-muted-foreground">Categories</dt>
-                      <dd className="mt-1">{detailsItem.categories.join(" · ")}</dd>
+                ) : null}
+                {detailsItem ? (
+                  <dl className="grid grid-cols-2 gap-x-5 gap-y-3 rounded-xl border border-border p-4 text-ui">
+                    <div>
+                      <dt className="text-ui-sm text-muted-foreground">Compatible package</dt>
+                      <dd className="mt-1 break-all font-medium">{detailsItem.version}</dd>
                     </div>
-                  ) : null}
-                </dl>
-              ) : null}
-              <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-ui-sm text-muted-foreground">
-                <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-                <p>
-                  API-version compatibility is not full VS Code compatibility. Execution currently
-                  requires a supported Linux sandbox. Installations stay disabled until you approve
-                  the package and trust its workspace.
+                    <div>
+                      <dt className="text-ui-sm text-muted-foreground">Publisher</dt>
+                      <dd className="mt-1 break-all font-medium">{detailsItem.namespace}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-ui-sm text-muted-foreground">VS Code API requirement</dt>
+                      <dd className="mt-1 break-all">{detailsItem.apiRange ?? "Not provided"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-ui-sm text-muted-foreground">License</dt>
+                      <dd className="mt-1 break-words">{detailsItem.license ?? "Not provided"}</dd>
+                    </div>
+                    {detailsItem.categories?.length ? (
+                      <div className="col-span-2">
+                        <dt className="text-ui-sm text-muted-foreground">Categories</dt>
+                        <dd className="mt-1">{detailsItem.categories.join(" · ")}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                ) : null}
+                <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-ui-sm text-muted-foreground">
+                  <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                  <p>
+                    API-version compatibility is not full VS Code compatibility. Execution currently
+                    requires a supported Linux sandbox. Installations stay disabled until you
+                    approve the package and trust its workspace.
+                  </p>
+                </div>
+              </DialogPanel>
+              {props.operationError ? (
+                <p role="alert" className="px-4 text-ui text-destructive">
+                  {props.operationError}
                 </p>
-              </div>
+              ) : null}
               <DialogFooter>
                 <Button variant="outline" onClick={closeDetails}>
                   Close
@@ -537,7 +549,7 @@ export function ExtensionMarketplace(props: MarketplaceProps) {
                   </Button>
                 )}
               </DialogFooter>
-            </div>
+            </>
           ) : null}
         </DialogPopup>
       </Dialog>

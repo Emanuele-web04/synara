@@ -144,12 +144,15 @@ export class OpenVsxRegistry {
     if (category) params.set("category", category);
     const response = z
       .object({
-        extensions: z.array(summarySchema).max(100),
+        extensions: z.array(summarySchema).max(24),
         offset: z.number().int().nonnegative(),
         totalSize: z.number().int().nonnegative().safe(),
       })
       .parse(await this.json("/api/-/search?" + params, signal));
-    if (response.offset !== offset)
+    // RegistryAPI.search leaves resultOffset at zero for its first registry.
+    // Keep our bounded request cursor authoritative instead of resetting it.
+    // See eclipse-openvsx/openvsx RegistryAPI.java at 72b6c54, search().
+    if (response.offset !== 0 && response.offset !== offset)
       throw new Error("The registry returned a different result page. Retry the search.");
     const ids = new Set<string>();
     const registryResults = response.extensions.filter((item) => {

@@ -117,3 +117,20 @@ describe("native marketplace discovery", () => {
     await expect(registry.catalog({}, controller.signal)).rejects.toThrow("catalog cancelled");
   });
 });
+
+it("advances a requested page when the upstream registry reports its default zero offset", async () => {
+  const request = vi.fn<typeof fetch>().mockResolvedValue(
+    Response.json({
+      offset: 0,
+      totalSize: 90,
+      extensions: Array.from({ length: 24 }, (_, index) => ({
+        ...summary,
+        name: "page-two-" + index,
+      })),
+    }),
+  );
+  const result = await new OpenVsxRegistry(request).catalog({ offset: 24 });
+  expect(new URL(String(request.mock.calls[0]![0])).searchParams.get("offset")).toBe("24");
+  expect(result.registryResults[0]?.name).toBe("page-two-0");
+  expect(result.registryNextOffset).toBe(48);
+});

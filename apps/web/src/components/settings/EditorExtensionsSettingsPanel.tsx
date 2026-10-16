@@ -253,6 +253,7 @@ export function EditorExtensionsSettingsPanel() {
         <ExtensionMarketplace
           active={view === "marketplace"}
           entries={entries}
+          operationError={error}
           busy={busy}
           available={Boolean(state.data)}
           pendingId={

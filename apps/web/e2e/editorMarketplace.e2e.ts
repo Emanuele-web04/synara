@@ -21,9 +21,21 @@ test("native marketplace discovery, details, install, permissions and responsive
     const cards = page.getByTestId("extension-card");
     await expect(cards.first()).toBeVisible({ timeout: 40_000 });
     await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
+    const firstPage = await cards.getByRole("button", { name: /^Details for/ }).allTextContents();
     await capture(page, info, "marketplace-after-discover");
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.getByText("Page 2", { exact: true })).toBeVisible();
+    await expect
+      .poll(
+        async () => {
+          const secondPage = await cards
+            .getByRole("button", { name: /^Details for/ })
+            .allTextContents();
+          return secondPage.length > 0 && JSON.stringify(secondPage) !== JSON.stringify(firstPage);
+        },
+        { timeout: 40_000 },
+      )
+      .toBe(true);
     await expect(cards.first()).toBeVisible({ timeout: 40_000 });
     await page.getByRole("button", { name: "Formatters", exact: true }).click();
     await expect(page.getByRole("button", { name: "Formatters", exact: true })).toHaveAttribute(
@@ -100,6 +112,15 @@ test("native marketplace discovery, details, install, permissions and responsive
       }),
       contentType: "application/json",
     });
+  } catch (error) {
+    console.error(
+      "MARKETPLACE_VISIBLE_FAILURE",
+      await page
+        .locator("main")
+        .innerText()
+        .catch(() => "Page closed"),
+    );
+    throw error;
   } finally {
     await page.evaluate(async (id) => {
       const modulePath = "/src/nativeApi.ts";
