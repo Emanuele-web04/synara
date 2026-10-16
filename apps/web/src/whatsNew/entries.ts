@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.8",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-workspace-recovery",
+        title: "Open your other computer",
+        description:
+          "Connected computers now open their workspace in the packaged app, including recovery after a reload.",
+      },
+      {
+        id: "claude-native-controls",
+        title: "Claude controls match your CLI",
+        description:
+          "Effort choices follow the installed Claude CLI. The extra Default choice is removed, including from older cached catalogs.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-beta.1",
     date: "Oct 15",
     features: [

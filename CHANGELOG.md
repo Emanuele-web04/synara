@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.6-remote.8 — 2026-10-16
+
+### Changed
+
+- Claude effort, thinking and fast-mode controls follow the installed CLI's capabilities. Synthetic Default effort choices are removed from cached catalogs.
+
+### Fixed
+
+- Packaged remote workspaces can open their own application frame and reload it for recovery. The fix retains containment of inline visualizations and unrelated navigation.
+
+### Verification
+
+- Remote uses its separate app identity, data directory and updater lane. Publication requires exact-source quality checks, signed and notarized macOS ARM64 packaging, and packaged startup qualification.
+
 ## 1.0.6-beta.1 — 2026-10-15
 
 **Connectors, a compact composer, clearer Activity and the full reliability work since the previous Beta.**
