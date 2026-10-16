@@ -1881,7 +1881,13 @@ const makeGitHubCli = Effect.gen(function* () {
       }
       const diff = runGit({
         cwd,
-        args: ["diff", "--no-color", `${baseSha}...${headSha}`],
+        args: [
+          "diff",
+          "--no-color",
+          "--src-prefix=a/",
+          "--dst-prefix=b/",
+          `${baseSha}...${headSha}`,
+        ],
         maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
         outputMode: "truncate",
       });

@@ -1,5 +1,23 @@
 # Cloudflare Remote — execution state
 
+## Main Codex reliability sync — 2026-10-16
+
+Integrated the six commits through main `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`
+without rewriting the shared branch. Live adapter-owned turns survive runtime
+reconciliation; stale work is paged fairly; handoff outcomes settle durably without
+replaying native work; internal Codex moderation metadata stays out of activity.
+Also included canonical Git diff prefixes, temporary degraded model catalogs and
+separate Remote migration-lineage validation. The only conflict appended tests in
+AgentGateway; both remote authorization coverage and new lifecycle coverage remain.
+
+The eight focused server files qualify 740 cases: 738 passed in the first run;
+the two process integration cases could not prove child exit inside the sandbox
+and both passed when rerun with process inspection available. Workspace typecheck,
+formatting, lint, Windows boundary and migration lineage checks pass. This is a
+source integration, not an installed desktop update or a new TestFlight build.
+The optional provider-discovery field is compatible with the current native
+decoder; server-owned turn and activity fixes apply to remote mobile clients.
+
 ## GitHub Production sign-in follow-up — 2026-10-16
 
 GitHub OAuth is enabled and validated in WorkOS Production. The existing Synara

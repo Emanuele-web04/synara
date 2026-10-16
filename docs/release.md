@@ -443,6 +443,10 @@ full subject distinguished name.
    `bun run lint`, `bun run typecheck`, `bun run release:smoke`, and affected
    Vitest tests. Include `bun run windows-runtime:check`, `bun run migrations:check`
    and relevant browser/native checks when their boundaries change.
+   Migration history is checked for the family selected by matching server and
+   desktop package versions: Stable and Beta share history; Remote checks its own
+   releases because its data home and updater are isolated. Legacy shared tags
+   remain protected. An unknown or mismatched package version fails the check.
    The single tag workflow supplies the final full workspace test suite through
    `quality` plus all three `server_tests` shards, and the desktop build through
    `build_portable` and the native platform jobs. Do not require an additional

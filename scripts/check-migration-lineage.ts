@@ -21,7 +21,7 @@ const migrationsFile = "apps/server/src/persistence/Migrations.ts";
  * 69 and did exactly that.
  *
  * Appending new migrations is always safe. This guard rejects changes to pairs
- * any reachable release tag already shipped — not just the newest one, because
+ * any release tag in this database family already shipped — not just the newest one, because
  * a database is wedged by the release *it* was created under, and users skip
  * versions. A pair that today's `MIGRATION_LINEAGE_ALIASES` knows how to repair
  * is exempt: that divergence is handled rather than merely present.
@@ -169,15 +169,48 @@ const defaultListTags = (pattern: string): readonly string[] => {
     : [];
 };
 
+type MigrationLineageFamily = "shared" | "remote";
+const releaseVersionPattern = /^\d+\.\d+\.\d+(?:-(beta|remote)\.\d+)?$/u;
+const remoteReleaseTagPattern = /^v\d+\.\d+\.\d+-remote\.\d+$/u;
+
+/** Package metadata selects the database family; environment overrides cannot weaken the guard. */
+export function resolveMigrationLineageFamily(
+  serverVersion: unknown,
+  desktopVersion: unknown,
+): MigrationLineageFamily {
+  if (typeof serverVersion !== "string" || serverVersion !== desktopVersion) {
+    throw new Error("Migration lineage requires matching server and desktop package versions.");
+  }
+  const version = releaseVersionPattern.exec(serverVersion);
+  if (version === null) {
+    throw new Error(
+      `Cannot determine the migration lineage family for version "${serverVersion}".`,
+    );
+  }
+  return version[1] === "remote" ? "remote" : "shared";
+}
+
+function currentMigrationLineageFamily(): MigrationLineageFamily {
+  const versionAt = (path: string): unknown =>
+    (JSON.parse(readFileSync(resolve(repoRoot, path), "utf8")) as { version?: unknown }).version;
+  return resolveMigrationLineageFamily(
+    versionAt("apps/server/package.json"),
+    versionAt("apps/desktop/package.json"),
+  );
+}
+
 /**
- * Every reachable release tag, newest first, or an empty list when history has
- * none — a shallow CI clone or a fork without tags must degrade to a warning,
- * never a hard failure.
+ * Every release in this database family, newest first. Stable and Beta share
+ * migration history; Remote has its own isolated home and updater. Keep legacy
+ * non-Remote tag shapes (including v0.0.18.1) in shared history.
  */
 export function resolveReleaseTags(
   listTags: (pattern: string) => readonly string[] = defaultListTags,
+  family: MigrationLineageFamily = currentMigrationLineageFamily(),
 ): string[] {
-  return [...listTags("v[0-9]*")];
+  return listTags("v[0-9]*").filter(
+    (tag) => remoteReleaseTagPattern.test(tag) === (family === "remote"),
+  );
 }
 
 interface TaggedViolation {
@@ -226,10 +259,11 @@ function main(): void {
     return;
   }
 
-  const tags = resolveReleaseTags();
+  const family = currentMigrationLineageFamily();
+  const tags = resolveReleaseTags(defaultListTags, family);
   if (tags.length === 0) {
     console.warn(
-      "Migration lineage check skipped: no release tag is reachable from this checkout. " +
+      `Migration lineage check skipped: no ${family} release tags are available in this checkout. ` +
         "Fetch tags (actions/checkout with fetch-depth: 0) to enable it.",
     );
     return;
@@ -271,7 +305,7 @@ function main(): void {
   const skippedNote = skipped.length === 0 ? "" : ` (${skipped.length} unreadable tags skipped)`;
   if (perTag.length === 0) {
     console.log(
-      `Migration lineage check passed: all migrations shipped across ${checked.length} release ` +
+      `Migration lineage check passed: all migrations shipped across ${checked.length} ${family} release ` +
         `tags (${checked[checked.length - 1]}..${checked[0]}) keep their released (id, name)` +
         `${skippedNote}.`,
     );
