@@ -13,11 +13,14 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule, Semaphore } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionStaleInFlightThreadCursor,
+} from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
   ProviderRuntimeEventRepository,
@@ -43,6 +46,7 @@ const DEFAULT_RECONCILIATION_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILIATION_CANDIDATE_LIMIT = 256;
 
 export interface ProviderRuntimeReconcilerLiveOptions {
+  readonly now?: () => number;
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
   readonly maxStalledStartAgeMs?: number;
@@ -161,10 +165,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       // Nothing left to repair: the projected session already matches the plan
       // and no turn is left running. Dispatching anyway writes two fresh events
       // on every tick for as long as the thread stays a candidate.
-      if (
-        thread.latestTurn?.state !== "running" &&
-        isSameProjectedSession(thread.session, session)
-      ) {
+      const turnNeedsRepair =
+        plan.action === "align-running-turn"
+          ? thread.latestTurn?.turnId !== plan.runtimeTurnId ||
+            thread.latestTurn.state !== "running" ||
+            thread.latestTurn.completedAt !== null
+          : thread.latestTurn?.state === "running";
+      if (!turnNeedsRepair && isSameProjectedSession(thread.session, session)) {
         return;
       }
 
@@ -225,12 +232,28 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       }
     });
 
+    const reconciliationLock = yield* Semaphore.make(1);
+    let candidateCursor: ProjectionStaleInFlightThreadCursor | null = null;
+
     const reconcileNow = Effect.gen(function* () {
-      const nowMs = Date.now();
-      const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
-        updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
+      const nowMs = (options?.now ?? Date.now)();
+      const updatedBefore = new Date(nowMs - staleAfterMs).toISOString();
+      let page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+        updatedBefore,
         limit: candidateLimit,
+        ...(candidateCursor === null ? {} : { after: candidateCursor }),
       });
+      // The stored ordering key remains usable if the previous candidate was
+      // repaired or deleted. Wrap with at most one extra query at the boundary.
+      if (page.threadIds.length === 0 && candidateCursor !== null) {
+        candidateCursor = null;
+        page = yield* projectionSnapshotQuery.listStaleInFlightThreadPage({
+          updatedBefore,
+          limit: candidateLimit,
+        });
+      }
+      candidateCursor = page.nextCursor;
+      const candidateThreadIds = page.threadIds;
       if (candidateThreadIds.length === 0) return;
       const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
@@ -292,7 +315,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         { concurrency: 1, discard: true },
       );
       yield* orchestrationReactor.reconcileSettledOpenTurns;
-    });
+    }).pipe(reconciliationLock.withPermits(1));
 
     const reconcileSafely = reconcileNow.pipe(
       Effect.catchCause((cause) =>

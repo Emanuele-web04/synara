@@ -26,6 +26,7 @@ describe("Claude native cache observations", () => {
         {
           hook_event_name: "SessionStart",
           session_id: "native",
+          source: "resume",
           seconds_since_last_response: 3600,
           context_tokens: 896542,
           prompt_cache_likely_expired: true,
@@ -51,6 +52,13 @@ describe("Claude native cache observations", () => {
       claudeCacheFromSessionStart(
         { hook_event_name: "SessionStart", session_id: "native" },
         observedAt,
+        undefined,
+        {
+          nativeSessionId: "native",
+          observedAt,
+          source: "session-start",
+          state: "unknown",
+        },
       ),
     ).toEqual({ nativeSessionId: "native", observedAt, state: "unknown", source: "session-start" });
   });

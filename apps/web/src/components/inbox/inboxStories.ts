@@ -348,13 +348,21 @@ export function buildInboxTiles(
   }
 
   if (tokens > 0) {
+    // Cache reads re-read context the agent already had, so they get their own count.
+    const cacheReadTokens = Math.min(tokens, totals.cacheReadTokens ?? 0);
     const change = changeAmount(tokens, yesterdaySoFar?.tokens, "less");
     tiles.push({
       id: "tokens",
       lead: "You used",
       value: `${formatCompact(tokens)} tokens`,
-      detail: change ? `${change.words} than this time yesterday` : "Cache reads included",
-      ...(change?.tone === "good" ? { detailTone: "good" as const } : {}),
+      ...(cacheReadTokens > 0
+        ? {
+            detail: `${formatCompact(tokens - cacheReadTokens)} other · ${formatCompact(cacheReadTokens)} from cache`,
+          }
+        : {
+            detail: change ? `${change.words} than this time yesterday` : "Cache reads included",
+            ...(change?.tone === "good" ? { detailTone: "good" as const } : {}),
+          }),
     });
   }
 

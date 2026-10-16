@@ -1604,6 +1604,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // Applies `modelSelection` as a same-thread provider handoff: the server starts
   // the target session now and records the handoff (or reverts) in the timeline.
   providerHandoff: Schema.optional(Schema.Boolean),
+  // With `providerHandoff`: the user agreed to stop the source runtime's
+  // background tasks. Without it, live background tasks refuse the handoff.
+  providerHandoffStopsBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -2336,6 +2339,7 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 
 export const ThreadProviderHandoff = Schema.Struct({
   sourceModelSelection: ModelSelection,
+  stopBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
 
