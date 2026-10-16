@@ -414,6 +414,7 @@ export const AppSettingsSchema = Schema.Struct({
   // When false, the desktop chat header shows the plain thread title instead of the
   // open-thread tab strip.
   showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
+  showAsciiBackground: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),

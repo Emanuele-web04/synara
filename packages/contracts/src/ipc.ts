@@ -30,6 +30,14 @@ import type {
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
 import type {
+  McpConnector,
+  McpConnectorConnectInput,
+  McpConnectorConnectResult,
+  McpConnectorDisconnectInput,
+  McpConnectorDisconnectResult,
+  McpConnectorSetup,
+} from "./mcpConnectors";
+import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
   AutomationArchiveRunInput,
@@ -1306,6 +1314,12 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listMcpConnectors: () => Promise<ReadonlyArray<McpConnector>>;
+    connectMcpConnector: (input: McpConnectorConnectInput) => Promise<McpConnectorConnectResult>;
+    disconnectMcpConnector: (
+      input: McpConnectorDisconnectInput,
+    ) => Promise<McpConnectorDisconnectResult>;
+    getMcpConnectorSetup: () => Promise<McpConnectorSetup>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;

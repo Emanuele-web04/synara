@@ -71,6 +71,7 @@ import {
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
+import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -493,6 +494,7 @@ function SettingsRouteView() {
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
       : []),
+    ...(settings.showAsciiBackground !== defaults.showAsciiBackground ? ["ASCII background"] : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
@@ -1109,6 +1111,17 @@ function SettingsRouteView() {
           ) : null}
         </SettingsSection>
       ) : null}
+
+      <SettingsSection title="Chat background">
+        {renderBooleanSettingRow({
+          settingKey: "showAsciiBackground",
+          title: "ASCII background",
+          description:
+            "Show the animated ASCII field on empty chats. Reduced motion keeps the field still.",
+          resetLabel: "ASCII background",
+          ariaLabel: "ASCII background",
+        })}
+      </SettingsSection>
 
       <SettingsSection title="Typography and spacing">
         <SettingsRow
@@ -1729,7 +1742,11 @@ function SettingsRouteView() {
             <div
               className={cn(
                 "mx-auto w-full px-6 py-8",
-                activeSection === "profile" ? "max-w-3xl" : "max-w-2xl",
+                activeSection === "connectors"
+                  ? "max-w-4xl"
+                  : activeSection === "profile"
+                    ? "max-w-3xl"
+                    : "max-w-2xl",
               )}
             >
               {activeSection !== "profile" ? (
@@ -1807,6 +1824,7 @@ function SettingsRouteView() {
                   updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
+                <McpConnectorsSettingsPanel active={activeSection === "connectors"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}

@@ -267,6 +267,62 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
+  describe("raw patches with configured diff prefixes", () => {
+    it.effect("keeps a/ and b/ prefixes on parsed, applied and stored patches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.autocrlf", "false"]);
+        // `diff.noprefix` drops the prefixes git apply strips; `diff.mnemonicPrefix` swaps them;
+        // `color.diff=always` writes escape codes that git apply rejects.
+        yield* git(tmp, ["config", "diff.noprefix", "true"]);
+        yield* git(tmp, ["config", "diff.mnemonicPrefix", "true"]);
+        yield* git(tmp, ["config", "color.diff", "always"]);
+        const core = yield* GitCore;
+        yield* core.createBranch({ cwd: tmp, branch: "feature/prefixed-patches" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/prefixed-patches" });
+        yield* writeTextFile(path.join(tmp, "branch.txt"), "branch change\n");
+        yield* git(tmp, ["add", "branch.txt"]);
+        yield* git(tmp, ["commit", "-m", "branch change"]);
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged change\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "unstaged change\n");
+
+        const patches = yield* Effect.all({
+          unstaged: core.readUnstagedPatch(tmp),
+          staged: core.readStagedPatch(tmp),
+          workingTree: core.readWorkingTreePatch(tmp),
+          branch: core.readBranchPatch(tmp),
+          ref: core.readRefPatch(tmp, initialBranch),
+        });
+        expect(patches.unstaged.patch).toContain("diff --git a/README.md b/README.md");
+        expect(patches.staged.patch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(patches.workingTree.patch).toContain("diff --git a/README.md b/README.md");
+        expect(patches.branch.patch).toContain("diff --git a/branch.txt b/branch.txt");
+        // New files take the `--no-index` read, so README.md covers the tracked ref diff.
+        expect(patches.ref.patch).toContain("diff --git a/branch.txt b/branch.txt");
+        expect(patches.ref.patch).toContain("diff --git a/README.md b/README.md");
+
+        const wtPath = path.join(tmp, "wt-prefixed-copy");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe("unstaged change\n");
+
+        const snapshotRoot = yield* makeTmpDir("prefixed-worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "snapshot");
+        yield* core.snapshotWorktree({ cwd: tmp, outputPath });
+        expect(yield* readTextFile(path.join(outputPath, "changes.patch"))).toMatch(
+          /^diff --git a\/README\.md b\/README\.md$/m,
+        );
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+  });
+
   describe("bounded working-tree and ref reads", () => {
     it.effect("streams rename metadata beyond the capture limit for a selected file", () =>
       Effect.gen(function* () {

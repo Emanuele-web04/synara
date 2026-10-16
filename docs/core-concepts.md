@@ -26,6 +26,11 @@ is cancelled, the task and its prompt remain available for retry. Pressing Send 
 message for the same task is still being sent shows a notice and keeps the new text in the
 composer; it is not sent twice.
 
+Empty chats show an animated ASCII background by default. Turn it off in **Settings →
+Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
+clicks can still trigger a ripple. The pattern fades around the composer and stays out of the
+input, including during ripples. The decoration pauses while its chat is hidden.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
@@ -37,6 +42,11 @@ composer; it is not sent twice.
   A dot marks unread completions or pending actions in that list, including rows beyond its preview.
   Selecting a list does not mark its threads read. Numbered thread shortcuts follow its visible rows.
   Turning off **Chats** under **Sidebar sections** hides the navigation rows and returns to Projects.
+  The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
+  answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
+  place while you work through them, and read rows stay until **Clear read from Priority** in
+  the Activity options or until the view reopens. Other chats follow under Today, Yesterday,
+  and Earlier.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
@@ -188,9 +198,9 @@ again. An assistant item that ends without any text does not add an empty respon
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
-### Inline visuals (Beta)
+### Inline visuals
 
-In Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
+In Synara and Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
 line chart, a table, a side-by-side comparison, a checklist or step list, a note, a small
 calculator, follow-up choices, or tabs that combine them. Ask for one ("show this as a chart") and
 the agent calls the `synara_show_visual` tool, then places the visual in its answer like a
@@ -510,6 +520,9 @@ scaling beyond one task.
 - `mod+\` — split the current view
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
+- `mod+alt+a` — open the next chat that needs you: one waiting on an answer first, then
+  unseen work. Repeated presses advance through that urgency order and wrap after the last
+  actionable chat, independently of Priority's held row order.
 
 Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
 the remaining chats and preserves focus on a surviving chat. Closing a forked Side

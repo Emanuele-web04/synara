@@ -393,3 +393,27 @@ Existing external links are unchanged. UI/CI-only changes are covered by release
 notes, without unsupported battery, latency or package-size percentages. The new
 and updated guides are mirrored to Synara's marketing docs without replacing
 unrelated site-specific content.
+
+## Synara 1.0.5 Stable / 1.0.6-beta.1 audit — 2026-10-15
+
+Authority: feature head `4b2441d1040080324f458602e30fbb7f946cb1f5`, tree
+`84da13f198460c42b11fd12db7ddeeb935cd7cc8`; complete Stable range after
+`v1.0.4` and Beta range after `v1.0.2-beta.1`. Per-change source map:
+Synara `docs/releases/1.0.5-source-audit.md`.
+
+Production deploys from the separate website repository; apps/marketing is the
+Synara repository mirror. The current production guides already documented
+1.0.3/1.0.4 recovery and Computer Use. Their detail is retained, and stale
+history/cache claims in the mirror are replaced. New inline-visual and Beta
+Connectors guides have navigation and overview links and extend the existing
+navigation contract. Composer, Activity, subagent navigation, handoff, browser
+focus, Claude permission/accounting and simulator behavior were checked against
+the release source. No new external links were added.
+
+No real OAuth sign-in, installed-app upgrade, live microphone capture or
+universal provider/website compatibility is established by the docs audit.
+Unrelated dirty files in the older local website checkout remain untouched.
+
+## Synara 1.0.6 release audit — 2026-10-16
+
+Source: Stable range `v1.0.5..612aff6d8fdcdb9e849d8c8750a8683e7e2dca81` (16 commits). Provider discovery and troubleshooting updates cite their owning source files inline. Changelog highlights mirror the app entry; no Beta-only feature is promoted. Download snapshots are refreshed only after publication.

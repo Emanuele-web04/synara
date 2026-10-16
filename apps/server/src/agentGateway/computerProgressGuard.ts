@@ -19,6 +19,8 @@ export interface ComputerProgressAction {
 export interface ComputerProgressOutcome {
   readonly effect: ComputerAuditEffect;
   readonly code?: string;
+  /** Actual mutation target reported by the completed action, when known. */
+  readonly resolvedTargetKey?: string;
 }
 
 export interface ComputerProgressBlock {
@@ -38,6 +40,8 @@ interface RefusedAction {
 interface TargetHistory {
   readonly uncertainActions: string[];
   readonly refusals: RefusedAction[];
+  /** Hashed identity shared by every recorded outcome, or unknown/mixed. */
+  resolvedTargetKey: string | undefined;
 }
 
 const HISTORY_LIMIT = 12;
@@ -61,6 +65,7 @@ const TRANSIENT_ADMISSION_CODES = new Set([
   "computer_setup_required",
   "browser_requires_setup",
   "approval_denied",
+  "approval_expired",
   "approval_unavailable",
   "approval_queue_full",
   "target_not_on_active_space",
@@ -157,7 +162,7 @@ export class ComputerProgressGuard {
 
   record(action: ComputerProgressAction, outcome: ComputerProgressOutcome): void {
     if (outcome.effect === "verified") {
-      this.recordVerifiedProgress(action.scope, action.targetKey);
+      this.recordVerifiedProgress(action.scope, outcome.resolvedTargetKey ?? action.targetKey);
       return;
     }
     const refused = outcome.effect === "refused" || outcome.effect === "not-dispatched";
@@ -174,7 +179,16 @@ export class ComputerProgressGuard {
     }
 
     const target = digest(action.targetKey);
-    const history = targets.get(target) ?? { uncertainActions: [], refusals: [] };
+    const resolvedTargetKey =
+      outcome.resolvedTargetKey === undefined ? undefined : digest(outcome.resolvedTargetKey);
+    const history = targets.get(target) ?? {
+      uncertainActions: [],
+      refusals: [],
+      resolvedTargetKey,
+    };
+    // Once any contribution is unidentified or targets another window, a
+    // later result cannot retroactively attribute the whole alias history.
+    if (history.resolvedTargetKey !== resolvedTargetKey) history.resolvedTargetKey = undefined;
     targets.delete(target);
     targets.set(target, history);
     while (targets.size > this.maximumTargetsPerScope) {
@@ -195,7 +209,11 @@ export class ComputerProgressGuard {
   recordVerifiedProgress(scope: ComputerProgressScope, targetKey: string): void {
     const key = scopeKey(scope);
     const targets = this.scopes.get(key);
-    targets?.delete(digest(targetKey));
+    const target = digest(targetKey);
+    for (const [historyKey, history] of targets ?? []) {
+      if (historyKey === target || history.resolvedTargetKey === target)
+        targets!.delete(historyKey);
+    }
     if (targets?.size === 0) this.scopes.delete(key);
   }
 }

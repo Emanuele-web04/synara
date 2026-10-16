@@ -38,6 +38,20 @@ export class ComputerApprovalQueueFullError extends Error {
   }
 }
 
+/** An unanswered card is not a user decision and must not become a turn-long denial. */
+export class ComputerApprovalExpiredError extends Error {
+  readonly code = "approval_expired";
+  readonly effect = "not-dispatched";
+  readonly retryable = true;
+  constructor() {
+    super(
+      "The computer approval expired without an answer; no input was sent. " +
+        "Request approval again only if the action is still needed.",
+    );
+    this.name = "ComputerApprovalExpiredError";
+  }
+}
+
 /** Synara-owned Computer consent, scoped to one live turn. Clipboard reads use
  * separate per-call approvals. The runtime routes user decisions here first;
  * restart, Stop and terminal events discard pending prompts.
@@ -185,8 +199,8 @@ export class ComputerApprovalGate {
       throw new ComputerApprovalQueueFullError("global");
     }
     const requestId = `computer:${randomUUID()}`;
-    let settle!: (decision: ProviderApprovalDecision) => void;
-    const answer = new Promise<ProviderApprovalDecision>((resolve) => {
+    let settle!: (decision: ProviderApprovalDecision | "expired") => void;
+    const answer = new Promise<ProviderApprovalDecision | "expired">((resolve) => {
       settle = resolve;
     });
     this.pending.set(requestId, {
@@ -196,7 +210,7 @@ export class ComputerApprovalGate {
     });
     const cancel = () => settle("cancel");
     input.signal.addEventListener("abort", cancel, { once: true });
-    const timeout = setTimeout(cancel, 5 * 60_000);
+    const timeout = setTimeout(() => settle("expired"), 5 * 60_000);
     timeout.unref?.();
     let decision: ProviderApprovalDecision = "cancel";
     try {
@@ -207,13 +221,16 @@ export class ComputerApprovalGate {
       const published = input.publish(requestId).then(() => "ok" as const);
       const outcome = await Promise.race([published, answer]);
       void published.catch(() => undefined);
+      let answered: ProviderApprovalDecision | "expired";
       if (outcome === "ok") {
         if (input.signal.aborted) cancel();
-        decision = await answer;
+        answered = await answer;
       } else {
-        decision = outcome;
+        answered = outcome;
       }
       input.signal.throwIfAborted();
+      if (answered === "expired") throw new ComputerApprovalExpiredError();
+      decision = answered;
       return decision === "accept";
     } finally {
       clearTimeout(timeout);
