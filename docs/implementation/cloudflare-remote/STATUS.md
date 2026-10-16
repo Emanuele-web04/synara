@@ -1187,3 +1187,35 @@ release. The `.10` tag and artifacts were not overwritten.
 The post-tag branch passes 115 affected unit/guard tests, 35 browser tests,
 formatting, lint and twelve-package typecheck; this is source verification,
 not qualification or installation of a package containing `43d11d5`.
+
+### 2026-10-16 — Remote .11 published; Mini installed, MacBook awaits unlock
+
+[Remote .11](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.11),
+source `94d1a95`, now includes `43d11d5`. Quoted/bracketed remote chat identifiers
+are escaped before hover-anchor lookup, and classic Projects, Pinned and Chats
+reuse the existing local/Activity preview. The candidate passes 121 unit/guard
+and 35 browser tests plus formatting, lint, twelve-package typecheck, brand and
+release smoke. Workflow `38902469458` passed every quality/server gate,
+signed/notarized macOS ARM64 packaging and packaged startup. All four public
+asset digests, provenance, source and lockfile match; strict app/DMG signatures,
+Developer ID, Gatekeeper and stapled tickets pass independent verification.
+Stable Latest stays `v1.0.5`, and historical `v0.4.2` release metadata is unchanged.
+No Stable/Beta website download snapshot changes are needed for the Remote lane.
+
+The Mini runs `.11` after a normal shutdown and a fresh `.10` backup, with the
+`.10` bundle retained for rollback. All 53 original chats, 232 messages, 99 turns,
+eight projects, its plan and 14,667 orchestration events remain intact. The local
+smoke adds one chat, two messages and one turn; its exact reply
+`SYNARA_REMOTE11_MINI_OK` completes in 4.4 seconds, survives Reload and is persisted
+after normal quit. Identity bytes and trust authorizations are unchanged; only
+an original chat's `updated_at` and a trust connection timestamp advanced.
+
+The MacBook independently verified the public package but cannot be normally
+quit through computer use while its screen is locked. Its `.10` installation
+has not been replaced, and the existing tunnel still returns HTTP 200. The user
+has been asked to unlock it. Installation with a new `.10` backup, a fresh
+MacBook-to-Mini chat/reload and any supported manual hover check remain open.
+No force quit, new login, trust reset or physical-phone operation was used.
+The browser hover regression passes; it is not a manual installed-MacBook claim.
+Native contracts and APIs are unchanged, so TestFlight 135 remains compatible
+and no additional iPhone/iPad build was uploaded for this desktop-only fix.
