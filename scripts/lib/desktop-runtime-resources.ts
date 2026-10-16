@@ -28,6 +28,16 @@ export const stageDesktopRuntimeResources = Effect.fn("stageDesktopRuntimeResour
     if (BUNDLE_ONLY_RESOURCE_ENTRIES.has(entry)) continue;
     yield* fs.copy(path.join(buildResourcesDir, entry), path.join(runtimeResourcesDir, entry));
   }
+  if (options) {
+    // Root notices are outside buildResources and would otherwise be omitted
+    // from every packaged app. Keep the full text in the runtime resource tree.
+    for (const notice of ["LICENSE", "ATTRIBUTION.md"]) {
+      yield* fs.copyFile(
+        path.join(options.repositoryRoot, notice),
+        path.join(runtimeResourcesDir, notice),
+      );
+    }
+  }
   if (options?.flavor === "beta") {
     // Bundle branding stays blue. Explicit picker choices use separate runtime
     // assets so Default, Dark and Beta do not all resolve to the same artwork.
