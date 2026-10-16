@@ -4962,6 +4962,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return Effect.gen(function* () {
+          let cliDiscoveryFailed = false;
           const cliModelsEffect = openCodeRuntime
             .listOpenCodeCliModels({
               binaryPath,
@@ -4973,12 +4974,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(input.environment !== undefined ? { environment: input.environment } : {}),
             })
             .pipe(
-              Effect.catch((error) =>
-                Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
+              Effect.catch((error) => {
+                cliDiscoveryFailed = true;
+                return Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
                   binaryPath,
                   detail: openCodeRuntimeErrorDetail(error),
-                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
-              ),
+                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>));
+              }),
             );
           const inventoryEffect = withDiscoveryInventory(
             {
@@ -5028,6 +5030,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ? adapterConfig.cliModelSource
                   : adapterConfig.fallbackModelSource,
               cached: false,
+              degraded: cliDiscoveryFailed,
             };
           }
 
@@ -5052,6 +5055,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               models,
               source: adapterConfig.cliModelSource,
               cached: false,
+              degraded: true,
             };
           }
 

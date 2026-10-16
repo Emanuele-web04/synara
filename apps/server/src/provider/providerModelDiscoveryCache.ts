@@ -153,13 +153,13 @@ export const serializeProviderModelDiscoveryCacheKey = (
   ]);
 
 /**
- * Only a non-empty, error-free catalog is worth remembering as "good". Static
- * fallbacks that carry `error` (e.g. `devin.static`) and empty lists are
+ * Only a complete, non-empty, error-free catalog is worth remembering as "good".
+ * Partial catalogs, static fallbacks that carry `error`, and empty lists are
  * replayed briefly as failures so the next real attempt is not delayed by the
  * fresh window.
  */
 const isUsableCatalog = (result: ProviderListModelsResult): boolean =>
-  result.models.length > 0 && result.error === undefined;
+  result.models.length > 0 && result.error === undefined && result.degraded !== true;
 
 export interface PersistedModelCatalogEntryInput {
   /** Serialized ProviderModelDiscoveryCacheKey — the map key. */
@@ -214,7 +214,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
   const bootedAt = now();
   let droppedPersisted = false;
   for (const entry of options?.persistedCatalogs ?? []) {
-    if (bootedAt - entry.storedAt > staleTtlMs) {
+    if (!isUsableCatalog(entry.result) || bootedAt - entry.storedAt > staleTtlMs) {
       droppedPersisted = true;
       continue;
     }
@@ -283,7 +283,12 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     }
     // An error-free empty response is authoritative: do not keep offering
     // models the provider has removed. Replay it briefly before rediscovery.
-    if (Exit.isSuccess(exit) && exit.value.error === undefined && catalogs.delete(serialized)) {
+    if (
+      Exit.isSuccess(exit) &&
+      exit.value.error === undefined &&
+      exit.value.degraded !== true &&
+      catalogs.delete(serialized)
+    ) {
       emitCatalogsChanged();
     }
     storeFailure(serialized, exit, at);
@@ -328,13 +333,21 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       return deferred;
     });
 
+  // A fallback can serve a cold lookup, but even interactive refreshes retain
+  // the last complete catalog until it expires instead of dropping model IDs.
+  const retainLastGoodCatalog = (serialized: string, result: ProviderListModelsResult) => {
+    if (result.degraded !== true) return result;
+    const entry = readCatalog(serialized, now());
+    return entry === undefined ? result : { ...entry.result, cached: true };
+  };
+
   const awaitDiscovery = (
+    serialized: string,
     deferred: Deferred.Deferred<ProviderListModelsResult, unknown>,
   ): Effect.Effect<ProviderListModelsResult, E | ProviderAdapterRequestError> =>
-    Deferred.await(deferred) as Effect.Effect<
-      ProviderListModelsResult,
-      E | ProviderAdapterRequestError
-    >;
+    Deferred.await(deferred).pipe(
+      Effect.map((result) => retainLastGoodCatalog(serialized, result)),
+    ) as Effect.Effect<ProviderListModelsResult, E | ProviderAdapterRequestError>;
 
   const lookup: ProviderModelDiscoveryCache<E>["lookup"] = (key, discover, refresh) =>
     Effect.gen(function* () {
@@ -344,13 +357,15 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       const failure = readFailure(serialized, at);
       if (refresh !== undefined) {
         const pending = inflight.get(serialized);
-        if (pending !== undefined) return yield* awaitDiscovery(pending);
-        if (failure !== undefined) return yield* failure.exit as DiscoveryExit<E>;
+        if (pending !== undefined) return yield* awaitDiscovery(serialized, pending);
+        if (failure !== undefined) {
+          return retainLastGoodCatalog(serialized, yield* failure.exit as DiscoveryExit<E>);
+        }
         const freshWindow = refresh === "now" ? MANUAL_REFRESH_MIN_INTERVAL_MS : freshTtlMs;
         if (entry !== undefined && at - entry.storedAt <= freshWindow) {
           return { ...entry.result, cached: true };
         }
-        return yield* awaitDiscovery(yield* startDiscovery(key, serialized, discover));
+        return yield* awaitDiscovery(serialized, yield* startDiscovery(key, serialized, discover));
       }
       if (entry !== undefined) {
         if (at - entry.storedAt <= freshTtlMs) {
@@ -364,13 +379,13 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       }
       const pending = inflight.get(serialized);
       if (pending !== undefined) {
-        return yield* awaitDiscovery(pending);
+        return yield* awaitDiscovery(serialized, pending);
       }
       if (failure !== undefined) {
-        return yield* failure.exit as DiscoveryExit<E>;
+        return retainLastGoodCatalog(serialized, yield* failure.exit as DiscoveryExit<E>);
       }
       const deferred = yield* startDiscovery(key, serialized, discover);
-      return yield* awaitDiscovery(deferred);
+      return yield* awaitDiscovery(serialized, deferred);
     });
 
   return {

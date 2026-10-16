@@ -1577,6 +1577,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(result).toMatchObject({
       source: "opencode-cli",
       cached: false,
+      degraded: true,
     });
     expect(result?.models.map((model) => model.slug)).toEqual(["opencode/nemotron-3-ultra-free"]);
     expect(runtime.connectCalls).toHaveLength(1);
@@ -1584,6 +1585,31 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls).toHaveLength(1);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/server-startup-fails" });
   });
+
+  it.each([false, true])(
+    "distinguishes an empty CLI catalog from failed discovery (failed: %s)",
+    async (failed) => {
+      const runtime = createMockOpenCodeRuntime({
+        ...(failed
+          ? {
+              cliModelsError: new OpenCodeRuntimeError({
+                operation: "listOpenCodeCliModels",
+                detail: "CLI unavailable",
+              }),
+            }
+          : {}),
+      });
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          return yield* adapter.listModels!({ provider: "opencode", cwd: process.cwd() });
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
+
+      expect(result.models).toEqual([]);
+      expect(result.degraded).toBe(failed);
+    },
+  );
 
   it("lists OpenCode agents from the active discovery cwd", async () => {
     const runtime = createMockOpenCodeRuntime({
