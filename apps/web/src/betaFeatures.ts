@@ -7,7 +7,9 @@ import {
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  MCP_CONNECTORS_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -40,6 +42,18 @@ export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
  */
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
+
+/**
+ * Inline visuals are available in Stable and Beta. HTML keeps the same
+ * sandbox and desktop-only execution boundary; component specs also work on the web.
+ */
+export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
+
+/**
+ * Connectors are Beta-only: Settings → Connectors and their `@` mentions. The
+ * server refuses the Connectors RPCs on Stable regardless.
+ */
+export const MCP_CONNECTORS_ON = isBetaFeatureOn(MCP_CONNECTORS_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

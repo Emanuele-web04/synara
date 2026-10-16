@@ -390,6 +390,11 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     completed: "Synara moved a board card",
     failed: "Synara couldn't move a board card",
   },
+  synara_show_visual: {
+    running: "Synara is showing a visual",
+    completed: "Synara showed a visual",
+    failed: "Synara couldn't show a visual",
+  },
   synara_create_todo: {
     running: "Synara is adding a to-do",
     completed: "Synara added a to-do",
@@ -827,12 +832,21 @@ function extractToolDescriptorFromPayload(
 }
 
 function extractMcpServerToolDescriptor(value: unknown, depth: number): string | null {
+  const pair = findMcpServerToolPair(value, depth);
+  return pair ? humanizeMcpServerTool(pair.server, pair.tool) : null;
+}
+
+// Codex reports MCP calls as `{ server, tool }` somewhere inside the payload.
+function findMcpServerToolPair(
+  value: unknown,
+  depth: number,
+): { readonly server: string; readonly tool: string } | null {
   if (depth > 4 || !value || typeof value !== "object") {
     return null;
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const nested = extractMcpServerToolDescriptor(entry, depth + 1);
+      const nested = findMcpServerToolPair(entry, depth + 1);
       if (nested) {
         return nested;
       }
@@ -842,7 +856,7 @@ function extractMcpServerToolDescriptor(value: unknown, depth: number): string |
 
   const record = value as Record<string, unknown>;
   if (typeof record.server === "string" && typeof record.tool === "string") {
-    return humanizeMcpServerTool(record.server, record.tool);
+    return { server: record.server, tool: record.tool };
   }
   for (const nestedKey of [
     "item",
@@ -855,12 +869,29 @@ function extractMcpServerToolDescriptor(value: unknown, depth: number): string |
     "invocation",
     "source",
   ]) {
-    const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
+    const nested = findMcpServerToolPair(record[nestedKey], depth + 1);
     if (nested) {
       return nested;
     }
   }
   return null;
+}
+
+/**
+ * The MCP server behind a tool call: Claude names tools `mcp__<server>__<tool>`,
+ * Codex reports a `{ server, tool }` pair in the payload. Null for other tools.
+ */
+export function extractMcpServerName(
+  toolName: string | null | undefined,
+  payload: unknown,
+): string | null {
+  const trimmed = toolName?.trim() ?? "";
+  if (trimmed.startsWith("mcp__")) {
+    const server = trimmed.split("__")[1]?.trim();
+    if (server) return server;
+  }
+  const server = findMcpServerToolPair(payload, 0)?.server.trim();
+  return server ? server : null;
 }
 
 function collectDescriptorCandidates(

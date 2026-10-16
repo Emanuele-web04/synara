@@ -3,7 +3,7 @@
 // composer input (each with Steer / Delete / Edit actions), led by a "Queue paused"
 // notice with Resume / Edit when a stop, failure, or usage limit holds the queue. Rounded only on top with
 // a flat, borderless bottom that fuses flush onto the composer; spans the full composer
-// width while the composer below keeps only its bottom rounding.
+// width while the composer below keeps its own full rounding.
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
@@ -121,7 +121,6 @@ interface ComposerQueuedHeaderProps {
   onEditPaused?: () => void;
   /** Workspace root used to resolve local file links/mentions inside the parsed preview. */
   cwd?: string | undefined;
-  attachedToPrevious?: boolean;
 }
 
 export const ComposerQueuedHeader = function ComposerQueuedHeader({
@@ -133,15 +132,13 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   onResume,
   onEditPaused,
   cwd,
-  attachedToPrevious: attachedToPreviousProp,
 }: ComposerQueuedHeaderProps) {
-  const attachedToPrevious = attachedToPreviousProp ?? false;
   if (queuedTurns.length === 0) {
     return null;
   }
 
   return (
-    <ComposerStackedPanel attachedToPrevious={attachedToPrevious} className="flex flex-col">
+    <ComposerStackedPanel className="flex flex-col">
       {pause && onResume && onEditPaused ? (
         <QueuedComposerPausedNotice pause={pause} onResume={onResume} onEdit={onEditPaused} />
       ) : null}

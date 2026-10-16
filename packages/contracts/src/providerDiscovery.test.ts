@@ -23,6 +23,7 @@ describe("ProviderListModelsResult", () => {
       ],
       source: "omp-cli",
       cached: true,
+      degraded: true,
     };
 
     expect(decodeModels({ ...catalog, roles })).toEqual(catalog);

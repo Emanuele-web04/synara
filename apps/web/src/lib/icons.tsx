@@ -338,6 +338,8 @@ export {
   FolderAddIcon,
   FolderClosedIcon as FolderIcon,
   BookOpen01Icon as BookIcon,
+  // Transcript file reads (rows and collapsed read groups) wear the open book.
+  BookOpen01Icon as FileReadIcon,
   GiftIcon,
   MessageEdit01Icon as FeedbackIcon,
   SlidersHorizontalIcon as CustomizeIcon,

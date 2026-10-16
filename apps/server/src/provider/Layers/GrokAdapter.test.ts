@@ -55,6 +55,7 @@ describe("GrokAdapter runtime event scoping", () => {
     const env = buildGrokModelDiscoveryEnv(
       {
         instanceId: "grok_work",
+        isolationRootDir: mkdtempSync(join(tmpdir(), "synara-grok-discovery-")),
         environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
       },
       {
@@ -423,6 +424,19 @@ describe("GrokAdapter runtime event scoping", () => {
 
     expect(models.map(({ slug, name }) => ({ slug, name }))).toEqual([
       { slug: "grok-4.6", name: "Grok 4.6" },
+    ]);
+  });
+
+  it("stamps Grok 4.7 Build Fast with Extra High instead of the grok-build ladder", () => {
+    const [model] = mergeGrokModelDescriptors([
+      [{ slug: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast" }],
+    ]);
+    expect(model?.defaultReasoningEffort).toBe("high");
+    expect(model?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
     ]);
   });
 

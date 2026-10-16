@@ -187,6 +187,7 @@ export function GitHubItemFloatingComposer({
           />
           {voice.showVoiceNotesControl ? (
             <ComposerVoiceButton
+              appearance="circle"
               disabled={!project}
               isRecording={voice.isVoiceRecording}
               isTranscribing={voice.isVoiceTranscribing}

@@ -247,6 +247,7 @@ function render(
       archiveDeletesOrphanedWorktree: overrides.archiveDeletesOrphanedWorktree ?? false,
       confirmThreadArchive: false,
       confirmThreadDelete: false,
+      sidebarThreadAttentionFirst: true,
       sidebarThreadSortOrder: "updated_at",
     },
     clearTerminalState: harness.clearTerminalState,
@@ -339,6 +340,20 @@ beforeEach(() => {
 });
 
 describe("useSidebarThreadActions", () => {
+  it("can unpin a child from its tab even though the sidebar hides it", async () => {
+    const child = makeThread(THREAD_ID, { parentThreadId: FALLBACK_ID, isPinned: true });
+    const parent = makeThread(FALLBACK_ID);
+    sidebarThreads = [child, parent];
+    const controller = render({ sidebarTreeThreads: [parent] });
+    expect(controller.pinnedThreadIdSet.has(THREAD_ID)).toBe(true);
+    controller.toggleThreadPinned(THREAD_ID);
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: THREAD_ID, isPinned: false }),
+      ),
+    );
+  });
+
   it("uses elapsed durations and tomorrow at 9am in the user's local calendar", async () => {
     const now = new Date(2026, 9, 2, 23, 45);
     const clock = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
