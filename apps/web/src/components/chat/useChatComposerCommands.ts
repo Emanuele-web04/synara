@@ -249,7 +249,7 @@ export function useChatComposerCommands({
         });
         return;
       }
-      if (item.type === "plugin" || item.type === "thread") {
+      if (item.type === "plugin" || item.type === "thread" || item.type === "connector") {
         applyComposerTriggerReplacement({
           snapshot,
           trigger,

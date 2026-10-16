@@ -1,5 +1,7 @@
+import "./httpRuntime";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
+import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -5718,6 +5720,7 @@ function createWindow(): BrowserWindow {
     }
     return { action: "deny" };
   });
+  attachAppSubframeNavigationGuard(window.webContents);
 
   window.on("page-title-updated", (event) => {
     event.preventDefault();

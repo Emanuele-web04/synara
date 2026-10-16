@@ -25,8 +25,6 @@ import {
 
 interface ThreadFindBarProps {
   open: boolean;
-  historyIncomplete?: boolean;
-  historyError?: string | null;
   focusNonce: number;
   timelineEntries: readonly TimelineEntry[];
   onClose: () => void;
@@ -42,8 +40,6 @@ const FIND_STEP_BUTTON_CLASS_NAME =
 
 export function ThreadFindBar({
   open,
-  historyIncomplete,
-  historyError,
   focusNonce,
   timelineEntries,
   onClose,
@@ -231,15 +227,11 @@ export function ThreadFindBar({
             )}
             aria-live="polite"
           >
-            {historyIncomplete
-              ? historyError
-                ? "Earlier messages unavailable"
-                : "Searching earlier messages…"
-              : hasQuery
-                ? matchCount === 0
-                  ? "No results"
-                  : `${safeIndex + 1} / ${matchCount} results`
-                : ""}
+            {hasQuery
+              ? matchCount === 0
+                ? "No results"
+                : `${safeIndex + 1} / ${matchCount} results`
+              : ""}
           </span>
         </div>
       </DisclosureRegion>
@@ -249,8 +241,6 @@ export function ThreadFindBar({
 
 export function ChatThreadFindHost({
   open,
-  historyIncomplete,
-  historyError,
   focusNonce,
   timelineEntries,
   threadId,
@@ -276,8 +266,6 @@ export function ChatThreadFindHost({
         <ThreadFindBar
           key={threadId}
           open={open}
-          {...(historyIncomplete !== undefined ? { historyIncomplete } : {})}
-          {...(historyError !== undefined ? { historyError } : {})}
           focusNonce={focusNonce}
           timelineEntries={timelineEntries}
           onClose={onClose}

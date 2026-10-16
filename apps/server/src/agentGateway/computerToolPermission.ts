@@ -190,6 +190,12 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_update_kanban_card",
   "synara_set_kanban_goal",
   "synara_delete_kanban_card",
+  // To-do tools (todoTools.ts)
+  "synara_create_todo",
+  "synara_list_todos",
+  "synara_update_todo",
+  // Inline visuals (inlineVisualTools.ts; available in Stable and Beta)
+  "synara_show_visual",
   // Thread write tools (Layers/AgentGateway.ts)
   "synara_create_threads",
   "synara_create_thread",
@@ -229,10 +235,12 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_e2e_review",
   // Capability-gated device tools (deviceTools.ts — not in contracts)
   "device_boot",
+  "device_configure",
   "device_describe_ui",
   "device_install",
   "device_launch",
   "device_list",
+  "device_logs",
   "device_open_url",
   "device_press_button",
   "device_screenshot",
@@ -240,6 +248,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "device_swipe",
   "device_tap",
   "device_type",
+  "device_wait",
 ] as const;
 
 /** Every tool name the agent gateway serves, from the shared catalogs. */

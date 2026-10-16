@@ -15,6 +15,13 @@ import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
 
 import {
   type AppSettings,
@@ -64,6 +71,7 @@ import {
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
+import { McpConnectorsSettingsPanel } from "../components/settings/McpConnectorsSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -328,6 +336,11 @@ type BooleanSettingKey = {
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
+    DiffRenderModeSchema,
+  );
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
@@ -461,6 +474,7 @@ function SettingsRouteView() {
     ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
       ? ["Move sent messages to top"]
       : []),
+    ...(settings.showOpenThreadTabs !== defaults.showOpenThreadTabs ? ["Thread tabs"] : []),
     ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
       ? ["Delete worktree on archive"]
       : []),
@@ -470,6 +484,9 @@ function SettingsRouteView() {
     ...(settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder
       ? ["Thread sort order"]
       : []),
+    ...(settings.sidebarThreadAttentionFirst !== defaults.sidebarThreadAttentionFirst
+      ? ["Working and unread on top"]
+      : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
       ? ["Hubs section"]
@@ -477,6 +494,7 @@ function SettingsRouteView() {
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
       : []),
+    ...(settings.showAsciiBackground !== defaults.showAsciiBackground ? ["ASCII background"] : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
     ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
@@ -540,6 +558,7 @@ function SettingsRouteView() {
     ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
       ? ["Keep Synara responsive"]
       : []),
+    ...(defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? ["Diff layout"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]
@@ -599,6 +618,7 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
+    setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE);
     await resetSettings();
     setResetEpoch((current) => current + 1);
   }
@@ -751,6 +771,15 @@ function SettingsRouteView() {
           ariaLabel: "Move sent messages to top",
         })}
 
+        {renderBooleanSettingRow({
+          settingKey: "showOpenThreadTabs",
+          title: "Thread tabs",
+          description:
+            "Show open threads as tabs in the chat header. Turn off to show only the current thread's title.",
+          resetLabel: "thread tabs",
+          ariaLabel: "Show open threads as tabs in the chat header",
+        })}
+
         <SettingsRow
           title="Welcome tour"
           description="Replay the first-run setup: feature tour, provider selection, appearance, and first project."
@@ -842,6 +871,15 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
+
+        {renderBooleanSettingRow({
+          settingKey: "sidebarThreadAttentionFirst",
+          title: "Working and unread on top",
+          description:
+            "With Recently active order, move working and unread threads above the rest. The list holds still while your pointer is over it.",
+          resetLabel: "working and unread on top",
+          ariaLabel: "Move working and unread threads to the top of the sidebar",
+        })}
       </SettingsSection>
 
       <SettingsSection title="Sidebar sections">
@@ -1074,6 +1112,17 @@ function SettingsRouteView() {
           ) : null}
         </SettingsSection>
       ) : null}
+
+      <SettingsSection title="Chat background">
+        {renderBooleanSettingRow({
+          settingKey: "showAsciiBackground",
+          title: "ASCII background",
+          description:
+            "Show the animated ASCII field on empty chats. Reduced motion keeps the field still.",
+          resetLabel: "ASCII background",
+          ariaLabel: "ASCII background",
+        })}
+      </SettingsSection>
 
       <SettingsSection title="Typography and spacing">
         <SettingsRow
@@ -1515,6 +1564,31 @@ function SettingsRouteView() {
 
       <SettingsSection title="Review">
         <SettingsRow
+          title="Diff layout"
+          description="Default stacked or split layout for threads without a saved choice. Each thread remembers its review-panel changes independently."
+          resetAction={
+            defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? (
+              <SettingResetButton
+                label="diff layout"
+                onClick={() => setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={defaultDiffRenderMode}
+              onValueChange={setDefaultDiffRenderMode}
+              ariaLabel="Diff layout"
+              options={
+                [
+                  { value: "stacked", label: "Stacked" },
+                  { value: "split", label: "Split" },
+                ] satisfies ReadonlyArray<{ value: DiffRenderMode; label: string }>
+              }
+            />
+          }
+        />
+        <SettingsRow
           title="Open pull requests and issues"
           description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."
           resetAction={
@@ -1669,7 +1743,11 @@ function SettingsRouteView() {
             <div
               className={cn(
                 "mx-auto w-full px-6 py-8",
-                activeSection === "profile" ? "max-w-3xl" : "max-w-2xl",
+                activeSection === "connectors"
+                  ? "max-w-4xl"
+                  : activeSection === "profile"
+                    ? "max-w-3xl"
+                    : "max-w-2xl",
               )}
             >
               {activeSection !== "profile" ? (
@@ -1747,6 +1825,7 @@ function SettingsRouteView() {
                   updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
                 />
+                <McpConnectorsSettingsPanel active={activeSection === "connectors"} />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel
                   active={activeSection === "advanced"}

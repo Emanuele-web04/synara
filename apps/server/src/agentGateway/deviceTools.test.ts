@@ -109,7 +109,10 @@ describe("agent gateway device tools surface", () => {
       "device_press_button",
       "device_screenshot",
       "device_describe_ui",
+      "device_wait",
       "device_scroll_to_element",
+      "device_logs",
+      "device_configure",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "device:control")).toBe(true);
     // Every tool, the read-only ones included, needs a live caller turn.
@@ -131,17 +134,32 @@ describe("agent gateway device tool handlers", () => {
     expect(description("device_open_url")).toContain("exp://127.0.0.1:8081");
     expect(description("device_open_url")).toContain("start it detached");
     expect(description("device_open_url")).toContain("expo start --ios");
-    expect(description("device_tap")).toContain("Tap by label");
+    // Xcode 27+ replaced Simulator.app with DeviceHub: the shell route fails.
+    expect(description("device_open_url")).toContain("DeviceHub");
+    expect(description("device_install")).toContain(
+      "-destination 'platform=iOS Simulator,id=<udid>'",
+    );
+    expect(description("device_launch")).toContain("expo run:ios");
+    expect(description("device_boot")).toContain("never open Simulator.app or DeviceHub");
+    expect(description("device_launch")).toContain("restart: true");
+    expect(description("device_tap")).toContain("by identifier");
     expect(description("device_tap")).toContain("activationPoint");
-    expect(description("device_tap")).toContain("screenshot pixels");
+    expect(description("device_tap")).toContain("pixels are device points");
+    expect(description("device_tap")).toContain("long press");
     expect(description("device_tap")).toContain("HID events were not delivered");
-    expect(description("device_tap")).toContain("unchanged tree");
+    expect(description("device_tap")).toContain("screenChanged: false");
+    expect(description("device_type")).toContain("fieldValue");
     expect(description("device_swipe")).toContain("gesture itself is the goal");
     expect(description("device_swipe")).toContain("Never write a swipe loop");
-    expect(description("device_screenshot")).toContain("showing the user a result");
-    expect(description("device_describe_ui")).toContain('value "1" means on and "0" means off');
-    expect(description("device_describe_ui")).toContain("rather than using a screenshot");
+    expect(description("device_swipe")).toContain("left edge is back");
+    expect(description("device_screenshot")).toContain("scaled to device points");
+    expect(description("device_screenshot")).toContain("artifactPath");
+    expect(description("device_describe_ui")).toContain('value "1" means on and "0" off');
+    expect(description("device_describe_ui")).toContain("#identifier");
     expect(description("device_describe_ui")).toContain("hardware-backed panes");
+    expect(description("device_wait")).toContain("instead of sleeping");
+    expect(description("device_logs")).toContain("never instructions");
+    expect(description("device_configure")).toContain("pre-answer permission prompts");
     expect(description("device_scroll_to_element")).toContain("instead of a device_swipe loop");
 
     for (const name of [
@@ -154,6 +172,7 @@ describe("agent gateway device tool handlers", () => {
       "device_type",
       "device_press_button",
       "device_scroll_to_element",
+      "device_configure",
     ]) {
       expect(description(name)).toContain("DeviceApprovalRequired");
       expect(description(name)).toContain("do not retry");
@@ -558,5 +577,160 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
     expect(opened).toHaveLength(1);
     // One attach, so no duplicate stream for the pane to reconcile.
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
+  });
+});
+
+/** The last text block of a result: the screen snapshot, or an error message. */
+function screenText(result: McpToolCallResult): string {
+  const texts = result.content.filter((entry) => entry.type === "text");
+  const last = texts.at(-1);
+  return last && last.type === "text" ? last.text : "";
+}
+
+describe("agent gateway device tools for end-to-end testing", () => {
+  it("returns the settled screen and whether it changed after an input", async () => {
+    const { call, structured } = await setup();
+
+    const result = await call("device_tap", { udid: DEVICE, identifier: "continue-button" });
+    const metadata = (await structured("device_tap", {
+      udid: DEVICE,
+      identifier: "continue-button",
+    })) as Record<string, unknown>;
+
+    expect(result.isError).toBeUndefined();
+    expect(metadata).toMatchObject({
+      element: { label: "Continue", identifier: "continue-button" },
+      settled: true,
+      screenChanged: false,
+    });
+    expect(screenText(result)).toContain('app "Fake App"');
+    expect(screenText(result)).toContain('- Button "Continue" #"continue-button" @196,725');
+  });
+
+  it("skips the observation when asked to", async () => {
+    const { call, backend } = await setup();
+
+    const result = await call("device_tap", { udid: DEVICE, x: 10, y: 10, observe: false });
+
+    expect(result.content).toHaveLength(1);
+    expect(backend.callsOfKind("describeUi")).toHaveLength(0);
+  });
+
+  it("turns a swipe that starts on the left edge into the back gesture", async () => {
+    const { call, backend, manager } = await setup();
+    await manager.describeUi(DEVICE);
+
+    await call("device_swipe", { udid: DEVICE, fromX: 2, fromY: 400, toX: 300, toY: 400 });
+    await call("device_swipe", { udid: DEVICE, fromX: 200, fromY: 600, toX: 200, toY: 200 });
+
+    const swipes = backend.callsOfKind("swipe").map((swipe) => swipe.gesture.edge);
+    expect(swipes).toEqual(["left", undefined]);
+  });
+
+  it("reads the field back after typing", async () => {
+    const { structured } = await setup();
+
+    const metadata = (await structured("device_type", { udid: DEVICE, text: "ada" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(metadata).toMatchObject({ method: "keys", fieldValue: "ada", submitted: false });
+  });
+
+  it("waits for an element by identifier", async () => {
+    const { structured } = await setup();
+
+    await expect(
+      structured("device_wait", { udid: DEVICE, identifier: "continue-button", timeoutMs: 1_000 }),
+    ).resolves.toMatchObject({ status: "ready" });
+    await expect(
+      structured("device_wait", { udid: DEVICE, label: "Never there", timeoutMs: 300 }),
+    ).resolves.toMatchObject({ status: "timeout", settled: false });
+  });
+
+  it("applies environment settings and validates privacy requests", async () => {
+    const { call, structured, backend } = await setup();
+
+    await expect(
+      structured("device_configure", {
+        udid: DEVICE,
+        appearance: "dark",
+        location: { latitude: 45.46, longitude: 9.19 },
+        privacy: { action: "grant", service: "photos", bundleId: "com.example.shop" },
+      }),
+    ).resolves.toEqual({ udid: DEVICE, applied: ["appearance", "location", "privacy"] });
+    expect(backend.callsOfKind("configure").map((entry) => entry.configuration)).toEqual([
+      { kind: "appearance", appearance: "dark" },
+      { kind: "location", latitude: 45.46, longitude: 9.19 },
+      { kind: "privacy", action: "grant", service: "photos", bundleId: "com.example.shop" },
+    ]);
+
+    const missingBundle = await call("device_configure", {
+      udid: DEVICE,
+      privacy: { action: "grant", service: "photos" },
+    });
+    expect(missingBundle.isError).toBe(true);
+    expect(screenText(missingBundle)).toMatch(/needs the app's bundleId/);
+  });
+
+  it("reads logs with sensible defaults", async () => {
+    const { structured, backend } = await setup();
+
+    await expect(
+      structured("device_logs", { udid: DEVICE, bundleId: "com.example.shop" }),
+    ).resolves.toMatchObject({ process: "FakeApp", console: ["hello from print"] });
+    expect(backend.callsOfKind("readLogs")[0]?.query).toEqual({
+      bundleId: "com.example.shop",
+      sinceSeconds: 300,
+      level: "default",
+      contains: undefined,
+      limit: 100,
+    });
+  });
+
+  it("passes restart and environment through to the launch", async () => {
+    const { structured, backend } = await setup();
+
+    await structured("device_launch", {
+      udid: DEVICE,
+      bundleId: "com.example.shop",
+      restart: true,
+      environment: { UITESTS: "1" },
+    });
+
+    expect(backend.callsOfKind("launch").at(-1)?.options).toEqual({
+      terminateExisting: true,
+      environment: { UITESTS: "1" },
+    });
+  });
+
+  it("saves a full-resolution proof image and returns its path", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend });
+    await manager.boot(DEVICE);
+    const saved: string[] = [];
+    const tools = makeAgentGatewayDeviceTools({
+      manager,
+      authorizeAction: async () => true,
+      saveProof: async (_threadId, data) => {
+        saved.push(data);
+        return "/proofs/device.png";
+      },
+    });
+    const screenshot = tools.find((tool) => tool.definition.name === "device_screenshot")!;
+
+    const result = await Effect.runPromise(
+      screenshot.handler({ udid: DEVICE, proof: true }, makeContext()),
+    );
+
+    const text = result.content.find((entry) => entry.type === "text");
+    expect(text && text.type === "text" ? JSON.parse(text.text) : null).toMatchObject({
+      artifactPath: "/proofs/device.png",
+      coordinates: "device points",
+    });
+    expect(saved).toHaveLength(1);
+    expect(backend.callsOfKind("screenshot")).toHaveLength(1);
+    expect(result.content.some((entry) => entry.type === "image")).toBe(true);
   });
 });

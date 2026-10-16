@@ -26,6 +26,10 @@ import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from 
 import { ProjectKind } from "./project";
 import { ClaudeCacheObservation } from "./claudeCache";
 import {
+  OrchestrationGetInlineVisualInput,
+  OrchestrationGetInlineVisualResult,
+} from "./inlineVisual";
+import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
@@ -58,6 +62,7 @@ export const ORCHESTRATION_WS_METHODS = {
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
+  getInlineVisual: "orchestration.getInlineVisual",
   replayEvents: "orchestration.replayEvents",
   listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
   reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
@@ -1599,6 +1604,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // Applies `modelSelection` as a same-thread provider handoff: the server starts
   // the target session now and records the handoff (or reverts) in the timeline.
   providerHandoff: Schema.optional(Schema.Boolean),
+  // With `providerHandoff`: the user agreed to stop the source runtime's
+  // background tasks. Without it, live background tasks refuse the handoff.
+  providerHandoffStopsBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -2315,6 +2323,7 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 
 export const ThreadProviderHandoff = Schema.Struct({
   sourceModelSelection: ModelSelection,
+  stopBackgroundTasks: Schema.optional(Schema.Boolean),
 });
 export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
 
@@ -2813,39 +2822,11 @@ export const OrchestrationEvent = Schema.Union([
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
-/** Stable message-order boundary; sequence is null for imported/legacy rows. */
-export const OrchestrationThreadHistoryCursor = Schema.Struct({
-  messageId: MessageId,
-  createdAt: IsoDateTime,
-  sequence: Schema.NullOr(NonNegativeInt),
-});
-export type OrchestrationThreadHistoryCursor = typeof OrchestrationThreadHistoryCursor.Type;
-export const OrchestrationThreadActivityHistoryCursor = Schema.Struct({
-  activityId: EventId,
-  createdAt: IsoDateTime,
-});
-export type OrchestrationThreadActivityHistoryCursor =
-  typeof OrchestrationThreadActivityHistoryCursor.Type;
-export const OrchestrationThreadMessageWindow = Schema.Struct({
-  limit: NonNegativeInt.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(500)),
-  before: Schema.optional(OrchestrationThreadHistoryCursor),
-  beforeActivity: Schema.optional(OrchestrationThreadActivityHistoryCursor),
-});
-export type OrchestrationThreadMessageWindow = typeof OrchestrationThreadMessageWindow.Type;
-export const OrchestrationThreadHistory = Schema.Struct({
-  totalMessageCount: NonNegativeInt,
-  olderCursor: Schema.NullOr(OrchestrationThreadHistoryCursor),
-  olderActivityCursor: Schema.optional(Schema.NullOr(OrchestrationThreadActivityHistoryCursor)),
-  totalActivityCount: Schema.optional(NonNegativeInt),
-  /** Existing rollback/revert event fence; invalidates retained historical rows. */
-  revisionSequence: Schema.optional(NonNegativeInt),
-});
-export type OrchestrationThreadHistory = typeof OrchestrationThreadHistory.Type;
-
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
-  history: Schema.optional(OrchestrationThreadHistory),
+  /** Latest projected rollback/revert; lets recovery discard removed local messages. */
+  historyRevisionSequence: Schema.optional(NonNegativeInt),
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
 
@@ -2858,12 +2839,10 @@ export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetail
 export interface OrchestrationThreadReplayItemSchema extends Schema.Struct<{
   readonly kind: Schema.Literal<"replay">;
   readonly events: Schema.$Array<typeof OrchestrationEvent>;
-  readonly threadId: Schema.optional<typeof ThreadId>;
 }> {}
 export const OrchestrationThreadReplayItem: OrchestrationThreadReplayItemSchema = Schema.Struct({
   kind: Schema.Literal("replay"),
   events: Schema.Array(OrchestrationEvent),
-  threadId: Schema.optional(ThreadId),
 });
 export type OrchestrationThreadReplayItem = typeof OrchestrationThreadReplayItem.Type;
 
@@ -3097,14 +3076,11 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
   // instead of one `event` item per event. Opt-in so older clients, which do
   // not know the `replay` item, keep per-event replay.
   batchReplay: Schema.optional(Schema.Boolean),
-  /** Opt-in bounded text history. Omission retains the legacy snapshot shape. */
-  messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
 export const OrchestrationGetThreadDetailSnapshotInput = Schema.Struct({
   threadId: ThreadId,
-  messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
 });
 export type OrchestrationGetThreadDetailSnapshotInput =
   typeof OrchestrationGetThreadDetailSnapshotInput.Type;
@@ -3226,6 +3202,10 @@ export const OrchestrationRpcSchemas = {
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
     output: OrchestrationGetFullThreadDiffResult,
+  },
+  getInlineVisual: {
+    input: OrchestrationGetInlineVisualInput,
+    output: OrchestrationGetInlineVisualResult,
   },
   replayEvents: {
     input: OrchestrationReplayEventsInput,

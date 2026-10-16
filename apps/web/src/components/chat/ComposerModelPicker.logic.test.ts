@@ -8,8 +8,10 @@ import {
   type StarredModel,
 } from "~/lib/starredModels";
 import {
+  buildProviderTabRows,
   buildStarredModelOptionsPatch,
   buildStarredTabRows,
+  composerModelDisplayName,
   modelPickerShortcutRowIndex,
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
@@ -109,6 +111,95 @@ describe("account-scoped starred presets", () => {
   });
 });
 
+describe("OMP picker rows", () => {
+  it("does not reinterpret another provider's opaque role: model id", () => {
+    const customOption = { slug: "role:custom", name: "Private Model", isCustom: true };
+    expect(
+      buildProviderTabRows({
+        provider: "pi",
+        instanceId: "pi_work",
+        options: [customOption],
+        query: "",
+        selectedModel: "role:custom",
+      })[0],
+    ).toMatchObject({
+      provider: "pi",
+      instanceId: "pi_work",
+      model: "role:custom",
+      selectableModel: "role:custom",
+      selected: true,
+    });
+  });
+
+  it("selects the concrete catalog model on its own account without carrying role metadata", () => {
+    const legacyOption = {
+      slug: "upstream/catalog-model",
+      name: "Catalog Model",
+      upstreamProviderId: "upstream",
+      upstreamProviderName: "Upstream",
+      role: { name: "smol", model: "different/model", thinkingLevel: "high" },
+    };
+    expect(
+      buildProviderTabRows({
+        provider: "omp",
+        instanceId: "omp_work",
+        options: [legacyOption],
+        query: "",
+        selectedModel: "role:smol",
+      }),
+    ).toEqual([
+      {
+        key: "omp_work:upstream/catalog-model",
+        provider: "omp",
+        instanceId: "omp_work",
+        model: "upstream/catalog-model",
+        selectableModel: "upstream/catalog-model",
+        name: "Catalog Model",
+        detail: null,
+        selected: false,
+        groupLabel: "Upstream",
+        preset: null,
+      },
+    ]);
+  });
+
+  it("marks stale starred role keys unavailable rather than ranking a replacement", () => {
+    const role = {
+      ...CODEX_HIGH_FAST,
+      provider: "omp" as const,
+      model: "role:smol",
+      instanceId: "omp_work",
+    };
+    const customPlaceholder = { slug: "role:smol", name: "Role Smol", isCustom: true };
+    const rows = buildStarredTabRows({
+      starredModels: [role],
+      modelOptionsFor: () => [
+        customPlaceholder,
+        { slug: "upstream/catalog-model", name: "Catalog Model" },
+      ],
+      query: "",
+      current: { ...role, instanceId: "omp_work" },
+      effortLevelsFor: () => [],
+    });
+    expect(rows[0]).toMatchObject({
+      provider: "omp",
+      instanceId: "omp_work",
+      model: "role:smol",
+      selectableModel: null,
+      detail: "Unavailable",
+      selected: false,
+    });
+    expect(
+      buildProviderTabRows({
+        provider: "omp",
+        options: [customPlaceholder],
+        query: "",
+        selectedModel: "role:smol",
+      })[0]?.selectableModel,
+    ).toBeNull();
+  });
+});
+
 describe("modelPickerShortcutRowIndex", () => {
   const base = { metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
 
@@ -123,5 +214,20 @@ describe("modelPickerShortcutRowIndex", () => {
     expect(
       modelPickerShortcutRowIndex({ ...base, key: "2", metaKey: true, altKey: true }),
     ).toBeNull();
+  });
+});
+
+describe("composerModelDisplayName", () => {
+  it("drops the family prefix the provider icon already shows", () => {
+    expect(composerModelDisplayName("claudeAgent", "Claude Opus 5")).toBe("Opus 5");
+    expect(composerModelDisplayName("codex", "GPT-6 Astra")).toBe("6 Astra");
+    expect(composerModelDisplayName("codex", "GPT-5.3-Codex")).toBe("5.3-Codex");
+  });
+
+  it("keeps names without the prefix, bare family names, and gateway models", () => {
+    expect(composerModelDisplayName("codex", "codex-mini-latest")).toBe("codex-mini-latest");
+    expect(composerModelDisplayName("claudeAgent", "Claude")).toBe("Claude");
+    expect(composerModelDisplayName("cursor", "Claude 4 Sonnet")).toBe("Claude 4 Sonnet");
+    expect(composerModelDisplayName("opencode", "GPT-5")).toBe("GPT-5");
   });
 });

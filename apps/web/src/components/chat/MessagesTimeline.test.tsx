@@ -193,7 +193,7 @@ describe("MessagesTimeline", () => {
     expect(markup.match(/data-direction-mode="auto-blocks"/g)).toHaveLength(2);
   });
 
-  it("renders the launch header and the live Resumed clock when the provider reuses its turn id", async () => {
+  it("keeps a reply without folded work plain and renders the live Resumed clock when the provider reuses its turn id", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const turnId = TurnId.makeUnsafe("same-turn");
     const launchAt = "2026-03-17T19:12:00.000Z";
@@ -277,10 +277,10 @@ describe("MessagesTimeline", () => {
         }
       />,
     );
-    expect(markup).toContain("Worked 4.0s");
+    expect(markup).not.toContain(TURN_HEADER_MARKER);
     expect(markup).toContain("Resumed: “Delayed echo” finished · ");
     expect(markup).toContain('class="tabular-nums">2s</span>');
-    expect(markup.indexOf("Worked 4.0s")).toBeLessThan(markup.indexOf("Resumed:"));
+    expect(markup.indexOf("Launched.")).toBeLessThan(markup.indexOf("Resumed:"));
     expect(markup.match(/data-turn-header="live"/g)).toHaveLength(1);
   });
 
@@ -780,7 +780,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Compacting context");
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
-    expect(markup).toContain(">Working <");
+    expect(markup).toContain(">Working for <");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
@@ -867,7 +867,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
-    expect(markup).toContain("Worked 1.0s");
+    expect(markup).toContain("Worked for 1.0s");
     expect(markup).not.toContain("data-scroll-anchor-ignore");
     expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
@@ -1050,7 +1050,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Worked ");
+    expect(markup).toContain("Worked for ");
     expect(markup).toContain(">done</p>");
     // Trailing work folds into the terminal reply's collapsed disclosure rather
     // than leaving a detached work row at the end of the transcript.

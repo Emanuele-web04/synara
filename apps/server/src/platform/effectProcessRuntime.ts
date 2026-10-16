@@ -7,7 +7,7 @@ import {
   prepareProcess,
   type ProcessLaunchInput,
 } from "@synara/shared/platformProcess";
-import { Effect } from "effect";
+import { Effect, PlatformError } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { providerProcessPriorityEnabled } from "../providerProcessPriority";
 
@@ -20,9 +20,19 @@ export function spawnProviderProcess(
 ): ReturnType<ChildProcessSpawner.ChildProcessSpawner["Service"]["spawn"]> {
   return Effect.gen(function* () {
     const enabled = yield* providerProcessPriorityEnabled;
-    const prepared = prepareEffectProcessCommand(command, args, {
-      ...options,
-      lowerPriority: enabled,
+    const prepared = yield* Effect.try({
+      try: () =>
+        prepareEffectProcessCommand(command, args, {
+          ...options,
+          lowerPriority: enabled,
+        }),
+      catch: (cause) =>
+        PlatformError.badArgument({
+          module: "ChildProcess",
+          method: "spawn",
+          description: cause instanceof Error ? cause.message : "Invalid process launch arguments.",
+          cause,
+        }),
     });
     const child = yield* spawner.spawn(prepared.command);
     if (

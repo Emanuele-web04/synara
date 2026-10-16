@@ -58,18 +58,22 @@ import {
   type ThreadStatusPill,
 } from "./Sidebar.logic";
 import {
+  activityPriorityStatesEqual,
   buildActivityViewModel,
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
+  excludeActivityPriorityThreads,
   resolveActivitySectionRows,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
+  resolveActivityPriority,
+  resolveActivityPriorityTier,
   resolveActivityScope,
   resolveActivityThreadReadAt,
   splitActivityThreadsByDateBucket,
-  splitRecentActivityThreads,
   type ActivityGroupMode,
+  type ActivityPriorityState,
   type ActivityProjectGroup,
   type ActivityScopeOption,
   type ActivityScopeSelection,
@@ -106,6 +110,7 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
+const EMPTY_THREADS: SidebarThreadSummary[] = [];
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -117,6 +122,7 @@ export function ActivityThreadRow({
   thread,
   project,
   isActive,
+  isOpen = isActive,
   isSettled,
   isPinned,
   hasPendingDraft,
@@ -138,6 +144,7 @@ export function ActivityThreadRow({
   thread: SidebarThreadSummary;
   project: Project | undefined;
   isActive: boolean;
+  isOpen?: boolean;
   isSettled: boolean;
   isPinned: boolean;
   hasPendingDraft: boolean;
@@ -173,7 +180,7 @@ export function ActivityThreadRow({
   // else — same rule and same glyphs the classic thread/project rows use.
   const trailingStatus = resolveThreadStatusTrailingIndicator({
     status,
-    isActive,
+    isActive: isOpen,
     slotOccupied: Boolean(threadJumpLabel),
   });
   // Rename/context-menu gestures live on the row wrapper (not the title button) so
@@ -273,32 +280,31 @@ export function ActivityThreadRow({
                 aria-hidden
               />
             )}
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
+            {/* The folder outranks the branch: the branch shrinks first (weighted shrink). */}
+            <span className="mr-auto min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
-              {isWorktree ? (
-                <span className="inline-flex size-5 shrink-0 items-center justify-center">
-                  <WorktreeIcon
-                    className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                    aria-label="Worktree"
-                  />
-                </span>
-              ) : null}
-              {pr ? (
-                <PrStateChip
-                  pr={pr}
-                  className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
-                  onOpen={(event) => onOpenPullRequest(event, pr)}
+            {isWorktree ? (
+              <span className="inline-flex size-5 shrink-0 items-center justify-center">
+                <WorktreeIcon
+                  className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                  aria-label="Worktree"
                 />
-              ) : null}
-              {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
-                  <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
-                  <span className="max-w-36 truncate">{branch}</span>
-                </span>
-              ) : null}
-            </span>
+              </span>
+            ) : null}
+            {pr ? (
+              <PrStateChip
+                pr={pr}
+                className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
+                onOpen={(event) => onOpenPullRequest(event, pr)}
+              />
+            ) : null}
+            {branch ? (
+              <span className="flex min-w-0 shrink-[100] items-center gap-1 text-ui-sm text-muted-foreground/70">
+                <GitBranchIcon className={sidebarGlyphClass("meta", "shrink-0")} aria-hidden />
+                <span className="min-w-0 max-w-36 truncate">{branch}</span>
+              </span>
+            ) : null}
           </span>
           {thread.snoozedUntil != null ? (
             <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
@@ -502,18 +508,22 @@ function ActivityScopeMenu({
 
 /**
  * Header filter control: picks how the feed groups its sections (by time or by
- * project) and hosts "Mark all as read" below that choice.
+ * project) and hosts "Mark all as read" and "Clear read from Priority" below that choice.
  */
 function ActivityFilterMenu({
   groupMode,
   onChangeGroupMode,
   markAllReadDisabled,
   onMarkAllRead,
+  clearReadPriorityDisabled,
+  onClearReadPriority,
 }: {
   groupMode: ActivityGroupMode;
   onChangeGroupMode: (mode: ActivityGroupMode) => void;
   markAllReadDisabled: boolean;
   onMarkAllRead: () => void;
+  clearReadPriorityDisabled: boolean;
+  onClearReadPriority: () => void;
 }) {
   return (
     <Menu>
@@ -549,6 +559,13 @@ function ActivityFilterMenu({
         >
           Mark all as read
         </MenuItem>
+        <MenuItem
+          className="min-h-7 py-1 sm:text-ui leading-snug"
+          disabled={clearReadPriorityDisabled}
+          onClick={onClearReadPriority}
+        >
+          Clear read from Priority
+        </MenuItem>
       </ComposerPickerMenuPopup>
     </Menu>
   );
@@ -558,6 +575,7 @@ export function SidebarActivityView({
   threads,
   projectById,
   activeThreadId,
+  visualActiveThreadId = activeThreadId,
   pinnedThreadIdSet,
   settledOverrideByThreadId,
   threadsHydrated,
@@ -585,6 +603,8 @@ export function SidebarActivityView({
   threads: readonly SidebarThreadSummary[];
   projectById: ReadonlyMap<ProjectId, Project>;
   activeThreadId: ThreadId | null;
+  /** A hidden child can select its root row while the real chat still owns unread/draft state. */
+  visualActiveThreadId?: ThreadId | null;
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
@@ -633,6 +653,13 @@ export function SidebarActivityView({
   const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   );
+  // Priority's order lives as long as this view. "Clear read" bumps the generation for a
+  // fresh sort; so do scope and grouping changes, through the key.
+  const [priorityGeneration, setPriorityGeneration] = useState(0);
+  const [storedPriority, setStoredPriority] = useState<{
+    key: string;
+    state: ActivityPriorityState;
+  } | null>(null);
 
   const draftThreadIdSet = useThreadIdsWithPendingDraft();
   const isRealProject = useCallback(
@@ -644,9 +671,18 @@ export function SidebarActivityView({
   // of re-running six passes and four sorts over every activity thread per render.
   // Scope options and the unread sweep intentionally ignore the active scope:
   // the menu must keep offering every project, and "Mark all as read" means all.
+  const preparingThreadIdSet = useMemo(
+    () =>
+      new Set(
+        threads
+          .filter((thread) => resolveThreadStatus(thread)?.label === "Preparing worktree")
+          .map((thread) => thread.id),
+      ),
+    [threads, resolveThreadStatus],
+  );
   const scopeOptions = useMemo(
-    () => collectActivityScopeOptions(threads, isRealProject),
-    [isRealProject, threads],
+    () => collectActivityScopeOptions(threads, isRealProject, preparingThreadIdSet),
+    [isRealProject, threads, preparingThreadIdSet],
   );
   const unreadThreads = useMemo(() => collectUnreadActivityThreads(threads), [threads]);
 
@@ -666,6 +702,7 @@ export function SidebarActivityView({
         threads,
         pinnedThreadIdSet,
         draftThreadIdSet,
+        preparingThreadIdSet,
         activeThreadId,
         settledOverrideByThreadId,
         projectFilterIds,
@@ -673,21 +710,61 @@ export function SidebarActivityView({
     [
       activeThreadId,
       draftThreadIdSet,
+      preparingThreadIdSet,
       pinnedThreadIdSet,
       projectFilterIds,
       settledOverrideByThreadId,
       threads,
     ],
   );
-  const scopedPinnedThreads = model.pinned;
-  const draftThreads = model.drafts;
+  const priorityKey = `${groupMode}:${activeScope ?? "all"}:${priorityGeneration}`;
+  const previousPriority = storedPriority?.key === priorityKey ? storedPriority.state : null;
+  // Priority leads the time-grouped feed; the project grouping keeps its own blocks.
+  const priority = useMemo(
+    () =>
+      groupMode === "time"
+        ? resolveActivityPriority({
+            candidates: [
+              ...model.pinned.filter(
+                (thread) => !isThreadSettledForActivity(thread, settledOverrideByThreadId),
+              ),
+              ...model.drafts,
+              ...model.active,
+            ],
+            resolveTier: (thread) => resolveActivityPriorityTier(resolveThreadStatus(thread)),
+            previous: previousPriority,
+            nowMs: Date.now(),
+          })
+        : null,
+    [groupMode, model, previousPriority, resolveThreadStatus, settledOverrideByThreadId],
+  );
+  useEffect(() => {
+    // Before hydration every thread is missing; storing that would sort later rows as
+    // late arrivals instead of ranking them.
+    if (!threadsHydrated) return;
+    if (priority === null) {
+      // Project grouping ends the held order; returning to Time starts a fresh sort.
+      setStoredPriority(null);
+      return;
+    }
+    if (activityPriorityStatesEqual(previousPriority, priority.state)) return;
+    setStoredPriority({ key: priorityKey, state: priority.state });
+  }, [previousPriority, priority, priorityKey, threadsHydrated]);
+  const priorityThreads = priority?.threads ?? EMPTY_THREADS;
+  const {
+    pinned: scopedPinnedThreads,
+    drafts: draftThreads,
+    active: remainingActiveThreads,
+  } = useMemo(
+    () => excludeActivityPriorityThreads(model, priorityThreads),
+    [model, priorityThreads],
+  );
+  const clearReadPriorityDisabled = !priorityThreads.some(
+    (thread) => resolveActivityPriorityTier(resolveThreadStatus(thread)) === null,
+  );
   // Coarse clock so the date bucketing memo stays effective across renders that
   // happen within the same minute; buckets are day-granular anyway.
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
-  const { recent: recentThreads, rest: remainingActiveThreads } = useMemo(
-    () => splitRecentActivityThreads(model.active, { nowMs }),
-    [model.active, nowMs],
-  );
   const dateBuckets = useMemo(
     () => splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs),
     [nowMs, remainingActiveThreads],
@@ -726,7 +803,7 @@ export function SidebarActivityView({
       threads: resolveActivitySectionRows(group.threads, {
         open: true,
         previewLimit: paging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }).visible,
     };
   });
@@ -735,27 +812,27 @@ export function SidebarActivityView({
       resolveActivitySectionRows(scopedPinnedThreads, {
         open: pinnedOpen,
         previewLimit: scopedPinnedThreads.length,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, pinnedOpen, scopedPinnedThreads],
+    [visualActiveThreadId, pinnedOpen, scopedPinnedThreads],
   );
   const earlierRows = useMemo(
     () =>
       resolveActivitySectionRows(dateBuckets.earlier, {
         open: earlierOpen,
         previewLimit: earlierPaging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
+    [visualActiveThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
   );
   const settledRows = useMemo(
     () =>
       resolveActivitySectionRows(model.settled, {
         open: settledOpen,
         previewLimit: settledPaging.previewLimit,
-        activeThreadId,
+        activeThreadId: visualActiveThreadId,
       }),
-    [activeThreadId, model.settled, settledOpen, settledPaging.previewLimit],
+    [visualActiveThreadId, model.settled, settledOpen, settledPaging.previewLimit],
   );
   // The open thread stays on screen even when its section is collapsed.
   const revealedThreads = useMemo(
@@ -772,8 +849,8 @@ export function SidebarActivityView({
         groupMode,
         pinnedOpen,
         pinned: scopedPinnedThreads,
+        priority: priorityThreads,
         drafts: draftThreads,
-        recent: recentThreads,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
@@ -794,7 +871,7 @@ export function SidebarActivityView({
       groupMode,
       pagedProjectGroups,
       pinnedOpen,
-      recentThreads,
+      priorityThreads,
       revealedThreads,
       scopedPinnedThreads,
       settledOpen,
@@ -806,8 +883,8 @@ export function SidebarActivityView({
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const lastActiveRevealKeyRef = useRef<string | null>(null);
   const activeRevealKey =
-    activeThreadId !== null && visibleThreadIds.includes(activeThreadId)
-      ? `${activeThreadId}:${groupMode}:${activeScope ?? "all"}`
+    visualActiveThreadId !== null && visibleThreadIds.includes(visualActiveThreadId)
+      ? `${visualActiveThreadId}:${groupMode}:${activeScope ?? "all"}`
       : null;
   useEffect(() => {
     if (activeRevealKey === null) {
@@ -861,7 +938,8 @@ export function SidebarActivityView({
       key={thread.id}
       thread={thread}
       project={projectById.get(thread.projectId)}
-      isActive={activeThreadId === thread.id}
+      isActive={visualActiveThreadId === thread.id}
+      isOpen={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
       hasPendingDraft={draftThreadIdSet.has(thread.id)}
@@ -893,7 +971,7 @@ export function SidebarActivityView({
       onRenamePointerUp={onThreadRenamePointerUp}
       onContextMenu={onThreadContextMenu}
       renderHoverCard={(anchorId) => renderThreadHoverCard(thread, anchorId)}
-      {...(registerActiveRow && activeThreadId === thread.id ? { rowRef: activeRowRef } : {})}
+      {...(registerActiveRow && visualActiveThreadId === thread.id ? { rowRef: activeRowRef } : {})}
     />
   );
   const renderActiveRow = (thread: SidebarThreadSummary) =>
@@ -905,9 +983,9 @@ export function SidebarActivityView({
   const isEmpty =
     model.active.length === 0 &&
     model.settled.length === 0 &&
-    draftThreads.length === 0 &&
+    model.drafts.length === 0 &&
     model.snoozed.length === 0 &&
-    scopedPinnedThreads.length === 0;
+    model.pinned.length === 0;
   const emptyLabel =
     activeScope === null
       ? "No activity yet"
@@ -964,6 +1042,8 @@ export function SidebarActivityView({
           onChangeGroupMode={setGroupMode}
           markAllReadDisabled={unreadThreads.length === 0}
           onMarkAllRead={markAllRead}
+          clearReadPriorityDisabled={clearReadPriorityDisabled}
+          onClearReadPriority={() => setPriorityGeneration((generation) => generation + 1)}
         />
       </div>
 
@@ -1014,16 +1094,16 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
+          {priorityThreads.length > 0 ? (
+            <div>
+              <SidebarSectionLabel label="Priority" />
+              <div className="flex flex-col gap-0.5">{priorityThreads.map(renderActiveRow)}</div>
+            </div>
+          ) : null}
           {draftThreads.length > 0 ? (
             <div>
               <SidebarSectionLabel label="Drafts" />
               <div className="flex flex-col gap-0.5">{draftThreads.map(renderActiveRow)}</div>
-            </div>
-          ) : null}
-          {recentThreads.length > 0 ? (
-            <div>
-              <SidebarSectionLabel label="Recent" />
-              <div className="flex flex-col gap-0.5">{recentThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (

@@ -30,6 +30,7 @@ import { useStarredModels } from "../../hooks/useStarredModels";
 import type { ProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import {
   buildNextProviderOptions,
+  getOmpModelSelectionIssue,
   type ProviderModelOption,
   type ProviderOptions,
 } from "../../providerModelOptions";
@@ -49,6 +50,7 @@ import {
   buildStarredTabRows,
   type ComposerModelPickerRow as PickerRow,
   type ComposerModelPickerTab,
+  composerModelDisplayName,
   MODEL_PICKER_POPUP_ATTRIBUTE,
   MODEL_PICKER_SHORTCUT_ROW_LIMIT,
   modelPickerShortcutRowIndex,
@@ -292,6 +294,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
+  const modelSelectionIssue =
+    activeProvider === "omp"
+      ? getOmpModelSelectionIssue(
+          props.model,
+          props.modelOptionsByProviderInstance?.[activeInstanceId] ??
+            props.modelOptionsByProvider.omp,
+        )
+      : null;
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
     props.model,
@@ -441,16 +451,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const selectRow = (row: PickerRow) => {
     if (props.disabled) return;
-    // OMP role rows resolve to a concrete model + options, committed through the
-    // same patch path as a starred preset.
-    if (row.role) {
-      commitRow(
-        row,
-        row.role.model as ModelSlug,
-        row.role.thinkingLevel ? { thinkingLevel: row.role.thinkingLevel } : {},
-      );
-      return;
-    }
     const model = row.selectableModel;
     if (model === null) return;
 
@@ -538,7 +538,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         // The default account is implied; only another one is worth the room.
         accountName={activeProviderTab?.dotted ? activeProviderTab.name : null}
         accountAccentColor={activeProviderTab?.accentColor}
-        modelLabel={modelLabel}
+        modelLabel={composerModelDisplayName(activeProvider, modelLabel)}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
@@ -607,6 +607,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
+            {modelSelectionIssue ? (
+              <div role="status" className="px-2 py-1.5 text-ui leading-snug text-destructive">
+                {modelSelectionIssue}
+              </div>
+            ) : null}
             {setupMessage !== null ? (
               <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
                 {openProviderTab ? (

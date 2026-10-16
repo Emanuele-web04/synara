@@ -6,6 +6,7 @@
 
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import {
+  isSettingsSectionAvailable,
   settingRowAnchorId,
   SETTINGS_NAV_ITEMS,
   type SettingsSectionId,
@@ -86,6 +87,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
   },
   {
+    id: "general:thread-tabs",
+    section: "general",
+    title: "Thread tabs",
+    keywords:
+      "Show open threads as tabs in the chat header. Turn off to show only the current thread's title. horizontal tabs strip header chat title",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",
@@ -104,6 +112,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Thread order",
     keywords:
       "Controls how threads are arranged inside each project in the main sidebar. sort updated created",
+  },
+  {
+    id: "general:thread-attention-first",
+    section: "general",
+    title: "Working and unread on top",
+    keywords:
+      "With Recently active order, move working and unread threads above the rest. sort unread jump reorder pin top hold",
   },
   {
     id: "general:chats-section",
@@ -191,6 +206,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
 
   // ── Appearance ───────────────────────────────────────────────────────────────
+  {
+    id: "appearance:ascii-background",
+    section: "appearance",
+    title: "ASCII background",
+    keywords: "animated empty chat landing background field waves ripples reduced motion disable",
+  },
   {
     id: "appearance:theme",
     section: "appearance",
@@ -441,6 +462,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
   },
   {
+    id: "behavior:diff-layout",
+    section: "behavior",
+    title: "Diff layout",
+    keywords: "Default stacked split review panel side by side unified layout per thread",
+  },
+  {
     id: "behavior:diff-line-wrapping",
     section: "behavior",
     title: "Diff line wrapping",
@@ -606,6 +633,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Recovery tools",
     keywords:
       "Rebuild local project indexes without clearing existing chats when the local state gets out of sync.",
+  },
+  {
+    id: "connectors:catalog",
+    section: "connectors",
+    title: "Connectors",
+    keywords:
+      "Connect Supabase Cloudflare Linear Notion Sentry Stripe Neon Atlassian PostHog remote MCP server sign in OAuth custom URL apps tools",
+    target: null,
+    applies: () => isSettingsSectionAvailable("connectors"),
   },
   {
     id: "integrations:external-mcp",

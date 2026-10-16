@@ -23,6 +23,12 @@ import {
 } from "./composerPickerStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 
+// Effort and context window ("High", "1M") share one muted tone after the model name.
+const TRIGGER_TRAIT_LABEL_CLASS_NAME = cn(
+  "shrink-0 dark:text-muted-foreground/45",
+  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+);
+
 // Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
 // degradation steps: the text moves to title/sr-only so assistive tech keeps it.
 export function ComposerModelMenuTrigger(props: {
@@ -149,24 +155,11 @@ export function ComposerModelMenuTrigger(props: {
                 <span className="sr-only">{label.statusLabel}</span>
               </>
             ) : (
-              <span
-                className={cn(
-                  "shrink-0 dark:text-muted-foreground/45",
-                  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
-                )}
-              >
-                {label.statusLabel}
-              </span>
+              <span className={TRIGGER_TRAIT_LABEL_CLASS_NAME}>{label.statusLabel}</span>
             )
           ) : null}
           {label.contextWindowLabel ? (
-            <span
-              className={
-                props.hideStatusLabel
-                  ? "sr-only"
-                  : cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)
-              }
-            >
+            <span className={props.hideStatusLabel ? "sr-only" : TRIGGER_TRAIT_LABEL_CLASS_NAME}>
               {label.contextWindowLabel}
             </span>
           ) : null}
