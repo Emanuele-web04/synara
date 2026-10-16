@@ -11,22 +11,24 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           ref: 75c55fa5250b8bf0646c53e350d73d95c38d0cb5
           persist-credentials: false
-      - name: Archive pinned source without credentials or local state
+      - uses: ./.github/actions/setup-workspace
+      - name: Prepare pinned browser without credentials or local state
         run: |
-          mkdir -p "$RUNNER_TEMP/notion-ux-source"
-          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/notion-ux-source/source.tar.gz"
-          git rev-parse HEAD > "$RUNNER_TEMP/notion-ux-source/source-commit.txt"
-          sha256sum "$RUNNER_TEMP/notion-ux-source/source.tar.gz" > "$RUNNER_TEMP/notion-ux-source/source.sha256"
+          cd apps/web
+          bunx playwright install chromium
+          mkdir -p "$RUNNER_TEMP/notion-ux-browser"
+          tar -czf "$RUNNER_TEMP/notion-ux-browser/chromium.tar.gz" -C "$HOME/.cache/ms-playwright" chromium-1234
+          sha256sum "$RUNNER_TEMP/notion-ux-browser/chromium.tar.gz" > "$RUNNER_TEMP/notion-ux-browser/chromium.sha256"
       - uses: actions/upload-artifact@v7
         with:
-          name: notion-ux-source
-          path: ${{ runner.temp }}/notion-ux-source
+          name: notion-ux-browser
+          path: ${{ runner.temp }}/notion-ux-browser
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
