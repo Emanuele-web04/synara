@@ -19,18 +19,16 @@ const metadata = {
 
 describe("native marketplace discovery", () => {
   it("uses bounded server-side category, ordering and page controls", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        Response.json({
-          offset: 24,
-          totalSize: 73,
-          extensions: Array.from({ length: 24 }, (_, index) => ({
-            ...summary,
-            name: `tool-${index}`,
-          })),
-        }),
-      );
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        offset: 24,
+        totalSize: 73,
+        extensions: Array.from({ length: 24 }, (_, index) => ({
+          ...summary,
+          name: `tool-${index}`,
+        })),
+      }),
+    );
     const result = await new OpenVsxRegistry(request).catalog({
       query: "format & lint",
       category: "Formatters",
