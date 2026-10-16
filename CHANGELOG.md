@@ -10,6 +10,8 @@
 
 - Fresh Remote installations use the working hosted account service automatically. The previous default returned 404 for email and social sign-in; operator launch overrides on our Macs masked the problem. Self-hosted overrides and the issuer of existing saved sessions are preserved.
 
+- Remote offers the configured Google, Apple and email sign-in methods, and profile/usage sync no longer requires operator shell setup. Generic provider support, Stable/Beta gates and explicit profile-sync opt-out are preserved.
+
 ### Verification
 
 - Packaging/configuration tests cover isolated app identities, complete three-platform publication, feed isolation and exact-source artifact checkpoints. Startup qualification removes any inherited account URL override.

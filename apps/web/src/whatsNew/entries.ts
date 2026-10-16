@@ -32,6 +32,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "Remote now reaches its hosted account service automatically, fixing sign-in errors on freshly installed apps. Existing account sessions and local chats are preserved.",
       },
       {
+        id: "ready-to-sign-in",
+        title: "Your account without extra setup",
+        description:
+          "Use Google, Apple or email to sign in. Profile and usage sync work in Remote without shell configuration; product analytics remain a separate opt-in.",
+      },
+      {
         id: "windows-linux-remote",
         title: "Remote for Windows and Linux",
         description:
