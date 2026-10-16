@@ -71,6 +71,30 @@ describe("active thread action shortcuts", () => {
       }
     });
   }
+
+  it("resolves the next-needing-attention chord apart from Archive, even as Option+A types å", () => {
+    for (const platform of ["MacIntel", "Win32", "Linux"]) {
+      const isMac = platform === "MacIntel";
+      const press = event({
+        key: isMac ? "å" : "a",
+        code: "KeyA",
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        altKey: true,
+      });
+      assert.equal(resolveShortcutCommand(press, [], { platform }), "chat.attention.next");
+      assert.equal(
+        resolveShortcutCommand({ ...press, shiftKey: true, key: isMac ? "Å" : "A" }, [], {
+          platform,
+        }),
+        "thread.archive",
+      );
+      assert.equal(
+        resolveShortcutCommand(press, [], { platform, context: { terminalFocus: true } }),
+        isMac ? "chat.attention.next" : null,
+      );
+    }
+  });
 });
 
 describe("layout-aware matching", () => {

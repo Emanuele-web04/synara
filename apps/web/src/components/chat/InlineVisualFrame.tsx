@@ -45,7 +45,7 @@ export function InlineVisualFrame(props: {
   ) : (
     <InlineVisualNotice
       title={props.visual.title}
-      message="HTML visuals are available in Synara Beta desktop. Use native components in the browser."
+      message="HTML visuals are available in Synara desktop. Use native components in the browser."
     />
   );
 }

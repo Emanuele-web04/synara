@@ -102,6 +102,7 @@ import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
+  type OrchestrationThreadWithoutActivities,
   type ProjectionGeneratedImageActivityRecord,
 } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -300,18 +301,20 @@ type NativeChildSlotState = {
 };
 
 /**
- * Promote a cheap thread *shell* into a full {@link OrchestrationThread} by
- * filling the heavy arrays with empties. Only valid for events that do not read
- * those arrays (see {@link eventNeedsHeavyThreadDetail}); the empties are never
- * observed on those code paths.
+ * Promote a cheap thread *shell* into a thread detail by filling the heavy
+ * arrays with empties. Only valid for events that do not read those arrays (see
+ * {@link eventNeedsHeavyThreadDetail}); the empties are never observed on those
+ * code paths. Ingestion never reads the activity timeline, so neither shape
+ * carries it and the compiler rejects any new read of `thread.activities`.
  */
-function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationThread {
+function threadDetailFromShell(
+  shell: OrchestrationThreadShell,
+): OrchestrationThreadWithoutActivities {
   return {
     ...shell,
     deletedAt: null,
     messages: [],
     proposedPlans: [],
-    activities: [],
     checkpoints: [],
   };
 }
@@ -349,11 +352,12 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   }
   // Session exits and runtime errors flush the turn's pending generated images
   // into the terminal assistant message, which requires thread.messages.
+  // `turn.diff.updated` only needs checkpoints, which its handler reads through
+  // the narrow checkpoint context (Codex emits one per patch).
   return (
     event.type === "turn.proposed.completed" ||
     event.type === "turn.completed" ||
     event.type === "turn.aborted" ||
-    event.type === "turn.diff.updated" ||
     event.type === "session.exited" ||
     event.type === "runtime.error"
   );
@@ -1247,12 +1251,14 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Heavy events read messages, plans and checkpoints, never the activity
+  // timeline, so they skip its query (the costliest part of a detail read).
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
+  ): Effect.fn.Return<OrchestrationThreadWithoutActivities | undefined> {
     return Option.getOrUndefined(
       yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
+        .getThreadDetailWithoutActivitiesById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
@@ -1262,7 +1268,7 @@ const make = Effect.gen(function* () {
   // empty arrays. See eventNeedsHeavyThreadDetail.
   const getThreadShellDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
+  ): Effect.fn.Return<OrchestrationThreadWithoutActivities | undefined> {
     const shell = Option.getOrUndefined(
       yield* projectionSnapshotQuery
         .getThreadShellById(threadId)
@@ -1281,8 +1287,14 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Reads only shell fields (project id and workspace fields), so a shell lookup
+  // replaces the full detail read this used to pay on every diff event.
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* getThreadDetail(threadId);
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
     if (!thread) {
       return false;
     }
@@ -1562,7 +1574,7 @@ const make = Effect.gen(function* () {
 
   const resolveAssistantCompletionMessageId = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
@@ -1960,7 +1972,7 @@ const make = Effect.gen(function* () {
    */
   const flushPendingGeneratedImagesForTurn = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     turnId: TurnId;
     createdAt: string;
   }) =>
@@ -2022,7 +2034,7 @@ const make = Effect.gen(function* () {
    */
   const materializeStudioGeneratedImage = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     imagePath: string;
     turnId: TurnId | undefined;
     createdAt: string;
@@ -2366,7 +2378,7 @@ const make = Effect.gen(function* () {
           // Mirror the parent load: only this event's heavy-detail handlers read the
           // child's message/plan/checkpoint arrays, so otherwise use the cheap shell.
           const existingThread = needsHeavyThreadDetail
-            ? yield* projectionSnapshotQuery.getThreadDetailById(childThreadId)
+            ? yield* projectionSnapshotQuery.getThreadDetailWithoutActivitiesById(childThreadId)
             : Option.map(
                 yield* projectionSnapshotQuery.getThreadShellById(childThreadId),
                 threadDetailFromShell,
@@ -2527,7 +2539,6 @@ const make = Effect.gen(function* () {
                 latestTurn: null,
                 messages: [],
                 proposedPlans: [],
-                activities: [],
                 checkpoints: [],
                 session: null,
                 createdAt: now,
@@ -3525,8 +3536,19 @@ const make = Effect.gen(function* () {
 
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
-        if (turnId && (yield* isGitRepoForThread(thread.id))) {
-          const existingCheckpoint = thread.checkpoints.find((c) => c.turnId === turnId);
+        // This event loads only the thread shell (see eventNeedsHeavyThreadDetail):
+        // read the checkpoints through the narrow context query, which selects the
+        // same checkpoint rows as the full detail. A thread that cannot be read
+        // any more is skipped, as it was when the full detail came back empty.
+        const checkpointContext =
+          turnId && (yield* isGitRepoForThread(thread.id))
+            ? yield* projectionSnapshotQuery
+                .getThreadCheckpointContext(thread.id)
+                .pipe(Effect.catch(() => Effect.succeed(Option.none())))
+            : Option.none();
+        if (turnId && Option.isSome(checkpointContext)) {
+          const checkpoints = checkpointContext.value.checkpoints;
+          const existingCheckpoint = checkpoints.find((c) => c.turnId === turnId);
           const placeholderKey = providerTurnKey(thread.id, turnId);
           const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(
             placeholderKey,
@@ -3546,7 +3568,7 @@ const make = Effect.gen(function* () {
           } else {
             const canParseLiveDiffPatch = yield* supportsLiveTurnDiffPatch(event.provider);
             const livePlaceholder = trackedPlaceholder ?? existingProviderPlaceholder;
-            const maxTurnCount = thread.checkpoints.reduce(
+            const maxTurnCount = checkpoints.reduce(
               (max, c) => Math.max(max, c.checkpointTurnCount),
               0,
             );

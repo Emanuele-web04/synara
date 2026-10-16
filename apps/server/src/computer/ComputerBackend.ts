@@ -69,6 +69,12 @@ export const MAX_COMPUTER_CAPTURE_MAX_DIMENSION = 16_384;
  */
 export const MAX_COMPUTER_CLIPBOARD_BYTES = 1024 * 1024;
 
+/** Files are canonicalized inside the caller's workspace by the tool gateway. */
+export type ComputerClipboardPayload =
+  | { readonly text: string }
+  | { readonly imagePath: string }
+  | { readonly filePath: string };
+
 /**
  * The id every real desktop backend reports for the one computer it drives.
  *
@@ -737,6 +743,14 @@ export interface ComputerBackend {
   readClipboard?(): Promise<string>;
   /** Writes the same shared system clipboard `readClipboard` reads. */
   writeClipboard?(text: string): Promise<void>;
+  /**
+   * Preserve all clipboard representations and write paste content with native
+   * change tracking to detect competing writes.
+   * The opaque restore closure never exposes the user's contents to the model.
+   * It must not overwrite a newer human clipboard write; false reports that the
+   * snapshot was not restored. Unsupported preservation refuses before writing.
+   */
+  prepareClipboardPaste?(payload: ComputerClipboardPayload): Promise<() => Promise<boolean>>;
   setValue(
     target: ComputerResolvedTarget,
     value: string,

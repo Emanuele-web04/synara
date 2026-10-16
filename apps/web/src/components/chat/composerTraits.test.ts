@@ -237,3 +237,36 @@ describe("resolveComposerEffortLadderIndex", () => {
     );
   });
 });
+
+describe("CLI-discovered Claude effort", () => {
+  it("uses only native levels and rejects the synthetic default from a cached catalog", () => {
+    const selection = getComposerTraitSelection(
+      "claudeAgent",
+      "runtime-fixture-model",
+      "",
+      { effort: "max" },
+      {
+        slug: "runtime-fixture-model",
+        name: "Runtime fixture",
+        supportsThinkingToggle: false,
+        supportedReasoningEfforts: [
+          { value: "default", label: "Default" },
+          { value: "low" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "default",
+      },
+    );
+    expect(selection.effortLevels.map((level) => level.value)).toEqual(["low", "max"]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("max");
+    expect(
+      planComposerEffortChange({
+        provider: "claudeAgent",
+        selection,
+        prompt: "",
+        value: "default",
+      }),
+    ).toBeNull();
+  });
+});

@@ -31,7 +31,6 @@ import {
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
-import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ServerSettingsService } from "./serverSettings";
 
 const KEEP_AWAKE_ARGS = ["-dims", "-w", String(process.pid)] as const;
@@ -138,7 +137,6 @@ function sameState(a: ServerKeepAwakeState, b: ServerKeepAwakeState): boolean {
 export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
   const serverSettings = yield* ServerSettingsService;
   const orchestrationEngine = yield* OrchestrationEngineService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   const stateRef = yield* Ref.make<ServerKeepAwakeState>({
     available: false,
@@ -265,16 +263,12 @@ export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
     yield* publish({ available, mode: initialMode });
 
     // Register the domain-event subscriber before seeding so no session
-    // transition can slip between the snapshot and the live stream.
+    // transition can slip between the seed and the live stream. The engine's
+    // in-memory command model carries the same thread rows and projected
+    // sessions as a full projection snapshot, without reading every thread's
+    // messages and activities from SQLite at startup.
     const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
-    const seeded = yield* projectionSnapshotQuery.getSnapshot().pipe(
-      Effect.map(seedActiveThreads),
-      Effect.catch((error) =>
-        Effect.logWarning("keep-awake could not seed active turns; starting empty", {
-          detail: String(error),
-        }).pipe(Effect.as<ReadonlySet<string>>(new Set())),
-      ),
-    );
+    const seeded = seedActiveThreads(yield* orchestrationEngine.getReadModel());
     yield* Ref.set(activeThreadsRef, seeded);
 
     yield* Effect.addFinalizer(() =>

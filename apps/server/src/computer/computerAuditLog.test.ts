@@ -44,11 +44,14 @@ describe("summarizeComputerAuditArgs", () => {
       value: "set_value payload",
       arguments: ["--password=s3cret"],
       files: ["/tmp/a", "/tmp/b"],
+      image_path: "/workspace/private-image.png",
+      file_path: "/workspace/private-document.pdf",
       label: "OK",
     });
     expect(JSON.stringify(summary)).not.toContain("s3cret");
     expect(JSON.stringify(summary)).not.toContain("token");
     expect(JSON.stringify(summary)).not.toContain("/tmp/a");
+    expect(JSON.stringify(summary)).not.toContain("/workspace/");
     expect(summary.contents).toEqual({ chars: 30 });
     expect(summary.value).toEqual({ chars: 17 });
     expect(summary.arguments).toEqual({ items: 1 });

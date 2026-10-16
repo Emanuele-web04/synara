@@ -4,6 +4,8 @@ import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsAutoRuntimeMode,
+  RUNTIME_MODE_PRESENTATION,
+  runtimeModePresentation,
 } from "./runtimeMode";
 
 describe("runtime mode provider support", () => {
@@ -76,5 +78,26 @@ describe("runtime mode provider support", () => {
         },
       ),
     ).toBe(false);
+  });
+});
+
+describe("runtimeModePresentation", () => {
+  it("describes each mode with the provider's own mechanism for Claude and Codex", () => {
+    expect(runtimeModePresentation("auto", "claudeAgent").description).toContain("classifier");
+    expect(runtimeModePresentation("approval-required", "codex").description).toContain(
+      "Read-only sandbox",
+    );
+    expect(runtimeModePresentation("auto", "codex").label).toBe(
+      RUNTIME_MODE_PRESENTATION.auto.label,
+    );
+  });
+
+  it("keeps the generic wording for other providers", () => {
+    expect(runtimeModePresentation("full-access", "cursor")).toEqual(
+      RUNTIME_MODE_PRESENTATION["full-access"],
+    );
+    expect(runtimeModePresentation("approval-required", undefined)).toEqual(
+      RUNTIME_MODE_PRESENTATION["approval-required"],
+    );
   });
 });

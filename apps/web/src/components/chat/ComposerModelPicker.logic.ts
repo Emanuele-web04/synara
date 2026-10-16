@@ -27,6 +27,23 @@ type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 export const STARRED_TAB = ":starred";
 export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
+// First-party family prefix each provider's icon already stands for.
+const COMPOSER_MODEL_FAMILY_PREFIX_BY_PROVIDER: Partial<Record<ProviderKind, RegExp>> = {
+  claudeAgent: /^claude\s+(?=\S)/iu,
+  codex: /^gpt-(?=\S)/iu,
+};
+
+/**
+ * Model name as the composer shows it beside its provider icon: the family prefix repeats
+ * the icon, so "Claude Opus 5" reads "Opus 5" and "GPT-5.5" reads "5.5". Gateways (Cursor,
+ * OpenCode, …) keep full names, since their icon names the gateway and not the family.
+ * Display only: search and accessible labels keep the full name.
+ */
+export function composerModelDisplayName(provider: ProviderKind, name: string): string {
+  const prefix = COMPOSER_MODEL_FAMILY_PREFIX_BY_PROVIDER[provider];
+  return prefix ? name.replace(prefix, "") : name;
+}
+
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
 

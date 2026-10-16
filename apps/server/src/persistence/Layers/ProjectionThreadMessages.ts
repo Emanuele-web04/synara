@@ -4,6 +4,7 @@ import {
   selectSegmentEndedAt,
   joinMessageTextChunks,
 } from "../messageTextChunks.ts";
+import { MessageId } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -19,6 +20,7 @@ import {
   type ProjectionThreadMessageDbRow,
 } from "../projectionThreadMessageRow.ts";
 import {
+  GetNewestProjectionThreadMessageIdByTurnInput,
   GetProjectionThreadMessageInput,
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
@@ -31,6 +33,10 @@ import {
 
 const MessageTimestampRowSchema = Schema.Struct({
   messageAt: Schema.String,
+});
+
+const MessageIdRowSchema = Schema.Struct({
+  messageId: MessageId,
 });
 
 const makeProjectionThreadMessageRepository = Effect.gen(function* () {
@@ -169,6 +175,27 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
           AND role = 'user'
+        ORDER BY
+          CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+          sequence DESC,
+          created_at DESC,
+          message_id DESC
+        LIMIT 1
+      `,
+  });
+
+  // Served by idx_projection_thread_messages_turn_activity (thread_id, turn_id).
+  const getNewestProjectionThreadMessageIdByTurnRow = SqlSchema.findOneOption({
+    Request: GetNewestProjectionThreadMessageIdByTurnInput,
+    Result: MessageIdRowSchema,
+    execute: ({ threadId, turnId, role }) =>
+      sql`
+        SELECT
+          message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND role = ${role}
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
           sequence DESC,
@@ -380,6 +407,18 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       ),
     );
 
+  const getNewestIdByThreadTurnRole: ProjectionThreadMessageRepositoryShape["getNewestIdByThreadTurnRole"] =
+    (input) =>
+      getNewestProjectionThreadMessageIdByTurnRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionThreadMessageRepository.getNewestIdByThreadTurnRole:query",
+            "ProjectionThreadMessageRepository.getNewestIdByThreadTurnRole:decodeRow",
+          ),
+        ),
+        Effect.map(Option.map((row) => row.messageId)),
+      );
+
   const getLatestUserMessageAt: ProjectionThreadMessageRepositoryShape["getLatestUserMessageAt"] = (
     input,
   ) =>
@@ -410,6 +449,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   return {
     upsert,
     getByThreadAndMessageId,
+    getNewestIdByThreadTurnRole,
     listByThreadId,
     getLatestUserMessageAt,
     getLatestHumanMessageAt,

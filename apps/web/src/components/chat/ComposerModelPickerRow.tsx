@@ -22,6 +22,7 @@ import {
 } from "../ui/menu";
 import {
   type ComposerModelPickerRow as PickerRow,
+  composerModelDisplayName,
   resolveStarredTraits,
 } from "./ComposerModelPicker.logic";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
@@ -78,6 +79,7 @@ export function ComposerModelPickerRow(props: {
       ? selection.effortLevels
       : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];
+  const displayName = composerModelDisplayName(row.provider, row.name);
   const rowClassName = cn("pe-1", row.selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME);
   const starButton = (
     <ModelStarButton
@@ -103,7 +105,15 @@ export function ComposerModelPickerRow(props: {
         />
       ) : null}
       <span className={cn("truncate", row.detail !== null && "max-w-[62%] shrink-0")}>
-        {row.name}
+        {displayName === row.name ? (
+          row.name
+        ) : (
+          // Assistive tech has no provider icon to lean on, so it keeps the full name.
+          <>
+            <span aria-hidden="true">{displayName}</span>
+            <span className="sr-only">{row.name}</span>
+          </>
+        )}
       </span>
       <span className={cn("min-w-0 flex-1 truncate", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
         {row.detail}

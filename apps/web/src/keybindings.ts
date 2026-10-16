@@ -113,6 +113,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenModChordAllowed,
   },
   {
+    command: "chat.attention.next",
+    shortcut: commandShortcut("a", { altKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
     command: "sidebar.addProject",
     shortcut: commandShortcut("o", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,

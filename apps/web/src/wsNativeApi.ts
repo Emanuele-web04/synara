@@ -21,6 +21,8 @@ import {
   type ExternalMcpIntegration,
   type ExternalMcpRefreshPairingInput,
   type ExternalMcpRevokeIntegrationInput,
+  type McpConnectorConnectInput,
+  type McpConnectorDisconnectInput,
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
@@ -773,6 +775,12 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
+      listMcpConnectors: () => transport.request(WS_METHODS.serverListMcpConnectors),
+      connectMcpConnector: (input: McpConnectorConnectInput) =>
+        transport.request(WS_METHODS.serverConnectMcpConnector, input),
+      disconnectMcpConnector: (input: McpConnectorDisconnectInput) =>
+        transport.request(WS_METHODS.serverDisconnectMcpConnector, input),
+      getMcpConnectorSetup: () => transport.request(WS_METHODS.serverGetMcpConnectorSetup),
       // Claude runs sequential CLI and auth probes, so a refresh can exceed the
       // generic 60-second RPC deadline. Keep this bounded while allowing slow
       // probes to finish; onboarding shows an error if this deadline expires.

@@ -48,6 +48,10 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
+when logging is enabled and do not create conversation activity rows. Actual provider
+errors still appear. Previously stored activity rows are preserved.
+
 Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
 contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
 32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
@@ -197,6 +201,12 @@ For a release newer than Synara's catalog, the picker shows the concrete ID. Age
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
 advertised alias.
 
+Claude effort levels, adaptive-thinking support and fast-mode availability come from the installed
+CLI when it supplies that metadata, including for models newer than Synara’s fallback catalog.
+When effort is unset, Claude Code keeps its own default; Synara offers only the native effort
+levels and validates explicit selections against the session’s catalog. Older CLIs retain fallback behavior for metadata
+fields they omit.
+
 Claude model discovery caches catalogs by the detected CLI version as well as the executable
 path. A detected CLI update refreshes the picker even when the path stays the same, including
 after a restart. Catalog revalidation uses a temporary Claude process because running sessions
@@ -217,6 +227,10 @@ manual retries for at least one minute, and backs off failures. Checks for the v
 priority over queued background catalog loads.
 Failed refreshes retain the last successful catalog. Refreshing does not change the
 selected model or restart running sessions, and availability still comes from the provider runtime.
+Partial or fallback catalogs are retried on demand after a thirty-second cooldown and are never
+persisted or substituted for the last complete catalog. The first upgrade to this cache format
+discards the old catalog snapshot once, then rediscovers models on demand with the same shared
+request and failure limits; accounts, saved models, and sessions are unaffected.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or
@@ -323,8 +337,8 @@ each invocation's status, elapsed time, current step and short result. Their com
 visible after the parent turn ends, including while background children continue working. A running card outside the viewport
 gets a floating chip that brings it back into view. Stop all stays visible on a live header;
 expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
-subagents separately; their rows start collapsed. The sidebar shows the same source-thread
-tree under the open parent, with neutral names and status dots. Child threads link back to
+subagents separately; their rows start collapsed. The sidebar lists top-level threads only;
+child threads are reached from the card, Environment and the Subagents dock. Child threads link back to
 their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.

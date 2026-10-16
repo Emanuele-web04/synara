@@ -650,14 +650,24 @@ test("production MCP controls one persistent Electron page across visibility cha
           expect(layerOrder.backgroundVisible).toBe(false);
           expect(layerOrder.backgroundBounds).toMatchObject({ x: 0, y: 0 });
           const viewport = (await read(
-            "({width:innerWidth,height:innerHeight,scale:devicePixelRatio})",
-          )) as { width: number; height: number; scale: number };
+            "({width:innerWidth,height:innerHeight,contentWidth:document.documentElement.scrollWidth,scale:devicePixelRatio})",
+          )) as { width: number; height: number; contentWidth: number; scale: number };
           expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          const previousFocus = await electronApp.evaluate(({ BrowserWindow, webContents }) => ({
+            windowFocused: BrowserWindow.getAllWindows()[0]!.isFocused(),
+            contentsId: webContents.getFocusedWebContents()?.id ?? null,
+          }));
           await run(
-            'await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
+            'await page.bringToFront(); await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
             3000,
           );
           expect(await read("document.body.dataset.agentClicks")).toBe("1");
+          expect(
+            await electronApp.evaluate(({ BrowserWindow, webContents }) => ({
+              windowFocused: BrowserWindow.getAllWindows()[0]!.isFocused(),
+              contentsId: webContents.getFocusedWebContents()?.id ?? null,
+            })),
+          ).toEqual(previousFocus);
           const proof = await mcp.call("browser_screenshot", {
             kind: "proof",
             fullPage,
@@ -665,7 +675,8 @@ test("production MCP controls one persistent Electron page across visibility cha
           });
           expect(proof.content.some((block) => block.type === "image")).toBe(true);
           expect(proof.structuredContent.image).toMatchObject({
-            width: 1280 * viewport.scale,
+            // Full-page captures exclude a non-overlay system scrollbar.
+            width: (fullPage ? viewport.contentWidth : viewport.width) * viewport.scale,
             height: (fullPage ? 2600 : 800) * viewport.scale,
           });
           const pixels = await electronApp.evaluate(({ nativeImage }, artifactPath) => {
@@ -734,7 +745,7 @@ test("production MCP controls one persistent Electron page across visibility cha
         BrowserWindow.getAllWindows()[0]!.webContents.focus(),
       );
       await run(
-        'await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
+        'await page.bringToFront(); await page.getByLabel("Shared input",{exact:true}).fill("guest-only"); return true;',
       );
       await expect(composer).toHaveValue("HOST_SENTINEL");
       expect(await read('document.querySelector("input").value')).toBe("guest-only");
@@ -845,10 +856,142 @@ type FocusFixtureGlobals = typeof globalThis & {
   __synaraVisibleBrowserE2E: {
     browserManager: DesktopBrowserManager;
     threadId: ThreadId;
+    setPanelRevealEnabled(enabled: boolean): void;
     setPreviewEnabled(enabled: boolean): void;
     setSurface(surface: "native" | "renderer"): void;
   };
 };
+
+test("preserves composer keyboard ownership while hovering two background browsers", async () => {
+  const fixture = await launchVisibleBrowserFixture();
+  const { electronApp, site, pipePath, capability, threadId, workspaceRoot } = fixture;
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.locator("html")).toHaveAttribute("data-shell-ready", "true");
+    const hostSession = await page.context().newCDPSession(page);
+    await hostSession.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+    await electronApp.evaluate(() => {
+      (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E.setPanelRevealEnabled(false);
+    });
+    const mcp = createBrowserMcpHarness({ pipePath, capability, threadId, workspaceRoot });
+    await mcp.initialize();
+    const tabs: string[] = [];
+    const run = (tabId: string, code: string) =>
+      mcp.call("browser_run", { tabId, code, timeoutMs: 10_000, idempotencyKey: key() });
+    for (let index = 0; index < 2; index += 1) {
+      const opened = await mcp.call("browser_open", {
+        url: site.appUrl,
+        show: true,
+        reuse: false,
+      });
+      const tabId = String(opened.structuredContent.tabId);
+      tabs.push(tabId);
+      await run(
+        tabId,
+        `await page.evaluate(() => {
+        document.body.dataset.trustedMoves = '0';
+        document.addEventListener('mousemove', event => {
+          if (event.isTrusted) document.body.dataset.trustedMoves = String(Number(document.body.dataset.trustedMoves) + 1);
+        });
+      });`,
+      );
+    }
+    await electronApp.evaluate(async ({ app, BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]!;
+      if (process.platform === "darwin") app.focus({ steal: true });
+      window.focus();
+      window.webContents.focus();
+      await window.webContents.executeJavaScript(`(() => {
+        const input = document.querySelector('#host-composer');
+        input.value = 'draft text'; input.focus(); input.setSelectionRange(3, 6);
+        document.body.dataset.hoverBlurs = '0';
+        window.addEventListener('blur', () => {
+          document.body.dataset.hoverBlurs = String(Number(document.body.dataset.hoverBlurs) + 1);
+        });
+      })()`);
+    });
+    await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+    for (const tabId of [...tabs, ...tabs]) {
+      await run(
+        tabId,
+        `for (let index = 0; index < 20; index += 1) {
+        await page.mouse.move(30 + index * 2, 100 + index);
+      }`,
+      );
+    }
+    expect(
+      await page.evaluate(() => {
+        const input = document.querySelector<HTMLInputElement>("#host-composer")!;
+        return {
+          blurs: Number(document.body.dataset.hoverBlurs),
+          focused: document.hasFocus() && document.activeElement === input,
+          value: input.value,
+          selection: [input.selectionStart, input.selectionEnd],
+        };
+      }),
+    ).toEqual({ blurs: 0, focused: true, value: "draft text", selection: [3, 6] });
+    if (process.platform === "darwin") {
+      // The same owned background tabs must receive hover while the user is in
+      // another app. Blur only this isolated test window; agent input may not raise it.
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.blur());
+      await expect
+        .poll(() =>
+          electronApp.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows()[0]!.isFocused(),
+          ),
+        )
+        .toBe(false);
+      for (const tabId of tabs) {
+        const before = await run(
+          tabId,
+          `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
+        );
+        await run(
+          tabId,
+          `for (let index = 0; index < 5; index += 1) await page.mouse.move(400 + index * 2, 220 + index);`,
+        );
+        await expect
+          .poll(async () => {
+            const after = await run(
+              tabId,
+              `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
+            );
+            return Number(after.structuredContent.value);
+          })
+          .toBeGreaterThan(Number(before.structuredContent.value));
+        expect(
+          await electronApp.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows()[0]!.isFocused(),
+          ),
+        ).toBe(false);
+      }
+    }
+
+    for (const [index, tabId] of tabs.entries()) {
+      const observed = await run(
+        tabId,
+        `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
+      );
+      expect(Number(observed.structuredContent.value)).toBeGreaterThan(0);
+      const hovered = await run(
+        tabId,
+        `await page.getByRole('button', {name:'Reveal hover state',exact:true}).hover();
+        await page.locator('#hover-result').waitFor({state:'visible'});
+        return await page.evaluate(() => ({visibility:getComputedStyle(document.querySelector('#hover-result')).visibility,trusted:document.querySelector('#hover-result').dataset.trusted}));`,
+      );
+      expect(hovered.structuredContent.value).toEqual({ visibility: "visible", trusted: "true" });
+      const typed = await run(
+        tabId,
+        `await human.type(page.getByLabel('Shared input', {exact:true}), 'browser-${index}', {clear:true});
+        return await page.getByLabel('Shared input', {exact:true}).inputValue();`,
+      );
+      expect(typed.structuredContent.value).toBe(`browser-${index}`);
+    }
+    await expect(page.getByLabel("Host composer")).toHaveValue("draft text");
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("preserves composer keyboard ownership during browser navigation", async () => {
   const fixture = await launchVisibleBrowserFixture();

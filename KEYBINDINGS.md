@@ -145,6 +145,7 @@ Shortcuts follow the character your layout types: on AZERTY, the key labelled A 
   { "key": "mod+alt+shift+u", "command": "thread.markUnread", "when": "!terminalFocus || isMac" },
   { "key": "mod+shift+]", "command": "chat.visible.next", "when": "!terminalFocus" },
   { "key": "mod+shift+[", "command": "chat.visible.previous", "when": "!terminalFocus" },
+  { "key": "mod+alt+a", "command": "chat.attention.next", "when": "!terminalFocus || isMac" },
   { "key": "mod+ctrl+arrowright", "command": "threadTab.next", "when": "isMac" },
   { "key": "mod+ctrl+arrowleft", "command": "threadTab.previous", "when": "isMac" },
   { "key": "ctrl+pagedown", "command": "threadTab.next", "when": "!terminalFocus && !isMac" },
@@ -229,6 +230,7 @@ The command identifiers are defined by [`STATIC_KEYBINDING_COMMANDS`](packages/c
 | `thread.snooze`                                          | Open the existing snooze date and time picker.                                                       |
 | `thread.markUnread`                                      | Mark the active chat unread and restore its dismissed notification.                                  |
 | `chat.visible.next`, `chat.visible.previous`             | Cycle threads currently visible in the sidebar.                                                      |
+| `chat.attention.next`                                    | Cycle through chats needing attention: waiting on you first, then unseen work.                       |
 | `threadTab.next`, `threadTab.previous`                   | Select the next or previous open thread tab.                                                         |
 | `editor.openFavorite`                                    | Open the current project or worktree in the last-used editor.                                        |
 | `editor.file.save`                                       | Save the focused file editor's unsaved changes.                                                      |

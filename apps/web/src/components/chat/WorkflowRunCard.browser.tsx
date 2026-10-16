@@ -37,8 +37,6 @@ it("updates live elapsed time locally and stops ticking when the workflow settle
       <ComposerColumnFrame>
         <WorkflowRunCard
           workflowRun={run}
-          compact={false}
-          onCompactChange={onAction}
           onOpenThread={onAction}
           onStop={onAction}
           onPause={onAction}

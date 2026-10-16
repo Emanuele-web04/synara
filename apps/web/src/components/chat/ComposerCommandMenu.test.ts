@@ -88,3 +88,36 @@ describe("groupCommandItems", () => {
     ]);
   });
 });
+
+describe("groupCommandItems connectors", () => {
+  it("puts connectors in their own first group", () => {
+    const items: ComposerCommandItem[] = [
+      {
+        id: "path:file:/workspace/AGENTS.md",
+        type: "path",
+        path: "/workspace/AGENTS.md",
+        pathKind: "file",
+        label: "AGENTS.md",
+        description: "/workspace",
+      },
+      {
+        id: "connector:mcp_conn_1",
+        type: "connector",
+        connectorName: "Supabase",
+        mention: { name: "Supabase", path: "connector://supabase_connector" },
+        label: "Supabase",
+        description: "mcp.supabase.com",
+      },
+    ];
+
+    expect(
+      groupCommandItems(items, "mention", false).map((group) => [
+        group.label,
+        group.items.map((item) => item.id),
+      ]),
+    ).toEqual([
+      ["Connectors", ["connector:mcp_conn_1"]],
+      ["Local", ["path:file:/workspace/AGENTS.md"]],
+    ]);
+  });
+});

@@ -201,6 +201,7 @@ describe("RecapStatsQuery", () => {
       failedTurns: 1,
       agentWorkMs: 75 * 60_000,
       tokens: { user: 40_000, automation: 7_000, agent: 0 },
+      cacheReadTokens: 0,
     });
     expect(
       recap.slots.map(({ prompts, chats, turns, failedTurns, agentWorkMs, tokens }) => ({
@@ -361,6 +362,280 @@ describe("RecapStatsQuery", () => {
     ]);
     // A turn that failed before reporting usage does not mark its provider as silent.
     expect(recap.unavailableProviders).toEqual([]);
+  });
+
+  it.each([
+    "new generation",
+    "SessionStart",
+    "repeated startup hooks",
+    "new process without hook",
+    "compact hook",
+    "clear hook",
+    "legacy hook",
+    "missing restart evidence",
+    "new native session",
+    "unversioned result",
+    "withheld result",
+    "synthetic completion",
+  ] as const)("accounts for restored usage with %s", async (evidence) => {
+    const recap = await runRecapTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES
+            ('thread-claude', 'project-app', 'Claude',
+              '{"provider":"claudeAgent","model":"claude-opus-5"}', 'full-access', 'default',
+              'local', '2026-09-30T05:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL),
+            ('thread-codex', 'project-app', 'Codex', '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access', 'default', 'local',
+              '2026-09-30T05:00:00.000Z', '2026-09-30T09:00:00.000Z', NULL)
+        `;
+        // Subagents of thread-claude. Their source turn ids name their own
+        // turns, so only time places them inside a parent result.
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at,
+            parent_thread_id, creation_source, source_turn_id
+          )
+          VALUES
+            ('child-withheld', 'project-app', 'Subagent',
+              '{"provider":"claudeAgent","model":"claude-opus-5"}', 'full-access', 'default',
+              'local', '2026-09-30T06:59:00.000Z', '2026-09-30T07:01:30.000Z', NULL,
+              'thread-claude', 'provider_native', 'child-withheld-turn'),
+            ('child-settled', 'project-app', 'Subagent',
+              '{"provider":"claudeAgent","model":"claude-opus-5"}', 'full-access', 'default',
+              'local', '2026-09-30T07:30:00.000Z', '2026-09-30T07:40:00.000Z', NULL,
+              'thread-claude', 'provider_native', 'child-settled-turn')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('done-child-withheld', 'child-withheld', 'child-withheld-turn', 'info',
+              'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":50}',
+              1, ${evidence === "new native session" ? "2026-09-30T07:00:30.000Z" : "2026-09-30T07:01:30.000Z"}),
+            ('done-child-settled', 'child-settled', 'child-settled-turn', 'info',
+              'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":20}',
+              1, '2026-09-30T07:40:00.000Z')
+        `;
+        const rows: Array<[string, string | null, string, string, number, string]> = [];
+        const pushRequest = (
+          turnId: string,
+          generation: string,
+          at: string,
+          request: { input: number; cacheRead: number; cacheCreation: number },
+        ) => {
+          const claudeCache = {
+            nativeSessionId:
+              evidence === "new native session" && (turnId === "turn-three" || turnId === "t4")
+                ? "session-2"
+                : "session-1",
+            lifecycleGeneration: generation,
+            ...(["SessionStart", "repeated startup hooks", "new process without hook"].includes(
+              evidence,
+            )
+              ? {
+                  processId:
+                    evidence !== "repeated startup hooks" &&
+                    (turnId === "turn-three" || turnId === "t4")
+                      ? "process-2"
+                      : "process-1",
+                }
+              : {}),
+            lastRequest: {
+              messageId: `msg-${turnId}`,
+              inputTokens: request.input,
+              cacheReadInputTokens: request.cacheRead,
+              cacheCreationInputTokens: request.cacheCreation,
+            },
+          };
+          const payload = JSON.stringify({
+            provider: "claudeAgent",
+            tokenAccountingVersion: 1,
+            claudeCache,
+          });
+          rows.push([`x-${turnId}`, turnId, "context-window.updated", payload, rows.length, at]);
+        };
+        const pushCompleted = (turnId: string, at: string, payload: object) => {
+          rows.push([
+            `done-${turnId}`,
+            turnId,
+            "turn.completed",
+            JSON.stringify({ provider: "claudeAgent", tokenAccountingVersion: 1, ...payload }),
+            rows.length,
+            at,
+          ]);
+        };
+        // Process one serves two turns; process two resumes the same session.
+        pushRequest("t1", "gen-1", "2026-09-30T05:01:00.000Z", {
+          input: 10,
+          cacheRead: 60,
+          cacheCreation: 20,
+        });
+        pushCompleted("t1", "2026-09-30T05:02:00.000Z", {
+          mainLoopTokens: 100,
+          modelUsage: { "claude-opus-5": { totalTokens: 100, cacheReadInputTokens: 60 } },
+        });
+        pushRequest("t2", "gen-1", "2026-09-30T06:01:00.000Z", {
+          input: 10,
+          cacheRead: 150,
+          cacheCreation: 30,
+        });
+        pushCompleted("t2", "2026-09-30T06:02:00.000Z", {
+          mainLoopTokens: 200,
+          modelUsage: { "claude-opus-5": { totalTokens: 200, cacheReadInputTokens: 150 } },
+        });
+        // Provider-switch rollback deliberately restores its ownership generation.
+        // The native SessionStart observation still identifies the new process.
+        const resumedGeneration = evidence === "new generation" ? "gen-2" : "gen-1";
+        if (
+          [
+            "SessionStart",
+            "repeated startup hooks",
+            "compact hook",
+            "clear hook",
+            "legacy hook",
+          ].includes(evidence)
+        ) {
+          const at = "2026-09-30T07:00:00.000Z";
+          const payload = JSON.stringify({
+            claudeCache: {
+              nativeSessionId: "session-1",
+              lifecycleGeneration: resumedGeneration,
+              source: "session-start",
+              ...(["SessionStart", "repeated startup hooks"].includes(evidence)
+                ? { processId: evidence === "SessionStart" ? "process-2" : "process-1" }
+                : {}),
+              observedAt: at,
+            },
+          });
+          rows.push(["restart", null, "context-window.updated", payload, rows.length, at]);
+          // Repeated observations of the same hook are one process, not a restart.
+          const repeatedPayload =
+            evidence === "repeated startup hooks"
+              ? JSON.stringify({
+                  claudeCache: {
+                    ...JSON.parse(payload).claudeCache,
+                    observedAt: "2026-09-30T07:00:30.000Z",
+                  },
+                })
+              : payload;
+          rows.push([
+            "restart-repeat",
+            null,
+            "context-window.updated",
+            repeatedPayload,
+            rows.length,
+            at,
+          ]);
+        }
+        // Claude Code restored t1 + t2 into this first result of the new process.
+        if (evidence !== "synthetic completion") {
+          pushRequest("turn-three", resumedGeneration, "2026-09-30T07:01:00.000Z", {
+            input: 10,
+            cacheRead: 240,
+            cacheCreation: 40, // The remaining 10 tokens are output, never cache reads.
+          });
+        }
+        // A child-only synthetic turn has no new parent request or SDK result.
+        // Its child is included by the next actual result, not counted twice.
+        pushCompleted("turn-three", "2026-09-30T07:02:00.000Z", {
+          mainLoopTokens: evidence === "synthetic completion" ? 0 : 300,
+          ...(evidence === "unversioned result" ? { tokenAccountingVersion: undefined } : {}),
+          ...(evidence === "synthetic completion" ? { claudeResultObserved: false } : {}),
+          ...(evidence === "withheld result" ? { claudeResultObserved: true } : {}),
+          ...(["withheld result", "synthetic completion"].includes(evidence)
+            ? {
+                mainLoopCacheReadTokens: evidence === "synthetic completion" ? 0 : 240,
+              }
+            : {
+                modelUsage: { "claude-opus-5": { totalTokens: 600, cacheReadInputTokens: 450 } },
+              }),
+        });
+        // t4's result also settles child-settled's 20 tokens (380 + 20).
+        pushRequest("t4", resumedGeneration, "2026-09-30T08:01:00.000Z", {
+          input: 10,
+          cacheRead: 290,
+          cacheCreation: 60,
+        });
+        pushCompleted("t4", "2026-09-30T08:02:00.000Z", {
+          mainLoopTokens: 380,
+          mainLoopCacheReadTokens: 290,
+          modelUsage: {
+            "claude-opus-5": {
+              totalTokens: evidence === "synthetic completion" ? 450 : 400,
+              cacheReadInputTokens: 300,
+            },
+          },
+        });
+        for (const [activityId, turnId, kind, payload, sequence, at] of rows) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence,
+              created_at
+            )
+            VALUES (${activityId}, 'thread-claude', ${turnId}, 'info', ${kind}, 'usage',
+              ${payload}, ${sequence}, ${at})
+          `;
+        }
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('x-codex-1', 'thread-codex', 'turn-codex', 'info', 'context-window.updated', 'tokens',
+              '{"provider":"codex","totalProcessedTokens":1000,"cumulativeUsage":{"inputTokens":900,"outputTokens":100,"cachedInputTokens":600}}',
+              1, '2026-09-30T06:00:00.000Z'),
+            ('x-codex-2', 'thread-codex', 'turn-codex', 'info', 'context-window.updated', 'tokens',
+              '{"provider":"codex","totalProcessedTokens":1500,"cumulativeUsage":{"inputTokens":1350,"outputTokens":150,"cachedInputTokens":1000}}',
+              2, '2026-09-30T06:05:00.000Z')
+        `;
+        return yield* (yield* RecapStatsQuery).getRecap(RECAP_INPUT);
+      }),
+    );
+
+    // Claude: 100 + 200 + 300 (turn-three's main loop, not its restored 600) + 400, plus
+    // child-withheld's 50, which only turn-three's withheld result had settled.
+    // child-settled is already inside t4. Cache: 60 + 150 + 240 (turn-three's recorded
+    // requests, excluding output) + 300; the children report none; Codex adds 1000.
+    // Without a persisted restart boundary these same values could represent
+    // legitimate process usage. Do not guess a restart and discard that usage.
+    const missingEvidence = [
+      "missing restart evidence",
+      "repeated startup hooks",
+      "compact hook",
+      "clear hook",
+      "legacy hook",
+    ].includes(evidence);
+    const newNativeSession = evidence === "new native session";
+    const noParentUsage = evidence === "unversioned result" || evidence === "synthetic completion";
+    // A child completed before the native identity changed is not included
+    // in the new session's first result, even when ownership generation matches.
+    expect(recap.totals.tokens).toEqual({
+      user: noParentUsage ? 2_250 : newNativeSession ? 2_850 : missingEvidence ? 2_800 : 2_550,
+      automation: 0,
+      agent: 0,
+    });
+    expect(recap.totals.cacheReadTokens).toBe(
+      noParentUsage ? 1_510 : missingEvidence || newNativeSession ? 1_960 : 1_750,
+    );
+    expect(recap.models).toEqual([
+      { provider: "codex", model: "gpt-5-codex", turns: 0, tokens: 1_500 },
+      {
+        provider: "claudeAgent",
+        model: "claude-opus-5",
+        turns: 0,
+        tokens: noParentUsage ? 750 : newNativeSession ? 1_350 : missingEvidence ? 1_300 : 1_050,
+      },
+    ]);
   });
 
   it("refuses the recap when the Inbox is off for this build", async () => {

@@ -55,7 +55,11 @@ import {
   isSynaraGatewayToolCall,
   shouldAllowSynaraComputerProviderTool,
 } from "../../agentGateway/computerToolPermission.ts";
-import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
+import {
+  buildOpenCodeConnectorMcpServers,
+  buildOpenCodeMcpServer,
+  SYNARA_MCP_SERVER_NAME,
+} from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
@@ -322,6 +326,28 @@ const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(functio
   ).pipe(Effect.timeout("10 seconds"));
   const status = result.data?.[SYNARA_MCP_SERVER_NAME];
   if (status?.status === "connected") {
+    // Connectors are optional: one that fails to start must not block the session.
+    // Installed together, so slow vendors cost one timeout rather than one each.
+    yield* Effect.forEach(
+      buildOpenCodeConnectorMcpServers(input.connection),
+      (connector) =>
+        runOpenCodeSdk("mcp.add", (signal) =>
+          input.client.mcp.add(
+            { directory: input.directory, name: connector.name, config: connector.config },
+            { signal },
+          ),
+        ).pipe(
+          Effect.timeout("10 seconds"),
+          // Log the summarized detail only: the raw cause can echo request headers.
+          Effect.catch((error) =>
+            Effect.logWarning("OpenCode connector MCP install failed", {
+              connector: connector.name,
+              detail: error instanceof OpenCodeRuntimeError ? error.detail : "timed out",
+            }),
+          ),
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
     return;
   }
   return yield* new OpenCodeRuntimeError({
@@ -4936,6 +4962,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return Effect.gen(function* () {
+          let cliDiscoveryFailed = false;
           const cliModelsEffect = openCodeRuntime
             .listOpenCodeCliModels({
               binaryPath,
@@ -4947,12 +4974,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(input.environment !== undefined ? { environment: input.environment } : {}),
             })
             .pipe(
-              Effect.catch((error) =>
-                Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
+              Effect.catch((error) => {
+                cliDiscoveryFailed = true;
+                return Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
                   binaryPath,
                   detail: openCodeRuntimeErrorDetail(error),
-                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
-              ),
+                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>));
+              }),
             );
           const inventoryEffect = withDiscoveryInventory(
             {
@@ -5002,6 +5030,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ? adapterConfig.cliModelSource
                   : adapterConfig.fallbackModelSource,
               cached: false,
+              degraded: cliDiscoveryFailed,
             };
           }
 
@@ -5026,6 +5055,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               models,
               source: adapterConfig.cliModelSource,
               cached: false,
+              degraded: true,
             };
           }
 

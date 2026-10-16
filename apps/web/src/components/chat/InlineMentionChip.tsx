@@ -43,7 +43,10 @@ export function InlineMentionChip(props: InlineMentionChipProps) {
     ...(props.mentionReferences ? { mentionReferences: props.mentionReferences } : {}),
   });
   const label =
-    props.label ?? (resolvedKind === "thread" ? props.path : basenameOfPath(props.path));
+    props.label ??
+    (resolvedKind === "thread" || resolvedKind === "connector"
+      ? props.path
+      : basenameOfPath(props.path));
   const inner = (
     <InlineChipContent
       icon={

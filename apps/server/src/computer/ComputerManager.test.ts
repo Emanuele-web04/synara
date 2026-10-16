@@ -1486,6 +1486,43 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await withoutClipboard.dispose();
   });
 
+  it("refuses paste before replacing clipboard contents it cannot preserve", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    vi.spyOn(backend, "readClipboard").mockRejectedValue(new Error("clipboard contains an image"));
+    try {
+      await expect(manager.paste("thread-1", "replacement")).rejects.toThrow(/preserve/);
+      expect(backend.callsFor("writeClipboard")).toHaveLength(0);
+      expect(backend.callsFor("hotkey")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "restores native clipboard content after paste failure=%s without replay",
+    async (fails) => {
+      const restore = vi.fn(async () => true);
+      const prepare = vi.fn(async () => restore);
+      const backend = Object.assign(new FakeComputerBackend(), { prepareClipboardPaste: prepare });
+      const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+      const failure = new Error("keyboard outcome unknown");
+      if (fails) backend.failNext("hotkey", failure);
+      try {
+        const result = manager.paste("thread-1", { imagePath: "/workspace/image.png" });
+        if (fails) await expect(result).rejects.toBe(failure);
+        else await expect(result).resolves.toMatchObject({ clipboardRestored: true });
+        expect(prepare).toHaveBeenCalledWith({ imagePath: "/workspace/image.png" });
+        expect(restore).toHaveBeenCalledTimes(1);
+        expect(backend.callsFor("hotkey")).toHaveLength(1);
+        expect(backend.callsFor("readClipboard")).toHaveLength(0);
+        expect(backend.callsFor("writeClipboard")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
   it("tells the backend which thread is driving, so the agent cursor can name it", async () => {
     const backend = new FakeComputerBackend();
     const names: Array<string | null> = [];
