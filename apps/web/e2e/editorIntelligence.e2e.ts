@@ -20,7 +20,7 @@ const person: Person = { name: "Ada", age: 37 };
 const message = greet(person.name);
 console.log(message);
 `;
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   workspace = await mkdtemp(path.join(os.tmpdir(), "synara-editor-project-"));
   await writeFile(
     path.join(workspace, "tsconfig.json"),
@@ -51,7 +51,7 @@ test.beforeAll(async () => {
   ]);
   await writeFile(path.join(workspace, "main.ts"), source.replace('"Ada"', '"Grace"'));
 });
-test.afterAll(async () => {
+test.afterEach(async () => {
   if (workspace) await rm(workspace, { recursive: true, force: true });
 });
 
