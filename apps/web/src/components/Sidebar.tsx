@@ -4563,7 +4563,11 @@ export default function Sidebar() {
     const { groupThreads: chats, nonGroupThreads: projectThreads } =
       partitionSidebarThreadsByProjectIds(visibleNonGroupSidebarThreads, chatProjectIds);
     const needsAttention = (threads: readonly SidebarThreadSummary[]) =>
-      hasActivityNeedingAttention(threads, activeSidebarThreadId, resolveActivityPriorityTierForSidebar) ||
+      hasActivityNeedingAttention(
+        threads,
+        activeSidebarThreadId,
+        resolveActivityPriorityTierForSidebar,
+      ) ||
       countNeedsYouActions(threads, activeSidebarThreadId, dismissedThreadStatusKeyByThreadId) > 0;
     return { projects: needsAttention(projectThreads), chats: needsAttention(chats) };
   }, [
