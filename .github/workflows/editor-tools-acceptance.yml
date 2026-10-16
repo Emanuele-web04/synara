@@ -1,0 +1,44 @@
+name: Native editor tools acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/editor-tools-acceptance.yml
+      - apps/web/src/components/EditorWorkspaceView.tsx
+      - apps/web/src/components/chat/SingleChatSurface.tsx
+      - apps/web/src/components/chat/workspaceExplorer.tsx
+      - apps/web/src/components/codeEditor/EditorToolsActivityBar.tsx
+      - apps/web/src/components/codeEditor/editorToolScope*
+      - apps/web/src/components/codeEditor/MonacoEditorSurface.tsx
+      - apps/web/src/components/codeEditor/EditorActionPicker.tsx
+      - apps/web/e2e/editorToolsRail.e2e.ts
+      - apps/web/e2e/editorAcceptanceFixture.ts
+      - apps/web/playwright.editor-tools.config.ts
+      - apps/web/playwright.editor.config.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: editor-tools-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-rail:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Editor shell ownership regressions
+        run: bun run --cwd apps/web test src/components/codeEditor/editorToolScope.test.ts src/components/EditorWorkspaceView.test.tsx
+      - name: Install browser
+        run: bun run --cwd apps/web test:browser:install
+      - name: Native rail, keyboard and guarded navigation journey
+        run: cd apps/web && ./node_modules/.bin/playwright test --config playwright.editor-tools.config.ts
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: native-editor-tools-evidence
+          path: apps/web/test-results
+          retention-days: 14
+          if-no-files-found: warn

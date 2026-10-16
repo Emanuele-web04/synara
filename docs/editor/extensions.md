@@ -10,6 +10,12 @@ Ubuntu 24.04 policies can deny the required network/user namespace operations. S
 
 The host has no host-network access, inherits no provider/GitHub/Synara credentials and sees read-only workspace, package and runtime mounts. Only assigned extension storage is writable. Extensions needing network downloads, cloud authentication, external debug attachment, another terminal or a graphical webview are not supported by this launcher.
 
+## Editor rail shortcuts
+
+The existing inner Files/Diff/Search rail also exposes Outline, Problems and Run and debug. Extensions and Editor commands are grouped at its lower edge. These shortcuts open the same native pickers, launch dialog and Settings page used by the editor commands; they do not create a second sidebar, debugger, file tree, Git panel or terminal. Problems combines the active model's native and extension markers, with an error/warning count. Outline is available where the existing TypeScript/JavaScript symbol service supports the file.
+
+The shortcuts are owned by the visible editor shell. Hidden diff surfaces cannot take ownership. When no compatible code editor is mounted, file-dependent controls are disabled and extension management remains accessible. Opening extension tools never starts the host; approval and workspace trust are unchanged. Navigating to Settings uses the existing save/conflict guard.
+
 ## Use the native interface
 
 1. Build the optional runtime below and start an isolated Synara development instance using the repository's normal development commands.

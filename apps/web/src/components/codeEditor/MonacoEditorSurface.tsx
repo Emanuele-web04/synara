@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { EditorToolScopeContext, type EditorTool } from "./editorToolScope";
 import { getEditorExtensionBridge } from "./editorExtensionBridge";
 import { EditorExtensionInteraction } from "./EditorExtensionInteraction";
 import { useQueryClient } from "@tanstack/react-query";
@@ -54,6 +56,9 @@ const emptyPicker: PickerState = { title: "Editor commands", mode: "commands", r
 
 export default function MonacoEditorSurface(props: SurfaceProps) {
   const client = useQueryClient();
+  const toolScope = useContext(EditorToolScopeContext);
+  const toolOwner = useRef({});
+  const openTool = useRef<(tool: EditorTool, manage?: () => void) => void>(() => undefined);
   const extensionInteractionOwner = useRef({});
   const extensionBridge = useMemo(
     () => (props.workspaceRoot ? getEditorExtensionBridge(client, props.workspaceRoot) : null),
@@ -91,6 +96,72 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       extensionInteractionOwner.current,
     );
   }, [controller, extensionBridge, props.readOnly]);
+
+  useEffect(() => {
+    if (!controller || !toolScope) return;
+    const owner = toolOwner.current;
+    const release = toolScope.attach(owner, {
+      filePath: controller.entry.relativePath,
+      available: [],
+      selected: null,
+      problemCount: 0,
+      debugging: false,
+      open: (tool, manage) => openTool.current(tool, manage),
+    });
+    const focus = controller.editor.onDidFocusEditorText(() => toolScope.focus(owner));
+    const debug = () =>
+      toolScope.update(owner, {
+        debugging: Boolean(
+          debugStore && ["starting", "running", "paused"].includes(debugStore.getSnapshot().phase),
+        ),
+      });
+    const unsubscribe = debugStore?.subscribe(debug);
+    debug();
+    return () => {
+      focus.dispose();
+      unsubscribe?.();
+      release();
+    };
+  }, [controller, toolScope, debugStore]);
+  useEffect(() => {
+    if (!controller || !toolScope) return;
+    const selected: EditorTool | null =
+      debugLaunch || picker?.title === "Run and debug"
+        ? "debug"
+        : picker?.title === "Go to symbol in file"
+          ? "outline"
+          : picker?.title === "Problems in this file"
+            ? "problems"
+            : picker?.title === "Extensions"
+              ? "extensions"
+              : picker?.mode === "commands"
+                ? "commands"
+                : null;
+    toolScope.update(toolOwner.current, {
+      available: [
+        "problems",
+        "commands",
+        "extensions",
+        ...(debugStore ? ["debug" as const] : []),
+        ...(supportsProjectIntelligence(controller.entry) ? ["outline" as const] : []),
+      ],
+      selected,
+      problemCount: diagnosticCount.errors + diagnosticCount.warnings,
+    });
+  }, [controller, toolScope, debugStore, debugLaunch, picker, diagnosticCount]);
+  openTool.current = (tool, manage) => {
+    if (tool === "extensions") {
+      results("Extensions", [
+        ...(manage ? [{ id: "extensions:manage", label: "Manage extensions", run: manage }] : []),
+        ...commands().filter((row) => row.id.startsWith("extensions:")),
+      ]);
+    } else if (tool === "debug") {
+      results(
+        "Run and debug",
+        commands().filter((row) => row.id.startsWith("debug") || row.id === "extensions:debug"),
+      );
+    } else commandRef.current(tool === "outline" ? "documentSymbols" : tool);
+  };
 
   function report(error: unknown) {
     const entry = controllerRef.current?.entry;
@@ -208,16 +279,22 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         return;
       }
       case "problems": {
-        const result = await requestIntelligence(entry, "diagnostics");
-        if (!result) return;
+        // Both native intelligence and extension diagnostics already publish
+        // to this model. Keep one authoritative list, without a second service.
+        const markers = monaco.editor.getModelMarkers({ resource: entry.model.uri });
         results(
           "Problems in this file",
-          (result.diagnostics ?? []).map((item, index) => ({
+          markers.map((item, index) => ({
             id: `problem:${index}`,
             label: item.message,
-            detail: `${item.severity} · line ${entry.model.getPositionAt(item.start).lineNumber}`,
+            detail: `${item.source ?? "Diagnostic"} · line ${item.startLineNumber}`,
             run: () => {
-              const range = offsetRange(entry.model, item);
+              const range = new monaco.Range(
+                item.startLineNumber,
+                item.startColumn,
+                item.endLineNumber,
+                item.endColumn,
+              );
               editor.setSelection(range);
               editor.revealRangeInCenter(range);
               editor.focus();

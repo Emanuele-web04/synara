@@ -1073,6 +1073,9 @@ export function SingleChatSurface(props: {
         >
           <Suspense fallback={<ChatMountLoader />}>
             <EditorWorkspaceView
+              onManageExtensions={() => {
+                void navigate({ to: "/settings", search: { section: "extensions" } });
+              }}
               workspaceRoot={workspaceRoot}
               projectName={activeProject?.name ?? null}
               currentProjectId={activeProject?.id ?? null}
