@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.6-remote.9 — 2026-10-16
+
+### Added
+
+- Clear read chats from Priority with the eraser action in the sidebar and Activity view.
+
+### Fixed
+
+- Chat creation on another computer appends its recap to the original conversation. The card opens the chat in the owning connected workspace and never treats its identifier as local.
+- Remote Activity rows keep project and branch metadata without repeating the computer name.
+
+### Verification
+
+- This follow-up includes all three additional commits from the Remote feature branch. Remote retains its separate identity, data directory and updater lane; release CI qualifies the exact signed macOS ARM64 candidate.
+
 ## 1.0.6-remote.8 — 2026-10-16
 
 ### Changed

@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.9",
+    date: "Oct 16",
+    features: [
+      {
+        id: "remote-thread-recap",
+        title: "Follow chats created on another computer",
+        description:
+          "The created-thread card appears in the original conversation and opens the new chat in its computer's connected workspace.",
+      },
+      {
+        id: "clear-priority",
+        title: "Clear read chats from Priority",
+        description:
+          "Use the eraser beside Priority to clear chats you have already read. Remote Activity rows keep project and branch metadata compact.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.8",
     date: "Oct 16",
     features: [
