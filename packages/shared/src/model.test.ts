@@ -457,7 +457,7 @@ describe("resolveGrokEffortFamily", () => {
 });
 
 describe("provider option descriptor helpers", () => {
-  it("keeps the Claude default label plain when an older catalog is cached", () => {
+  it("removes the synthetic Claude default choice from an older cached catalog", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "claudeAgent",
       caps: {
@@ -477,12 +477,9 @@ describe("provider option descriptor helpers", () => {
       },
     });
     expect(descriptors[0]).toMatchObject({
-      currentValue: "default",
-      options: [
-        { id: "default", label: "Default", isDefault: true },
-        { id: "high", label: "High" },
-      ],
+      options: [{ id: "high", label: "High" }],
     });
+    expect(descriptors[0]).not.toHaveProperty("currentValue");
   });
 
   it("projects legacy Codex capability flags into generic option descriptors", () => {

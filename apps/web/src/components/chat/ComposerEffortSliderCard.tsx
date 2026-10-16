@@ -69,14 +69,16 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
 
   const ladderIndex = resolveComposerEffortLadderIndex(selection);
   const activeLevel = effortLevels[ladderIndex];
-  const statusLabel = resolveComposerTraitStatusLabel(selection) ?? activeLevel?.label ?? "Effort";
+  const statusLabel =
+    resolveComposerTraitStatusLabel(selection) ??
+    (effort === null ? "Effort" : (activeLevel?.label ?? "Effort"));
   const effortIsDefault = ultrathinkPromptControlled || effort === defaultEffort;
   const canReset = fastModeEnabled || !effortIsDefault;
 
   const lastIndex = Math.max(effortLevels.length - 1, 0);
 
   const handleSliderChange = (nextIndex: number) => {
-    if (nextIndex === ladderIndex) return;
+    if (nextIndex === ladderIndex && effort !== null) return;
     const nextLevel = effortLevels[nextIndex];
     if (!nextLevel) return;
     const plan = planComposerEffortChange({ provider, selection, prompt, value: nextLevel.value });
@@ -94,7 +96,11 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         ? planComposerEffortChange({ provider, selection, prompt, value: defaultEffort })
         : null;
     commitTrait({
-      ...(effortPlan?.kind === "options" ? effortPlan.patch : {}),
+      ...(effortPlan?.kind === "options"
+        ? effortPlan.patch
+        : !effortIsDefault && selection.primarySelectDescriptor
+          ? { [selection.primarySelectDescriptor.id]: undefined }
+          : {}),
       ...(fastModeEnabled ? { fastMode: false } : {}),
     });
   };
@@ -137,7 +143,18 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           </TooltipPopup>
         </Tooltip>
       </div>
-      <div className="mt-1 px-0.5">
+      <div
+        className="mt-1 px-0.5"
+        // The native default is unknown: selecting the resting first stop must still commit it.
+        onPointerUpCapture={(event) => {
+          if (effort === null && event.button === 0) handleSliderChange(ladderIndex);
+        }}
+        onKeyDownCapture={(event) => {
+          if (effort === null && ["Home", "ArrowLeft", "ArrowDown"].includes(event.key)) {
+            handleSliderChange(0);
+          }
+        }}
+      >
         <Slider
           value={ladderIndex}
           min={0}
@@ -148,7 +165,11 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           magnetic
           disabled={ultrathinkPromptControlled}
           aria-label="Reasoning effort"
-          getAriaValueText={(index) => effortLevels[index]?.label ?? String(index)}
+          getAriaValueText={(index) =>
+            effort === null && !ultrathinkPromptControlled
+              ? "Select effort"
+              : (effortLevels[index]?.label ?? String(index))
+          }
           onValueChange={handleSliderChange}
         />
       </div>

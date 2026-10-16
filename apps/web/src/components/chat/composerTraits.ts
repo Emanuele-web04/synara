@@ -126,7 +126,9 @@ export function getComposerTraitSelection(
   const contextWindowOptions = selectOptions(contextWindowDescriptor);
   const defaultEffort =
     primarySelectDescriptor?.options.find((option) => option.isDefault)?.id ??
-    primarySelectDescriptor?.options[0]?.id ??
+    (provider === "claudeAgent" && runtimeModel?.supportedReasoningEfforts !== undefined
+      ? null
+      : primarySelectDescriptor?.options[0]?.id) ??
     null;
   const defaultContextWindow =
     contextWindowDescriptor?.options.find((option) => option.isDefault)?.id ??
@@ -290,10 +292,6 @@ export function planComposerEffortChange(input: {
     };
   }
   const optionId = selection.primarySelectDescriptor?.id ?? fallbackEffortOptionId(provider);
-  // The CLI default is an absence of an override, never a fabricated effort level.
-  if (provider === "claudeAgent" && nextOption.value === "default") {
-    return { kind: "options", patch: { [optionId]: undefined } };
-  }
   return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
 }
 
