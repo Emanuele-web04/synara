@@ -413,3 +413,7 @@ the release source. No new external links were added.
 No real OAuth sign-in, installed-app upgrade, live microphone capture or
 universal provider/website compatibility is established by the docs audit.
 Unrelated dirty files in the older local website checkout remain untouched.
+
+## Synara 1.0.6 release audit — 2026-10-16
+
+Source: Stable range `v1.0.5..612aff6d8fdcdb9e849d8c8750a8683e7e2dca81` (16 commits). Provider discovery and troubleshooting updates cite their owning source files inline. Changelog highlights mirror the app entry; no Beta-only feature is promoted. Download snapshots are refreshed only after publication.
