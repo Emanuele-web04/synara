@@ -1083,3 +1083,34 @@ is a prerelease with curated notes; GitHub Latest remains Stable `v1.0.5`. The
 installed Macs were not replaced during this publication. Remote retains its
 separate identity/data/feed;
 Stable/Beta download pages do not need a change for this tester-only lane.
+
+### 2026-10-16 — Remote .9 includes the feature-branch updates
+
+The final desktop branch push exposed three pre-existing commits not included
+in the `.8` cut: `6341df0` (compact remote Activity metadata), `e85ab15` (clear
+read chats from Priority), and `c33a532` (created-thread cards for remote chat
+creation). They were merged normally with the latest main and local delivery
+notes as `802b7f1`; no ref or existing public release was overwritten. The `.9`
+candidate `41bd27e` contains all three, main `f2614e5` and the workspace startup
+repair. The remote feature-branch head was checked before tagging.
+
+All 447 affected gateway, work-log, timeline and browser checks pass with Node
+24, along with format, lint, twelve-package typecheck, brand and release smoke.
+All 86 shared Swift fixtures validate against this desktop; there is no new
+WebSocket method/schema or migration. The existing native work-log handles the
+recap summary, and Clear read from Priority already exists in its Activity menu.
+TestFlight 135 remains the current compatible iPhone/iPad build; no additional
+mobile binary is needed for these desktop updates.
+
+Publication workflow `38835973834` completed successfully: all quality and server
+gates, signed/notarized macOS ARM64 packaging and packaged startup qualification.
+The public ZIP, DMG, provenance and Remote feed match GitHub asset digests, source
+`41bd27e` and its exact lockfile. Strict app/DMG signatures, Developer ID,
+Gatekeeper and both stapled tickets passed independent local verification.
+[Remote .9](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.9)
+is public with curated notes and its own updater feed; GitHub Stable Latest stays
+`v1.0.5`. The installed desktop bundles were not replaced. The final MacBook
+tunnel availability probe still failed (HTTP 502, after the earlier Cloudflare
+1033); fresh two-Mac transcript/reload qualification remains open. Native branches
+are aligned with TestFlight 135 and the release handoff. No account, application
+database, pairing trust or physical-phone state was reset.
