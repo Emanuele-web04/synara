@@ -10,7 +10,7 @@ concurrency:
   group: editor-tools-review-${{ github.ref }}
   cancel-in-progress: true
 env:
-  CANDIDATE_BASE: 3e4f5e4747d9b1c43cc36cb5dd1386e01129c63e
+  CANDIDATE_BASE: 8213a9ef84393b827c3f03dd0dcbb04986a691d2
 jobs:
   prepare:
     runs-on: ubuntu-24.04
@@ -25,8 +25,18 @@ jobs:
           ref: ${{ env.CANDIDATE_BASE }}
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
-      - name: Normalize only the corrected test
-        run: ./node_modules/.bin/oxfmt apps/web/e2e/editorToolsRail.e2e.ts
+      - name: Preserve the real modal accessibility boundary
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile,writeFile} from 'node:fs/promises';
+          const file='apps/web/e2e/editorToolsRail.e2e.ts';
+          const before='  await expect(outline).toHaveAttribute("aria-pressed", "true");';
+          const source=await readFile(file,'utf8');
+          if(source.split(before).length!==2)throw new Error('Expected one selected-state assertion');
+          await writeFile(file,source.replace(before,`  // Modal isolation correctly removes the underlying rail from the accessibility tree.
+          await expect(page.locator('nav[aria-label="Editor activity bar"] button[aria-label="Outline"]')).toHaveAttribute("aria-pressed", "true");`));
+          NODE
+          ./node_modules/.bin/oxfmt apps/web/e2e/editorToolsRail.e2e.ts
       - name: Preserve exact normalized test candidate without updating refs
         id: objects
         env:
@@ -50,7 +60,7 @@ jobs:
           const base=await api(`git/commits/${process.env.CANDIDATE_BASE}`);
           const tree=await api('git/trees',{base_tree:base.tree.sha,tree:[{path:file,mode:'100644',type:'blob',sha:blob.sha}]});
           const identity={name:'Commander Chara',email:'249489759+cmdr-chara@users.noreply.github.com'};
-          const commit=await api('git/commits',{message:'test(editor): verify native rail picker accessibility',tree:tree.sha,parents:[process.env.CANDIDATE_BASE],author:identity,committer:identity});
+          const commit=await api('git/commits',{message:'test(editor): respect native modal isolation in the rail journey',tree:tree.sha,parents:[process.env.CANDIDATE_BASE],author:identity,committer:identity});
           console.log('CANDIDATE_COMMIT',commit.sha);console.log('CANDIDATE_TREE',tree.sha);console.log('TEST_BLOB',blob.sha);
           await appendFile(process.env.GITHUB_OUTPUT,`candidate=${commit.sha}\n`);
           NODE
