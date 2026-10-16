@@ -4831,6 +4831,22 @@ export default function Sidebar() {
     () => new Map([...projectById, ...workspaceActivity.projectById]),
     [projectById, workspaceActivity],
   );
+  const workspaceActivityThreadById = useMemo(
+    () => new Map(workspaceActivity.threads.map((thread) => [thread.id, thread])),
+    [workspaceActivity],
+  );
+  // Remote tree rows share the Activity summary of the same chat for their hover card.
+  const renderRemoteThreadHoverCard = (entry: WorkspaceThreadEntry) => {
+    if (!entry.session) return undefined;
+    const summary = workspaceActivityThreadById.get(
+      ThreadId.makeUnsafe(
+        `workspace:${workspaceThreadKey(entry.session.host.executionScope.environmentId, entry.thread.id)}`,
+      ),
+    );
+    return summary
+      ? (anchorId: string) => renderThreadHoverCardPopup(summary, anchorId, false)
+      : undefined;
+  };
   const externalActivityRows = useMemo(
     () =>
       new Map(
@@ -5723,6 +5739,7 @@ export default function Sidebar() {
               entry={entry}
               topLevel
               threadJumpLabel={visibleThreadJumpLabelByKey.get(entry.key) ?? null}
+              renderHoverCard={renderRemoteThreadHoverCard(entry)}
             />
           ))}
         </div>
@@ -6443,6 +6460,7 @@ export default function Sidebar() {
     return (
       <WorkspaceProjectItem
         entry={entry}
+        renderThreadHoverCard={renderRemoteThreadHoverCard}
         expanded={!collapsedWorkspaceProjects.includes(entry.key)}
         onToggle={() => {
           if (dragInProgressRef.current) return;
@@ -8095,6 +8113,9 @@ export default function Sidebar() {
                                     visibleThreadJumpLabelByKey.get(entry.rowId) ?? null
                                   }
                                   topLevel
+                                  renderHoverCard={renderRemoteThreadHoverCard(
+                                    entry.row.workspaceEntry,
+                                  )}
                                 />
                               </SidebarMenuItem>
                             ) : (

@@ -29,6 +29,8 @@ import {
 } from "../../lib/hosts/workspaceSessions";
 import type { WorkspaceSidebarActions } from "../../lib/hosts/workspaceFrame";
 import { openWorkspacePath } from "../../lib/hosts/workspaceCommands";
+import { SIDEBAR_HOVER_CARD_TRIGGER_PROPS } from "../sidebarHoverCardStyles";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { resolveProjectStatusIndicator, resolveSidebarRootThreadId } from "../Sidebar.logic";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 import { ProjectEmojiGlyph } from "../ProjectSidebarIcon";
@@ -287,10 +289,13 @@ export function WorkspaceThreadRow({
   entry,
   topLevel: topLevelProp,
   threadJumpLabel,
+  renderHoverCard,
 }: {
   entry: WorkspaceThreadEntry;
   topLevel?: boolean;
   threadJumpLabel?: string | null;
+  /** The rich hover card local chat rows show, when this chat has one. */
+  renderHoverCard?: ((anchorId: string) => ReactNode) | undefined;
 }) {
   const topLevel = topLevelProp ?? false;
   const href = useLocation({ select: (location) => location.href });
@@ -331,41 +336,68 @@ export function WorkspaceThreadRow({
   );
   const label = `${thread.title}, ${hostName}${status ? `, ${status.label}` : ""}`;
   const open = () => openWorkspacePath(session, `/${thread.id}`);
+  const hoverAnchorId = `remote:${entry.key}`;
   return (
     <WorkspaceThreadActions entry={entry}>
-      {({ rowEvents, menuButton }) => (
-        <div className="group/thread-row relative w-full" {...rowEvents}>
-          {topLevel ? (
-            <SidebarMenuButton
-              size="sm"
-              isActive={active}
-              aria-label={label}
-              className={cn(
-                SIDEBAR_HEADER_ROW_CLASS_NAME,
-                "gap-1.5 pr-7",
-                active ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
-              )}
-              onClick={open}
+      {({ rowEvents, menuButton }) => {
+        const row = (
+          <>
+            {topLevel ? (
+              <SidebarMenuButton
+                size="sm"
+                isActive={active}
+                aria-label={label}
+                className={cn(
+                  SIDEBAR_HEADER_ROW_CLASS_NAME,
+                  "gap-1.5 pr-7",
+                  active ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
+                )}
+                onClick={open}
+              >
+                {content}
+              </SidebarMenuButton>
+            ) : (
+              <SidebarMenuSubButton
+                render={<button type="button" />}
+                size="sm"
+                isActive={active}
+                aria-label={label}
+                className={cn(SIDEBAR_THREAD_ROW_BASE_CLASS_NAME, "pr-7")}
+                onClick={open}
+              >
+                {content}
+              </SidebarMenuSubButton>
+            )}
+            <SidebarRowHoverActions threadId={entry.key}>
+              <span className="mr-1.5">{menuButton}</span>
+            </SidebarRowHoverActions>
+          </>
+        );
+        if (!renderHoverCard) {
+          return (
+            <div className="group/thread-row relative w-full" {...rowEvents}>
+              {row}
+            </div>
+          );
+        }
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+              render={
+                <div
+                  data-thread-hover-anchor={hoverAnchorId}
+                  className="group/thread-row relative w-full"
+                  {...rowEvents}
+                />
+              }
             >
-              {content}
-            </SidebarMenuButton>
-          ) : (
-            <SidebarMenuSubButton
-              render={<button type="button" />}
-              size="sm"
-              isActive={active}
-              aria-label={label}
-              className={cn(SIDEBAR_THREAD_ROW_BASE_CLASS_NAME, "pr-7")}
-              onClick={open}
-            >
-              {content}
-            </SidebarMenuSubButton>
-          )}
-          <SidebarRowHoverActions threadId={entry.key}>
-            <span className="mr-1.5">{menuButton}</span>
-          </SidebarRowHoverActions>
-        </div>
-      )}
+              {row}
+            </TooltipTrigger>
+            {renderHoverCard(hoverAnchorId)}
+          </Tooltip>
+        );
+      }}
     </WorkspaceThreadActions>
   );
 }
@@ -380,6 +412,7 @@ export function WorkspaceProjectItem({
   extraPages: extraPagesProp,
   onExtraPagesChange,
   threadJumpLabels,
+  renderThreadHoverCard,
 }: {
   entry: WorkspaceProjectEntry;
   expanded: boolean;
@@ -390,6 +423,9 @@ export function WorkspaceProjectItem({
   extraPages?: number;
   onExtraPagesChange?: (pages: number) => void;
   threadJumpLabels?: ReadonlyMap<string, string>;
+  renderThreadHoverCard?: (
+    entry: WorkspaceThreadEntry,
+  ) => ((anchorId: string) => ReactNode) | undefined;
 }) {
   const manualSorting = manualSortingProp ?? false;
   const [localExtraPages, setLocalExtraPages] = useState(0);
@@ -524,6 +560,11 @@ export function WorkspaceProjectItem({
                   threadJumpLabel={
                     threadJumpLabels?.get(workspaceThreadKey(environmentId, row.thread.id)) ?? null
                   }
+                  renderHoverCard={renderThreadHoverCard?.({
+                    key: `${entry.key}:${row.thread.id}`,
+                    thread: row.thread,
+                    session,
+                  })}
                 />
               </SidebarMenuSubItem>
             ))}
