@@ -16,10 +16,12 @@ function Harness({
   diff = false,
   initialValue = "const value = 1;\n",
   onHistoryChange,
+  workspaceRoot,
 }: {
   diff?: boolean;
   initialValue?: string | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
+  workspaceRoot?: string;
 }) {
   const [value, setValue] = useState(initialValue);
   const [version, setVersion] = useState(0);
@@ -34,6 +36,7 @@ function Harness({
     onSave: () => setSaved((n) => n + 1),
     historyControlsRef: controls,
     onHistoryChange,
+    workspaceRoot,
   };
   return (
     <div style={{ width: 900, height: 500, display: "flex", flexDirection: "column" }}>
@@ -283,11 +286,25 @@ it("retains the same diff model, buffer and undo stack when switching split/unif
 });
 
 it("opens Synara's native command picker without a workbench or second navigation", async () => {
-  const view = await mount();
-  await ready();
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <Harness workspaceRoot="/workspace" />
+    </QueryClientProvider>,
+  );
+  const workspaceEditor = () =>
+    monaco.editor
+      .getEditors()
+      .find((editor) => editor.getModel()?.uri.scheme === "synara-workspace");
+  await expect.poll(workspaceEditor).toBeDefined();
+  workspaceEditor()?.focus();
   await userEvent.keyboard("{F1}");
   await expect.element(page.getByRole("dialog")).toBeVisible();
   await expect.element(page.getByText("Find in file", { exact: true })).toBeVisible();
+  await page.getByText("Show problems in file", { exact: true }).click();
+  await expect.element(page.getByText("No problems found in this file.")).toBeVisible();
+  await page.getByRole("combobox", { name: "Problems in this file" }).fill("missing");
+  await expect.element(page.getByText("No matching results.")).toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   await view.unmount();

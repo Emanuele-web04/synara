@@ -1024,6 +1024,11 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         query={query}
         rows={rows}
         busy={picker?.mode === "workspaceSymbols" && searching}
+        message={
+          picker?.title === "Problems in this file" && picker.rows.length === 0 && !query.trim()
+            ? "No problems found in this file."
+            : null
+        }
         onQueryChange={setQuery}
         onClose={() => {
           setPicker(null);

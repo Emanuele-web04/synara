@@ -42,7 +42,7 @@ export function EditorActionPicker(props: {
             value={props.query}
             onChange={(event) => props.onQueryChange(event.currentTarget.value)}
           />
-          <CommandStatus>
+          <CommandStatus className="p-4 text-ui text-muted-foreground empty:hidden">
             {props.busy
               ? "Searching…"
               : (props.message ?? (props.rows.length ? null : "No matching results."))}
