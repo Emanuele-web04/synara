@@ -14,7 +14,10 @@ const summarySchema = z.object({
   name: z.string(),
   version: z.string(),
   displayName: z.string().optional(),
-  description: z.string().optional(),
+  description: z.string().max(16_384).optional(),
+  downloadCount: z.number().int().nonnegative().safe().optional(),
+  categories: z.array(z.string().max(128)).max(64).optional(),
+  license: z.string().max(512).optional(),
 });
 const metadataSchema = summarySchema.extend({
   engines: z.object({ vscode: z.string() }),
@@ -89,6 +92,89 @@ export class OpenVsxRegistry {
         return false;
       }
     });
+  }
+
+  /** Paged discovery is read-only and never grants execution approval. */
+  async catalog(
+    input: {
+      query?: string | undefined;
+      category?: string | undefined;
+      sortBy?: string | undefined;
+      offset?: number | undefined;
+    },
+    signal?: AbortSignal,
+  ) {
+    const query = input.query?.trim() ?? "";
+    const offset = input.offset ?? 0;
+    const category = input.category;
+    const sortBy = input.sortBy ?? "downloadCount";
+    if (
+      query.length > 256 ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      offset > 9_984 ||
+      offset % 24 !== 0 ||
+      !["relevance", "downloadCount", "timestamp"].includes(sortBy) ||
+      (category !== undefined &&
+        !["Programming Languages", "Formatters", "Linters", "Debuggers"].includes(category))
+    ) {
+      throw new Error("Invalid extension catalog filters.");
+    }
+    let exactId;
+    try {
+      exactId = extensionId(query);
+    } catch {
+      /* Keywords use the registry index. */
+    }
+    if (exactId) {
+      const item = summarySchema.parse(await this.compatible(exactId, signal));
+      const matches = !category || item.categories?.includes(category);
+      return {
+        registryResults: offset === 0 && matches ? [item] : [],
+        registryTotal: matches ? 1 : 0,
+      };
+    }
+    const params = new URLSearchParams({
+      query,
+      size: "24",
+      offset: String(offset),
+      sortBy,
+      sortOrder: "desc",
+    });
+    if (category) params.set("category", category);
+    const response = z
+      .object({
+        extensions: z.array(summarySchema).max(100),
+        offset: z.number().int().nonnegative(),
+        totalSize: z.number().int().nonnegative().safe(),
+      })
+      .parse(await this.json("/api/-/search?" + params, signal));
+    if (response.offset !== offset)
+      throw new Error("The registry returned a different result page. Retry the search.");
+    const ids = new Set<string>();
+    const registryResults = response.extensions.filter((item) => {
+      try {
+        const id = extensionId(item.namespace + "." + item.name);
+        if (!semver.valid(item.version) || ids.has(id)) return false;
+        ids.add(id);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const next = offset + 24;
+    return {
+      registryResults,
+      registryTotal: response.totalSize,
+      ...(response.extensions.length === 24 && next < response.totalSize && next <= 9_984
+        ? { registryNextOffset: next }
+        : {}),
+    };
+  }
+
+  async details(id: string, signal?: AbortSignal) {
+    const metadata = await this.compatible(id, signal);
+    return { ...summarySchema.parse(metadata), apiRange: metadata.engines.vscode };
   }
 
   async metadata(id: string, version: string, signal?: AbortSignal): Promise<RegistryMetadata> {

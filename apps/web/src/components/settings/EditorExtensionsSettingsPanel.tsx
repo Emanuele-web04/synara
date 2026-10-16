@@ -1,11 +1,12 @@
+import { ExtensionMarketplace } from "./ExtensionMarketplace";
+import { SegmentedPicker } from "~/components/SegmentedPicker";
+import {
+  EXTENSION_STATE_KEY as stateKey,
+  requestEditorExtensions as request,
+} from "./editorExtensionsApi";
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  EditorExtensionSummary,
-  EditorExtensionsInput,
-  EditorExtensionsResult,
-} from "@synara/contracts";
-import { ensureNativeApi } from "~/nativeApi";
+import type { EditorExtensionSummary, EditorExtensionsInput } from "@synara/contracts";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Textarea } from "~/components/ui/textarea";
@@ -25,16 +26,7 @@ import {
   SettingsSectionShell,
 } from "./SettingsPanelPrimitives";
 
-const stateKey = ["editor-extensions"] as const;
 const UPLOAD_CHUNK = 512 * 1_024;
-async function request(
-  input: EditorExtensionsInput,
-  signal?: AbortSignal,
-): Promise<EditorExtensionsResult> {
-  const extensions = ensureNativeApi().editor?.extensions;
-  if (!extensions) throw new Error("This server does not provide editor extension management.");
-  return extensions(input, signal ? { signal } : undefined);
-}
 function consentClosure(
   root: EditorExtensionSummary,
   entries: readonly EditorExtensionSummary[],
@@ -73,14 +65,13 @@ type Approval =
 /** All presentation belongs to Synara. Registry text is rendered as text, never HTML. */
 export function EditorExtensionsSettingsPanel() {
   const queryClient = useQueryClient();
-  const searchId = useId();
   const workspaceId = useId();
   const configurationId = useId();
   const fileInput = useRef<HTMLInputElement>(null);
   const active = useRef<AbortController | null>(null);
   const live = useRef(true);
-  const [search, setSearch] = useState("");
-  const [submittedSearch, setSubmittedSearch] = useState<string | null>(null);
+  const [view, setView] = useState<"marketplace" | "installed" | "permissions">("marketplace");
+  const [success, setSuccess] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -96,12 +87,6 @@ export function EditorExtensionsSettingsPanel() {
   const state = useQuery({
     queryKey: stateKey,
     queryFn: ({ signal }) => request({ operation: "list" }, signal),
-    retry: false,
-  });
-  const results = useQuery({
-    queryKey: ["editor-extension-search", submittedSearch],
-    queryFn: ({ signal }) => request({ operation: "search", query: submittedSearch ?? "" }, signal),
-    enabled: submittedSearch !== null,
     retry: false,
   });
   const mutation = useMutation({
@@ -147,9 +132,14 @@ export function EditorExtensionsSettingsPanel() {
         if (live.current) setProgress(null);
       }
     },
-    onSuccess: (result) => {
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: stateKey });
+    },
+    onSuccess: (result, input) => {
       queryClient.setQueryData(stateKey, result);
       if (live.current) {
+        if ("file" in input || input.operation === "install")
+          setSuccess("Package installed disabled. Review it in Installed before enabling.");
         setApproval(null);
         setLocalError(null);
       }
@@ -157,6 +147,7 @@ export function EditorExtensionsSettingsPanel() {
   });
   const run = (input: EditorExtensionsInput) => {
     setLocalError(null);
+    setSuccess(null);
     mutation.mutate(input);
   };
   const entries = state.data?.extensions ?? [];
@@ -211,291 +202,261 @@ export function EditorExtensionsSettingsPanel() {
           </Button>
         </div>
       ) : null}
-      <SettingsSectionShell
-        title="Find extensions"
-        action={
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={busy || !state.data}
-            onClick={() => fileInput.current?.click()}
-          >
-            Install VSIX
-          </Button>
-        }
-      >
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".vsix"
-          className="hidden"
-          aria-label="Choose VSIX package"
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            if (file) mutation.mutate({ file });
-          }}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SegmentedPicker
+          value={view}
+          onValueChange={setView}
+          ariaLabel="Extension library view"
+          className="w-full sm:w-80"
+          options={[
+            { value: "marketplace", label: "Marketplace" },
+            { value: "installed", label: "Installed (" + entries.length + ")" },
+            { value: "permissions", label: "Permissions" },
+          ]}
         />
-        <form
-          className="flex items-end gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setSubmittedSearch(search.trim());
-          }}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || !state.data}
+          onClick={() => fileInput.current?.click()}
         >
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <label htmlFor={searchId} className="text-ui-sm text-muted-foreground">
-              Search Open VSX
-            </label>
-            <Input
-              id={searchId}
-              value={search}
-              maxLength={256}
-              placeholder="Formatter, language, or publisher"
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
-          <Button
-            type="submit"
-            size="sm"
-            variant="outline"
-            disabled={results.isFetching || !state.data}
-          >
-            Search
+          Install VSIX
+        </Button>
+      </div>
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".vsix"
+        className="hidden"
+        aria-label="Choose VSIX package"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            setSuccess(null);
+            mutation.mutate({ file });
+          }
+        }}
+      />
+      {success ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 p-3 text-ui"
+        >
+          <p>{success}</p>
+          <Button size="sm" variant="ghost" onClick={() => setView("installed")}>
+            Manage installed
           </Button>
-        </form>
-        <p className="mt-2 text-ui-sm text-muted-foreground">
-          Packages are installed disabled. Installing a package does not authorize it to run.
-        </p>
-        {results.isFetching ? (
-          <p role="status" className="mt-3 text-ui text-muted-foreground">
-            Searching Open VSX...
-          </p>
-        ) : null}
-        {results.error ? (
-          <p role="alert" className="mt-3 text-ui text-destructive">
-            {results.error.message}
-          </p>
-        ) : null}
-        {submittedSearch !== null && results.data?.registryResults.length === 0 ? (
-          <SettingsEmptyState layout="status">No matching extensions found.</SettingsEmptyState>
-        ) : null}
-        {results.data?.registryResults.length ? (
-          <SettingsCard>
-            {results.data.registryResults.map((extension) => {
-              const id = `${extension.namespace}.${extension.name}`.toLowerCase();
-              const installed = entries.find((entry) => entry.id === id);
-              return (
+        </div>
+      ) : null}
+      <div hidden={view !== "marketplace"}>
+        <ExtensionMarketplace
+          active={view === "marketplace"}
+          entries={entries}
+          busy={busy}
+          available={Boolean(state.data)}
+          pendingId={
+            mutation.variables && !("file" in mutation.variables)
+              ? mutation.variables.id
+              : undefined
+          }
+          onInstall={(id, version) =>
+            run({ operation: "install", id, ...(version ? { version } : {}) })
+          }
+          onManage={() => setView("installed")}
+        />
+      </div>
+      <div hidden={view !== "installed"} className="space-y-5">
+        <SettingsSectionShell
+          title="Installed extensions"
+          action={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || entries.length === 0}
+              onClick={() => run({ operation: "checkUpdates" })}
+            >
+              Check for updates
+            </Button>
+          }
+        >
+          {state.isPending ? (
+            <SettingsEmptyState layout="status">Loading extensions...</SettingsEmptyState>
+          ) : entries.length === 0 ? (
+            <SettingsEmptyState>No editor extensions installed.</SettingsEmptyState>
+          ) : (
+            <SettingsCard>
+              {entries.map((entry) => (
                 <SettingsListRow
-                  key={id}
-                  title={extension.displayName ?? id}
+                  key={entry.id}
+                  title={entry.displayName}
                   description={
                     <>
                       <span>
-                        {id} · {extension.version}
+                        {entry.id} · {entry.version} · {entry.enabled ? "Enabled" : "Disabled"}
                       </span>
-                      <p>{extension.description}</p>
+                      <p>{entry.description}</p>
+                      {entry.error ? (
+                        <p role="alert" className="text-destructive">
+                          {entry.error}
+                        </p>
+                      ) : null}
                     </>
                   }
+                  actions={
+                    <div className="flex flex-wrap items-center gap-2">
+                      {entry.updateVersion ? (
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            run({
+                              operation: "install",
+                              id: entry.id,
+                              version: entry.updateVersion,
+                            })
+                          }
+                        >
+                          Update to {entry.updateVersion}
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={busy || Boolean(entry.error)}
+                        onClick={() => {
+                          if (entry.enabled)
+                            run({ operation: "setEnabled", id: entry.id, enabled: false });
+                          else {
+                            try {
+                              setApproval({
+                                kind: "enable",
+                                id: entry.id,
+                                entries: consentClosure(entry, entries),
+                              });
+                            } catch (cause) {
+                              setLocalError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "Unable to enable extension.",
+                              );
+                            }
+                          }
+                        }}
+                      >
+                        {entry.enabled ? "Disable" : "Enable"}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={busy || Boolean(entry.error)}
+                        onClick={() => void inspect(entry)}
+                      >
+                        Configure
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => setApproval({ kind: "remove", entry })}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  }
+                />
+              ))}
+            </SettingsCard>
+          )}
+        </SettingsSectionShell>
+        {configuration ? (
+          <SettingsSectionShell title={`Configuration · ${configuration.id}`}>
+            <label htmlFor={configurationId} className="text-ui-sm text-muted-foreground">
+              Extension settings as JSON
+            </label>
+            <Textarea
+              id={configurationId}
+              value={configuration.json}
+              spellCheck={false}
+              onChange={(event) => setConfiguration({ ...configuration, json: event.target.value })}
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setConfiguration(null)}
+              >
+                Close
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  run({
+                    operation: "configure",
+                    id: configuration.id,
+                    configurationJson: configuration.json,
+                  })
+                }
+              >
+                Save configuration
+              </Button>
+            </div>
+          </SettingsSectionShell>
+        ) : null}
+      </div>
+      <div hidden={view !== "permissions"}>
+        <SettingsSectionShell title="Workspace trust">
+          <p className="mb-3 text-ui-sm text-muted-foreground">
+            Only trust workspaces you recognize. Enabling an extension and trusting a workspace are
+            separate permissions. Revoking trust stops extension hosts.
+          </p>
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <label htmlFor={workspaceId} className="text-ui-sm text-muted-foreground">
+                Workspace directory
+              </label>
+              <Input
+                id={workspaceId}
+                value={workspace}
+                maxLength={4_096}
+                onChange={(event) => setWorkspace(event.target.value)}
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || !workspace.trim()}
+              onClick={() => setApproval({ kind: "trust", cwd: workspace.trim() })}
+            >
+              Trust workspace
+            </Button>
+          </div>
+          {state.data?.trustedWorkspaces.length ? (
+            <SettingsCard>
+              {state.data.trustedWorkspaces.map((cwd) => (
+                <SettingsListRow
+                  key={cwd}
+                  title={cwd}
                   actions={
                     <Button
                       size="xs"
                       variant="outline"
-                      disabled={busy || Boolean(installed)}
-                      onClick={() => run({ operation: "install", id })}
+                      disabled={busy}
+                      onClick={() => run({ operation: "setTrust", cwd, trusted: false })}
                     >
-                      {installed ? "Installed" : "Install compatible version"}
+                      Revoke trust
                     </Button>
                   }
                 />
-              );
-            })}
-          </SettingsCard>
-        ) : null}
-      </SettingsSectionShell>
-      <SettingsSectionShell
-        title="Installed extensions"
-        action={
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={busy || entries.length === 0}
-            onClick={() => run({ operation: "checkUpdates" })}
-          >
-            Check for updates
-          </Button>
-        }
-      >
-        {state.isPending ? (
-          <SettingsEmptyState layout="status">Loading extensions...</SettingsEmptyState>
-        ) : entries.length === 0 ? (
-          <SettingsEmptyState>No editor extensions installed.</SettingsEmptyState>
-        ) : (
-          <SettingsCard>
-            {entries.map((entry) => (
-              <SettingsListRow
-                key={entry.id}
-                title={entry.displayName}
-                description={
-                  <>
-                    <span>
-                      {entry.id} · {entry.version} · {entry.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                    <p>{entry.description}</p>
-                    {entry.error ? (
-                      <p role="alert" className="text-destructive">
-                        {entry.error}
-                      </p>
-                    ) : null}
-                  </>
-                }
-                actions={
-                  <div className="flex flex-wrap items-center gap-2">
-                    {entry.updateVersion ? (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() =>
-                          run({ operation: "install", id: entry.id, version: entry.updateVersion })
-                        }
-                      >
-                        Update to {entry.updateVersion}
-                      </Button>
-                    ) : null}
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={busy || Boolean(entry.error)}
-                      onClick={() => {
-                        if (entry.enabled)
-                          run({ operation: "setEnabled", id: entry.id, enabled: false });
-                        else {
-                          try {
-                            setApproval({
-                              kind: "enable",
-                              id: entry.id,
-                              entries: consentClosure(entry, entries),
-                            });
-                          } catch (cause) {
-                            setLocalError(
-                              cause instanceof Error
-                                ? cause.message
-                                : "Unable to enable extension.",
-                            );
-                          }
-                        }
-                      }}
-                    >
-                      {entry.enabled ? "Disable" : "Enable"}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={busy || Boolean(entry.error)}
-                      onClick={() => void inspect(entry)}
-                    >
-                      Configure
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => setApproval({ kind: "remove", entry })}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                }
-              />
-            ))}
-          </SettingsCard>
-        )}
-      </SettingsSectionShell>
-      {configuration ? (
-        <SettingsSectionShell title={`Configuration · ${configuration.id}`}>
-          <label htmlFor={configurationId} className="text-ui-sm text-muted-foreground">
-            Extension settings as JSON
-          </label>
-          <Textarea
-            id={configurationId}
-            value={configuration.json}
-            spellCheck={false}
-            onChange={(event) => setConfiguration({ ...configuration, json: event.target.value })}
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setConfiguration(null)}
-            >
-              Close
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={busy}
-              onClick={() =>
-                run({
-                  operation: "configure",
-                  id: configuration.id,
-                  configurationJson: configuration.json,
-                })
-              }
-            >
-              Save configuration
-            </Button>
-          </div>
+              ))}
+            </SettingsCard>
+          ) : null}
         </SettingsSectionShell>
-      ) : null}
-      <SettingsSectionShell title="Workspace trust">
-        <p className="mb-3 text-ui-sm text-muted-foreground">
-          Only trust workspaces you recognize. Enabling an extension and trusting a workspace are
-          separate permissions. Revoking trust stops extension hosts.
-        </p>
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <label htmlFor={workspaceId} className="text-ui-sm text-muted-foreground">
-              Workspace directory
-            </label>
-            <Input
-              id={workspaceId}
-              value={workspace}
-              maxLength={4_096}
-              onChange={(event) => setWorkspace(event.target.value)}
-            />
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy || !workspace.trim()}
-            onClick={() => setApproval({ kind: "trust", cwd: workspace.trim() })}
-          >
-            Trust workspace
-          </Button>
-        </div>
-        {state.data?.trustedWorkspaces.length ? (
-          <SettingsCard>
-            {state.data.trustedWorkspaces.map((cwd) => (
-              <SettingsListRow
-                key={cwd}
-                title={cwd}
-                actions={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => run({ operation: "setTrust", cwd, trusted: false })}
-                  >
-                    Revoke trust
-                  </Button>
-                }
-              />
-            ))}
-          </SettingsCard>
-        ) : null}
-      </SettingsSectionShell>
+      </div>
       <p role="status" className="text-ui-sm text-muted-foreground">
         Extension runtime: {state.data?.runtime ?? "unavailable"}. API target:{" "}
         {state.data?.apiVersion ?? "unknown"}.

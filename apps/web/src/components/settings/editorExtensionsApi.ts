@@ -9,6 +9,7 @@ export function requestEditorExtensions(
   signal?: AbortSignal,
 ): Promise<EditorExtensionsResult> {
   const extensions = ensureNativeApi().editor?.extensions;
-  if (!extensions) return Promise.reject(new Error("This server does not provide editor extension management."));
+  if (!extensions)
+    return Promise.reject(new Error("This server does not provide editor extension management."));
   return extensions(input, signal ? { signal } : undefined);
 }

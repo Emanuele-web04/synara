@@ -40,17 +40,18 @@ test("native settings, actual extension install, sandbox activation, formatting 
   const threadId = await seedEditorProject(page, cwd);
   try {
     await page.goto("/settings?section=extensions");
+    await page.getByRole("radio", { name: /^Installed/ }).click();
     await expect(page.getByText("No editor extensions installed.", { exact: true })).toBeVisible();
+    await page.getByRole("radio", { name: "Marketplace", exact: true }).click();
     await capture(page, info, "before-install-native-extension-settings");
     await page.getByRole("textbox", { name: "Search Open VSX" }).fill("esbenp.prettier-vscode");
     await page.getByRole("button", { name: "Search", exact: true }).click();
-    const result = page
-      .locator('[data-slot="settings-row"]')
-      .filter({ hasText: "esbenp.prettier-vscode" });
+    const result = page.getByTestId("extension-card").filter({ hasText: "esbenp.prettier-vscode" });
     await expect(result).toHaveCount(1, { timeout: 35_000 });
-    await expect(result.getByRole("button", { name: "Install compatible version" })).toBeVisible();
+    await expect(result.getByRole("button", { name: "Install", exact: true })).toBeVisible();
     await capture(page, info, "after-real-open-vsx-search");
-    await result.getByRole("button", { name: "Install compatible version" }).click();
+    await result.getByRole("button", { name: "Install", exact: true }).click();
+    await page.getByRole("radio", { name: /^Installed/ }).click();
     const installed = page
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "Installed extensions", exact: true }) });
@@ -64,6 +65,7 @@ test("native settings, actual extension install, sandbox activation, formatting 
     await approval.getByRole("button", { name: "Enable approved versions" }).click();
     await expect(installed.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
     await expect(approval).not.toBeVisible();
+    await page.getByRole("radio", { name: "Permissions", exact: true }).click();
     await page.getByRole("textbox", { name: "Workspace directory" }).fill(cwd);
     await page.getByRole("button", { name: "Trust workspace", exact: true }).click();
     await page
