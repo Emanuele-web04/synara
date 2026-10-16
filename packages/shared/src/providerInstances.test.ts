@@ -47,6 +47,22 @@ function settingsWithLegacyCodexWorkInstance(explicit: ProviderInstanceConfig): 
 }
 
 describe("provider instance resolution", () => {
+  it("derives the default Cline instance and preserves its launch environment", () => {
+    const instance = deriveProviderInstances({
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        cline: {
+          driver: "cline",
+          config: { binaryPath: "/opt/cline" },
+          environment: [{ name: "CLINE_API_KEY", value: "test-key" }],
+        },
+      },
+    }).find((instance) => instance.driver === "cline");
+    expect(instance?.instanceId).toBe("cline");
+    expect(providerStartOptionsFromInstance(instance!)).toEqual({
+      cline: { binaryPath: "/opt/cline", environment: { CLINE_API_KEY: "test-key" } },
+    });
+  });
   it("rejects explicit unknown instance ids instead of falling back", () => {
     const resolved = resolveProviderInstance(DEFAULT_SERVER_SETTINGS, {
       provider: "codex",

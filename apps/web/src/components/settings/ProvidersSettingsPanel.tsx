@@ -143,6 +143,7 @@ type ProviderInstallTextKey =
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
   | "devinBinaryPath"
+  | "clineBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
@@ -382,6 +383,28 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
           <>
             Leave blank to use <code>devin</code> from your PATH. Authenticate with{" "}
             <code>devin auth login</code> or set WINDSURF_API_KEY.
+          </>
+        ),
+      },
+    ],
+  },
+  {
+    provider: "cline",
+    docs: [
+      { label: "Install", href: "https://docs.cline.bot/cli/cli-overview" },
+      { label: "ACP", href: "https://docs.cline.bot/usage/acp" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "clineBinaryPath",
+        label: "Cline binary path",
+        placeholder: "cline",
+        description: (
+          <>
+            Install with <code>npm install -g cline</code>, then run <code>cline auth</code>. Leave
+            blank to use <code>cline</code> from your PATH. Models come from your configured Cline
+            provider; Synara uses <code>cline --acp</code>.
           </>
         ),
       },
