@@ -10,6 +10,7 @@
 import type { AccountSsoProvider, AccountStatus } from "@synara/contracts";
 import { useEffect, useId, useRef, useState } from "react";
 import { SiApple, SiGithub, SiGoogle } from "react-icons/si";
+import { isRemoteDesktop } from "~/branding";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
@@ -289,15 +290,19 @@ function SignInDialogContent({ onOpenChange, onSignedIn }: Omit<SignInDialogProp
               <SiApple className="size-3.5" />
               Continue with Apple
             </Button>
-            <Button
-              variant="outline"
-              className="w-full gap-2"
-              disabled={busy}
-              onClick={() => void handleSso("github")}
-            >
-              <SiGithub className="size-3.5" />
-              Continue with GitHub
-            </Button>
+            {/* Hosted Remote has Google/Apple/email configured. Generic builds
+                keep GitHub available for their own account service. */}
+            {!isRemoteDesktop() && (
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                disabled={busy}
+                onClick={() => void handleSso("github")}
+              >
+                <SiGithub className="size-3.5" />
+                Continue with GitHub
+              </Button>
+            )}
           </div>
 
           <div className="flex items-center gap-3" role="separator" aria-orientation="horizontal">

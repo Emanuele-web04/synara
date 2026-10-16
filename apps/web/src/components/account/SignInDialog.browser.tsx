@@ -18,6 +18,11 @@ const accountApi = vi.hoisted(() => ({
   signOut: vi.fn(),
   openVerificationUrl: vi.fn(),
 }));
+const branding = vi.hoisted(() => ({ remote: false }));
+vi.mock("~/branding", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/branding")>()),
+  isRemoteDesktop: () => branding.remote,
+}));
 
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
@@ -81,6 +86,18 @@ async function typeCode(code: string) {
 describe("SignInDialog", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    branding.remote = false;
+  });
+
+  it("offers only the configured hosted sign-in providers in Remote", async () => {
+    branding.remote = true;
+    renderDialog();
+    await expect.element(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Continue with Apple" })).toBeVisible();
+    await expect.element(page.getByPlaceholder("Email")).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Continue with GitHub" }))
+      .not.toBeInTheDocument();
   });
 
   // L2: a wrong OTP code stays on the step with a failure announced as an

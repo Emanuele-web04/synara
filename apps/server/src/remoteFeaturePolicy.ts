@@ -31,7 +31,12 @@ export function accountProfileSyncUnavailableReason(): string | undefined {
   const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
   if (!isBetaFeatureEnabled("accountProfileSync", flavor))
     return "Account profile sync is unavailable in Stable.";
-  if (process.env.SYNARA_ACCOUNT_PROFILE_SYNC !== "1")
+  // The dedicated Remote app promises account sync on sign-in; generic builds
+  // still require operator opt-in, and an explicit Remote opt-out is honored.
+  const enabled =
+    process.env.SYNARA_ACCOUNT_PROFILE_SYNC === "1" ||
+    (flavor === "remote" && process.env.SYNARA_ACCOUNT_PROFILE_SYNC === undefined);
+  if (!enabled)
     return "Account profile sync is unavailable until SYNARA_ACCOUNT_PROFILE_SYNC=1 is set.";
   return undefined;
 }
