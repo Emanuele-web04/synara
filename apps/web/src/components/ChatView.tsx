@@ -6707,6 +6707,11 @@ export default function ChatView({
                     keybindings={keybindings}
                     closeActiveTabRef={closeActiveThreadTabRef}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
+                    onNewThread={
+                      activeProjectScripts !== undefined && !isCenteredEmptyLanding
+                        ? onNewThreadFromHeader
+                        : null
+                    }
                   />
                 ),
               }
@@ -6761,7 +6766,6 @@ export default function ChatView({
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
-          onNewThread={onNewThreadFromHeader}
           onToggleDiff={onToggleDiff}
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
           onCreateHandoff={onCreateHandoffThread}
