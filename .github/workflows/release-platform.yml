@@ -137,6 +137,12 @@ jobs:
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
+      - name: Install Linux package prerequisites
+        if: inputs.platform == 'linux' && steps.restore_checkpoint.outcome != 'success'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcrypt1
+
       - name: Download macOS icon catalog
         if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success'
         uses: actions/download-artifact@v8
@@ -290,6 +296,7 @@ jobs:
             "release/*.dmg" \
             "release/*.zip" \
             "release/*.AppImage" \
+            "release/*.deb" \
             "release/*.exe" \
             "release/*.blockmap" \
             "release/latest*.yml"; do

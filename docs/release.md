@@ -19,14 +19,14 @@ version, release notes and lockfile are final.
   omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Runs four native build jobs in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
     Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
     job then downloads it and runs the startup smoke on `macos-15-intel`:
     under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
-  - Linux `x64` AppImage
+  - Linux `x64` AppImage and `.deb`
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,
   signs/notarizes where required, records verified provenance, runs Defender on
@@ -65,7 +65,7 @@ version, release notes and lockfile are final.
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+  - platform installers (`.exe`, `.dmg`, `.AppImage`, `.deb`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
   - `*.blockmap` files, except the macOS update ZIP, which uses a full-archive payload

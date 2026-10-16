@@ -209,6 +209,10 @@ export function createDesktopPlatformBuildConfig(
   }
 
   if (input.platform === "linux") {
+    const targets = input.target
+      .split(",")
+      .map((target) => target.trim())
+      .filter((target) => target.length > 0);
     return {
       ...nativePackaging,
       // The driver is spawned by path; an executable inside app.asar cannot
@@ -221,7 +225,7 @@ export function createDesktopPlatformBuildConfig(
       ],
       extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
       linux: {
-        target: [input.target],
+        target: targets.length > 0 ? targets : [input.target],
         executableName: "synara",
         icon: "icon.png",
         category: "Development",

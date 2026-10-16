@@ -240,7 +240,11 @@ interface StagePackageJson {
   readonly synaraWindowsPublisherSubject: string | null;
   readonly private: true;
   readonly description: string;
-  readonly author: string;
+  readonly homepage: string;
+  readonly author: {
+    readonly name: string;
+    readonly email: string;
+  };
   readonly main: string;
   readonly build: Record<string, unknown>;
   readonly dependencies: Record<string, unknown>;
@@ -1330,7 +1334,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
     private: true,
     description: "Synara desktop build",
-    author: "Emanuele Di Pietro",
     main: "apps/desktop/dist-electron/main.js",
     build: resolvedBuildConfig.buildConfig,
     dependencies: {

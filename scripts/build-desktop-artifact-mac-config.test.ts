@@ -195,6 +195,15 @@ describe("createDesktopPlatformBuildConfig", () => {
       },
     });
 
+    const linuxInstallers = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage,deb",
+    });
+    assert.deepStrictEqual((linuxInstallers.linux as Record<string, unknown>).target, [
+      "AppImage",
+      "deb",
+    ]);
+
     assert.equal(win.mac, undefined);
     assert.equal(win.extraFiles, undefined);
     assert.equal(win.extraResources, undefined);
