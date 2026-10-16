@@ -1,0 +1,287 @@
+name: PR 1878 exact-source runtime QA
+
+on:
+  push:
+    branches: [qa/pr-1878-runtime-20261017]
+
+permissions:
+  contents: read
+
+# Diagnostics only. The production PR is checked out at this immutable head,
+# rather than testing the diagnostic workflow commit or a merge preview.
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  source:
+    name: Export exact source and current-main comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@v6
+        with:
+          repository: Emanuele-web04/synara
+          ref: main
+          persist-credentials: false
+          path: upstream
+      - name: Capture original source without dependencies or user state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          test "$(git -C candidate rev-parse HEAD)" = "$QA_SOURCE"
+          git -C candidate archive --format=tar.gz HEAD > evidence/candidate-source.tar.gz
+          git -C upstream archive --format=tar.gz HEAD > evidence/main-source.tar.gz
+          git -C candidate ls-tree -r HEAD > evidence/candidate-tree.txt
+          git -C upstream ls-tree -r HEAD > evidence/main-tree.txt
+          git -C candidate rev-parse HEAD HEAD^{tree} > evidence/candidate-identity.txt
+          git -C upstream rev-parse HEAD HEAD^{tree} > evidence/main-identity.txt
+          sha256sum evidence/*.tar.gz > evidence/archive-sha256.txt
+          git -C candidate diff --exit-code
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-exact-source
+          path: evidence
+          retention-days: 14
+          if-no-files-found: error
+
+  static:
+    name: Exact-source static and type contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Run each required static gate and retain every exit
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          git rev-parse HEAD HEAD^{tree} > qa-evidence/tested-source.txt
+          failed=0
+          for check in fmt:check lint typecheck windows-runtime:check brand:check; do
+            name="${check//:/-}"
+            bun run "$check" > "qa-evidence/$name.log" 2>&1
+            rc=$?
+            cat "qa-evidence/$name.log"
+            printf '%s\t%s\n' "$check" "$rc" >> qa-evidence/exits.tsv
+            if [ "$rc" -ne 0 ]; then failed=1; fi
+          done
+          git diff --exit-code > qa-evidence/source-clean.diff || failed=1
+          exit "$failed"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-static
+          path: qa-evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+  unit:
+    name: Exact-source tests (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            filters: --filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop
+            args: ''
+          - name: web
+            filters: --filter=@synara/web
+            args: ''
+          - name: server-1
+            filters: --filter=@synara/cli
+            args: --shard=1/3
+          - name: server-2
+            filters: --filter=@synara/cli
+            args: --shard=2/3
+          - name: server-3
+            filters: --filter=@synara/cli
+            args: --shard=3/3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Run original repository tests without weakening assertions
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          git rev-parse HEAD HEAD^{tree} > qa-evidence/tested-source.txt
+          bun run test ${{ matrix.filters }} -- ${{ matrix.args }} > qa-evidence/tests.log 2>&1
+          rc=$?
+          cat qa-evidence/tests.log
+          printf '%s\n' "$rc" > qa-evidence/test-exit.txt
+          git diff --exit-code > qa-evidence/source-clean.diff || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-unit-${{ matrix.name }}
+          path: qa-evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+  browser:
+    name: Real Chromium (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Install repository-pinned browser
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Run existing complete CI browser projects
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          git rev-parse HEAD HEAD^{tree} > qa-evidence/tested-source.txt
+          bun run --cwd apps/web test:browser:ci -- --shard=${{ matrix.shard }}/3 > qa-evidence/browser.log 2>&1
+          rc=$?
+          cat qa-evidence/browser.log
+          printf '%s\n' "$rc" > qa-evidence/test-exit.txt
+          git diff --exit-code > qa-evidence/source-clean.diff || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-chromium-${{ matrix.shard }}
+          path: |
+            qa-evidence
+            apps/web/test-results
+            apps/web/__screenshots__
+          retention-days: 14
+          if-no-files-found: warn
+
+  native:
+    name: Native process and persistence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-15]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+      - name: Exercise shared process and recovery contracts
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          git rev-parse HEAD HEAD^{tree} > qa-evidence/tested-source.txt
+          bun run --cwd packages/shared test src/windowsProcess.test.ts src/platformProcess.test.ts src/processRuntime.test.ts src/filesystemPlatform.test.ts src/platformEnvironment.test.ts src/migrationRecovery.test.ts > qa-evidence/shared-native.log 2>&1
+          rc=$?
+          cat qa-evidence/shared-native.log
+          printf '%s\n' "$rc" > qa-evidence/shared-exit.txt
+          exit "$rc"
+      - name: Exercise server lifecycle and actual SQLite recovery
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          bun run --cwd apps/server test src/platform/processTreeController.test.ts src/platform/effectProcessSignals.test.ts src/provider/supervisedProcessTeardown.test.ts src/provider/providerStartupLifecycle.test.ts src/provider/Layers/AntigravityAdapter.test.ts src/processRunner.test.ts src/persistence/MigrationBackup.test.ts src/persistence/Migrations/MigrationReplay.test.ts > qa-evidence/server-native.log 2>&1
+          rc=$?
+          cat qa-evidence/server-native.log
+          printf '%s\n' "$rc" > qa-evidence/server-exit.txt
+          git diff --exit-code > qa-evidence/source-clean.diff || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-native-${{ matrix.os }}
+          path: qa-evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+  build:
+    name: Production build and real Electron lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: 'true'
+      - name: Build actual desktop pipeline
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          git rev-parse HEAD HEAD^{tree} > qa-evidence/tested-source.txt
+          bun run build:desktop > qa-evidence/build.log 2>&1
+          rc=$?
+          cat qa-evidence/build.log
+          printf '%s\n' "$rc" > qa-evidence/build-exit.txt
+          exit "$rc"
+      - name: Configure isolated runner Electron sandbox
+        run: |
+          sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+      - name: Real Electron browser lifecycle
+        shell: bash
+        run: |
+          set -uo pipefail
+          xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle > qa-evidence/electron-lifecycle.log 2>&1
+          rc=$?
+          cat qa-evidence/electron-lifecycle.log
+          printf '%s\n' "$rc" > qa-evidence/electron-exit.txt
+          exit "$rc"
+      - name: Native browser MCP workflow
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p qa-evidence
+          xvfb-run -a bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts > qa-evidence/electron-mcp.log 2>&1
+          rc=$?
+          cat qa-evidence/electron-mcp.log
+          printf '%s\n' "$rc" > qa-evidence/mcp-exit.txt
+          git diff --exit-code > qa-evidence/source-clean.diff || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-build-electron
+          path: |
+            qa-evidence
+            apps/web/test-results
+          retention-days: 14
+          if-no-files-found: warn
