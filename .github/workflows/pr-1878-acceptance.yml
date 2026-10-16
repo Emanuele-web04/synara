@@ -1,0 +1,222 @@
+name: PR 1878 live application acceptance
+on:
+  push:
+    branches: [qa/pr-1878-acceptance-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  static:
+    name: Remaining static gates and exact formatter proposal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Run every gate and preserve failing exits
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-static"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          failed=0
+          for check in lint typecheck windows-runtime:check brand:check; do
+            name="${check//:/-}"
+            if bun run "$check" > "$out/$name.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+            cat "$out/$name.log"
+            printf '%s\t%s\n' "$check" "$rc" >> "$out/exits.tsv"
+          done
+          file=docs/integration/issue-driven-selection-20261016.md
+          cp "$file" "$out/original.md"
+          ./node_modules/.bin/oxfmt "$file"
+          cp "$file" "$out/formatted.md"
+          git diff -- "$file" > "$out/formatter-proposal.patch"
+          cp "$out/original.md" "$file"
+          git diff --exit-code > "$out/source-clean.diff" || failed=1
+          exit "$failed"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-remaining-static
+          path: ${{ runner.temp }}/pr1878-static
+          retention-days: 14
+          if-no-files-found: error
+  browser:
+    name: Isolated Chromium ${{ matrix.project }} ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chat-follow
+            shard: 1/1
+            id: chat-follow
+          - project: chat-projects
+            shard: 1/1
+            id: chat-projects
+          - project: chat-workflows
+            shard: 1/1
+            id: chat-workflows
+          - project: components
+            shard: 1/3
+            id: components-1
+          - project: components
+            shard: 2/3
+            id: components-2
+          - project: components
+            shard: 3/3
+            id: components-3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Install real Chromium
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Run a single canonical project per runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-browser"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          if bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }} --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/browser.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-browser-${{ matrix.id }}
+          path: |
+            ${{ runner.temp }}/pr1878-browser
+            apps/web/src/**/__screenshots__
+            apps/web/test-results
+          retention-days: 14
+          if-no-files-found: error
+  lineage:
+    name: Released migration lineage with actual upstream tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: Emanuele-web04/synara
+          ref: ${{ env.QA_SOURCE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.13.1
+      - name: Check released identities without missing-history skips
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-lineage"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          git tag --list 'v[0-9]*' > "$out/release-tags.txt"
+          test -s "$out/release-tags.txt"
+          if node scripts/check-migration-lineage.ts > "$out/lineage.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/lineage.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git archive --format=tar.gz d4f4d4b6002d57acf7a76c24c576eacb04fd1e1e apps/server/src/persistence > "$out/released-migration-prerequisite.tar.gz"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-released-lineage
+          path: ${{ runner.temp }}/pr1878-lineage
+          retention-days: 14
+          if-no-files-found: error
+  live:
+    name: Real built application and durable restart journeys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain the diagnostic driver outside application source
+        run: cp .github/qa/pr1878-live.mjs "$RUNNER_TEMP/pr1878-live.mjs"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Build the production web and server application
+        run: bun run build --filter=@synara/cli
+      - name: Install real browser and video runtime
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Drive real application workflows without mocked transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-live"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          if QA_REPO="$PWD" QA_OUT="$out" node "$RUNNER_TEMP/pr1878-live.mjs" > "$out/journey.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/journey.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-live-application
+          path: ${{ runner.temp }}/pr1878-live
+          retention-days: 14
+          if-no-files-found: error
+  handoff:
+    name: Native handoff readiness diagnosis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: 'true'
+      - name: Prepare native recorder
+        run: cd apps/web && ./node_modules/.bin/playwright install ffmpeg
+      - name: Configure owned runner Electron sandbox
+        run: |
+          sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+      - name: Observe original handoff test without changing its assertions
+        shell: bash
+        env:
+          DEBUG: pw:browser
+          ELECTRON_ENABLE_LOGGING: '1'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-handoff"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          if xvfb-run -a bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'keeps one real renderer guest' > "$out/handoff.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/handoff.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-native-handoff-diagnosis
+          path: |
+            ${{ runner.temp }}/pr1878-handoff
+            apps/web/test-results
+          retention-days: 14
+          if-no-files-found: error
