@@ -1,34 +1,51 @@
-name: Notion UX workspace
+name: Notion Tasks evidence
 
 on:
   push:
     branches: [feat/notion-enterprise-oauth-integration]
-    paths: [.github/workflows/notion-ux-workspace.yml]
+    paths:
+      - .github/workflows/notion-ux-workspace.yml
+      - apps/web/scripts/notion-tasks-*.mjs
+      - apps/web/src/components/tasks/**
+      - apps/web/src/components/notion/**
 
 permissions:
   contents: read
 
 jobs:
-  workspace:
+  evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 75c55fa5250b8bf0646c53e350d73d95c38d0cb5
+          ref: ${{ github.sha }}
+          fetch-depth: 20
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
-      - name: Prepare pinned browser without credentials or local state
+      # Diagnostics only: the ordinary CI Format lane checks the pristine commit.
+      # No formatter result is pushed by this job. Any patch must be reviewed and
+      # published through the connector before the candidate is considered verified.
+      - name: Report formatting adjustments for the changed slice
+        run: |
+          bun run fmt -- apps/web/src/components/tasks/taskFilters.ts apps/web/src/components/tasks/taskFilters.test.ts apps/web/src/components/tasks/TaskListFilters.tsx apps/web/src/components/tasks/TaskListItem.tsx apps/web/src/components/tasks/TasksView.tsx apps/web/src/components/notion/NotionWorkspaceLauncher.tsx apps/web/scripts/notion-tasks-fixture.mjs apps/web/scripts/notion-tasks-evidence.mjs
+          git diff -- apps/web/src/components/tasks apps/web/src/components/notion/NotionWorkspaceLauncher.tsx apps/web/scripts/notion-tasks-fixture.mjs apps/web/scripts/notion-tasks-evidence.mjs
+      - name: Focused Tasks and Notion checks
+        run: |
+          bun run test:web:focused src/components/tasks/taskFilters.test.ts src/components/tasks/tasks.logic.test.ts src/components/notion/notionDrafts.test.ts src/components/notion/notionWrites.test.ts
+          bun run --cwd apps/server test src/notion/runtime.test.ts src/agentGateway/notionTools.test.ts src/agentGateway/notionApproval.test.ts
+      - name: Install the pinned browser
         run: |
           cd apps/web
-          bunx playwright install chromium
-          mkdir -p "$RUNNER_TEMP/notion-ux-browser"
-          tar -czf "$RUNNER_TEMP/notion-ux-browser/chromium.tar.gz" -C "$HOME/.cache/ms-playwright" chromium-1234
-          sha256sum "$RUNNER_TEMP/notion-ux-browser/chromium.tar.gz" > "$RUNNER_TEMP/notion-ux-browser/chromium.sha256"
+          ./node_modules/.bin/playwright install chromium
+      - name: Capture actual component journeys
+        env:
+          NOTION_EVIDENCE_DIR: ${{ runner.temp }}/notion-tasks-evidence
+        run: node apps/web/scripts/notion-tasks-evidence.mjs
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: notion-ux-browser
-          path: ${{ runner.temp }}/notion-ux-browser
-          retention-days: 2
-          compression-level: 0
-          if-no-files-found: error
+          name: notion-tasks-before-after
+          path: ${{ runner.temp }}/notion-tasks-evidence
+          retention-days: 14
+          if-no-files-found: warn

@@ -114,12 +114,14 @@ describe("Notion task discovery filters", () => {
   it("combines filters and leaves task data unchanged", () => {
     const todo = task({ external: reference() });
     const original = structuredClone(todo);
-    expect(matchesTaskFilters(todo, {
-      source: "notion",
-      project: taskProjectKey(todo),
-      status: notionStatusKey(reference()),
-      assignee: notionAssigneeKey("workspace-a", "person-a"),
-    })).toBe(true);
+    expect(
+      matchesTaskFilters(todo, {
+        source: "notion",
+        project: taskProjectKey(todo),
+        status: notionStatusKey(reference()),
+        assignee: notionAssigneeKey("workspace-a", "person-a"),
+      }),
+    ).toBe(true);
     expect(accepts(reference(), { source: "local" })).toBe(false);
     expect(todo).toEqual(original);
   });
