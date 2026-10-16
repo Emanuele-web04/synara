@@ -213,6 +213,9 @@ describe("SidebarActivityView", () => {
     expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
     const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
     expect(remoteRow).toHaveAttribute("draggable", "false");
+    // The computer is named by the hover card and the accessible label, not the meta line.
+    expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
+    expect(remoteRow.element().textContent).not.toContain("Studio Mac");
     expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
     await remoteRow.click();
     expect(onRemoteOpen).toHaveBeenCalledOnce();
@@ -861,7 +864,7 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each(["clear read", "grouping roundtrip"] as const)(
+  it.each(["clear read", "eraser", "grouping roundtrip"] as const)(
     "holds Priority still while chats change and resets read rows (%s)",
     async (reset) => {
       const waiting = makeThread(920, { hasPendingApprovals: true });
@@ -891,6 +894,10 @@ describe("SidebarActivityView", () => {
         .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
         .toHaveAttribute("aria-disabled", "true");
       await userEvent.keyboard("{Escape}");
+      // Nothing read yet, so Priority's header offers no eraser.
+      expect(
+        page.getByRole("button", { name: "Clear read from Priority" }).elements(),
+      ).toHaveLength(0);
 
       // The approval is answered and runs, the unread chat is opened, the running one
       // finishes unseen, and the idle one asks for input: rows keep their places, the
@@ -920,10 +927,13 @@ describe("SidebarActivityView", () => {
         ]);
       });
 
-      await page.getByRole("button", { name: "Activity options" }).click();
-      if (reset === "clear read") {
+      if (reset === "eraser") {
+        await page.getByRole("button", { name: "Clear read from Priority" }).click();
+      } else if (reset === "clear read") {
+        await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();
       } else {
+        await page.getByRole("button", { name: "Activity options" }).click();
         await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
         // Radio choices keep the shared menu open; switch back in that same popup.
         await expect.element(page.getByText("Priority", { exact: true })).not.toBeInTheDocument();

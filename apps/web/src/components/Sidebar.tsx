@@ -1,5 +1,7 @@
-import { openWorkspacePath } from "./hosts/WorkspacePanels";
-import { dispatchSelectedWorkspaceChatCreation } from "../lib/hosts/workspaceCommands";
+import {
+  dispatchSelectedWorkspaceChatCreation,
+  openWorkspacePath,
+} from "../lib/hosts/workspaceCommands";
 import {
   OPEN_CREATE_PROJECT_EVENT,
   type WorkspaceSidebarKeyboardEvent,
