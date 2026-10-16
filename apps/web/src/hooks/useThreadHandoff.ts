@@ -18,6 +18,7 @@ import {
   buildThreadHandoffImportedMessages,
   canContinueThreadHandoff,
   canCreateThreadHandoff,
+  ProviderHandoffBackgroundTasksError,
   type ProviderHandoffOutcome,
   resolveProviderHandoffOutcome,
   resolveThreadHandoffModelSelection,
@@ -138,6 +139,8 @@ export function useThreadHandoff() {
     // The model picked in the composer; the header menu leaves it to the
     // same default the new-thread handoff uses.
     explicitModelSelection?: ModelSelection,
+    // Set only from an explicit user choice: ends the source's background tasks.
+    options?: { readonly stopBackgroundTasks?: boolean },
   ): Promise<void> => {
     if (
       !canContinueThreadHandoff({ sourceProvider: thread.modelSelection.provider, targetProvider })
@@ -155,9 +158,13 @@ export function useThreadHandoff() {
       threadId: thread.id,
       modelSelection,
       providerHandoff: true,
+      ...(options?.stopBackgroundTasks ? { providerHandoffStopsBackgroundTasks: true } : {}),
     });
     const outcome = await waitForProviderHandoffOutcome(thread.id, commandId);
     const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+    if (outcome.status === "failed" && outcome.blockedByBackgroundTasks) {
+      throw new ProviderHandoffBackgroundTasksError(thread.modelSelection.provider, targetProvider);
+    }
     if (outcome.status === "failed") {
       throw new Error(`${targetName} could not start: ${outcome.detail}`);
     }

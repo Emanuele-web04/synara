@@ -17,6 +17,7 @@ import {
   EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadErrorRefetchInterval,
 } from "./expensiveReadRetry";
+import { createActivityRefreshThrottle } from "./activityRefreshThrottle";
 import { resolveWorkspaceFileReferenceBatched } from "./workspaceFileReferenceBatch";
 
 export const projectQueryKeys = {
@@ -125,6 +126,13 @@ export function invalidateProjectFileQueriesForCwds(
     ]),
   );
 }
+
+/** Mid-turn file-change refresh for workspaces running agents just touched; see activityRefreshThrottle. */
+export const invalidateProjectFileQueriesForCwdsAfterActivity = createActivityRefreshThrottle(
+  (queryClient, cwd) => {
+    void invalidateProjectFileQueriesForCwds(queryClient, [cwd]);
+  },
+);
 
 const DEFAULT_SEARCH_ENTRIES_LIMIT = 80;
 const DEFAULT_LIST_DIRECTORIES_STALE_TIME = 15_000;

@@ -237,6 +237,39 @@ describe("EscapeKillSwitchMonitor", () => {
     monitor.dispose();
   });
 
+  it.each([false, true])(
+    "recovers a silent listener readiness stall after rearm=%s without trusting its late output",
+    async (rearm) => {
+      vi.useFakeTimers();
+      const onEscape = vi.fn();
+      const { monitor, helpers } = makeMonitor({ onEscape });
+      let activation = monitor.activate();
+      const stalled = helpers[0]!;
+      if (rearm) {
+        stalled.stdout.write('{"type":"ready"}\n');
+        await activation;
+        monitor.setArmed(false);
+        activation = monitor.activate();
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      await activation;
+      expect(monitor.state.ready).toBe(false);
+      expect(stalled.kill).toHaveBeenCalledWith("SIGTERM");
+      stalled.stdout.write('{"type":"ready"}\n{"type":"escape"}\n');
+      expect(onEscape).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(helpers).toHaveLength(2);
+      expect(helpers[1]!.stdinCommands).toEqual(["arm\n"]);
+      expect(monitor.state.ready).toBe(false);
+      helpers[1]!.stdout.write('{"type":"ready"}\n{"type":"escape"}\n');
+      expect(monitor.state.ready).toBe(true);
+      expect(onEscape).toHaveBeenCalledOnce();
+      monitor.dispose();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(helpers).toHaveLength(2);
+    },
+  );
+
   it("does not spawn twice when activation overtakes the restart timer", async () => {
     vi.useFakeTimers();
     const { monitor, helpers } = makeMonitor();

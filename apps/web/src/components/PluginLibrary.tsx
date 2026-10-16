@@ -11,22 +11,13 @@ import {
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { useMemo, type ReactNode, useDeferredValue, useState } from "react";
-import type { IconType } from "react-icons";
-import {
-  SiCanva,
-  SiFigma,
-  SiGithub,
-  SiGmail,
-  SiGooglecalendar,
-  SiGoogledrive,
-  SiHuggingface,
-  SiLinear,
-  SiNotion,
-  SiSlack,
-  SiStripe,
-  SiVercel,
-} from "react-icons/si";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
+import {
+  type BrandArtwork,
+  KNOWN_BRAND_ARTWORK,
+  normalizeBrandKey,
+  readableBrandColor,
+} from "~/lib/brandIcons";
 import { useStore } from "~/store";
 import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
 import { useAppSettings } from "~/appSettings";
@@ -77,30 +68,12 @@ type PluginEntry = {
   plugin: ProviderPluginDescriptor;
   isFeatured: boolean;
 };
-type PluginBrandArtwork = {
-  color: string;
-  icon: IconType;
-};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
-};
-const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
-  canva: { icon: SiCanva, color: "#00C4CC" },
-  figma: { icon: SiFigma, color: "#F24E1E" },
-  github: { icon: SiGithub, color: "#181717" },
-  gmail: { icon: SiGmail, color: "#EA4335" },
-  googlecalendar: { icon: SiGooglecalendar, color: "#4285F4" },
-  googledrive: { icon: SiGoogledrive, color: "#0F9D58" },
-  huggingface: { icon: SiHuggingface, color: "#FF9D00" },
-  linear: { icon: SiLinear, color: "#5E6AD2" },
-  notion: { icon: SiNotion, color: "#111111" },
-  slack: { icon: SiSlack, color: "#4A154B" },
-  stripe: { icon: SiStripe, color: "#635BFF" },
-  vercel: { icon: SiVercel, color: "#111111" },
 };
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -118,18 +91,11 @@ function resolvePluginAccent(plugin: ProviderPluginDescriptor): string | undefin
   return plugin.interface?.brandColor?.trim() || undefined;
 }
 
-function normalizeBrandKey(value: string | undefined): string {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
 function resolvePluginLogo(plugin: ProviderPluginDescriptor): string | undefined {
   return plugin.interface?.logo?.trim() || undefined;
 }
 
-function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwork | undefined {
+function resolvePluginBrand(plugin: ProviderPluginDescriptor): BrandArtwork | undefined {
   const candidates = [
     plugin.interface?.composerIcon,
     plugin.interface?.displayName,
@@ -138,7 +104,7 @@ function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwor
 
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const knownBrand = KNOWN_PLUGIN_BRANDS[candidate];
+    const knownBrand = KNOWN_BRAND_ARTWORK[candidate];
     if (knownBrand) return knownBrand;
   }
 
@@ -197,7 +163,10 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
         className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px] border border-border/60 bg-background"
         style={accent ? { boxShadow: `0 0 0 0.5px ${accent}25` } : undefined}
       >
-        <BrandIcon className="size-5" style={{ color: brand.color }} />
+        <BrandIcon
+          className="size-5"
+          style={{ color: readableBrandColor(brand.color) ?? "var(--foreground)" }}
+        />
       </span>
     );
   }
