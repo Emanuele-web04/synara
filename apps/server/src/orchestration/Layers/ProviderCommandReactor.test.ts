@@ -8242,6 +8242,13 @@ describe("ProviderCommandReactor", () => {
         expect(
           harness.sendTurn.mock.calls.filter(([request]) => request.threadId === threadId),
         ).toHaveLength(0);
+        // The failure activity and session error are separate durable updates.
+        // Observing the activity does not imply the session update has committed.
+        await waitFor(async () =>
+          (await readHarnessThread(harness))?.session?.lastError?.includes(
+            PROVIDER_DELIVERY_BLOCK_SUMMARY,
+          ) === true,
+        );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
         );
@@ -14727,6 +14734,9 @@ describe("ProviderCommandReactor", () => {
       .fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void)
       .mockImplementationOnce(() => Effect.promise(() => captureGate));
     const harness = await createHarness({
+      // This case holds the baseline until explicit release, including under load.
+      // Real deadline behavior is exercised by the dedicated timeout cases.
+      preTurnBaselineTimeout: Duration.minutes(5),
       checkpointStore: {
         isGitRepository: () => Effect.succeed(true),
         captureCheckpoint,
@@ -14830,7 +14840,7 @@ describe("ProviderCommandReactor", () => {
       await start("thread-isolated");
       await waitFor(
         () => harness.sendTurn.mock.calls.some(([input]) => input.threadId === "thread-isolated"),
-        500,
+        10_000,
       );
       console.info(
         `Independent provider turn latency with a blocked checkpoint, 300 progress events and 300 queued intents: ${Date.now() - independentStartedAt}ms`,
@@ -17623,7 +17633,12 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("releases a timed-out promoted turn when its live provider turn settles", async () => {
+    const clockScope = await Effect.runPromise(Scope.make("sequential"));
+    scopes.add(clockScope);
+    const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(clockScope)));
+    const accepted = Effect.runSync(Deferred.make<void>());
     const harness = await createHarness({
+      clock,
       commandEventTimeout: Duration.millis(25),
     });
     await seedQueuedTurnBehindLiveTurn(harness, {
@@ -17645,14 +17660,18 @@ describe("ProviderCommandReactor", () => {
           status: "running",
           activeTurnId: timedOutTurnId,
         }),
-      ).pipe(Effect.andThen(Effect.never)),
+      ).pipe(Effect.andThen(Deferred.succeed(accepted, undefined)), Effect.andThen(Effect.never)),
     );
 
     await settleLiveTurn(harness, {
       turnId: asTurnId("turn-running-timeout"),
       eventId: "evt-turn-completed-timeout",
     });
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    // Start the deadline only after this fixture proves provider acceptance.
+    // A real 25ms deadline can otherwise expire during session preparation.
+    await Effect.runPromise(Deferred.await(accepted).pipe(Effect.timeout("5 seconds")));
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    await Effect.runPromise(clock.adjust(Duration.millis(26)).pipe(Scope.provide(clockScope)));
     await waitFor(async () =>
       Effect.runPromise(
         harness.deliveryRepository
@@ -17660,7 +17679,11 @@ describe("ProviderCommandReactor", () => {
             consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
             threadId: "thread-1",
           })
-          .pipe(Effect.map(Option.isSome)),
+          .pipe(
+            Effect.map(
+              (delivery) => Option.isSome(delivery) && delivery.value.state === "uncertain",
+            ),
+          ),
       ),
     );
 

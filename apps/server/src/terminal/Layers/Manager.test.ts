@@ -1531,32 +1531,33 @@ describe("TerminalManager", () => {
   });
 
   it("retries with fallback shells when preferred shell spawn fails", async () => {
+    const fallbackShell = "/qa/fallback-shell";
+    if (process.platform !== "win32") vi.stubEnv("SHELL", fallbackShell);
     const { manager, ptyAdapter } = makeManager(5, {
       shellResolver: () => "/definitely/missing-shell -l",
     });
     ptyAdapter.spawnFailures.push(new Error("posix_spawnp failed."));
 
-    const snapshot = await manager.open(openInput());
+    try {
+      const snapshot = await manager.open(openInput());
 
-    expect(snapshot.status).toBe("running");
-    expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
-    expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
+      expect(snapshot.status).toBe("running");
+      expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
+      expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
 
-    if (process.platform === "win32") {
-      expect(
-        ptyAdapter.spawnInputs.some(
-          (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-        ),
-      ).toBe(true);
-    } else {
-      expect(
-        ptyAdapter.spawnInputs.some((input) =>
-          ["/bin/zsh", "/bin/bash", "/bin/sh", "zsh", "bash", "sh"].includes(input.shell),
-        ),
-      ).toBe(true);
+      if (process.platform === "win32") {
+        expect(
+          ptyAdapter.spawnInputs.some(
+            (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
+          ),
+        ).toBe(true);
+      } else {
+        expect(ptyAdapter.spawnInputs[1]?.shell).toBe(fallbackShell);
+      }
+    } finally {
+      manager.dispose();
+      vi.unstubAllEnvs();
     }
-
-    manager.dispose();
   });
 
   it("emits nested PTY spawn failure details", async () => {
