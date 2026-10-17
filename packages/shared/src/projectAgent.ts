@@ -90,6 +90,30 @@ export function isMemoryNoteDocumentPath(logicalPath: string): boolean {
   );
 }
 
+// Dated hub memory notes are `memory/<date>-<slug>.md`: the files the
+// coordinator's remember tool writes and the user may later correct. Thread
+// memory and MEMORY.md itself are excluded by construction.
+export const GROUP_MEMORY_NOTE_PATH_PATTERN = /^memory\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$/;
+
+export function isGroupMemoryNoteDocumentPath(logicalPath: string): boolean {
+  return GROUP_MEMORY_NOTE_PATH_PATTERN.test(logicalPath);
+}
+
+// Notes the user owns end to end in Settings: coordinator-written notes and the
+// user's own quick notes. `memory/threads/**` keeps its own thread ownership and
+// MEMORY.md stays a generated index, so neither is editable here.
+export function isUserEditableMemoryNoteDocumentPath(logicalPath: string): boolean {
+  return isGroupMemoryNoteDocumentPath(logicalPath) || isMemoryNoteDocumentPath(logicalPath);
+}
+
+/** Provenance label for a note's author. Descriptive only: it never grants a
+ *  note more authority than its contents already have. */
+export function memoryNoteOriginForAuthor(
+  authorKind: string,
+): "human-instruction" | "agent-conclusion" {
+  return authorKind === "user" ? "human-instruction" : "agent-conclusion";
+}
+
 export function canWriteMemoryDocument(input: {
   readonly logicalPath: string;
   readonly principalKind: string;

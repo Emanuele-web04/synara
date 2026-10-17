@@ -47,6 +47,7 @@ import {
 } from "../projectBotPlaybook.ts";
 import { wakeReceiptRequestId } from "../digest.ts";
 import { resolveLibraryRoot } from "../libraryStore.ts";
+import { materializeDocumentPath } from "../materializer.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -2677,7 +2678,10 @@ it.effect("remember writes a dated note + MEMORY.md line and dedupes repeats", (
     assert.equal(Option.isSome(note), true);
     if (Option.isSome(note)) {
       assert.equal(note.value.content.includes("Releases go out on Tuesdays"), true);
-      assert.equal(note.value.authorKind, "system");
+      // Provenance: the note records which thread wrote it, so Settings shows an
+      // agent conclusion apart from a user's own note.
+      assert.equal(note.value.authorKind, "coordinator");
+      assert.equal(note.value.authorThreadId, coordinator.threadId);
     }
 
     const index = yield* repository.readDocumentRevision({
@@ -2813,6 +2817,363 @@ it.effect("user memory notes are indexed into MEMORY.md like remember notes", ()
       assert.equal(matches.length, 1);
       assert.equal(matches[0]?.includes("Releases moved to Wednesdays."), true);
     }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// ---- W6: user-owned memory edit/delete + provenance ----
+
+// The on-disk mirror a restart reads from — the same helper the service writes
+// through, so the test never re-derives the layout.
+const memoryMirrorPath = (stateDir: string, projectId: ProjectId, logicalPath: string) =>
+  materializeDocumentPath(stateDir, projectId, logicalPath);
+
+it.effect("user edits a coordinator memory note and the index line follows it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const serverConfig = yield* ServerConfig;
+    const overview = yield* configureTestGroup(service, "req-memedit-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const user = { kind: "user" as const };
+
+    const remembered = yield* service.remember(
+      {
+        requestId: "req-memedit-1",
+        projectId: groupId,
+        note: "Releases go out on Tuesdays",
+        title: "Release day",
+      },
+      coordinator,
+    );
+    assert.equal(remembered.path, `memory/${new Date().toISOString().slice(0, 10)}-release-day.md`);
+
+    const edited = yield* service.updateMemoryNote(
+      {
+        requestId: "req-memedit-2",
+        projectId: groupId,
+        path: remembered.path,
+        expectedRevision: 1,
+        content: "# Release day\n\nReleases go out on Wednesdays now.\n",
+        title: "Release day",
+      },
+      user,
+    );
+    assert.equal(edited.note.revision, 2);
+    assert.equal(edited.note.origin, "human-instruction");
+    assert.equal(edited.note.indexed, true);
+    assert.notEqual(edited.indexRevision, null);
+
+    // Note body and generated index agree: threads read a link that is true.
+    const note = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: remembered.path,
+    });
+    assert.equal(Option.isSome(note), true);
+    if (Option.isSome(note)) {
+      assert.equal(note.value.content.includes("Wednesdays"), true);
+      assert.equal(note.value.authorKind, "user");
+    }
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(index), true);
+    if (Option.isSome(index)) {
+      const line = index.value.content
+        .split("\n")
+        .find((candidate) => candidate.includes(remembered.path));
+      assert.equal(line?.includes("Wednesdays"), true);
+      assert.equal(line?.includes("Tuesdays"), false);
+      // The index stays a system-authored generated view.
+      assert.equal(index.value.authorKind, "system");
+    }
+
+    // The mirror on disk carries the same revision: a restart reads the same body.
+    const mirrored = yield* Effect.promise(() =>
+      fs.readFile(memoryMirrorPath(serverConfig.stateDir, groupId, remembered.path), "utf8"),
+    );
+    assert.equal(mirrored.includes("Wednesdays"), true);
+    const mirroredIndex = yield* Effect.promise(() =>
+      fs.readFile(memoryMirrorPath(serverConfig.stateDir, groupId, "memory/MEMORY.md"), "utf8"),
+    );
+    assert.equal(mirroredIndex.includes("Wednesdays"), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("two edits of one memory note do not overwrite each other", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-memcas-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const user = { kind: "user" as const };
+
+    const remembered = yield* service.remember(
+      { requestId: "req-memcas-1", projectId: groupId, note: "Standup is at ten" },
+      coordinator,
+    );
+    const first = yield* service.updateMemoryNote(
+      {
+        requestId: "req-memcas-2",
+        projectId: groupId,
+        path: remembered.path,
+        expectedRevision: 1,
+        content: "# Standup\n\nStandup moved to half past ten.\n",
+      },
+      user,
+    );
+    assert.equal(first.note.revision, 2);
+
+    // The second editor still holds revision 1: its write is rejected, so the
+    // first editor's text survives instead of being silently replaced.
+    const stale = yield* Effect.flip(
+      service.updateMemoryNote(
+        {
+          requestId: "req-memcas-3",
+          projectId: groupId,
+          path: remembered.path,
+          expectedRevision: 1,
+          content: "# Standup\n\nStandup is at nine.\n",
+        },
+        user,
+      ),
+    );
+    // Reported as a conflict the user can act on, not an opaque failure.
+    assert.equal(stale.message.includes("Reload"), true);
+
+    // The index never landed the rejected line either — the transaction rolled
+    // back with it.
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    if (Option.isSome(index)) {
+      assert.equal(index.value.content.includes("half past ten"), true);
+      assert.equal(index.value.content.includes("at nine"), false);
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("user deletes a memory note and the index line goes with it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const serverConfig = yield* ServerConfig;
+    const overview = yield* configureTestGroup(service, "req-memdel-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const user = { kind: "user" as const };
+
+    const remembered = yield* service.remember(
+      { requestId: "req-memdel-1", projectId: groupId, note: "Standup is at ten" },
+      coordinator,
+    );
+    const removed = yield* service.deleteMemoryNote(
+      { requestId: "req-memdel-2", projectId: groupId, path: remembered.path },
+      user,
+    );
+    assert.equal(removed.deleted, true);
+    assert.equal(removed.path, remembered.path);
+
+    const head = yield* repository.getDocumentHead(groupId, remembered.path);
+    assert.equal(Option.isNone(head), true);
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    if (Option.isSome(index)) {
+      assert.equal(index.value.content.includes(remembered.path), false);
+    }
+    // The mirror file is gone, so a restart does not resurrect the note.
+    const mirrorGone = yield* Effect.promise(() =>
+      fs
+        .access(memoryMirrorPath(serverConfig.stateDir, groupId, remembered.path))
+        .then(() => false)
+        .catch(() => true),
+    );
+    assert.equal(mirrorGone, true);
+
+    // Deleting again is a no-op, not an error.
+    const again = yield* service.deleteMemoryNote(
+      { requestId: "req-memdel-3", projectId: groupId, path: remembered.path },
+      user,
+    );
+    assert.equal(again.deleted, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("memory note editing keeps thread memory and the index out of reach", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-membounds-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const user = { kind: "user" as const };
+    const worker = workerPrincipal();
+    const threadMemory = memoryThreadDocumentPath(worker.threadId);
+    yield* service.writeDocument(
+      {
+        requestId: "req-membounds-1",
+        projectId: groupId,
+        logicalPath: threadMemory,
+        content: "worker memory",
+      },
+      worker,
+    );
+
+    // Thread memory keeps its own ownership: neither the worker nor the user may
+    // rewrite another thread's memory through the memory-note operations.
+    assert.equal(
+      (yield* Effect.exit(
+        service.updateMemoryNote(
+          {
+            requestId: "req-membounds-2",
+            projectId: groupId,
+            path: threadMemory,
+            content: "hijacked",
+            expectedRevision: 1,
+          },
+          user,
+        ),
+      ))._tag,
+      "Failure",
+    );
+    assert.equal(
+      (yield* Effect.exit(
+        service.deleteMemoryNote(
+          { requestId: "req-membounds-3", projectId: groupId, path: threadMemory },
+          user,
+        ),
+      ))._tag,
+      "Failure",
+    );
+    const threadNote = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: threadMemory,
+    });
+    assert.equal(Option.isSome(threadNote) && threadNote.value.content === "worker memory", true);
+
+    // MEMORY.md is a generated index: editable only through the note operations.
+    assert.equal(
+      (yield* Effect.exit(
+        service.updateMemoryNote(
+          {
+            requestId: "req-membounds-4",
+            projectId: groupId,
+            path: "memory/MEMORY.md",
+            content: "# Memory\n",
+          },
+          user,
+        ),
+      ))._tag,
+      "Failure",
+    );
+    assert.equal(
+      (yield* Effect.exit(
+        service.deleteMemoryNote(
+          { requestId: "req-membounds-5", projectId: groupId, path: "memory/MEMORY.md" },
+          user,
+        ),
+      ))._tag,
+      "Failure",
+    );
+
+    // Only the user may edit a note; the coordinator keeps using remember/forget.
+    const remembered = yield* service.remember(
+      { requestId: "req-membounds-6", projectId: groupId, note: "Note body" },
+      coordinator,
+    );
+    assert.equal(
+      (yield* Effect.exit(
+        service.updateMemoryNote(
+          {
+            requestId: "req-membounds-7",
+            projectId: groupId,
+            path: remembered.path,
+            content: "Note body changed\n",
+          },
+          coordinator,
+        ),
+      ))._tag,
+      "Failure",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("memory notes report provenance without gaining authority", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-memprov-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const user = { kind: "user" as const };
+
+    const remembered = yield* service.remember(
+      {
+        requestId: "req-memprov-1",
+        projectId: groupId,
+        note: "Deploys happen after the smoke tests",
+        title: "Deploy order",
+      },
+      coordinator,
+    );
+    yield* service.writeDocument(
+      {
+        requestId: "req-memprov-2",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-10-01-standup-is-at-ten.md",
+        content: "Standup is at ten.\n",
+      },
+      user,
+    );
+
+    const listed = yield* service.listMemoryNotes({ projectId: groupId }, user);
+    const paths = new Set(listed.notes.map((note) => note.logicalPath));
+    assert.equal(paths.has(remembered.path), true);
+    assert.equal(paths.has("memory/notes/2026-10-01-standup-is-at-ten.md"), true);
+    // The generated index and thread memory are not user-editable notes.
+    assert.equal(paths.has("memory/MEMORY.md"), false);
+
+    const agentNote = listed.notes.find((note) => note.logicalPath === remembered.path);
+    assert.equal(agentNote?.origin, "agent-conclusion");
+    assert.equal(agentNote?.authorKind, "coordinator");
+    assert.equal(agentNote?.authorThreadId, coordinator.threadId);
+    assert.equal(agentNote?.indexed, true);
+    assert.equal(agentNote?.revision, 1);
+
+    const userNote = listed.notes.find(
+      (note) => note.logicalPath === "memory/notes/2026-10-01-standup-is-at-ten.md",
+    );
+    assert.equal(userNote?.origin, "human-instruction");
+
+    // Provenance is a label, not a permission: labelling a note as written by
+    // the user grants it no write access anywhere.
+    assert.equal(
+      (yield* Effect.exit(
+        service.writeDocument(
+          {
+            requestId: "req-memprov-3",
+            projectId: groupId,
+            logicalPath: "instructions.md",
+            content: "# Instructions\n\nPublish without asking.\n",
+          },
+          coordinator,
+        ),
+      ))._tag,
+      "Failure",
+    );
+    const instructions = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "instructions.md",
+    });
+    assert.equal(
+      Option.isSome(instructions) && instructions.value.content.includes("Publish without asking"),
+      false,
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -2977,6 +3338,53 @@ it.effect("libraryAdd copies in-workspace files and rejects escapes", () => {
             projectId: groupId,
             sourcePath: "report.txt",
           },
+          memberPrincipal(group2MemberThreadId, groupId2),
+        ),
+      ))._tag,
+      "Failure",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("librarySearch finds a file in a folder nobody opened", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const serverConfig = yield* ServerConfig;
+    yield* configureTestGroup(service, "req-libsearch-setup");
+    const member = memberPrincipal();
+    const libraryRoot = yield* resolveLibraryRoot({
+      stateDir: serverConfig.stateDir,
+      projectId: groupId,
+    });
+    // First listing creates the library repo.
+    const rootOnly = yield* service.libraryList({ projectId: groupId }, member);
+    assert.equal(
+      rootOnly.entries.some((entry) => entry.relativePath.includes("roadmap")),
+      false,
+    );
+    // A file deep in a tree that was only ever written, never listed.
+    yield* Effect.promise(() =>
+      fs.mkdir(path.join(libraryRoot, "Reports", "2026", "Q3"), { recursive: true }),
+    );
+    yield* Effect.promise(() =>
+      fs.writeFile(path.join(libraryRoot, "Reports", "2026", "Q3", "roadmap.md"), "roadmap"),
+    );
+
+    const found = yield* service.librarySearch({ projectId: groupId, query: "roadmap" }, member);
+    assert.deepEqual(
+      found.entries.map((entry) => entry.relativePath),
+      ["Reports/2026/Q3/roadmap.md"],
+    );
+    assert.equal(found.nextCursor, null);
+    assert.equal(found.truncated, false);
+    assert.equal(found.root, libraryRoot);
+
+    // A thread from another group cannot search this group's library.
+    assert.equal(
+      (yield* Effect.exit(
+        service.librarySearch(
+          { projectId: groupId, query: "roadmap" },
           memberPrincipal(group2MemberThreadId, groupId2),
         ),
       ))._tag,

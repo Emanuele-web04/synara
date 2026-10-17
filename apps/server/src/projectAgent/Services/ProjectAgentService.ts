@@ -33,10 +33,16 @@ import type {
   ProjectAgentListDocumentsResult,
   ProjectAgentListEvidenceInput,
   ProjectAgentListEvidenceResult,
+  ProjectAgentListMemoryNotesInput,
+  ProjectAgentListMemoryNotesResult,
   ProjectAgentListTasksInput,
   ProjectAgentListTasksResult,
   ProjectAgentListThreadIndexInput,
   ProjectAgentListThreadIndexResult,
+  ProjectAgentLibrarySearchInput,
+  ProjectAgentLibrarySearchResult,
+  ProjectAgentDeleteMemoryNoteInput,
+  ProjectAgentDeleteMemoryNoteResult,
   ProjectAgentOverview,
   ProjectAgentReadDocumentInput,
   ProjectAgentReadDocumentResult,
@@ -48,6 +54,8 @@ import type {
   ProjectAgentStreamEvent,
   ProjectAgentSubscribeInput,
   ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateMemoryNoteInput,
+  ProjectAgentUpdateMemoryNoteResult,
   ProjectAgentUpdateTaskInput,
   ProjectAgentWriteDocumentInput,
   ProjectDocumentRevision,
@@ -100,10 +108,30 @@ export interface ProjectAgentServiceShape {
     input: ProjectAgentForgetInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentForgetResult, ProjectAgentServiceError>;
+  /** Memory notes with their provenance, for the Settings list. */
+  readonly listMemoryNotes: (
+    input: ProjectAgentListMemoryNotesInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentListMemoryNotesResult, ProjectAgentServiceError>;
+  /** User-owned edit of one memory note; note + index line commit together. */
+  readonly updateMemoryNote: (
+    input: ProjectAgentUpdateMemoryNoteInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentUpdateMemoryNoteResult, ProjectAgentServiceError>;
+  /** User-owned delete of one memory note; note + index line commit together. */
+  readonly deleteMemoryNote: (
+    input: ProjectAgentDeleteMemoryNoteInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentDeleteMemoryNoteResult, ProjectAgentServiceError>;
   readonly libraryList: (
     input: ProjectAgentLibraryListInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentLibraryListResult, ProjectAgentServiceError>;
+  /** Whole-tree name search with result/scan/depth bounds and a cursor. */
+  readonly librarySearch: (
+    input: ProjectAgentLibrarySearchInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentLibrarySearchResult, ProjectAgentServiceError>;
   readonly libraryAdd: (
     input: ProjectAgentLibraryAddInput,
     principal: ProjectAgentPrincipal,

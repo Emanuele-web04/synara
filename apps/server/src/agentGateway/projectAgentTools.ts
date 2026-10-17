@@ -5,6 +5,7 @@ import {
   ProjectAgentGetOverviewInput,
   ProjectAgentLibraryAddInput,
   ProjectAgentLibraryListInput,
+  ProjectAgentLibrarySearchInput,
   ProjectAgentLinkRepositoryInput,
   ProjectAgentListTasksInput,
   ProjectAgentListThreadsInput,
@@ -377,6 +378,40 @@ export function makeProjectAgentTools(
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  // Whole-tree search so a worker can find a file it was told about without
+  // walking directories one at a time. Returns paths and sizes only — no
+  // contents — so it never preloads the library into a prompt.
+  const librarySearch: ToolEntry = {
+    requiredCapability: "thread:read",
+    definition: {
+      name: "synara_project_library_search",
+      description:
+        "Search the hub's whole Library by name or path — including folders never opened before. Returns matching entries with relativePath, plus a cursor for the next page. Read a file with synara_project_library_list or the panel afterwards.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          query: { type: "string" },
+          relativePath: { type: "string" },
+          kind: { type: "string", enum: ["file", "directory"] },
+          cursor: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: ["projectId", "query"],
+      },
+      annotations: { title: "Search hub library", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLibrarySearchInput, args);
+        const result = yield* projectAgent
+          .librarySearch(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const listThreads: ToolEntry = {
     requiredCapability: "thread:read",
     definition: {
@@ -412,6 +447,7 @@ export function makeProjectAgentTools(
     forget,
     linkRepository,
     libraryList,
+    librarySearch,
     libraryAdd,
     listThreads,
   ];

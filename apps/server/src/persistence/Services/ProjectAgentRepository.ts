@@ -157,6 +157,26 @@ export interface ProjectAgentRepositoryShape {
     readonly diskHash?: string | null;
     readonly conflictPending?: boolean;
   }) => Effect.Effect<ProjectDocumentRevision, ProjectAgentRepositoryError>;
+  /** Apply several document writes and removals in one transaction.
+   *
+   *  A memory note and its MEMORY.md index line must agree or not exist at all:
+   *  a half-applied edit leaves threads reading a link to a stale body. Every
+   *  upsert carries the revision its caller read and every delete the revision
+   *  it expects to remove, so a concurrent writer loses the whole transaction
+   *  instead of half of it. */
+  readonly applyDocumentChanges: (input: {
+    readonly projectId: ProjectId;
+    readonly upserts: ReadonlyArray<{
+      readonly revision: ProjectDocumentRevision;
+      readonly expectedRevision: number | null;
+      readonly diskHash?: string | null;
+      readonly conflictPending?: boolean;
+    }>;
+    readonly deletes: ReadonlyArray<{
+      readonly logicalPath: string;
+      readonly expectedRevision: number | null;
+    }>;
+  }) => Effect.Effect<void, ProjectAgentRepositoryError>;
   /** Update only the head row's disk-sync marker after the mirror write lands. */
   readonly markDocumentDiskSynced: (input: {
     readonly projectId: ProjectId;

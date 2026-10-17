@@ -582,6 +582,75 @@ export const ProjectAgentForgetResult = Schema.Struct({
 });
 export type ProjectAgentForgetResult = typeof ProjectAgentForgetResult.Type;
 
+// A memory note as Settings sees it: the document plus who/what produced it.
+// `origin` only labels the note — a human instruction the user wrote vs an
+// agent conclusion. It is descriptive metadata: it never widens what a note
+// may write, approve, or dispatch.
+export const ProjectMemoryNoteOrigin = Schema.Literals(["human-instruction", "agent-conclusion"]);
+export type ProjectMemoryNoteOrigin = typeof ProjectMemoryNoteOrigin.Type;
+
+export const ProjectMemoryNote = Schema.Struct({
+  projectId: ProjectId,
+  logicalPath: ProjectDocumentLogicalPath,
+  title: Schema.String,
+  summary: Schema.String,
+  revision: PositiveInt,
+  updatedAt: IsoDateTime,
+  authorKind: Schema.Literals(["user", "coordinator", "worker", "system"]),
+  authorThreadId: Schema.NullOr(ThreadId),
+  /** Origin messages/threads/paths recorded with the revision that produced it. */
+  sources: Schema.Array(ProjectDocumentSource),
+  origin: ProjectMemoryNoteOrigin,
+  /** Whether the generated MEMORY.md index carries a line for this note. */
+  indexed: Schema.Boolean,
+});
+export type ProjectMemoryNote = typeof ProjectMemoryNote.Type;
+
+export const ProjectAgentListMemoryNotesInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectAgentListMemoryNotesInput = typeof ProjectAgentListMemoryNotesInput.Type;
+
+export const ProjectAgentListMemoryNotesResult = Schema.Struct({
+  notes: Schema.Array(ProjectMemoryNote),
+});
+export type ProjectAgentListMemoryNotesResult = typeof ProjectAgentListMemoryNotesResult.Type;
+
+// User-owned note edit. `expectedRevision` is the CAS guard: two editors of the
+// same note cannot overwrite each other — the second write is rejected instead
+// of silently replacing the first.
+export const ProjectAgentUpdateMemoryNoteInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  expectedRevision: Schema.optional(NonNegativeInt),
+  content: Schema.String.check(Schema.isMaxLength(PROJECT_AGENT_DOCUMENT_MAX_BYTES)),
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+});
+export type ProjectAgentUpdateMemoryNoteInput = typeof ProjectAgentUpdateMemoryNoteInput.Type;
+
+export const ProjectAgentUpdateMemoryNoteResult = Schema.Struct({
+  note: ProjectMemoryNote,
+  /** MEMORY.md revision after the index line was reconciled, null when the
+   * index could not change (nothing was indexed). */
+  indexRevision: Schema.NullOr(PositiveInt),
+});
+export type ProjectAgentUpdateMemoryNoteResult = typeof ProjectAgentUpdateMemoryNoteResult.Type;
+
+export const ProjectAgentDeleteMemoryNoteInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  expectedRevision: Schema.optional(NonNegativeInt),
+});
+export type ProjectAgentDeleteMemoryNoteInput = typeof ProjectAgentDeleteMemoryNoteInput.Type;
+
+export const ProjectAgentDeleteMemoryNoteResult = Schema.Struct({
+  deleted: Schema.Boolean,
+  path: ProjectDocumentLogicalPath,
+});
+export type ProjectAgentDeleteMemoryNoteResult = typeof ProjectAgentDeleteMemoryNoteResult.Type;
+
 export const ProjectAgentGroupThreadEntry = Schema.Struct({
   threadId: ThreadId,
   title: Schema.String,
@@ -867,6 +936,13 @@ export const ProjectAgentStreamEvent = Schema.Union([
     type: Schema.Literal("document-head-updated"),
     head: ProjectDocumentHead,
   }),
+  // A deleted document has no head to carry, so subscribers get the removal
+  // itself and drop their cached row instead of waiting for a full re-list.
+  Schema.Struct({
+    type: Schema.Literal("document-removed"),
+    projectId: ProjectId,
+    logicalPath: ProjectDocumentLogicalPath,
+  }),
   // One batch per index write — carries the rows actually written so a
   // watcher can patch its list without re-listing the whole index (e.g. the
   // Overview's Threads tab when the coordinator starts a worker thread in a
@@ -965,6 +1041,38 @@ export const ProjectAgentLibraryListResult = Schema.Struct({
   entries: Schema.Array(LibraryEntry),
 });
 export type ProjectAgentLibraryListResult = typeof ProjectAgentLibraryListResult.Type;
+
+// Name search across the whole library tree. The per-directory listing only
+// covers directories a caller already opened, so a file in a never-opened
+// folder was unreachable; this walks the tree server-side with explicit result,
+// scan, and depth bounds and a cursor for the next page.
+export const PROJECT_AGENT_LIBRARY_SEARCH_MAX_LIMIT = 200;
+export const PROJECT_AGENT_LIBRARY_SEARCH_MAX_DEPTH = 24;
+export const PROJECT_AGENT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES = 20_000;
+
+export const ProjectAgentLibrarySearchInput = Schema.Struct({
+  projectId: ProjectId,
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  /** Restrict the walk to one subtree. Omit to search the whole library. */
+  relativePath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  kind: Schema.optional(Schema.Literals(["file", "directory"])),
+  cursor: Schema.optional(TrimmedNonEmptyString),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_AGENT_LIBRARY_SEARCH_MAX_LIMIT)),
+  ).pipe(Schema.withDecodingDefault(() => 50)),
+});
+export type ProjectAgentLibrarySearchInput = typeof ProjectAgentLibrarySearchInput.Type;
+
+export const ProjectAgentLibrarySearchResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  entries: Schema.Array(LibraryEntry),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  /** Directory entries the walk visited; reported so a bounded search is
+   * visible rather than silently partial. */
+  scannedEntries: NonNegativeInt,
+  truncated: Schema.Boolean,
+});
+export type ProjectAgentLibrarySearchResult = typeof ProjectAgentLibrarySearchResult.Type;
 
 export const ProjectAgentLibraryMkdirInput = Schema.Struct({
   projectId: ProjectId,

@@ -7,8 +7,9 @@
 // Exports: resolveLibraryRoot, normalizeLibraryRelativePath, resolveLibraryDir,
 //          resolveLibraryTarget, resolveLibraryCreateTarget, resolveLibraryWriteTarget,
 //          createLibraryDirectory, deleteLibraryEntry, renameLibraryEntry,
-//          listLibraryEntries, ensureLibraryRepo, moveLibraryRoot, assertLibraryRootLocation
+//          listLibraryEntries, searchLibraryEntries, ensureLibraryRepo, moveLibraryRoot, assertLibraryRootLocation
 
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -363,6 +364,146 @@ export function listLibraryEntries(
       a.kind !== b.kind ? (a.kind === "directory" ? -1 : 1) : a.name.localeCompare(b.name),
     );
     return entries;
+  });
+}
+
+// Name search across the whole tree. `listLibraryEntries` only knows one
+// directory, so a file in a folder nobody opened was unreachable; this walks
+// depth-first with explicit bounds and yields matches in stable path order so a
+// cursor can page deterministically.
+// Symlinks are never followed (a link could redirect the walk outside the root)
+// and reserved names stay invisible, exactly as in a listing.
+export interface LibrarySearchPage {
+  readonly entries: LibraryEntry[];
+  /** Continuation token for the next page, null when the walk is exhausted. */
+  readonly nextCursor: string | null;
+  readonly scannedEntries: number;
+  readonly truncated: boolean;
+}
+
+export interface LibrarySearchOptions {
+  readonly query: string;
+  readonly kind?: "file" | "directory" | undefined;
+  readonly limit: number;
+  readonly cursor?: string | undefined;
+  /** Restrict the walk to one subtree; omitted means the whole library. */
+  readonly relativePath?: string | undefined;
+  readonly maxDepth?: number | undefined;
+  readonly maxScannedEntries?: number | undefined;
+}
+
+export const DEFAULT_LIBRARY_SEARCH_MAX_DEPTH = 24;
+export const DEFAULT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES = 20_000;
+
+interface SearchDirectory {
+  readonly dir: string;
+  readonly relativePath: string;
+  readonly depth: number;
+}
+
+const encodeSearchCursor = (offset: number) =>
+  Buffer.from(String(Math.max(0, Math.trunc(offset))), "utf8").toString("base64url");
+
+const decodeSearchCursor = (cursor: string | undefined): number => {
+  if (cursor === undefined) return 0;
+  try {
+    const parsed = Number(Buffer.from(cursor, "base64url").toString("utf8"));
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+  } catch {
+    return 0;
+  }
+};
+
+// Name search matches the name and the path, so typing a folder name still finds
+// what is inside it.
+const matchesSearchQuery = (name: string, relativePath: string, query: string) => {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return false;
+  return name.toLowerCase().includes(needle) || relativePath.toLowerCase().includes(needle);
+};
+
+export function searchLibraryEntries(
+  root: string,
+  options: LibrarySearchOptions,
+): Effect.Effect<LibrarySearchPage, LibraryError> {
+  return Effect.gen(function* () {
+    const startOffset = decodeSearchCursor(options.cursor);
+    const maxDepth = options.maxDepth ?? DEFAULT_LIBRARY_SEARCH_MAX_DEPTH;
+    const maxScanned = options.maxScannedEntries ?? DEFAULT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES;
+    const normalizedSubtree =
+      options.relativePath === undefined || options.relativePath === ""
+        ? ""
+        : yield* normalizeLibraryRelativePath(options.relativePath);
+    const startDir = yield* resolveLibraryDir(root, normalizedSubtree);
+    const collected: LibraryEntry[] = [];
+    // Breadth of a directory's children before descending keeps the walk
+    // shallow-first without recursing on unbounded depth.
+    const pending: SearchDirectory[] = [
+      { dir: startDir, relativePath: normalizedSubtree, depth: 0 },
+    ];
+    let scanned = 0;
+    let scanTruncated = false;
+    while (pending.length > 0) {
+      const current = pending.shift()!;
+      if (current.depth > maxDepth) continue;
+      // A directory removed or made unreadable mid-walk is skipped: search must
+      // not fail because one branch is gone.
+      const dirents = yield* Effect.tryPromise({
+        try: (): Promise<Dirent[]> => fs.readdir(current.dir, { withFileTypes: true }),
+        catch: () => new Error("unreadable"),
+      }).pipe(Effect.catch(() => Effect.succeed<Dirent[]>([])));
+      const children: SearchDirectory[] = [];
+      for (const dirent of dirents) {
+        if (IGNORED_ENTRY_NAMES.has(dirent.name) || isGitDirName(dirent.name)) continue;
+        const absolutePath = path.join(current.dir, dirent.name);
+        const relativePath = current.relativePath
+          ? `${current.relativePath}/${dirent.name}`
+          : dirent.name;
+        const stat = yield* Effect.tryPromise({
+          try: () => fs.lstat(absolutePath),
+          // An entry that vanished or became unreadable mid-walk is skipped
+          // rather than failing the whole search.
+          catch: () => null,
+        }).pipe(Effect.catch(() => Effect.succeed(null)));
+        if (stat === null || stat.isSymbolicLink()) continue;
+        const kind = stat.isDirectory() ? "directory" : stat.isFile() ? "file" : null;
+        if (kind === null) continue;
+        if (scanned >= maxScanned) {
+          scanTruncated = true;
+          break;
+        }
+        scanned += 1;
+        if (kind === "directory") {
+          children.push({ dir: absolutePath, relativePath, depth: current.depth + 1 });
+        }
+        if (options.kind !== undefined && kind !== options.kind) continue;
+        if (!matchesSearchQuery(dirent.name, relativePath, options.query)) continue;
+        collected.push({
+          name: dirent.name,
+          relativePath,
+          kind,
+          sizeBytes: kind === "file" ? stat.size : 0,
+          modifiedAt: stat.mtime.toISOString(),
+        });
+      }
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        pending.unshift(children[index]!);
+      }
+      if (scanTruncated) break;
+    }
+    // Stable path order: a cursor pages a deterministic slice, and a rename or
+    // delete simply stops matching instead of leaving a stale link behind.
+    collected.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    const page = collected.slice(startOffset, startOffset + options.limit);
+    const hasMore = collected.length > startOffset + page.length;
+    // Each page re-walks the tree from the root and skips to the cursor offset,
+    // so paging stays correct while the walk bound keeps one page bounded.
+    return {
+      entries: page,
+      nextCursor: hasMore ? encodeSearchCursor(startOffset + page.length) : null,
+      scannedEntries: scanned,
+      truncated: scanTruncated,
+    };
   });
 }
 

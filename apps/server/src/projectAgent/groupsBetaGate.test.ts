@@ -1,5 +1,5 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { Effect, Stream } from "effect";
+import { Effect, Stream, type Effect as EffectNs } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -37,6 +37,39 @@ describe("gateProjectAgentServiceForStable", () => {
       Stream.runCollect(gated.streamEvents({ projectId: PROJECT_ID })),
     );
     expect(Array.from(events)).toEqual([]);
+  });
+
+  // The W6 operations are hub-only like every other group API: a Stable build
+  // must refuse them server-side, not merely hide the UI.
+  it("refuses the memory-note and Library-search operations too", async () => {
+    const { gated } = gatedService();
+    const calls = [
+      gated.listMemoryNotes({ projectId: PROJECT_ID }, { kind: "user" }),
+      gated.updateMemoryNote(
+        {
+          requestId: "r1",
+          projectId: PROJECT_ID,
+          path: "memory/2026-10-01-a.md",
+          content: "x",
+        },
+        { kind: "user" },
+      ),
+      gated.deleteMemoryNote(
+        { requestId: "r2", projectId: PROJECT_ID, path: "memory/2026-10-01-a.md" },
+        { kind: "user" },
+      ),
+      gated.librarySearch({ projectId: PROJECT_ID, query: "roadmap" }, { kind: "user" }),
+    ];
+    for (const call of calls) {
+      // Each operation has its own result type; the shared check is the refusal.
+      const error: { readonly message: string; readonly code?: string } = await Effect.runPromise(
+        Effect.flip(
+          call as EffectNs.Effect<unknown, { readonly message: string; readonly code?: string }>,
+        ),
+      );
+      expect(error.message).toBe(GROUPS_BETA_ONLY_MESSAGE);
+      expect(error.code).toBe("forbidden");
+    }
   });
 
   it("treats a hub thread's turn like any other thread's", async () => {

@@ -7,6 +7,7 @@ import {
   entryMatchesLibraryFilters,
   flattenLibraryRows,
   libraryEntryTypeBucket,
+  librarySearchRows,
   nextLibrarySort,
   sortLibraryEntries,
   toggleLibraryDirectory,
@@ -166,6 +167,58 @@ describe("flattenLibraryRows", () => {
       typeFilter: "images",
     });
     expect(rows.map((row) => row.entry.relativePath)).toEqual(["Images", "Images/shot.png"]);
+  });
+});
+
+describe("librarySearchRows", () => {
+  const results = [
+    entry("Reports", "Reports", "directory", "2026-01-01T00:00:00Z"),
+    entry("roadmap.md", "Reports/2026/Q3/roadmap.md", "file", "2026-01-02T00:00:00Z"),
+    entry("shot.png", "Images/shot.png", "file", "2026-01-03T00:00:00Z"),
+  ];
+  const sort = { key: "name", direction: "asc" } as const;
+
+  it("keeps directories first and applies the panel type filter", () => {
+    const all = librarySearchRows({ results, typeFilter: "all", sort });
+    expect(all.map((row) => row.entry.relativePath)).toEqual([
+      "Reports",
+      "Reports/2026/Q3/roadmap.md",
+      "Images/shot.png",
+    ]);
+    // Directories sort above files; files then compare by name.
+    expect(all[0]?.entry.kind).toBe("directory");
+    // Search rows are flat paths: a match from an unopened folder has no indent.
+    expect(all.every((row) => row.depth === 0)).toBe(true);
+
+    // The type filter narrows files but keeps directories, as in the flat listing:
+    // a folder is a container, and the image inside it stays reachable.
+    const images = librarySearchRows({ results, typeFilter: "images", sort });
+    expect(images.map((row) => row.entry.relativePath)).toEqual(["Reports", "Images/shot.png"]);
+  });
+
+  // A rename or delete drops the old path; a page already in flight may still
+  // name it, and that must never render as a row.
+  it("drops paths a rename or delete removed", () => {
+    const dropped = librarySearchRows({
+      results,
+      typeFilter: "all",
+      sort,
+      droppedPaths: new Set(["Reports/2026/Q3/roadmap.md"]),
+    });
+    expect(dropped.map((row) => row.entry.relativePath)).toEqual(["Reports", "Images/shot.png"]);
+  });
+
+  it("honors the modifiedAt sort", () => {
+    const recent = librarySearchRows({
+      results,
+      typeFilter: "all",
+      sort: { key: "modifiedAt", direction: "desc" },
+    });
+    expect(recent.map((row) => row.entry.relativePath)).toEqual([
+      "Reports",
+      "Images/shot.png",
+      "Reports/2026/Q3/roadmap.md",
+    ]);
   });
 });
 

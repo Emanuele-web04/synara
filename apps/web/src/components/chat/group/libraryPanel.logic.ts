@@ -186,3 +186,23 @@ export function flattenLibraryRows(input: {
 
 // The seeded folder is expanded by default so first-open shows the structure.
 export const DEFAULT_EXPANDED_DIRECTORIES: ReadonlySet<string> = new Set(["Artifacts"]);
+
+// Rows for a whole-tree server search page. Search returns flat paths from the
+// whole library, so there is no tree to indent and no expansion state: the
+// panel's type filter and sort still apply. `droppedPaths` are paths a rename or
+// delete already removed — a page that was in flight can still name them, and a
+// result row must never point at a file that is gone.
+export function librarySearchRows(input: {
+  readonly results: readonly LibraryEntry[];
+  readonly typeFilter: LibraryTypeFilter;
+  readonly sort: LibrarySortState;
+  readonly droppedPaths?: ReadonlySet<string>;
+}): LibraryRow[] {
+  const visible = input.results.filter(
+    (entry) =>
+      !(input.droppedPaths?.has(entry.relativePath) ?? false) &&
+      // The server already filtered by name and path; only the type filter is left.
+      entryMatchesLibraryFilters(entry, { typeFilter: input.typeFilter, query: "" }),
+  );
+  return sortLibraryEntries(visible, input.sort).map((entry) => ({ entry, depth: 0 }));
+}

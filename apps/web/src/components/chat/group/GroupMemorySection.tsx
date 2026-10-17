@@ -3,7 +3,8 @@ import {
   MEMORY_DOCUMENT_PREFIX,
   MEMORY_THREAD_DOCUMENT_PREFIX,
 } from "@synara/shared/projectAgent";
-import { useEffect, useState } from "react";
+import type { ProjectMemoryNote } from "@synara/contracts";
+import { useCallback, useEffect, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import type { useProjectInstructionsAutosave } from "~/components/chat/environment/EnvironmentProjectInstructionsSection";
@@ -17,9 +18,19 @@ import {
   SettingsRow,
   SettingsSectionShell,
 } from "~/components/settings/SettingsPanelPrimitives";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
+  DialogFooter,
   DialogHeader,
   DialogPanel,
   DialogPopup,
@@ -28,7 +39,8 @@ import {
 import { IconButton } from "~/components/ui/icon-button";
 import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
-import { ArrowUpIcon } from "~/lib/icons";
+import { Textarea } from "~/components/ui/textarea";
+import { ArrowUpIcon, PencilIcon, TrashCanIcon } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 
 import { CharacterCountTextarea } from "./CharacterCountTextarea";
@@ -37,6 +49,8 @@ import {
   memoryNoteDocumentPath,
   type GroupSettingsDraft,
 } from "./groupSettingsDialog.logic";
+
+const MEMORY_NOTE_MAX_CHARS = 4_000;
 
 function MemoryDocumentDialog(props: {
   readonly logicalPath: string | null;
@@ -102,6 +116,148 @@ function MemoryDocumentDialog(props: {
   );
 }
 
+// Edit dialog for one memory note. The full body is loaded on open (the list
+// only carries its summary line) and the revision it was read at travels with
+// the save: if the coordinator or another editor changed the note in the
+// meantime the server rejects the write instead of overwriting their text, and
+// the user gets the message rather than a silently lost note.
+function MemoryNoteEditor(props: {
+  readonly note: ProjectMemoryNote | null;
+  readonly agent: ReturnType<typeof useProjectAgent>;
+  readonly onClose: () => void;
+  readonly onSaved: () => void;
+}) {
+  const [body, setBody] = useState("");
+  const [title, setTitle] = useState("");
+  const [revision, setRevision] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const note = props.note;
+  const open = note !== null;
+  const readDocument = props.agent.readDocument;
+
+  useEffect(() => {
+    if (!note) return;
+    let cancelled = false;
+    setBody("");
+    setTitle(note.title);
+    setRevision(note.revision);
+    setError(null);
+    setLoading(true);
+    void (async () => {
+      try {
+        const read = await readDocument(note.logicalPath);
+        if (cancelled) return;
+        if (!read) {
+          setError("Project coordinator is unavailable.");
+          return;
+        }
+        // Re-read the whole body: a list row only carries the summary line, and
+        // saving that back would silently truncate the note.
+        const heading = read.document.content.match(/^\s*#\s+(.+)$/m);
+        if (heading?.[1]) setTitle(heading[1].trim());
+        setBody(read.document.content.replace(/^\s*#[^\n]*\n?/, "").trim());
+        setRevision(read.document.revision);
+      } catch (cause) {
+        if (cancelled) return;
+        setError(cause instanceof Error ? cause.message : "Failed to load this note.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [note, readDocument]);
+
+  const save = useCallback(() => {
+    const target = props.note;
+    if (!target || busy || revision === null) return;
+    const nextTitle = title.trim();
+    const nextBody = body.trim();
+    if (nextBody.length === 0) {
+      setError("A memory note needs some text.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    void props.agent
+      .updateMemoryNote({
+        path: target.logicalPath,
+        // The title travels as the note's `# heading` so the server stores the
+        // body as typed instead of folding the title into the text.
+        content: nextTitle.length > 0 ? `# ${nextTitle}\n\n${nextBody}` : nextBody,
+        expectedRevision: revision,
+        ...(nextTitle.length > 0 ? { title: nextTitle } : {}),
+      })
+      .then(() => {
+        props.onSaved();
+        props.onClose();
+      })
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "Could not save the note.");
+      })
+      .finally(() => setBusy(false));
+  }, [props, body, busy, revision, title]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) props.onClose();
+      }}
+    >
+      <DialogPopup className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-ui-lg">Edit memory note</DialogTitle>
+        </DialogHeader>
+        <DialogPanel className="space-y-3">
+          <p className="text-ui-sm text-muted-foreground">{note?.logicalPath}</p>
+          <Input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Title"
+            aria-label="Memory note title"
+            disabled={busy || loading}
+          />
+          <Textarea
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="What should every thread in this hub remember?"
+            aria-label="Memory note text"
+            rows={8}
+            maxLength={MEMORY_NOTE_MAX_CHARS}
+            disabled={busy || loading}
+          />
+          {loading ? <p className="text-ui-sm text-muted-foreground">Loading note…</p> : null}
+          {error ? (
+            <p className="text-ui-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={props.onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={save} disabled={busy || loading || body.trim().length === 0}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function memoryNoteProvenanceLabel(note: ProjectMemoryNote): string {
+  const origin = note.origin === "human-instruction" ? "Written by you" : "Agent conclusion";
+  const parts = [origin];
+  if (note.authorThreadId) parts.push("from a hub thread");
+  if (!note.indexed) parts.push("not shared with threads yet");
+  return parts.join(" · ");
+}
+
 export function GroupMemorySection(props: {
   readonly configured: boolean;
   readonly draft: GroupSettingsDraft;
@@ -114,16 +270,38 @@ export function GroupMemorySection(props: {
   const instructionsSource = props.instructionsSource;
   const autosave = props.instructionsAutosave;
   const [viewingPath, setViewingPath] = useState<string | null>(null);
+  const [editingNote, setEditingNote] = useState<ProjectMemoryNote | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectMemoryNote | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteBusy, setNoteBusy] = useState(false);
+  const [notes, setNotes] = useState<readonly ProjectMemoryNote[]>([]);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const listMemoryNotes = props.agent.listMemoryNotes;
 
-  const memoryDocuments = props.agent.documents.filter(
-    (document) =>
-      document.logicalPath.startsWith(MEMORY_DOCUMENT_PREFIX) &&
-      document.logicalPath !== MEMORY_AUTO_DOCUMENT_PATH &&
-      !document.logicalPath.startsWith(MEMORY_THREAD_DOCUMENT_PREFIX),
-  );
+  // Notes carry provenance the document list cannot show, so they come from
+  // their own listing; re-listed whenever the panel's document cache changes
+  // (an edit, a delete, another thread writing memory).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const listed = await listMemoryNotes();
+        if (cancelled) return;
+        setNotes(listed);
+        setNotesError(null);
+      } catch (cause) {
+        if (cancelled) return;
+        setNotesError(cause instanceof Error ? cause.message : "Failed to load memory notes.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listMemoryNotes, props.agent.documents]);
+
   const threadDocuments = props.agent.documents.filter((document) =>
     document.logicalPath.startsWith(MEMORY_THREAD_DOCUMENT_PREFIX),
   );
@@ -146,6 +324,23 @@ export function GroupMemorySection(props: {
       })
       .finally(() => setNoteBusy(false));
   };
+
+  const confirmDelete = useCallback(() => {
+    const target = deleteTarget;
+    if (!target || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    void props.agent
+      .deleteMemoryNote({ path: target.logicalPath, expectedRevision: target.revision })
+      .then(() => {
+        setDeleteTarget(null);
+        if (viewingPath === target.logicalPath) setViewingPath(null);
+      })
+      .catch((cause: unknown) => {
+        setDeleteError(cause instanceof Error ? cause.message : "Could not delete the note.");
+      })
+      .finally(() => setDeleting(false));
+  }, [deleteTarget, deleting, props.agent, viewingPath]);
 
   return (
     <div className="space-y-6">
@@ -202,23 +397,49 @@ export function GroupMemorySection(props: {
       </SettingsSectionShell>
 
       <SettingsSectionShell title="Memory files">
-        {memoryDocuments.length === 0 ? (
+        {notesError ? (
+          <p className="text-ui-sm text-destructive" role="alert">
+            {notesError}
+          </p>
+        ) : null}
+        {notes.length === 0 ? (
           <SettingsEmptyState layout="status">No memory files yet.</SettingsEmptyState>
         ) : (
           <SettingsCard>
-            {memoryDocuments.map((document) => (
+            {notes.map((note) => (
               <SettingsListRow
-                key={document.logicalPath}
-                title={document.logicalPath.slice(MEMORY_DOCUMENT_PREFIX.length)}
-                description={formatRelativeTime(document.updatedAt)}
+                key={note.logicalPath}
+                title={note.logicalPath.slice(MEMORY_DOCUMENT_PREFIX.length)}
+                description={`${memoryNoteProvenanceLabel(note)} · ${formatRelativeTime(note.updatedAt)}`}
                 actions={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => setViewingPath(document.logicalPath)}
-                  >
-                    View
-                  </Button>
+                  <>
+                    <IconButton
+                      type="button"
+                      label={`Edit ${note.logicalPath}`}
+                      tooltip="Edit"
+                      onClick={() => setEditingNote(note)}
+                    >
+                      <PencilIcon className="size-3.5" />
+                    </IconButton>
+                    <IconButton
+                      type="button"
+                      label={`Delete ${note.logicalPath}`}
+                      tooltip="Delete"
+                      onClick={() => {
+                        setDeleteError(null);
+                        setDeleteTarget(note);
+                      }}
+                    >
+                      <TrashCanIcon className="size-3.5" />
+                    </IconButton>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setViewingPath(note.logicalPath)}
+                    >
+                      View
+                    </Button>
+                  </>
                 }
               />
             ))}
@@ -276,7 +497,9 @@ export function GroupMemorySection(props: {
               <ArrowUpIcon className="size-4" />
             </IconButton>
           </div>
-          <p className="mt-1 text-ui-sm text-muted-foreground">Notes apply immediately.</p>
+          <p className="mt-1 text-ui-sm text-muted-foreground">
+            Notes apply immediately. Edit or delete them here instead of asking the coordinator.
+          </p>
           {noteError ? (
             <p className="mt-1 text-ui-sm text-destructive" role="alert">
               {noteError}
@@ -290,6 +513,53 @@ export function GroupMemorySection(props: {
         agent={props.agent}
         onClose={() => setViewingPath(null)}
       />
+      <MemoryNoteEditor
+        note={editingNote}
+        agent={props.agent}
+        onClose={() => setEditingNote(null)}
+        onSaved={() =>
+          void listMemoryNotes()
+            .then(setNotes)
+            .catch(() => undefined)
+        }
+      />
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next && !deleting) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{deleteTarget?.logicalPath}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The note and its line in MEMORY.md are removed together. Threads stop reading it on
+              their next turn.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError ? (
+            <p className="text-ui-sm text-destructive" role="alert">
+              {deleteError}
+            </p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void confirmDelete()}
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </div>
   );
 }

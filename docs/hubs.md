@@ -250,12 +250,20 @@ Edit these in hub settings → **Memory**:
 - **MEMORY.md**: choose **View** to read the coordinator's running memory.
 - **Memory files**: every saved memory note. Type in the note box (for example, "Note that
   releases go out on Tuesdays") to add one yourself. Your note is added to the MEMORY.md index
-  right away, so every thread sees it on its next turn.
+  right away, so every thread sees it on its next turn. Use the pencil icon to **Edit** a note or
+  the bin icon to **Delete** it — you can correct a preference here instead of asking the
+  coordinator. The note and its MEMORY.md index line are saved together, so a thread never reads a
+  link to a body that says something else. Each row says who wrote it (**Written by you** or
+  **Agent conclusion**) and when. **Thread memory** below stays owned by the thread that wrote it.
+
+If someone else changed a note while you were editing, your save is refused with a reload prompt
+instead of overwriting their text.
 
 **How "remember" works.** When you tell the coordinator a preference or a fact ("always use the
 small model for reviews"), it saves a note and adds one line to the `MEMORY.md` index. A
 near-identical note updates the existing file instead of creating a second one. Any hub thread
-can remember or forget notes the same way. Ask the coordinator to forget a note when it is stale.
+can remember or forget notes the same way, and you can edit or delete the same notes from hub
+settings. Ask the coordinator to forget a note when it is stale.
 
 ![Hub memory settings](./screenshots/hubs-memory.png)
 
@@ -265,9 +273,13 @@ The Library is a folder of files for the hub, versioned as a Git repository. Eve
 commit. Open it with the **Library** button in the chat header.
 
 - **+** (Add files) in the Library header uploads files. Right-click a folder for **Upload here**.
-- Search, filter by type (**All**, **Documents**, **Images**, **Code**, **Other**), sort by name or
+- The search box searches the **whole Library**, including folders you never opened. Results are
+  listed by path with **Load more results** when more exist; a very large Library reports that the
+  search stopped early so a short result list is never silently incomplete.
+- Filter by type (**All**, **Documents**, **Images**, **Code**, **Other**), sort by name or
   date modified, and switch between **List** and **Grid**.
-- Click a file to preview it in the panel.
+- Click a file to preview it in the panel. Right-click a search result to rename, delete, or open
+  its history — the same actions as in the folder listing.
 - Right-click an entry to **Rename**, **Delete**, or see its **History**. The **History** button in
   the Library header shows the history of the whole Library.
 - **History** lists every version. Choose **Restore** to bring back an earlier version or a
@@ -282,7 +294,9 @@ wider, which is easier for reading documents. **Collapse** returns it to its com
 
 Threads deliver files to the Library themselves: when a thread produces something worth keeping,
 the coordinator asks it to add the file, then links the Library path in its reply. A thread can
-only add files from its own workspace.
+only add files from its own workspace. A thread asked to find a file it was told about searches
+the Library by name and reads the one file it needs; the Library is never loaded wholesale into a
+thread's context, which carries only the top-level names.
 
 To back up the Library, set a **Git remote** in settings → **Environment** → **Library hosting**
 and turn on **Push on change**. Pushes happen in the background and never block a write. The

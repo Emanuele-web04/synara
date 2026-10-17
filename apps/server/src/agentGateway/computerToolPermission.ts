@@ -222,6 +222,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_project_get_overview",
   "synara_project_library_add",
   "synara_project_library_list",
+  "synara_project_library_search",
   "synara_project_link_repository",
   "synara_project_list_tasks",
   "synara_project_list_threads",

@@ -41,6 +41,7 @@ describe("project agent tool surface", () => {
       synara_project_forget: { capability: "thread:write", activeTurn: true },
       synara_project_link_repository: { capability: "thread:write", activeTurn: true },
       synara_project_library_list: { capability: "thread:read", activeTurn: undefined },
+      synara_project_library_search: { capability: "thread:read", activeTurn: undefined },
       synara_project_library_add: { capability: "thread:write", activeTurn: true },
       synara_project_list_threads: { capability: "thread:read", activeTurn: undefined },
     };
@@ -50,7 +51,7 @@ describe("project agent tool surface", () => {
       expect(tool?.requiredCapability).toBe(capability);
       expect(tool?.requiresActiveTurn).toBe(activeTurn);
     }
-    expect(tools.length).toBe(12);
+    expect(tools.length).toBe(13);
   });
 
   it("declares the documented inputs for each new tool", () => {
@@ -66,6 +67,7 @@ describe("project agent tool surface", () => {
     // Exactly one of linkedProjectId / workspacePath is enforced at runtime.
     expect(required("synara_project_link_repository")).toEqual(["projectId"]);
     expect(required("synara_project_library_list")).toEqual(["projectId"]);
+    expect(required("synara_project_library_search")).toEqual(["projectId", "query"]);
     expect(required("synara_project_library_add")).toEqual(["projectId", "sourcePath"]);
     expect(required("synara_project_list_threads")).toEqual(["projectId"]);
   });

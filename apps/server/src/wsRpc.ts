@@ -11,6 +11,8 @@ import {
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
+  PROJECT_AGENT_LIBRARY_SEARCH_MAX_DEPTH,
+  PROJECT_AGENT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES,
   ThreadId,
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
@@ -70,6 +72,7 @@ import {
   normalizeLibraryRelativePath,
   renameLibraryEntry,
   resolveLibraryRoot,
+  searchLibraryEntries,
 } from "./projectAgent/libraryStore";
 import {
   commitLibraryChange,
@@ -2810,6 +2813,21 @@ const makeWsRpcHandlersLayer = () =>
             projectAgentService.writeDocument(input, { kind: "user" }),
             "Failed to write project document",
           ),
+        [WS_METHODS.projectAgentListMemoryNotes]: (input) =>
+          rpcEffect(
+            projectAgentService.listMemoryNotes(input, { kind: "user" }),
+            "Failed to list hub memory notes",
+          ),
+        [WS_METHODS.projectAgentUpdateMemoryNote]: (input) =>
+          rpcEffect(
+            projectAgentService.updateMemoryNote(input, { kind: "user" }),
+            "Failed to update the memory note",
+          ),
+        [WS_METHODS.projectAgentDeleteMemoryNote]: (input) =>
+          rpcEffect(
+            projectAgentService.deleteMemoryNote(input, { kind: "user" }),
+            "Failed to delete the memory note",
+          ),
         [WS_METHODS.projectAgentExportDocuments]: (input) =>
           rpcEffect(
             projectAgentService.exportDocuments(input, { kind: "user" }),
@@ -2839,6 +2857,42 @@ const makeWsRpcHandlersLayer = () =>
               }),
             ),
             "Failed to list the hub library",
+          ),
+        [WS_METHODS.projectAgentLibrarySearch]: (input) =>
+          rpcEffect(
+            withLibraryRootLock(
+              input.projectId,
+              Effect.gen(function* () {
+                const { root, libraryIsManaged } = yield* resolveGroupLibrary(input.projectId);
+                const page = yield* withLibraryQueue(
+                  root,
+                  Effect.gen(function* () {
+                    yield* ensureLibraryRepo(git, root, input.projectId, {
+                      isManaged: libraryIsManaged,
+                    });
+                    return yield* searchLibraryEntries(root, {
+                      query: input.query,
+                      limit: input.limit ?? 50,
+                      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+                      ...(input.relativePath !== undefined
+                        ? { relativePath: input.relativePath }
+                        : {}),
+                      ...(input.kind !== undefined ? { kind: input.kind } : {}),
+                      maxScannedEntries: PROJECT_AGENT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES,
+                      maxDepth: PROJECT_AGENT_LIBRARY_SEARCH_MAX_DEPTH,
+                    });
+                  }),
+                );
+                return {
+                  root,
+                  entries: page.entries,
+                  nextCursor: page.nextCursor,
+                  scannedEntries: page.scannedEntries,
+                  truncated: page.truncated,
+                };
+              }),
+            ),
+            "Failed to search the hub library",
           ),
         [WS_METHODS.projectAgentLibraryMkdir]: (input) =>
           requireWsOwnerSession.pipe(

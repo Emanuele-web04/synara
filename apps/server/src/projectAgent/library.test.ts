@@ -36,6 +36,7 @@ import {
   resolveLibraryRoot,
   resolveLibraryTarget,
   resolveLibraryWriteTarget,
+  searchLibraryEntries,
 } from "./libraryStore.ts";
 
 const testProjectId = ProjectId.makeUnsafe("group-library-owner");
@@ -143,6 +144,143 @@ it.layer(TestLayer)("hub library", (it) => {
       const history = yield* libraryHistory(git, root, "Artifacts/note.md");
       expect(history[0]?.sha).toBe(commitSha);
       expect(history[0]?.message).toBe("Add Artifacts/note.md");
+    }),
+  );
+
+  // The per-directory listing only knows folders a caller opened, so search is
+  // the only way to reach a file in a folder nobody opened.
+  it.effect("searches the whole tree, including directories never listed", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+
+      const deep = yield* resolveLibraryWriteTarget(
+        root,
+        "Reports/2026/Q3/never-opened/roadmap.md",
+      );
+      yield* Effect.promise(() => fs.writeFile(deep, "roadmap", "utf8"));
+      yield* commitLibraryChange(git, root, "Add roadmap");
+
+      // The listing path proves the gap: only the root is known so far.
+      const rootEntries = yield* listLibraryEntries(root);
+      expect(rootEntries.some((entry) => entry.name.startsWith("roadmap"))).toBe(false);
+
+      const page = yield* searchLibraryEntries(root, { query: "roadmap", limit: 20 });
+      expect(page.entries.map((entry) => entry.relativePath)).toEqual([
+        "Reports/2026/Q3/never-opened/roadmap.md",
+      ]);
+      expect(page.nextCursor).toBeNull();
+      expect(page.truncated).toBe(false);
+    }),
+  );
+
+  it.effect("matches by folder name and filters by kind", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      const target = yield* resolveLibraryWriteTarget(root, "Reports/summary.md");
+      yield* Effect.promise(() => fs.writeFile(target, "summary", "utf8"));
+      yield* commitLibraryChange(git, root, "Add summary");
+
+      const byFolder = yield* searchLibraryEntries(root, { query: "Reports", limit: 20 });
+      expect(byFolder.entries.map((entry) => entry.relativePath).toSorted()).toEqual([
+        "Reports",
+        "Reports/summary.md",
+      ]);
+
+      const filesOnly = yield* searchLibraryEntries(root, {
+        query: "Reports",
+        kind: "file",
+        limit: 20,
+      });
+      expect(filesOnly.entries.map((entry) => entry.relativePath)).toEqual(["Reports/summary.md"]);
+    }),
+  );
+
+  it.effect("pages results with a cursor without repeating entries", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      for (const name of ["report-a.md", "report-b.md", "report-c.md"]) {
+        const target = yield* resolveLibraryWriteTarget(root, `Artifacts/${name}`);
+        yield* Effect.promise(() => fs.writeFile(target, name, "utf8"));
+      }
+      yield* commitLibraryChange(git, root, "Add reports");
+
+      const first = yield* searchLibraryEntries(root, { query: "report-", limit: 2 });
+      expect(first.entries.map((entry) => entry.name)).toEqual(["report-a.md", "report-b.md"]);
+      expect(first.nextCursor).not.toBeNull();
+
+      const second = yield* searchLibraryEntries(root, {
+        query: "report-",
+        limit: 2,
+        cursor: first.nextCursor ?? undefined,
+      });
+      expect(second.entries.map((entry) => entry.name)).toEqual(["report-c.md"]);
+      expect(second.nextCursor).toBeNull();
+    }),
+  );
+
+  // A rename or delete must not leave a result pointing at the old path.
+  it.effect("drops renamed and deleted paths from later searches", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      const source = yield* resolveLibraryWriteTarget(root, "Artifacts/report.md");
+      yield* Effect.promise(() => fs.writeFile(source, "report", "utf8"));
+      yield* commitLibraryChange(git, root, "Add report");
+
+      const before = yield* searchLibraryEntries(root, { query: "report", limit: 20 });
+      expect(before.entries.map((entry) => entry.relativePath)).toEqual(["Artifacts/report.md"]);
+
+      const renamed = yield* resolveLibraryCreateTarget(root, "Artifacts/summary.md");
+      yield* Effect.promise(() => fs.rename(source, renamed));
+      yield* commitLibraryChange(git, root, "Rename report to summary");
+
+      const afterRename = yield* searchLibraryEntries(root, { query: "report", limit: 20 });
+      expect(afterRename.entries).toEqual([]);
+
+      yield* deleteLibraryEntry(root, "Artifacts/summary.md");
+      const afterDelete = yield* searchLibraryEntries(root, { query: "summary", limit: 20 });
+      expect(afterDelete.entries).toEqual([]);
+    }),
+  );
+
+  it.effect("bounds the walk and reports truncation instead of running away", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      for (const name of ["a-hit.md", "b-hit.md", "c-hit.md", "d-miss.md"]) {
+        const target = yield* resolveLibraryWriteTarget(root, name);
+        yield* Effect.promise(() => fs.writeFile(target, name, "utf8"));
+      }
+      yield* commitLibraryChange(git, root, "Add files");
+
+      const bounded = yield* searchLibraryEntries(root, {
+        query: "hit",
+        limit: 20,
+        maxScannedEntries: 2,
+      });
+      expect(bounded.truncated).toBe(true);
+      expect(bounded.entries.length).toBeLessThanOrEqual(2);
+      expect(bounded.scannedEntries).toBe(2);
+    }),
+  );
+
+  it.effect("refuses a subtree outside the root", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      const failure = yield* Effect.flip(
+        searchLibraryEntries(root, { query: "x", limit: 5, relativePath: "../outside" }),
+      );
+      expect(failure.code).toBe("invalid");
     }),
   );
 

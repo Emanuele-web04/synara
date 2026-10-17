@@ -55,6 +55,12 @@ import {
   ProjectAgentSubscribeInput,
   ProjectAgentUpdateGoalInput,
   ProjectAgentUpdateTaskInput,
+  ProjectAgentUpdateMemoryNoteInput,
+  ProjectAgentUpdateMemoryNoteResult,
+  ProjectAgentDeleteMemoryNoteInput,
+  ProjectAgentDeleteMemoryNoteResult,
+  ProjectAgentListMemoryNotesInput,
+  ProjectAgentListMemoryNotesResult,
   ProjectAgentWriteDocumentInput,
   ProjectAgentCreateTaskInput,
   ProjectAgentExcludeThreadInput,
@@ -71,6 +77,8 @@ import {
   ProjectAgentLibraryHistoryResult,
   ProjectAgentLibraryListInput,
   ProjectAgentLibraryListResult,
+  ProjectAgentLibrarySearchInput,
+  ProjectAgentLibrarySearchResult,
   ProjectAgentLibraryMkdirInput,
   ProjectAgentLibraryMutationResult,
   ProjectAgentLibraryRenameInput,
@@ -1841,6 +1849,21 @@ export const WsProjectAgentWriteDocumentRpc = Rpc.make(WS_METHODS.projectAgentWr
   success: ProjectDocumentRevision,
   error: WsRpcError,
 });
+export const WsProjectAgentListMemoryNotesRpc = Rpc.make(WS_METHODS.projectAgentListMemoryNotes, {
+  payload: ProjectAgentListMemoryNotesInput,
+  success: ProjectAgentListMemoryNotesResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentUpdateMemoryNoteRpc = Rpc.make(WS_METHODS.projectAgentUpdateMemoryNote, {
+  payload: ProjectAgentUpdateMemoryNoteInput,
+  success: ProjectAgentUpdateMemoryNoteResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentDeleteMemoryNoteRpc = Rpc.make(WS_METHODS.projectAgentDeleteMemoryNote, {
+  payload: ProjectAgentDeleteMemoryNoteInput,
+  success: ProjectAgentDeleteMemoryNoteResult,
+  error: WsRpcError,
+});
 export const WsProjectAgentExportDocumentsRpc = Rpc.make(WS_METHODS.projectAgentExportDocuments, {
   payload: ProjectAgentExportDocumentsInput,
   success: ProjectAgentExportDocumentsResult,
@@ -1854,6 +1877,11 @@ export const WsProjectAgentRefreshDigestRpc = Rpc.make(WS_METHODS.projectAgentRe
 export const WsProjectAgentLibraryListRpc = Rpc.make(WS_METHODS.projectAgentLibraryList, {
   payload: ProjectAgentLibraryListInput,
   success: ProjectAgentLibraryListResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibrarySearchRpc = Rpc.make(WS_METHODS.projectAgentLibrarySearch, {
+  payload: ProjectAgentLibrarySearchInput,
+  success: ProjectAgentLibrarySearchResult,
   error: WsRpcError,
 });
 export const WsProjectAgentLibraryMkdirRpc = Rpc.make(WS_METHODS.projectAgentLibraryMkdir, {
@@ -2079,9 +2107,13 @@ export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentListDocumentsRpc,
   WsProjectAgentReadDocumentRpc,
   WsProjectAgentWriteDocumentRpc,
+  WsProjectAgentListMemoryNotesRpc,
+  WsProjectAgentUpdateMemoryNoteRpc,
+  WsProjectAgentDeleteMemoryNoteRpc,
   WsProjectAgentExportDocumentsRpc,
   WsProjectAgentRefreshDigestRpc,
   WsProjectAgentLibraryListRpc,
+  WsProjectAgentLibrarySearchRpc,
   WsProjectAgentLibraryMkdirRpc,
   WsProjectAgentLibraryRenameRpc,
   WsProjectAgentLibraryDeleteRpc,

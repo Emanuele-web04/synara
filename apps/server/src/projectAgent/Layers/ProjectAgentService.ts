@@ -20,6 +20,8 @@ import {
   ProjectGoalId,
   ProjectId,
   ProjectInboxEventId,
+  PROJECT_AGENT_LIBRARY_SEARCH_MAX_DEPTH,
+  PROJECT_AGENT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES,
   ProjectTask,
   ProjectTaskAttemptId,
   ProjectTaskId,
@@ -35,6 +37,8 @@ import {
   type LibraryEntry,
   type ProjectThreadIndexEntry,
   type ProjectAgentDeleteGroupResult,
+  type ProjectAgentDeleteMemoryNoteResult,
+  type ProjectAgentUpdateMemoryNoteResult,
   type ProjectAgentGroupThreadEntry,
   type ProjectAgentOverview,
   type ProjectAgentResolveWorkerInput,
@@ -64,6 +68,7 @@ import {
   normalizeLibraryRelativePath,
   resolveLibraryRoot,
   resolveLibraryWriteTarget,
+  searchLibraryEntries,
 } from "../libraryStore.ts";
 import {
   commitLibraryChange,
@@ -78,6 +83,7 @@ import {
   decodeProjectAgentListCursor,
   detectProjectTaskDependencyCycle,
   encodeProjectAgentListCursor,
+  GROUP_MEMORY_NOTE_PATH_PATTERN,
   INITIAL_PROJECT_DIGEST_SUMMARY,
   isCoordinatorCuratedDocumentPath,
   isGeneratedDocumentPath,
@@ -85,8 +91,10 @@ import {
   isMemoryDocumentPath,
   isMemoryNoteDocumentPath,
   isMemoryThreadDocumentPath,
+  isUserEditableMemoryNoteDocumentPath,
   isUserOwnedDocumentPath,
   MEMORY_AUTO_DOCUMENT_PATH,
+  memoryNoteOriginForAuthor,
   normalizeProjectDocumentPath,
   sanitizeProjectDigestSummary,
   truncateToContextBudget,
@@ -206,8 +214,10 @@ const wakeClaimRequestId = (receiptId: string) => `${receiptId}:claim`;
 
 // Only dated note files are group memory the coordinator can forget; the
 // index, thread-scoped memories, and user notes are off limits.
-const GROUP_MEMORY_NOTE_PATTERN = /^memory\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$/;
 const MEMORY_INDEX_MAX_ENTRIES = 256;
+// Top-level library names carried in a context packet. The rest is found by
+// search, never preloaded.
+const LIBRARY_PACKET_INDEX_MAX_ENTRIES = 40;
 
 const normalizeMemoryNote = (value: string) =>
   value
@@ -233,6 +243,31 @@ const memoryNoteSummary = (note: string) =>
     .find((line) => line.trim().length > 0)
     ?.trim()
     .slice(0, 140) ?? note.slice(0, 140);
+
+// The note body is everything after an optional `# title` heading; the heading
+// is the note's title, not part of what the user wrote.
+const memoryNoteBodyText = (content: string) => {
+  const withoutHeading = content.replace(/^\s*#[^\n]*\n?/, "");
+  return withoutHeading.trim();
+};
+
+const memoryNoteTitleFromContent = (content: string) => {
+  const heading = content.match(/^\s*#\s+(.+)$/m);
+  if (heading?.[1]) return sanitizeMemoryTitle(heading[1]).slice(0, 160);
+  return memoryNoteSummary(memoryNoteBodyText(content)).slice(0, 60) || "Note";
+};
+
+// Does the generated index still publish this note? An unindexed note is
+// reachable from Settings but not from a thread packet, so the UI says so
+// instead of implying every note is shared.
+const memoryIndexHasLine = (indexContent: string, logicalPath: string) => {
+  const linkSegment = `](${logicalPath})`;
+  return indexContent
+    .split("\n")
+    .some(
+      (line) => line.startsWith("- [") && (line.split(" — ", 1)[0] ?? line).endsWith(linkSegment),
+    );
+};
 
 // A memory title becomes both the `# heading` line and the single-line
 // `- [title](path)` index entry — strip control characters so a title can
@@ -285,6 +320,16 @@ const copyLibrarySourceTree = async (source: string, target: string) => {
     await fs.copyFile(src, dst);
   };
   await visit(source, target, false);
+};
+
+// Shape accepted by repository.applyDocumentChanges upserts. Declared here so
+// the note + index transaction builds one typed array instead of a tuple
+// inferred from the call signature.
+type DocumentUpsert = {
+  readonly revision: ProjectDocumentRevision;
+  readonly expectedRevision: number | null;
+  readonly diskHash?: string | null;
+  readonly conflictPending?: boolean;
 };
 
 const branded = {
@@ -1428,6 +1473,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly content: string;
     readonly sources?: ProjectDocumentRevision["sources"];
     readonly authorThreadId?: ThreadId | null;
+    /** Authorship of the writer, defaulting to "system" for generated views.
+     *  `sources` carries the origin message/turn so a note can be traced back. */
+    readonly authorKind?: ProjectDocumentRevision["authorKind"];
   }) =>
     Effect.gen(function* () {
       const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
@@ -1446,7 +1494,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         revision: currentRevision + 1,
         content: input.content,
         contentHash: hashDocumentContent(input.content),
-        authorKind: "system",
+        authorKind: input.authorKind ?? "system",
         authorThreadId: input.authorThreadId ?? null,
         sources: input.sources ?? [],
         createdAt: now,
@@ -1913,7 +1961,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Failed to list hub memory.")));
       const paths = heads
         .map((head) => head.logicalPath)
-        .filter((logicalPath) => GROUP_MEMORY_NOTE_PATTERN.test(logicalPath));
+        .filter((logicalPath) => GROUP_MEMORY_NOTE_PATH_PATTERN.test(logicalPath));
       if (paths.length === 0) {
         return [] as ReadonlyArray<ProjectDocumentRevision>;
       }
@@ -1925,6 +1973,56 @@ export const makeProjectAgentService = Effect.gen(function* () {
   // One `- [title](path) — summary` line per note in MEMORY.md, the index
   // every group thread reads. Rewritten through upsertSystemDocument so it
   // keeps its system authorship and disk mirror.
+  //
+  // `nextMemoryIndexContent` is the single reconciler used by every writer
+  // (remember, user note edits, deletes): an edit that skipped it would leave
+  // threads reading a link to a body that no longer says what the index claims.
+  const nextMemoryIndexContent = (input: {
+    readonly currentContent: string;
+    readonly logicalPath: string;
+    readonly title: string;
+    /** null removes the entry. */
+    readonly summary: string | null;
+  }) => {
+    const lines = (input.currentContent.length > 0 ? input.currentContent : "# Memory\n").split(
+      "\n",
+    );
+    // Match index lines by their exact link target — substring includes()
+    // would let one note's path hit inside another's longer path or a
+    // title carrying forged `](...)` text. Entries are `- [t](path) — s`,
+    // so the target must close the link segment before the summary dash.
+    const lineTargetsPath = (line: string) => {
+      if (!line.startsWith("- [")) return false;
+      const linkSegment = line.split(" — ", 1)[0] ?? line;
+      return linkSegment.endsWith(`](${input.logicalPath})`);
+    };
+    const index = lines.findIndex(lineTargetsPath);
+    if (input.summary === null) {
+      if (index < 0) return null;
+      lines.splice(index, 1);
+    } else {
+      const entry = `- [${input.title}](${input.logicalPath}) — ${input.summary}`;
+      if (index >= 0) lines[index] = entry;
+      else lines.push(entry);
+      // Cap the index: drop the oldest entries first, never the one just
+      // written.
+      const entryCount = () => lines.filter((line) => line.startsWith("- [")).length;
+      while (entryCount() > MEMORY_INDEX_MAX_ENTRIES) {
+        const oldest = lines.findIndex((line) => line.startsWith("- [") && !lineTargetsPath(line));
+        if (oldest < 0) break;
+        lines.splice(oldest, 1);
+      }
+    }
+    const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    return next.endsWith("\n") ? next : `${next}\n`;
+  };
+
+  const readMemoryIndexContent = (projectId: ProjectId) =>
+    repository.readDocumentRevision({ projectId, logicalPath: MEMORY_AUTO_DOCUMENT_PATH }).pipe(
+      Effect.mapError(toServiceError("Failed to load the memory index.")),
+      Effect.map((current) => (Option.isSome(current) ? current.value.content : "")),
+    );
+
   const updateMemoryIndex = (input: {
     readonly projectId: ProjectId;
     readonly logicalPath: string;
@@ -1932,47 +2030,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly summary: string | null;
   }) =>
     Effect.gen(function* () {
-      const current = yield* repository
-        .readDocumentRevision({
-          projectId: input.projectId,
-          logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
-        })
-        .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
-      const content = Option.isSome(current) ? current.value.content : "# Memory\n";
-      const lines = content.split("\n");
-      // Match index lines by their exact link target — substring includes()
-      // would let one note's path hit inside another's longer path or a
-      // title carrying forged `](...)` text. Entries are `- [t](path) — s`,
-      // so the target must close the link segment before the summary dash.
-      const lineTargetsPath = (line: string) => {
-        if (!line.startsWith("- [")) return false;
-        const linkSegment = line.split(" — ", 1)[0] ?? line;
-        return linkSegment.endsWith(`](${input.logicalPath})`);
-      };
-      const index = lines.findIndex(lineTargetsPath);
-      if (input.summary === null) {
-        if (index < 0) return;
-        lines.splice(index, 1);
-      } else {
-        const entry = `- [${input.title}](${input.logicalPath}) — ${input.summary}`;
-        if (index >= 0) lines[index] = entry;
-        else lines.push(entry);
-        // Cap the index: drop the oldest entries first, never the one just
-        // written.
-        const entryCount = () => lines.filter((line) => line.startsWith("- [")).length;
-        while (entryCount() > MEMORY_INDEX_MAX_ENTRIES) {
-          const oldest = lines.findIndex(
-            (line) => line.startsWith("- [") && !lineTargetsPath(line),
-          );
-          if (oldest < 0) break;
-          lines.splice(oldest, 1);
-        }
-      }
-      const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+      const currentContent = yield* readMemoryIndexContent(input.projectId);
+      const next = nextMemoryIndexContent({ ...input, currentContent });
+      if (next === null) return;
       yield* upsertSystemDocument({
         projectId: input.projectId,
         logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
-        content: next.endsWith("\n") ? next : `${next}\n`,
+        content: next,
       });
     });
 
@@ -3046,6 +3110,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
               logicalPath: duplicate.logicalPath,
               content: `# ${title}\n\n${note}\n`,
               authorThreadId: principal.threadId,
+              // Provenance: the note records which thread wrote it, so Settings
+              // can show an agent conclusion separately from a user note.
+              authorKind: principal.kind === "coordinator" ? "coordinator" : "worker",
+              sources: [{ threadId: principal.threadId }],
             });
           }
           yield* updateMemoryIndex({
@@ -3079,6 +3147,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath,
           content,
           authorThreadId: principal.threadId,
+          authorKind: principal.kind === "coordinator" ? "coordinator" : "worker",
+          sources: [{ threadId: principal.threadId }],
         });
         yield* updateMemoryIndex({
           projectId: input.projectId,
@@ -3120,7 +3190,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           try: () => normalizeProjectDocumentPath(input.path),
           catch: () => fail(`Memory path "${input.path}" is not a valid document path.`, "invalid"),
         });
-        if (!GROUP_MEMORY_NOTE_PATTERN.test(logicalPath)) {
+        if (!GROUP_MEMORY_NOTE_PATH_PATTERN.test(logicalPath)) {
           return yield* Effect.fail(
             fail(`Only hub memory notes (memory/<date>-<slug>.md) can be forgotten.`, "forbidden"),
           );
@@ -3165,6 +3235,438 @@ export const makeProjectAgentService = Effect.gen(function* () {
         return result;
       }),
 
+    // Settings lists notes with their provenance, not just their bodies: who or
+    // what wrote the note, the thread/message it came from, and the revision a
+    // later edit must guard against. Provenance is a label only — it never
+    // widens what a note may write or approve.
+    listMemoryNotes: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        const heads = yield* repository
+          .listDocumentHeads(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to list hub memory.")));
+        const paths = heads
+          .map((head) => head.logicalPath)
+          .filter(isUserEditableMemoryNoteDocumentPath);
+        const indexContent = yield* readMemoryIndexContent(input.projectId);
+        const notes =
+          paths.length === 0
+            ? []
+            : yield* repository
+                .readDocumentRevisions({ projectId: input.projectId, logicalPaths: paths })
+                .pipe(Effect.mapError(toServiceError("Failed to read hub memory.")));
+        const headByPath = new Map(heads.map((head) => [head.logicalPath, head]));
+        const listed = notes.flatMap((revision) => {
+          const head = headByPath.get(revision.logicalPath);
+          // A note whose head vanished mid-read is skipped rather than shown as
+          // live; the next listing is authoritative.
+          if (head === undefined) return [];
+          return [
+            {
+              projectId: input.projectId,
+              logicalPath: revision.logicalPath,
+              title: memoryNoteTitleFromContent(revision.content),
+              summary: memoryNoteSummary(memoryNoteBodyText(revision.content)),
+              revision: revision.revision,
+              updatedAt: head.updatedAt,
+              authorKind: revision.authorKind,
+              authorThreadId: revision.authorThreadId,
+              sources: revision.sources,
+              origin: memoryNoteOriginForAuthor(revision.authorKind),
+              indexed: memoryIndexHasLine(indexContent, revision.logicalPath),
+            },
+          ];
+        });
+        return {
+          notes: listed.toSorted((a, b) =>
+            a.updatedAt === b.updatedAt
+              ? a.logicalPath.localeCompare(b.logicalPath)
+              : b.updatedAt.localeCompare(a.updatedAt),
+          ),
+        };
+      }),
+
+    // User-owned edit of a memory note. `writeDocument` deliberately refuses
+    // these paths for some principals and `forget` refuses the user entirely,
+    // so correcting a preference needed a new conversation with the agent.
+    // The note and its index line move in one transaction: a half-applied edit
+    // would leave every thread reading a link to a body that says something
+    // else.
+    updateMemoryNote: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Editing a memory note is a user action.", "forbidden"));
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as ProjectAgentUpdateMemoryNoteResult,
+        );
+        if (existingReceipt) return existingReceipt;
+        const logicalPath = yield* Effect.try({
+          try: () => normalizeProjectDocumentPath(input.path),
+          catch: () => fail(`Memory path "${input.path}" is not a valid document path.`, "invalid"),
+        });
+        if (!isUserEditableMemoryNoteDocumentPath(logicalPath)) {
+          return yield* Effect.fail(
+            fail(
+              `Only hub memory notes and quick notes can be edited here. Thread memory and MEMORY.md are not editable from Settings.`,
+              "forbidden",
+            ),
+          );
+        }
+        const head = yield* repository
+          .getDocumentHead(input.projectId, logicalPath)
+          .pipe(Effect.mapError(toServiceError("Failed to load the memory note.")));
+        if (Option.isNone(head)) {
+          return yield* Effect.fail(fail("That memory note no longer exists.", "not-found"));
+        }
+        const currentRevision = head.value.revision;
+        if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
+          return yield* Effect.fail(
+            fail("This note changed. Reload it and reapply your edit.", "conflict"),
+          );
+        }
+        const existing = yield* repository
+          .readDocumentRevision({ projectId: input.projectId, logicalPath })
+          .pipe(Effect.mapError(toServiceError("Failed to load the memory note.")));
+        const previous = Option.isSome(existing) ? existing.value.content : "";
+        // The title is the note's `# heading`; the body is everything after it.
+        // Normalizing here (rather than trusting the caller's shape) keeps a
+        // title from leaking into the body and the index summary.
+        const strippedBody = memoryNoteBodyText(input.content);
+        const body = strippedBody.length > 0 ? strippedBody : input.content.trim();
+        const title =
+          sanitizeMemoryTitle(input.title ?? "") || memoryNoteTitleFromContent(input.content);
+        // An edit that changes nothing must not burn a revision: the index and
+        // the head stay exactly as they are.
+        if (
+          body === memoryNoteBodyText(previous) &&
+          title === memoryNoteTitleFromContent(previous)
+        ) {
+          const indexHeadNow = yield* repository
+            .getDocumentHead(input.projectId, MEMORY_AUTO_DOCUMENT_PATH)
+            .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
+          const indexContentNow = yield* readMemoryIndexContent(input.projectId);
+          const result = {
+            note: {
+              projectId: input.projectId,
+              logicalPath,
+              title,
+              summary: memoryNoteSummary(body),
+              revision: currentRevision,
+              updatedAt: head.value.updatedAt,
+              authorKind: Option.isSome(existing) ? existing.value.authorKind : ("user" as const),
+              authorThreadId: Option.isSome(existing) ? existing.value.authorThreadId : null,
+              sources: Option.isSome(existing) ? existing.value.sources : [],
+              origin: memoryNoteOriginForAuthor(
+                Option.isSome(existing) ? existing.value.authorKind : "user",
+              ),
+              indexed: memoryIndexHasLine(indexContentNow, logicalPath),
+            },
+            indexRevision: Option.isSome(indexHeadNow) ? indexHeadNow.value.revision : null,
+          };
+          yield* storeReceipt(input.requestId, input.projectId, "updateMemoryNote", result);
+          return result;
+        }
+        const now = isoNow();
+        const content = `# ${title}\n\n${body}\n`;
+        const noteRevision: ProjectDocumentRevision = {
+          id: branded.document(),
+          projectId: input.projectId,
+          logicalPath,
+          revision: currentRevision + 1,
+          content,
+          contentHash: hashDocumentContent(content),
+          authorKind: "user",
+          authorThreadId: null,
+          // Provenance chain: the revision keeps the origins recorded so far
+          // and gains its own path, so a corrected note still shows what
+          // produced it. This is a record, not an instruction — it grants the
+          // note nothing.
+          sources: [
+            ...(Option.isSome(existing) ? existing.value.sources : []),
+            { path: logicalPath },
+          ],
+          createdAt: now,
+        };
+        const indexHead = yield* repository
+          .getDocumentHead(input.projectId, MEMORY_AUTO_DOCUMENT_PATH)
+          .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
+        const indexRevision = Option.isNone(indexHead) ? 0 : indexHead.value.revision;
+        const indexContent = yield* readMemoryIndexContent(input.projectId);
+        const nextIndex = nextMemoryIndexContent({
+          currentContent: indexContent,
+          logicalPath,
+          title,
+          summary: memoryNoteSummary(body),
+        });
+        const upserts: DocumentUpsert[] = [
+          {
+            revision: noteRevision,
+            expectedRevision: currentRevision,
+            diskHash: head.value.diskHash,
+          },
+        ];
+        // The index is a generated view: it keeps system authorship and is only
+        // rewritten when this note's line actually changes.
+        if (nextIndex !== null && nextIndex !== indexContent) {
+          upserts.push({
+            revision: {
+              id: branded.document(),
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              revision: indexRevision + 1,
+              content: nextIndex,
+              contentHash: hashDocumentContent(nextIndex),
+              authorKind: "system",
+              authorThreadId: null,
+              sources: [],
+              createdAt: now,
+            },
+            expectedRevision: indexRevision,
+            diskHash: Option.isSome(indexHead) ? indexHead.value.diskHash : null,
+          });
+        }
+        yield* repository
+          .applyDocumentChanges({ projectId: input.projectId, upserts, deletes: [] })
+          .pipe(
+            Effect.mapError((cause) =>
+              // A lost CAS race is a conflict the caller retries, not a failure.
+              cause instanceof Error && cause.message.includes("revision mismatch")
+                ? fail("This note changed. Reload it and reapply your edit.", "conflict")
+                : toServiceError("Failed to save the memory note.")(cause),
+            ),
+          );
+        yield* writeProjectDocumentMirror({
+          stateDir: serverConfig.stateDir,
+          projectId: input.projectId,
+          logicalPath,
+          content,
+        }).pipe(Effect.mapError(toServiceError("Failed to materialize the memory note.")));
+        yield* repository
+          .markDocumentDiskSynced({
+            projectId: input.projectId,
+            logicalPath,
+            diskHash: noteRevision.contentHash,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to record the synced note.")));
+        yield* publish({
+          type: "document-head-updated",
+          head: {
+            projectId: input.projectId,
+            logicalPath,
+            revision: noteRevision.revision,
+            contentHash: noteRevision.contentHash,
+            diskHash: noteRevision.contentHash,
+            conflictPending: false,
+            updatedAt: now,
+          },
+        });
+        let writtenIndexRevision: number | null = null;
+        if (upserts.length > 1) {
+          const indexUpsert = upserts[1]!;
+          writtenIndexRevision = indexUpsert.revision.revision;
+          yield* writeProjectDocumentMirror({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+            content: nextIndex!,
+          }).pipe(Effect.mapError(toServiceError("Failed to materialize the memory index.")));
+          yield* repository
+            .markDocumentDiskSynced({
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              diskHash: indexUpsert.revision.contentHash,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to record the synced index.")));
+          yield* publish({
+            type: "document-head-updated",
+            head: {
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              revision: indexUpsert.revision.revision,
+              contentHash: indexUpsert.revision.contentHash,
+              diskHash: indexUpsert.revision.contentHash,
+              conflictPending: false,
+              updatedAt: now,
+            },
+          });
+        }
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "document-written",
+          actorKind: "user",
+          actorThreadId: null,
+          goalId: null,
+          taskId: null,
+          source: { path: logicalPath },
+          summary: `Edited memory ${logicalPath}`,
+          createdAt: now,
+        });
+        const result = {
+          note: {
+            projectId: input.projectId,
+            logicalPath,
+            title,
+            summary: memoryNoteSummary(body),
+            revision: noteRevision.revision,
+            updatedAt: now,
+            authorKind: "user" as const,
+            authorThreadId: null,
+            sources: noteRevision.sources,
+            origin: memoryNoteOriginForAuthor("user"),
+            indexed: memoryIndexHasLine(nextIndex ?? indexContent, logicalPath),
+          },
+          indexRevision: writtenIndexRevision,
+        };
+        yield* storeReceipt(input.requestId, input.projectId, "updateMemoryNote", result);
+        return result;
+      }),
+
+    deleteMemoryNote: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Deleting a memory note is a user action.", "forbidden"));
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as ProjectAgentDeleteMemoryNoteResult,
+        );
+        if (existingReceipt) return existingReceipt;
+        const logicalPath = yield* Effect.try({
+          try: () => normalizeProjectDocumentPath(input.path),
+          catch: () => fail(`Memory path "${input.path}" is not a valid document path.`, "invalid"),
+        });
+        if (!isUserEditableMemoryNoteDocumentPath(logicalPath)) {
+          return yield* Effect.fail(
+            fail(
+              `Only hub memory notes and quick notes can be deleted here. Thread memory and MEMORY.md are not editable from Settings.`,
+              "forbidden",
+            ),
+          );
+        }
+        const head = yield* repository
+          .getDocumentHead(input.projectId, logicalPath)
+          .pipe(Effect.mapError(toServiceError("Failed to load the memory note.")));
+        if (Option.isNone(head)) {
+          const result = { deleted: false, path: logicalPath };
+          yield* storeReceipt(input.requestId, input.projectId, "deleteMemoryNote", result);
+          return result;
+        }
+        if (
+          input.expectedRevision !== undefined &&
+          input.expectedRevision !== head.value.revision
+        ) {
+          return yield* Effect.fail(
+            fail("This note changed. Reload it before deleting.", "conflict"),
+          );
+        }
+        const indexHead = yield* repository
+          .getDocumentHead(input.projectId, MEMORY_AUTO_DOCUMENT_PATH)
+          .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
+        const indexRevision = Option.isNone(indexHead) ? 0 : indexHead.value.revision;
+        const indexContent = yield* readMemoryIndexContent(input.projectId);
+        const nextIndex = nextMemoryIndexContent({
+          currentContent: indexContent,
+          logicalPath,
+          title: "",
+          summary: null,
+        });
+        const now = isoNow();
+        const upserts: DocumentUpsert[] = [];
+        if (nextIndex !== null && nextIndex !== indexContent) {
+          upserts.push({
+            revision: {
+              id: branded.document(),
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              revision: indexRevision + 1,
+              content: nextIndex,
+              contentHash: hashDocumentContent(nextIndex),
+              authorKind: "system",
+              authorThreadId: null,
+              sources: [],
+              createdAt: now,
+            },
+            expectedRevision: indexRevision,
+            diskHash: Option.isSome(indexHead) ? indexHead.value.diskHash : null,
+          });
+        }
+        // Note row and index line go together: a note removed while its index
+        // line survives leaves every thread following a dead link.
+        yield* repository
+          .applyDocumentChanges({
+            projectId: input.projectId,
+            upserts,
+            deletes: [{ logicalPath, expectedRevision: head.value.revision }],
+          })
+          .pipe(
+            Effect.mapError((cause) =>
+              cause instanceof Error && cause.message.includes("revision mismatch")
+                ? fail("This note changed. Reload it before deleting.", "conflict")
+                : toServiceError("Failed to delete the memory note.")(cause),
+            ),
+          );
+        yield* Effect.tryPromise({
+          try: () =>
+            fs.rm(materializeDocumentPath(serverConfig.stateDir, input.projectId, logicalPath), {
+              force: true,
+            }),
+          catch: toServiceError("Failed to remove the memory mirror file."),
+        });
+        yield* publish({
+          type: "document-removed",
+          projectId: input.projectId,
+          logicalPath,
+        });
+        if (upserts.length > 0) {
+          const indexUpsert = upserts[0]!;
+          yield* writeProjectDocumentMirror({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+            content: indexUpsert.revision.content,
+          }).pipe(Effect.mapError(toServiceError("Failed to materialize the memory index.")));
+          yield* repository
+            .markDocumentDiskSynced({
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              diskHash: indexUpsert.revision.contentHash,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to record the synced index.")));
+          yield* publish({
+            type: "document-head-updated",
+            head: {
+              projectId: input.projectId,
+              logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              revision: indexUpsert.revision.revision,
+              contentHash: indexUpsert.revision.contentHash,
+              diskHash: indexUpsert.revision.contentHash,
+              conflictPending: false,
+              updatedAt: now,
+            },
+          });
+        }
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "document-written",
+          actorKind: "user",
+          actorThreadId: null,
+          goalId: null,
+          taskId: null,
+          source: { path: logicalPath },
+          summary: `Deleted memory ${logicalPath}`,
+          createdAt: now,
+        });
+        const result = { deleted: true, path: logicalPath };
+        yield* storeReceipt(input.requestId, input.projectId, "deleteMemoryNote", result);
+        return result;
+      }),
+
     libraryList: (input, principal) =>
       Effect.gen(function* () {
         yield* requireProjectAccess(principal, input.projectId);
@@ -3184,6 +3686,47 @@ export const makeProjectAgentService = Effect.gen(function* () {
               }),
             );
             return { root, entries };
+          }),
+        );
+      }),
+
+    // Whole-tree name search. The panel's per-directory listing only knows
+    // directories a user opened, so a file in a never-opened folder was
+    // unreachable; this walks the tree under the same root lock and containment
+    // rules as the listing, with explicit result/scan/depth bounds and a
+    // cursor. Search output stays a path list — no contents are read here, so
+    // finding a file costs no Library preload.
+    librarySearch: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        return yield* withLibraryRootLock(
+          input.projectId,
+          Effect.gen(function* () {
+            const { root, libraryIsManaged } = yield* resolveGroupLibraryRoot(input.projectId);
+            const page = yield* withLibraryQueue(
+              root,
+              Effect.gen(function* () {
+                yield* ensureLibraryRepo(git, root, input.projectId, {
+                  isManaged: libraryIsManaged,
+                }).pipe(Effect.mapError(toServiceError("Failed to prepare the hub library.")));
+                return yield* searchLibraryEntries(root, {
+                  query: input.query,
+                  limit: input.limit ?? 50,
+                  ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+                  ...(input.relativePath !== undefined ? { relativePath: input.relativePath } : {}),
+                  ...(input.kind !== undefined ? { kind: input.kind } : {}),
+                  maxScannedEntries: PROJECT_AGENT_LIBRARY_SEARCH_MAX_SCANNED_ENTRIES,
+                  maxDepth: PROJECT_AGENT_LIBRARY_SEARCH_MAX_DEPTH,
+                }).pipe(Effect.mapError(toServiceError("Failed to search the hub library.")));
+              }),
+            );
+            return {
+              root,
+              entries: page.entries,
+              nextCursor: page.nextCursor,
+              scannedEntries: page.scannedEntries,
+              truncated: page.truncated,
+            };
           }),
         );
       }),
@@ -4837,6 +5380,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
               .pipe(Effect.map(({ root }) => root))
               .pipe(Effect.catch(() => Effect.succeed("unavailable")))
           : "unavailable";
+        // A light index: names at the top of the library only. The whole library
+        // is never preloaded into a prompt — agents search by name and then read
+        // the one file they need.
+        const libraryIndexText = yield* Effect.gen(function* () {
+          if (groupLibraryRoot === "unavailable") return "Unavailable.";
+          const entries = yield* listLibraryEntries(groupLibraryRoot).pipe(
+            Effect.catch(() => Effect.succeed([] as LibraryEntry[])),
+          );
+          if (entries.length === 0) return "Empty.";
+          const shown = entries.slice(0, LIBRARY_PACKET_INDEX_MAX_ENTRIES);
+          const lines = shown.map(
+            (entry) => `- ${entry.name}${entry.kind === "directory" ? "/" : ""}`,
+          );
+          if (entries.length > shown.length) {
+            lines.push(`- …and ${entries.length - shown.length} more at the top level`);
+          }
+          return `${lines.join("\n")}\nFind anything else with synara_project_library_search, then read it with synara_project_library_list.`;
+        });
         const memoryHeads = memoryEnabled
           ? (yield* repository
               .listDocumentHeads(principal.projectId)
@@ -4932,6 +5493,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 : "Provider default.",
           },
           { label: "Library root", text: groupLibraryRoot },
+          { label: "Library index (top level only)", text: libraryIndexText },
           ...(isCoordinator ? [{ label: "Watch", text: PROJECT_BOT_WATCH_RULES }] : []),
           ...(isCoordinator
             ? [
@@ -6406,6 +6968,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
             if (event.type === "thread-index-upserted") return event.projectId === input.projectId;
             if (event.type === "work-item-upserted") return event.projectId === input.projectId;
+            if (event.type === "document-removed") return event.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
           const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);

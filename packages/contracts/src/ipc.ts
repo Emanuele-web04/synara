@@ -84,6 +84,12 @@ import type {
   ProjectAgentStreamEvent,
   ProjectAgentUpdateGoalInput,
   ProjectAgentUpdateTaskInput,
+  ProjectAgentUpdateMemoryNoteInput,
+  ProjectAgentUpdateMemoryNoteResult,
+  ProjectAgentDeleteMemoryNoteInput,
+  ProjectAgentDeleteMemoryNoteResult,
+  ProjectAgentListMemoryNotesInput,
+  ProjectAgentListMemoryNotesResult,
   ProjectAgentWriteDocumentInput,
   ProjectAgentCreateTaskInput,
   ProjectAgentExcludeThreadInput,
@@ -97,6 +103,8 @@ import type {
   ProjectAgentLibraryHistoryResult,
   ProjectAgentLibraryListInput,
   ProjectAgentLibraryListResult,
+  ProjectAgentLibrarySearchInput,
+  ProjectAgentLibrarySearchResult,
   ProjectAgentLibraryMkdirInput,
   ProjectAgentLibraryMutationResult,
   ProjectAgentLibraryRenameInput,
@@ -1428,6 +1436,16 @@ export interface NativeApi {
     ) => Promise<ProjectAgentListDocumentsResult>;
     readDocument: (input: ProjectAgentReadDocumentInput) => Promise<ProjectAgentReadDocumentResult>;
     writeDocument: (input: ProjectAgentWriteDocumentInput) => Promise<ProjectDocumentRevision>;
+    /** Settings memory list: notes with provenance and their index state. */
+    listMemoryNotes: (
+      input: ProjectAgentListMemoryNotesInput,
+    ) => Promise<ProjectAgentListMemoryNotesResult>;
+    updateMemoryNote: (
+      input: ProjectAgentUpdateMemoryNoteInput,
+    ) => Promise<ProjectAgentUpdateMemoryNoteResult>;
+    deleteMemoryNote: (
+      input: ProjectAgentDeleteMemoryNoteInput,
+    ) => Promise<ProjectAgentDeleteMemoryNoteResult>;
     exportDocuments: (
       input: ProjectAgentExportDocumentsInput,
     ) => Promise<ProjectAgentExportDocumentsResult>;
@@ -1443,6 +1461,8 @@ export interface NativeApi {
     ) => Promise<ProjectAgentResolveWorkerResult>;
     library: {
       list: (input: ProjectAgentLibraryListInput) => Promise<ProjectAgentLibraryListResult>;
+      /** Whole-tree name search, bounded and paginated. */
+      search: (input: ProjectAgentLibrarySearchInput) => Promise<ProjectAgentLibrarySearchResult>;
       mkdir: (input: ProjectAgentLibraryMkdirInput) => Promise<ProjectAgentLibraryMutationResult>;
       rename: (input: ProjectAgentLibraryRenameInput) => Promise<ProjectAgentLibraryMutationResult>;
       delete: (input: ProjectAgentLibraryDeleteInput) => Promise<ProjectAgentLibraryMutationResult>;
