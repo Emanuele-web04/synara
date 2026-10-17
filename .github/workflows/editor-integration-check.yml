@@ -38,7 +38,7 @@ jobs:
       - name: Test real compiler and DAP lifecycle
         env:
           SYNARA_TEST_JS_DEBUG: "1"
-        run: bun run --cwd apps/server test src/editor src/platform/protocolProcessTeardown.test.ts
+        run: bun run --cwd apps/server test src/editor/ src/platform/protocolProcessTeardown.test.ts
   # ci.yml already runs every browser test; this job adds only the editor acceptance journey.
   browser:
     name: Native editor and real application acceptance
