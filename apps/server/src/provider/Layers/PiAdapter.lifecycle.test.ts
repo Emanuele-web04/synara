@@ -240,6 +240,23 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("keeps idle snapshot activity stable across reads and advances it on completed work", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const before = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(before.updatedAt);
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const completed = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    expect(Date.parse(completed.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(
+      completed.updatedAt,
+    );
+  });
+});
+
 it("passes the current Pi system prompt and tools to the model stream", async () => {
   responses("success");
   await withAdapter(async (adapter, events) => {

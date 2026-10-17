@@ -16,6 +16,18 @@
       "types": "./src/betaFeatures.ts",
       "import": "./src/betaFeatures.ts"
     },
+    "./mcpConnectors": {
+      "types": "./src/mcpConnectors.ts",
+      "import": "./src/mcpConnectors.ts"
+    },
+    "./inlineVisual": {
+      "types": "./src/inlineVisual.ts",
+      "import": "./src/inlineVisual.ts"
+    },
+    "./inlineVisualFormula": {
+      "types": "./src/inlineVisualFormula.ts",
+      "import": "./src/inlineVisualFormula.ts"
+    },
     "./cuaActionDiagnostics": {
       "types": "./src/cuaActionDiagnostics.ts",
       "import": "./src/cuaActionDiagnostics.ts"
@@ -443,10 +455,13 @@
     "./keybindingRules": {
       "types": "./src/keybindingRules.ts",
       "import": "./src/keybindingRules.ts"
+    },
+    "./wsRequestClass": {
+      "types": "./src/wsRequestClass.ts",
+      "import": "./src/wsRequestClass.ts"
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",

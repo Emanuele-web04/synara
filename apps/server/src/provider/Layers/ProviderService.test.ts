@@ -27,6 +27,7 @@ import {
   type ProviderKind,
   ProviderSessionStartInput,
   RuntimeItemId,
+  RuntimeTaskId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
@@ -680,6 +681,45 @@ const replacementRouting = makeProviderServiceLayer({
     }),
 });
 replacementRouting.layer("Claude replacement preparation", (it) => {
+  it.effect(
+    "finishes an already-started retirement instead of timing out with a live binding",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("slow-retirement");
+        const input = {
+          threadId,
+          provider: "claudeAgent" as const,
+          runtimeMode: "full-access" as const,
+        };
+        yield* provider.startSession(threadId, input);
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+          replacementRouting.claude
+            .stopSession(threadId)
+            .pipe(
+              Effect.andThen(Deferred.succeed(entered, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(undefined),
+            ),
+        );
+        const pending = yield* provider
+          .startSession(threadId, input)
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("61 seconds");
+        assert.isUndefined(pending.pollUnsafe());
+        assert.isFalse(yield* replacementRouting.claude.hasSession(threadId));
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(pending))._tag, "Success");
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.notEqual(after.lifecycleGeneration, before.lifecycleGeneration);
+        assert.isTrue(yield* replacementRouting.claude.hasSession(threadId));
+      }),
+  );
   for (const failure of ["background", "unsupported-auto"] as const) {
     it.effect(
       `preserves events and generation when preparation rejects (${failure}), then resumes idle`,
@@ -1650,6 +1690,73 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("preserves a pending send before the adapter exposes its active turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-reaper-pending-send");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const accepted = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const originalSend = routing.codex.sendTurn.getMockImplementation()!;
+      routing.codex.sendTurn.mockImplementationOnce((input) =>
+        Deferred.succeed(accepted, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(originalSend(input)),
+        ),
+      );
+      const sending = yield* provider
+        .sendTurn({ threadId, input: "continue the goal", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(accepted);
+      const stops = routing.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({ threadId, onlyIfIdleSince: new Date().toISOString() });
+      assert.equal(routing.codex.stopSession.mock.calls.length, stops);
+      yield* Deferred.succeed(release, undefined);
+      const sent = yield* Fiber.join(sending);
+      assert.isDefined(sent.turnId);
+      assert.isTrue(yield* routing.codex.adapter.hasSession(threadId));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("settles explicit Stop when an idle sweep arrives during teardown", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-reaper-overlap");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stopping = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const originalStop = routing.codex.stopSession.getMockImplementation()!;
+      routing.codex.stopSession.mockImplementationOnce((id) =>
+        Deferred.succeed(stopping, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(originalStop(id)),
+        ),
+      );
+      const explicitStop = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+      yield* Deferred.await(stopping);
+      const sweep = yield* provider.stopRuntimeSession!({
+        threadId,
+        onlyIfIdleSince: new Date().toISOString(),
+      }).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(explicitStop);
+      yield* Fiber.join(sweep);
+      assert.isTrue(Option.isNone(yield* directory.getBinding(threadId)));
+      assert.isFalse(yield* routing.codex.adapter.hasSession(threadId));
+    }),
+  );
+
   it.effect("starts another provider on a Codex thread only after a continuation reset", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1928,6 +2035,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.equal(result._tag, "Failure");
       assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("resumes a stopped Claude thread after behavior-only launch options change", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-claude-stopped-behavior-options");
+      const homePath = "/tmp/claude-stopped-behavior-options";
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        providerOptions: {
+          claudeAgent: { binaryPath: "claude", homePath, enableArtifacts: false },
+        },
+        runtimeMode: "full-access",
+      });
+      assert.ok(initial.resumeCursor);
+      yield* provider.stopRuntimeSession!({ threadId });
+      routing.claude.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        providerOptions: {
+          claudeAgent: {
+            binaryPath: "claude",
+            homePath,
+            enableArtifacts: true,
+            maxThinkingTokens: 4096,
+            permissionMode: "acceptEdits",
+          },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(routing.claude.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.claude.startSession.mock.calls[0]?.[0] as
+        | { resumeCursor?: unknown }
+        | undefined;
+      assert.deepEqual(resumedStartInput?.resumeCursor, initial.resumeCursor);
     }),
   );
 
@@ -2443,6 +2590,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondGeneration = secondBinding?.lifecycleGeneration;
       assert.equal(typeof secondGeneration, "string");
       assert.notEqual(secondGeneration, firstGeneration);
+      const secondStatus = secondBinding?.status;
+      const secondActiveTurnId = asRuntimePayloadRecord(secondBinding?.runtimePayload).activeTurnId;
 
       const responseCallCount = routing.codex.respondToRequest.mock.calls.length;
       const staleResponse = yield* Effect.result(
@@ -2492,10 +2641,42 @@ routing.layer("ProviderServiceLive routing", (it) => {
         lifecycleGeneration: String(firstGeneration),
         payload: { reason: "late old-runtime exit" },
       });
-      yield* sleep(25);
+      routing.codex.emit({
+        type: "session.state.changed",
+        eventId: asEventId("runtime-current-generation-ready"),
+        provider: "codex",
+        threadId,
+        createdAt: "2026-07-14T14:00:01.000Z",
+        lifecycleGeneration: String(secondGeneration),
+        payload: { state: "ready" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                Option.exists(
+                  (current) =>
+                    asRuntimePayloadRecord(current.runtimePayload).lastRuntimeEvent ===
+                    "session.state.changed",
+                ),
+              ),
+            ),
+        500,
+        10,
+        "current-generation event after stale exit",
+      );
       const bindingAfterStaleEvent = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.equal(bindingAfterStaleEvent?.lifecycleGeneration, secondGeneration);
+      // An idle replacement is still newer lifecycle state. The retired
+      // session's exit must not stop it merely because it has no active turn.
       assert.equal(bindingAfterStaleEvent?.status, "running");
+      assert.equal(bindingAfterStaleEvent?.status, secondStatus);
+      assert.equal(
+        asRuntimePayloadRecord(bindingAfterStaleEvent?.runtimePayload).activeTurnId,
+        secondActiveTurnId,
+      );
 
       const defaultStart = routing.codex.startSession.getMockImplementation();
       if (!defaultStart) assert.fail("Expected the fake adapter start implementation");
@@ -2597,6 +2778,194 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }),
     );
 
+    for (const terminalCase of [
+      {
+        event: {
+          type: "session.exited",
+          payload: { reason: "retired runtime finished" },
+        },
+        status: "stopped",
+      },
+      {
+        event: {
+          type: "runtime.error",
+          payload: { message: "Retired runtime failed.", class: "transport_error" },
+        },
+        status: "error",
+      },
+    ] as const) {
+      it.effect(
+        `settles ${terminalCase.event.type} when the retired generation still owns the binding`,
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* ProviderService;
+            const directory = yield* ProviderSessionDirectory;
+            const suffix = terminalCase.event.type;
+            const threadId = asThreadId(`thread-retired-binding-${suffix}`);
+            yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+            yield* provider.startSession(threadId, {
+              provider: "codex",
+              threadId,
+              cwd: "/tmp/project",
+              runtimeMode: "full-access",
+            });
+            const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+            assert.ok(binding);
+            const retiredGeneration = `retired-runtime-${suffix}`;
+            // The in-memory lifecycle has rotated, but durable state still owns
+            // the dying runtime. It has no turn id to attach to its final event.
+            yield* directory.upsert({
+              threadId,
+              provider: "codex",
+              lifecycleGeneration: retiredGeneration,
+              status: "running",
+              runtimePayload: { activeTurnId: null },
+            });
+
+            // The terminal-generation exception must not widen main's separate
+            // active-turn checks for interaction or item settlement.
+            staleSettlementRouting.codex.emit({
+              type: "item.completed",
+              eventId: asEventId(`retired-unrelated-item-${suffix}`),
+              provider: "codex",
+              threadId,
+              turnId: TurnId.makeUnsafe("turn-unrelated"),
+              itemId: RuntimeItemId.makeUnsafe("item-unrelated"),
+              createdAt: "2026-07-14T14:00:00.000Z",
+              lifecycleGeneration: retiredGeneration,
+              payload: { itemType: "command_execution", status: "failed" },
+            });
+            staleSettlementRouting.codex.emit({
+              type: "user-input.resolved",
+              eventId: asEventId(`retired-unrelated-resolution-${suffix}`),
+              provider: "codex",
+              threadId,
+              turnId: TurnId.makeUnsafe("turn-unrelated"),
+              requestId: RuntimeRequestId.makeUnsafe("request-unrelated"),
+              createdAt: "2026-07-14T14:00:01.000Z",
+              lifecycleGeneration: retiredGeneration,
+              payload: { answers: { cancelled: true } },
+            });
+            staleSettlementRouting.codex.emit({
+              ...terminalCase.event,
+              eventId: asEventId(`retired-terminal-${suffix}`),
+              provider: "codex",
+              threadId,
+              createdAt: "2026-07-14T14:00:02.000Z",
+              lifecycleGeneration: retiredGeneration,
+            });
+            staleSettlementRouting.codex.emit({
+              type: "content.delta",
+              eventId: asEventId(`current-marker-${suffix}`),
+              provider: "codex",
+              threadId,
+              createdAt: "2026-07-14T14:00:03.000Z",
+              lifecycleGeneration: binding.lifecycleGeneration,
+              payload: { streamKind: "assistant_text", delta: "current" },
+            });
+            yield* waitUntil(
+              () => staleSettlementPersistedEvents.has(`current-marker-${suffix}`),
+              1_000,
+              10,
+              "current marker after retired generation settlement",
+            );
+            assert.equal(staleSettlementPersistedEvents.has(`retired-terminal-${suffix}`), true);
+            assert.equal(
+              staleSettlementPersistedEvents.has(`retired-unrelated-item-${suffix}`),
+              false,
+            );
+            assert.equal(
+              staleSettlementPersistedEvents.has(`retired-unrelated-resolution-${suffix}`),
+              false,
+            );
+            const settledBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+            assert.equal(settledBinding?.lifecycleGeneration, retiredGeneration);
+            assert.equal(settledBinding?.status, terminalCase.status);
+            assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
+            assert.equal(
+              asRuntimePayloadRecord(settledBinding?.runtimePayload).lastRuntimeEvent,
+              terminalCase.event.type,
+            );
+          }),
+      );
+    }
+
+    it.effect("ignores stale terminal events for a newer idle binding", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-terminal-no-active-turn");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(typeof binding?.lifecycleGeneration, "string");
+        assert.equal(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId, null);
+        const bindingStatus = binding?.status;
+
+        const staleGeneration = "retired-generation-without-active-turn";
+        staleSettlementRouting.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("stale-complete-no-active-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-retired-before-binding"),
+          createdAt: "2026-07-14T14:10:00.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: { state: "completed" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "runtime.error",
+          eventId: asEventId("stale-error-no-active-turn"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-14T14:10:01.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: {
+            message: "Retired provider failed after lifecycle rotation.",
+            class: "transport_error",
+          },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "session.exited",
+          eventId: asEventId("stale-exit-no-active-turn"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-14T14:10:02.000Z",
+          lifecycleGeneration: staleGeneration,
+          payload: { reason: "late retired runtime exit", recoverable: false, exitKind: "error" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("current-delta-after-stale-idle-terminals"),
+          provider: "codex",
+          threadId,
+          createdAt: "2026-07-14T14:10:03.000Z",
+          lifecycleGeneration: binding?.lifecycleGeneration,
+          payload: { streamKind: "assistant_text", delta: "current" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("current-delta-after-stale-idle-terminals"),
+          1_000,
+          10,
+          "current-generation marker after stale idle terminal events",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-complete-no-active-turn"), false);
+        assert.equal(staleSettlementPersistedEvents.has("stale-exit-no-active-turn"), false);
+        assert.equal(staleSettlementPersistedEvents.has("stale-error-no-active-turn"), false);
+        const preservedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(preservedBinding?.lifecycleGeneration, binding?.lifecycleGeneration);
+        assert.equal(preservedBinding?.status, bindingStatus);
+        assert.equal(asRuntimePayloadRecord(preservedBinding?.runtimePayload).activeTurnId, null);
+      }),
+    );
+
     it.effect("settles a stale terminal event naming the binding's active turn", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -2620,16 +2989,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
         // stale terminal event for a different turn stays dropped.
         staleSettlementRouting.codex.emit({
           type: "turn.aborted",
-          eventId: asEventId("stale-abort-matching-turn"),
-          provider: "codex",
-          threadId,
-          turnId: TurnId.makeUnsafe(String(activeTurnId)),
-          createdAt: "2026-07-14T14:00:00.000Z",
-          lifecycleGeneration: "old-generation",
-          payload: { reason: "late abort for the bound turn" },
-        });
-        staleSettlementRouting.codex.emit({
-          type: "turn.aborted",
           eventId: asEventId("stale-abort-other-turn"),
           provider: "codex",
           threadId,
@@ -2637,6 +2996,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
           createdAt: "2026-07-14T14:00:01.000Z",
           lifecycleGeneration: "old-generation",
           payload: { reason: "late abort for a different turn" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "turn.aborted",
+          eventId: asEventId("stale-abort-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          createdAt: "2026-07-14T14:00:02.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { reason: "late abort for the bound turn" },
         });
 
         yield* waitUntil(
@@ -6524,6 +6893,199 @@ piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it)
 
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
+  it.effect(
+    "persists completed retirement when late task ownership displaces the idle generation",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-reaper-late-terminal-retirement");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const originalStop = idleCleanup.codex.stopSession.getMockImplementation()!;
+        idleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(originalStop(id)),
+          ),
+        );
+        const stopping = yield* provider.stopRuntimeSession!({
+          threadId,
+          onlyIfIdleSince: new Date(Date.now() + 60_000).toISOString(),
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const drainedCursor = { resume: "cursor-drained-during-stop" };
+        idleCleanup.codex.updateSession(threadId, (session) => ({
+          ...session,
+          resumeCursor: drainedCursor,
+        }));
+        idleCleanup.codex.emit({
+          type: "turn.tasks.updated",
+          eventId: asEventId("reaper-drained-cursor"),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          payload: { tasks: [] },
+        });
+        yield* waitUntilEffect(
+          () =>
+            directory
+              .getBinding(threadId)
+              .pipe(
+                Effect.map(
+                  (binding) =>
+                    Option.isSome(binding) &&
+                    JSON.stringify(binding.value.resumeCursor) === JSON.stringify(drainedCursor),
+                ),
+              ),
+          500,
+          10,
+          "drained cursor persisted before teardown completes",
+        );
+        idleCleanup.codex.emit({
+          type: "task.started",
+          eventId: asEventId("reaper-late-task"),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe("late-task"),
+            taskType: "agent",
+            status: "running",
+          },
+        });
+        yield* waitUntilEffect(
+          () => provider.hasLiveRuntimeTasks!({ threadId }),
+          500,
+          10,
+          "late task ownership observed during retirement",
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stopping);
+        assert.isFalse(yield* idleCleanup.codex.adapter.hasSession(threadId));
+        const retired = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(retired.status, "stopped");
+        assert.deepEqual(retired.resumeCursor, drainedCursor);
+      }),
+  );
+
+  it.effect("keeps a newer live cursor over an event cursor persisted before the live probe", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-reaper-live-cursor-after-event");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      const earlierCursor = { resume: "earlier-event-cursor" };
+      const latestCursor = { resume: "newer-live-cursor" };
+      const hasSession = idleCleanup.codex.hasSession.getMockImplementation()!;
+      idleCleanup.codex.hasSession.mockImplementationOnce((id) =>
+        Effect.gen(function* () {
+          idleCleanup.codex.updateSession(threadId, (session) => ({
+            ...session,
+            resumeCursor: earlierCursor,
+          }));
+          idleCleanup.codex.emit({
+            type: "turn.tasks.updated",
+            eventId: asEventId("reaper-pre-probe-cursor"),
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            threadId,
+            payload: { tasks: [] },
+          });
+          yield* waitUntilEffect(
+            () =>
+              directory
+                .getBinding(threadId)
+                .pipe(
+                  Effect.map(
+                    (binding) =>
+                      Option.isSome(binding) &&
+                      JSON.stringify(binding.value.resumeCursor) === JSON.stringify(earlierCursor),
+                  ),
+                ),
+            500,
+            10,
+            "older cursor persisted before the live read",
+          );
+          idleCleanup.codex.updateSession(threadId, (session) => ({
+            ...session,
+            resumeCursor: latestCursor,
+          }));
+          return yield* hasSession(id);
+        }).pipe(Effect.orDie),
+      );
+      yield* provider.stopRuntimeSession!({
+        threadId,
+        onlyIfIdleSince: new Date(Date.now() + 60_000).toISOString(),
+      });
+      assert.deepEqual(
+        Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+        latestCursor,
+      );
+    }),
+  );
+
+  it.effect("restores the normal idle timeout after a stale reaper stop is rejected", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-reaper-rejected-idle-timer");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      const cutoff = new Date(Date.now() - 60_000).toISOString();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("reaper-rejected-terminal"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        payload: { state: "completed" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                (binding) =>
+                  Option.isSome(binding) &&
+                  Date.parse(binding.value.lastSeenAt ?? "") > Date.parse(cutoff),
+              ),
+            ),
+        500,
+        10,
+        "terminal event persisted",
+      );
+      // Let the terminal event also arm the service's normal 100ms idle timer.
+      yield* sleep(20);
+      const stops = idleCleanup.codex.stopSession.mock.calls.length;
+      yield* provider.stopRuntimeSession!({ threadId, onlyIfIdleSince: cutoff });
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, stops);
+      yield* waitUntil(
+        () => idleCleanup.codex.stopSession.mock.calls.length > stops,
+        1000,
+        10,
+        "normal idle cleanup after rejected reaper",
+      );
+      assert.equal(Option.getOrThrow(yield* directory.getBinding(threadId)).status, "stopped");
+    }),
+  );
+
   it.effect("retries failed idle teardown after a delayed session exit notification", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

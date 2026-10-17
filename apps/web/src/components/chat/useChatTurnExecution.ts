@@ -21,6 +21,7 @@ import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
 import { runComposerSendOnce } from "~/lib/composerSendOwnership";
+import { ProviderHandoffBackgroundTasksError } from "~/lib/threadHandoff";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadNotes } from "~/pinnedMessages";
@@ -43,7 +44,6 @@ import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
-import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
@@ -655,10 +655,7 @@ export function useChatTurnExecution({
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
-          if (
-            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
-            isThreadDetailAwaitingVerification(threadIdForSend)
-          ) {
+          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
             throw new Error(
               "Choose how to resume the held message before sending another message.",
             );
@@ -947,7 +944,9 @@ export function useChatTurnExecution({
           if (isFocusedSend)
             setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
         }
-        if (!setupCancelled) {
+        // A handoff refused by the source's background tasks is explained by
+        // the composer notice, which also offers to stop them.
+        if (!setupCancelled && !(err instanceof ProviderHandoffBackgroundTasksError)) {
           setThreadError(
             threadIdForSend,
             err instanceof Error ? err.message : "Failed to send message.",

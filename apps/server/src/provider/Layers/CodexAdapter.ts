@@ -1167,8 +1167,10 @@ function mapCodexHookEvent(
   };
 }
 
-// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
+// Internal metadata and configuration/lifecycle bookkeeping stay in native diagnostics.
 const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "turn/moderationMetadata",
+  "item/autoApprovalReview/started",
   "remoteControl/status/changed",
   "skills/changed",
   "session/threadOpenRequested",

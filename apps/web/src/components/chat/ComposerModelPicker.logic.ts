@@ -9,6 +9,7 @@ import { resolveSelectableModel } from "@synara/shared/model";
 import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
 import {
   formatProviderModelOptionName,
+  getOmpModelSelectionIssue,
   groupProviderModelOptions,
   type ProviderModelOption,
 } from "../../providerModelOptions";
@@ -25,6 +26,23 @@ type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 // The colon keeps it outside the account id alphabet, so no account can claim it.
 export const STARRED_TAB = ":starred";
 export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
+
+// First-party family prefix each provider's icon already stands for.
+const COMPOSER_MODEL_FAMILY_PREFIX_BY_PROVIDER: Partial<Record<ProviderKind, RegExp>> = {
+  claudeAgent: /^claude\s+(?=\S)/iu,
+  codex: /^gpt-(?=\S)/iu,
+};
+
+/**
+ * Model name as the composer shows it beside its provider icon: the family prefix repeats
+ * the icon, so "Claude Opus 5" reads "Opus 5" and "GPT-5.5" reads "5.5". Gateways (Cursor,
+ * OpenCode, …) keep full names, since their icon names the gateway and not the family.
+ * Display only: search and accessible labels keep the full name.
+ */
+export function composerModelDisplayName(provider: ProviderKind, name: string): string {
+  const prefix = COMPOSER_MODEL_FAMILY_PREFIX_BY_PROVIDER[provider];
+  return prefix ? name.replace(prefix, "") : name;
+}
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
@@ -136,8 +154,6 @@ export type ComposerModelPickerRow = {
   groupLabel: string | null;
   /** Present on starred rows: the preset to restore and to un-star. */
   preset: StarredModel | null;
-  /** Present on OMP role rows: the model + options the role resolves to. */
-  role?: ProviderModelOption["role"];
 };
 
 export function buildProviderTabRows(input: {
@@ -167,13 +183,15 @@ export function buildProviderTabRows(input: {
         ? { instanceId: input.instanceId }
         : {}),
       model: option.slug,
-      selectableModel: option.slug,
+      selectableModel:
+        provider === "omp" && getOmpModelSelectionIssue(option.slug, input.options)
+          ? null
+          : option.slug,
       name: option.name,
       detail: null,
       selected: option.slug === input.selectedModel,
       groupLabel: group.label,
       preset: null,
-      role: option.role,
     })),
   );
 }
@@ -201,7 +219,10 @@ export function buildStarredTabRows(input: {
     const instanceId = starredModelInstanceId(entry);
     const options = input.modelOptionsFor(entry.provider, instanceId);
     const accountLabel = input.accountLabelFor?.(instanceId);
-    const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
+    const selectableModel =
+      entry.provider === "omp" && getOmpModelSelectionIssue(entry.model, options)
+        ? null
+        : resolveSelectableModel(entry.provider, entry.model, options);
     const name =
       options.find((option) => option.slug === selectableModel)?.name ??
       formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });

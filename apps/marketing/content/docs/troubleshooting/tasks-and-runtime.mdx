@@ -159,3 +159,43 @@ Do not ask both providers to “fix the conflict” in the same checkout.
 - [ ] Diagnostic coverage was considered before claiming an event was missing
 - [ ] Only one task owns the recovery
 - [ ] The final result will be independently verified
+
+## Review interrupted or waiting work
+
+Synara 1.0.1 preserves failed-turn feedback after session recovery. Open the thread error details and copy them when reporting a failure. Answered questions remain visible in the transcript, and Enter submits asynchronous answers. Stale provider questions settle instead of leaving the chat waiting indefinitely.
+
+Reconnect notices explain real transport reconnects. In 1.0.6 the misleading server-busy popup and client heartbeat were removed; local health and event-loop status remain available. A resumed session or a finished turn alone does not establish that requested work succeeded; inspect the resulting files and runtime behavior.
+
+## Missing owner during restart recovery
+
+In 1.0.3, recovery isolates persisted child commands when their owning task is missing or deleted. Synara does not create a replacement provider session or resend that abandoned work. Unsent commands are blocked, ambiguous delivery remains uncertain, and a surviving child reports an error while unrelated tasks remain usable.
+
+Claude compaction reviews with an unavailable owner stay held for reconciliation. Preserve their messages and inspect the error rather than repeatedly retrying. Chat deletion cancels queued work before optional computer cleanup; a cleanup failure or timeout cannot leave promotions stuck.
+
+The desktop also initializes a maintained HTTP dispatcher before requests to avoid Electron 43's macOS socket crash. This does not establish live provider success; use the task's actual connection and turn state.
+
+Source evidence: Synara v1.0.3 `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`, `docs/providers.md` and `apps/desktop/src/httpRuntime.ts`.
+
+## Unexpected shutdown recovery
+
+Starting with 1.0.4, Synara can automatically continue an ordinary human chat that was actively running when the server stopped unexpectedly. It uses the saved conversation and provider selection and asks the agent to inspect existing operations before repeating them. This is a continuation, not automatic replay of an in-flight tool call.
+
+Chats waiting for approval or an answer, still starting, archived, or owned by native subagents, delegated tasks, goals, Hubs or scheduled automations are excluded. Their existing recovery paths or manual controls still apply. Explicit choices made when quitting take precedence over this fallback.
+
+After reopening, inspect the continuation and the workspace before assuming a previous operation failed. Active-session cleanup also rechecks live work before stopping a provider; delayed Codex terminal notifications cannot finish a newer turn.
+
+## Workspace file requests stop responding
+
+In 1.0.4, opening a POSIX named pipe (FIFO) through workspace file reads or version-checked saves is rejected without blocking a filesystem worker. This fixes a reproduced starvation case on macOS/Linux. A regular text file remains a useful control when investigating file-request failures.
+
+This does not diagnose every slow or unresponsive request. If the issue continues, record the requested path type, exact error, current task state and whether an unrelated regular-file read works. Preserve the workspace rather than resetting the database.
+
+Source evidence: Synara v1.0.4 (`a62d7c733d19f5538ffc0d126d57437b3b578ff1`) `apps/server/src/orchestration/quitResume.ts`, `apps/server/src/effectServer.ts`, `apps/server/src/provider/Layers/ProviderService.ts`, `apps/server/src/codexAppServerManager.ts` and `apps/server/src/workspace/Layers/WorkspaceFileSystem.ts`.
+
+## Long conversations and parallel work in 1.0.6
+
+Long chats avoid repeated history scans and full-detail reads during routine turn updates. Parallel live streams suppress redundant replay polls and share bounded repository refreshes, retaining a final refresh after activity stops. Requests wait in bounded client queues before using server capacity. A capacity error can still occur; inspect mutation results before retrying uncertain work.
+
+Runtime reconciliation preserves live turn ownership and pages through older candidates. Provider handoffs settle known outcomes without replaying native stop/start operations. These changes preserve saved history and do not justify resetting the database.
+
+Source evidence: Synara 1.0.6 `ProjectionSnapshotQuery.ts`, `ProviderCommandReactor.ts`, `ProviderRuntimeReconciler.ts`, `wsTransport.ts` and `docs/event-loop-stalls.md`.

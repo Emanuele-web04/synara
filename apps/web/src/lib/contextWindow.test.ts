@@ -8,7 +8,6 @@ import {
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
   deriveObservedClaudeContextBudget,
-  contextWindowMeterSectorPath,
   deriveLatestContextWindowState,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowTokens,
@@ -346,22 +345,6 @@ describe("composer context budget label", () => {
       ).toBeNull();
     },
   );
-});
-
-describe("context window meter glyph", () => {
-  it("draws a filled sector from 12 o'clock, clockwise, closed at the centre", () => {
-    expect(contextWindowMeterSectorPath(0)).toBeNull();
-    // A quarter ends at 3 o'clock.
-    expect(contextWindowMeterSectorPath(25)).toBe(
-      "M 8 8 L 8 2.75 A 5.25 5.25 0 0 1 13.250 8.000 Z",
-    );
-    // More than half takes the large arc.
-    expect(contextWindowMeterSectorPath(75)).toContain("A 5.25 5.25 0 1 1");
-    // A full window is a whole disc, not a degenerate zero-length arc.
-    expect(contextWindowMeterSectorPath(100)).toBe(
-      "M 8 2.75 A 5.25 5.25 0 1 1 8 13.25 A 5.25 5.25 0 1 1 8 2.75 Z",
-    );
-  });
 });
 
 describe("observed Claude context budget", () => {

@@ -13,9 +13,10 @@ import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
   BotIcon,
-  FileIcon,
+  FileReadIcon,
   GlobeIcon,
   type LucideIcon,
+  McpIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
@@ -25,6 +26,7 @@ import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import type { WorkLogEntry } from "../../session-logic";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
@@ -40,7 +42,7 @@ import {
 function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   switch (summary.iconCategory) {
     case "read":
-      return FileIcon;
+      return FileReadIcon;
     case "search":
       return SearchIcon;
     case "command":
@@ -126,6 +128,8 @@ export function ToolCallGroupSummaryRow(
         >
           {showFavicon && iconWebFetchUrl ? (
             <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
+          ) : Icon === McpIcon && iconEntry?.mcpServer ? (
+            <McpServerIcon serverName={iconEntry.mcpServer} className="size-3.5" />
           ) : (
             renderWorkEntryIcon(Icon, "size-3.5")
           )}

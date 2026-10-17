@@ -1,7 +1,46 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ComputerApprovalGate } from "./ComputerApprovalGate.ts";
 
 describe("ComputerApprovalGate", () => {
+  it.each(["requestTask", "requestForegroundTask"] as const)(
+    "%s can prompt again after an unanswered card expires without authorizing input",
+    async (request) => {
+      vi.useFakeTimers();
+      try {
+        const gate = new ComputerApprovalGate();
+        const prompts: string[] = [];
+        const resolutions: string[] = [];
+        const input = {
+          threadId: "a",
+          turnId: "turn",
+          signal: new AbortController().signal,
+          publish: async (id: string, decision?: string) => {
+            if (decision === undefined) prompts.push(id);
+            else resolutions.push(decision);
+          },
+        };
+        const expired = gate[request](input).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        expect(await expired).toMatchObject({
+          error: { code: "approval_expired", effect: "not-dispatched", retryable: true },
+        });
+        expect(resolutions).toEqual(["cancel"]);
+        expect(gate.respond("a", prompts[0]!, "accept")).toBe(false);
+        expect(gate.hasForegroundGrant("a", "turn")).toBe(false);
+
+        const retry = gate[request](input);
+        expect(prompts).toHaveLength(2);
+        gate.respond("a", prompts[1]!, "accept");
+        await expect(retry).resolves.toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("cancels a concurrent waiter without approving or cancelling another call", async () => {
     const gate = new ComputerApprovalGate();
     let id = "";

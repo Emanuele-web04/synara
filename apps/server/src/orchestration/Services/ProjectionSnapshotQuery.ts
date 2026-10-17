@@ -14,7 +14,6 @@ import type {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadMessageWindow,
   OrchestrationThread,
   OrchestrationThreadShell,
   CheckpointRef,
@@ -44,6 +43,13 @@ export interface OrchestrationThreadMentionContext {
   readonly totalMessageCount: number;
 }
 
+/**
+ * A full thread detail without its activity timeline. The field is removed at
+ * runtime and in the type, so a caller that needs activities fails to compile
+ * instead of silently reading an empty list.
+ */
+export type OrchestrationThreadWithoutActivities = Omit<OrchestrationThread, "activities">;
+
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
   readonly threadCount: number;
@@ -51,6 +57,12 @@ export interface ProjectionSnapshotCounts {
 
 export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
+}
+
+/** Stable ordering key returned by the bounded runtime-reconciliation query. */
+export interface ProjectionStaleInFlightThreadCursor {
+  readonly observedAt: string;
+  readonly threadId: ThreadId;
 }
 
 export interface ProjectionThreadCheckpointContext {
@@ -149,6 +161,22 @@ export interface ProjectionSnapshotQueryShape {
   }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
 
   /**
+   * Read the next bounded candidate page in (observedAt, threadId) order.
+   * Carry the returned key even when the planner finds no repair on this page.
+   */
+  readonly listStaleInFlightThreadPage: (input: {
+    readonly updatedBefore: string;
+    readonly limit: number;
+    readonly after?: ProjectionStaleInFlightThreadCursor;
+  }) => Effect.Effect<
+    {
+      readonly threadIds: ReadonlyArray<ThreadId>;
+      readonly nextCursor: ProjectionStaleInFlightThreadCursor | null;
+    },
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read only the columns managed-worktree retention needs, for every thread that
    * records a worktree path. Avoids hydrating the full read model on a background
    * prune, while still exposing soft-deleted threads so their worktrees are reclaimed.
@@ -234,17 +262,22 @@ export interface ProjectionSnapshotQueryShape {
 
   /**
    * Read a single active thread shell row by id.
+   * Runtime reconciliation can opt into the latest projected message timestamp
+   * as its activity clock without changing the persisted sidebar shell.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
+    options?: { readonly includeLatestMessageActivity?: boolean },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
    * Read several active thread shells in one round of queries. Ids without an
    * active thread are simply absent from the result.
+   * Reconciliation can include the in-flight message activity in the same batch.
    */
   readonly getThreadShellsByIds: (
     threadIds: ReadonlyArray<ThreadId>,
+    options?: { readonly includeLatestMessageActivity?: boolean },
   ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
@@ -277,6 +310,20 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**
+   * Read the same active thread detail as `getThreadDetailById` (messages,
+   * plans, pending interactions, checkpoints, session, latest turn and summary
+   * flags) without loading the activity timeline, the most expensive part of a
+   * detail read on long threads. Summary flags stay identical because pending
+   * interactions, not activity replay, decide them.
+   */
+  readonly getThreadDetailWithoutActivitiesById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Option.Option<OrchestrationThreadWithoutActivities>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * The bounded slice a `thread://` mention needs: the thread row plus its
    * newest `messageLimit` messages. Skips plans, activities, pending
    * interactions, checkpoints, and the full-transcript decode that
@@ -299,7 +346,6 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadDetailSnapshotById: (
     threadId: ThreadId,
-    messageWindow?: OrchestrationThreadMessageWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

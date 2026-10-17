@@ -5,7 +5,7 @@
 
 import { Schema } from "effect";
 import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
-import { OMP_THINKING_LEVEL_OPTIONS, ProviderOptionDescriptor } from "./model";
+import { ProviderOptionDescriptor } from "./model";
 import { ProviderInstanceId } from "./providerInstance";
 
 const ProviderDiscoveryKind = Schema.Literals([
@@ -342,18 +342,12 @@ export const ProviderModelDescriptor = Schema.Struct({
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 
-export const OmpRoleDescriptor = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  model: TrimmedNonEmptyString,
-  thinkingLevel: Schema.optional(Schema.Literals(OMP_THINKING_LEVEL_OPTIONS)),
-});
-export type OmpRoleDescriptor = typeof OmpRoleDescriptor.Type;
-
 export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
-  roles: Schema.optional(Schema.Array(OmpRoleDescriptor)),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
+  // A partial or fallback catalog must not replace the last complete discovery.
+  degraded: Schema.optional(Schema.Boolean),
   // A concise, redacted explanation when live discovery failed and the result
   // was populated from a static fallback.
   error: Schema.optional(TrimmedNonEmptyString),

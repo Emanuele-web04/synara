@@ -5,6 +5,14 @@ description: Everything you can feed an agent — files, images, folders, screen
 
 The composer is more than a text box. The more precise the context you attach, the less the agent has to guess — these are the tools for that.
 
+## Compact composer and work capsules
+
+In Stable 1.0.5 and Beta, a started chat uses a single row while its draft fits on one line. A newline or longer draft expands it; shortening the draft collapses it again. Goals, active tasks and changes appear in floating capsules above the input. Open a capsule for details, use **+** for extras, and open the plan from its control even when no task capsule is present. Queue and permission notices remain actionable above the composer.
+
+The empty-chat ASCII background is on by default. Turn it off in **Settings → Appearance → ASCII background**. Reduced motion keeps the field still, and hidden or terminal views stop its drawing.
+
+Source evidence: feature head `4b2441d`; `ChatView.tsx`, `chat/useComposerSingleRow.ts`, `chat/ComposerCapsule.tsx`, `chat/ChatComposerFooter.tsx` and `chat/AsciiWaveBackground.tsx` under `apps/web/src/components`.
+
 ## Attach files and images
 
 Drag files or images into the composer, paste them, or use mentions. Attachments render as chips and cards, previews are worktree-aware, and paths with spaces or parentheses survive intact. Browsing your prompt history keeps a draft's attachments instead of stripping them.
@@ -71,3 +79,9 @@ Use `/computer-use` followed by a task to request [Computer Use beta](/docs/feat
 Drag a chat into the composer to mention it as context, or into a supported workspace drop zone to open a split pane. The tabbed model picker lets you star a model together with its effort setting and reuse that combination later.
 
 Supported Codex question cards can be non-blocking, so the agent may continue while you answer. Blocking choice questions support cancellation. Live tool work appears as a compact expandable line with the latest human-readable status. GitHub-style Markdown alerts render as note, tip, important, warning and caution callouts.
+
+## Pause and resume queued messages
+
+In 1.0.2 Stable and Beta, **Stop** holds waiting follow-ups after the active turn settles. A failed turn or a usage-limit rejection also pauses the queue. The notice offers **Resume** when you are ready. Stop markers persist with the composer draft through reload; sending a message manually or emptying the queue also clears a Stop hold. Resume acknowledges the failed or limited turn. An older turn's rate-limit event does not pause a newer unrelated turn.
+
+A cached conversation cannot automatically dispatch queued work until authoritative synchronization returns. Draft text and attachments remain recoverable after a failed send or thread creation. See [conversation history](/docs/features/conversation-history) for reload and connection behavior.

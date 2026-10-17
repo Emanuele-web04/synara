@@ -20,6 +20,8 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  INLINE_VISUAL_ACTIVITY_KIND,
+  INLINE_VISUAL_TOOL_NAME,
   EventId,
   MessageId,
   ModelSelection,
@@ -38,6 +40,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -872,6 +875,11 @@ function makeHarnessLayer(
     backfillSummaries: () => Effect.fail(new Error("not configured")),
   } as unknown as (typeof ProjectAgentService)["Service"]);
 
+  // To-do tool behavior is covered in todoTools.test.ts; the gateway only needs the service.
+  const todoLayer = Layer.succeed(TodoService, {
+    list: () => Effect.succeed({ todos: [] }),
+  } as unknown as (typeof TodoService)["Service"]);
+
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
@@ -1339,7 +1347,7 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
-    Layer.provide(projectAgentLayer),
+    Layer.provide(Layer.mergeAll(projectAgentLayer, todoLayer)),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
@@ -1945,6 +1953,57 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("shows an inline visual as an activity on the caller's running turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const list = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      const names = (list.body as { result: { tools: Array<{ name: string }> } }).result.tools.map(
+        (tool) => tool.name,
+      );
+      assert.include(names, INLINE_VISUAL_TOOL_NAME);
+
+      const args = { title: "Latency", html: "<svg width='10' height='10'></svg>", height: 240 };
+      const first = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+      const { visualId } = toolResultJson(first.result) as { visualId: string };
+      const visualAppends = () =>
+        harness.dispatched.flatMap((command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === INLINE_VISUAL_ACTIVITY_KIND
+            ? [command]
+            : [],
+        );
+      const [append] = visualAppends();
+      assert.equal(append?.threadId, "thread-parent");
+      assert.equal(append?.activity.turnId, "turn-parent-active");
+      assert.equal(append?.activity.summary, "Visual: Latency");
+      assert.deepInclude(append?.activity.payload as object, {
+        visualId,
+        title: "Latency",
+        height: 240,
+      });
+
+      // A retried call is the same visual and the same command, so the engine
+      // treats it as a replay instead of adding a second row.
+      const retry = yield* harness.callTool({
+        token: "token-parent",
+        name: INLINE_VISUAL_TOOL_NAME,
+        args,
+      });
+      assert.equal(toolResultJson(retry.result).visualId, visualId);
+      const commandIds = visualAppends().map((command) => command.commandId);
+      assert.deepEqual(commandIds, [append!.commandId, append!.commandId]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("surfaces one computer-control denial card per tool per turn", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       computerService: makeComputerServiceLayer({
@@ -2250,6 +2309,9 @@ describe("AgentGateway", () => {
         "synara_set_kanban_goal",
         "synara_delete_kanban_card",
         "synara_move_kanban_card",
+        "synara_create_todo",
+        "synara_list_todos",
+        "synara_update_todo",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
@@ -2875,6 +2937,53 @@ describe("AgentGateway", () => {
         (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
         ["provider_delivery_blocked", "THREAD_STREAM_CAPACITY_EXCEEDED"],
       );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("diagnoses an abandoned startup even without delivery blockers or incidents", () => {
+    const thread = makeThreadShell("thread-parent", {
+      latestTurn: {
+        ...baseThreads[0]!.latestTurn!,
+        state: "interrupted",
+        completedAt: NOW,
+      },
+      session: {
+        threadId: ThreadId.makeUnsafe("thread-parent"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([thread]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const diagnose = () =>
+        harness.callTool({
+          token: "token-parent",
+          name: "synara_diagnose_thread",
+          args: { threadId: "thread-parent" },
+        });
+      const payload = toolResultJson((yield* diagnose()).result);
+      assert.deepEqual(payload.providerDeliveryBlockers, []);
+      assert.deepEqual(payload.operationalIncidents, []);
+      assert.includeMembers(
+        (payload.findings as Array<{ code: string }>).map((finding) => finding.code),
+        ["provider_lifecycle_stale"],
+      );
+
+      // The same combination is normal while a new queued turn is starting.
+      const now = new Date().toISOString();
+      harness.setThreadDetail(
+        makeThreadDetail({
+          ...thread,
+          updatedAt: now,
+          session: { ...thread.session!, updatedAt: now },
+        }),
+      );
+      assert.deepEqual(toolResultJson((yield* diagnose()).result).findings, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
