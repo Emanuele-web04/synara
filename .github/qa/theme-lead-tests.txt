@@ -1,0 +1,37 @@
+
+
+it.each(["default", "subtle", "process"] as const)(
+  "preserves custom bold colors on paragraph and list leads with %s typography",
+  async (tone) => {
+    await page.viewport(900, 640);
+    localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "light" }));
+    const { container } = await render(
+      <>
+        <div id="custom-lead-colors">
+          <ChatMarkdown
+            cwd={undefined}
+            tone={tone}
+            text={"## **Heading**\n\n**Paragraph lead** details.\n\n- **Tight list lead** details.\n- Other entry.\n\nA separate block.\n\n1. **Loose list lead** details.\n\n   More detail."}
+          />
+        </div>
+        <ThemePackEditor variant="light" />
+      </>,
+    );
+    const leads = () => [...container.querySelectorAll("#custom-lead-colors p > strong:first-child, #custom-lead-colors li > strong:first-child")];
+    expect(leads()).toHaveLength(3);
+    const defaultColors = leads().map((lead) => getComputedStyle(lead).color);
+    await pickTextColor("Light theme chat headings color", "#2563eb");
+    await pickTextColor("Light theme bold text color", "#9a6700");
+    await expect.poll(() => root.style.getPropertyValue("--chat-bold-color")).toBe("#9a6700");
+    if (import.meta.env.VITE_PR1878_CAPTURE === "1") {
+      await page.screenshot({ path: `__screenshots__/pr1878-lead-${tone}.png` });
+    }
+    await expect.poll(() => leads().map((lead) => getComputedStyle(lead).color)).toEqual([
+      "rgb(154, 103, 0)", "rgb(154, 103, 0)", "rgb(154, 103, 0)",
+    ]);
+    expect(textColor("#custom-lead-colors h2 strong")).toBe("rgb(37, 99, 235)");
+    await page.getByRole("button", { name: "Reset Light theme bold text color" }).click();
+    await expect.poll(() => leads().map((lead) => getComputedStyle(lead).color)).toEqual(defaultColors);
+    expect(textColor("#custom-lead-colors h2 strong")).toBe("rgb(37, 99, 235)");
+  },
+);
