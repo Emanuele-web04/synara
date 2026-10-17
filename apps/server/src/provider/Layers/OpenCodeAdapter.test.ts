@@ -8,7 +8,7 @@ import type {
   Provider,
   QuestionRequest,
 } from "@opencode-ai/sdk/v2";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Scope, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, it, expect, vi } from "vitest";
 
@@ -19,6 +19,7 @@ import {
 } from "../../agentGateway/harnessPolicy.ts";
 import {
   AgentGatewayCredentials,
+  type AgentGatewayConnectorServer,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -411,6 +412,7 @@ function promptContainsHarnessPolicy(prompt: Record<string, unknown> | undefined
 
 function makeGatewayCredentials(options?: {
   readonly cancelSessionTurnRequests?: (token: string, turnId: string) => Promise<void>;
+  readonly connectors?: ReadonlyArray<AgentGatewayConnectorServer>;
 }) {
   let nextToken = 0;
   const revoked: string[] = [];
@@ -448,7 +450,11 @@ function makeGatewayCredentials(options?: {
     connectionForThread: (threadId, _provider, leaseOptions) => {
       leasedCapabilities.push(leaseOptions?.additionalCapabilities ?? []);
       const token = credentials.issueSessionToken(threadId, "opencode");
-      return { url: credentials.mcpEndpointUrl, bearerToken: token };
+      return {
+        url: credentials.mcpEndpointUrl,
+        bearerToken: token,
+        ...(options?.connectors ? { connectors: options.connectors } : {}),
+      };
     },
     stdioProxy: { command: process.execPath, args: [] },
   };
@@ -1849,6 +1855,64 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     }
     expect(gateway.revoked).toEqual(["gateway-token-1", "gateway-token-2"]);
   });
+
+  it.each(["connected", "failed", "missing"] as const)(
+    "keeps optional connector status %s non-blocking and logs failures without credentials",
+    async (status) => {
+      const messages: string[] = [];
+      const logger = Logger.make(({ message }) => messages.push(JSON.stringify(message)));
+      const runtime = createMockOpenCodeRuntime({
+        mcpAdd: async (input) =>
+          input.name === "synara"
+            ? { data: { synara: { status: "connected" } } }
+            : {
+                data:
+                  status === "missing"
+                    ? {}
+                    : {
+                        docs_connector: {
+                          status,
+                          error: "upstream failure echoed Bearer gateway-token-1",
+                        },
+                      },
+              },
+      });
+      const gateway = makeGatewayCredentials({
+        connectors: [{ name: "docs_connector", url: "http://127.0.0.1:3773/connectors/docs" }],
+      });
+      const threadId = asThreadId("thread-optional-connector-status");
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: "/repo",
+          });
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterTestLayer(runtime.runtime).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
+            ),
+          ),
+          Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      );
+
+      expect(runtime.mcpAddCalls.map((call) => call.name)).toEqual(["synara", "docs_connector"]);
+      const warnings = messages.filter((message) =>
+        message.includes("OpenCode connector MCP install failed"),
+      );
+      expect(warnings).toHaveLength(status === "connected" ? 0 : 1);
+      if (status !== "connected") expect(warnings[0]).toContain(`status: ${status}`);
+      expect(messages.join("\n")).not.toContain("gateway-token-1");
+      expect(messages.join("\n")).not.toContain("upstream failure");
+    },
+  );
 
   it("keeps shared external OpenCode servers identity-only and never installs a token", async () => {
     const runtime = createMockOpenCodeRuntime();

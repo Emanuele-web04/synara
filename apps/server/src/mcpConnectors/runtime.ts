@@ -728,19 +728,19 @@ export class McpConnectorRuntime {
 
   /**
    * Returns the token to send. Passing `rejected` (the token a 401 refused)
-   * forces a refresh, unless another call already rotated past that token.
+   * forces a refresh, unless another call already rotated to a fresh token.
    */
   private accessToken(connectorId: string, rejected?: string): Promise<string> {
     const oauth = this.find(connectorId)?.oauth;
     if (!oauth) return Promise.reject(new McpConnectorNeedsAuth());
     const force = rejected !== undefined;
-    // A refresh that finished after this call sent its request already replaced
-    // the rejected token; refreshing again would only rotate it once more.
-    if (force && oauth.tokens.access_token !== rejected) {
-      return Promise.resolve(oauth.tokens.access_token);
-    }
     const fresh =
       oauth.expiresAtMs === null || oauth.expiresAtMs - TOKEN_REFRESH_LEEWAY_MS > this.now();
+    // A refresh that finished after this call sent its request already replaced
+    // the rejected token; reuse it unless that replacement also needs refreshing.
+    if (force && fresh && oauth.tokens.access_token !== rejected) {
+      return Promise.resolve(oauth.tokens.access_token);
+    }
     if (!force && fresh) return Promise.resolve(oauth.tokens.access_token);
     const refreshToken = oauth.tokens.refresh_token;
     if (!refreshToken) {
