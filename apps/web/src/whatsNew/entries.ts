@@ -22,6 +22,32 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.21",
+    date: "Oct 18",
+    features: [
+      {
+        id: "pending-update-refresh",
+        title: "Prepare the latest update",
+        description:
+          "A downloaded update no longer stops periodic checks. A newer Remote release replaces the pending download before you restart.",
+        details:
+          "Automatic checks keep their four-hour cadence. You can check manually to discover a release sooner. macOS reports when a failed install handoff needs a relaunch before retrying.",
+      },
+      {
+        id: "phone-controlled-mac-updates",
+        title: "Update your Remote Mac from iPhone or iPad",
+        description:
+          "With companion build 143, open Computers to check, download and explicitly confirm Restart & Install on a packaged Remote Mac. The Mac refuses to restart while chats, tasks or pending requests still need it.",
+      },
+      {
+        id: "native-companion-143",
+        title: "Companion build 143",
+        description:
+          "The separate iPhone and iPad update fixes answers to multiple agent questions, adds background command status, output and Stop, and stabilizes the Git toolbar during refreshes. Install the mobile build to get these changes.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.20",
     date: "Oct 17",
     features: [

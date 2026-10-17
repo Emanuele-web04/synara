@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.6-remote.21 — 2026-10-18
+
+### Added
+
+- iPhone and iPad can inspect, check and download an official update for their connected Remote Mac, then explicitly confirm Restart & Install from Computers. This requires companion build 143 and a packaged macOS Synara Remote host. Restart is refused while chats, background tasks, approvals, questions or automation runs still need the host.
+
+### Fixed
+
+- A downloaded update no longer stops automatic update checks. The existing four-hour cadence continues, and a newer release replaces the pending download. Older or unchanged feeds and failed checks preserve an eligible downloaded update; stale download callbacks cannot make an older release ready to install.
+- macOS installs wait for the current verified update archive. A failed native handoff reports that Synara must be relaunched before retrying, and a delayed completion cannot install after recovery.
+
+### Verification
+
+- Companion universal iOS/iPadOS 0.1 (143) separately fixes answers to multiple agent questions, gives background commands compact status, output details and an owner-routed Stop action, and keeps the Git toolbar stable during refreshes. Install that mobile build to receive those native changes; they are not part of the desktop binary.
+- Remote continues to target macOS Apple Silicon, Windows x64 and Linux x64 with separate identities, homes and updater feeds. Phone-triggered Restart & Install is available only for the packaged Remote Mac. No account-service deployment, database migration or pairing reset is required.
+- Local checks and one publication workflow on the final tag SHA must qualify the candidate. Public notes record actual signing, notarization, startup, Windows Defender and provenance results after they complete. Windows retains the exact-version unsigned policy and may show SmartScreen; synthetic checks do not establish an installed-app upgrade or live-provider success.
+
 ## 1.0.6-remote.20 — 2026-10-17
 
 ### Fixed
