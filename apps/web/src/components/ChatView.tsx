@@ -58,6 +58,7 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { resolveInheritedThreadContext } from "~/lib/threadBootstrap";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -5437,6 +5438,16 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
+  // Header "New thread": mints a thread in the active workspace (same branch/worktree/env),
+  // falling back to the project when there is no server/draft thread yet.
+  const onNewThreadFromHeader = useStableCallback(() => {
+    const targetProjectId = activeProject?.id ?? activeThread?.projectId ?? null;
+    if (!targetProjectId) return;
+    void handleNewThread(
+      targetProjectId,
+      resolveInheritedThreadContext({ activeThread, activeDraftThread: draftThread }),
+    );
+  });
   const dismissActiveThreadError = useCallback(() => {
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
@@ -5977,6 +5988,17 @@ export default function ChatView({
     onRenamePinnedMessage: handleRenamePinnedMessage,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
+    ...(activeProjectScripts !== undefined
+      ? {
+          projectActions: {
+            scripts: activeProjectScripts,
+            onRunScript: onRunProjectScriptFromHeader,
+            onAddScript: saveProjectScript,
+            onUpdateScript: updateProjectScript,
+            onDeleteScript: deleteProjectScript,
+          },
+        }
+      : {}),
     onClose: closeEnvironmentPanelAfterAction,
     onRegisterCommitAndPushTrigger,
   };
@@ -6605,6 +6627,11 @@ export default function ChatView({
                     activeThreadId={activeThread.id}
                     keybindings={keybindings}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
+                    onNewThread={
+                      activeProjectScripts !== undefined && !isCenteredEmptyLanding
+                        ? onNewThreadFromHeader
+                        : null
+                    }
                   />
                 ),
               }
@@ -6626,7 +6653,8 @@ export default function ChatView({
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           continueHandoffActionTargets={continueHandoffTargets}
-          showHandoffAction={handoffAvailability.providerHandoff}
+          showHandoffAction={handoffAvailability.providerHandoff && settings.showHeaderHandoff}
+          showHeaderActions={settings.showHeaderActions}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}

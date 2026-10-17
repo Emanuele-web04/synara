@@ -21,7 +21,7 @@ import {
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { resolveShortcutCommand } from "~/keybindings";
-import { TerminalIcon } from "~/lib/icons";
+import { PlusSignIcon, TerminalIcon } from "~/lib/icons";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { showThreadContextMenu } from "~/lib/threadContextMenu";
 import { readNativeApi } from "~/nativeApi";
@@ -39,7 +39,10 @@ import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 import { ProviderIcon } from "../ProviderIcon";
 import { getNextVisibleSidebarThreadId } from "../Sidebar.logic";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
+import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chatHeaderControls";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
 
 const CLOSE_TABS_MENU_ID_PREFIX = "close-tabs:";
@@ -53,6 +56,11 @@ export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
   keybindings: ResolvedKeybindingsConfig;
   onRenameActiveThread: () => void;
+  /**
+   * Creates a thread in the active workspace, rendered as the strip's trailing `+` right
+   * after the last tab. Null hides it: a thread with no project has no workspace to inherit.
+   */
+  onNewThread: (() => void) | null;
 }) {
   const { activeThreadId, keybindings } = props;
   useRecordOpenThreadTab(activeThreadId);
@@ -225,6 +233,27 @@ export function OpenThreadTabStrip(props: {
           onContextMenu: (position) => openTabContextMenu(tab, position),
         };
       })}
+      trailing={
+        props.onNewThread ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="chrome"
+                  size="icon-xs"
+                  aria-label="New thread in this workspace"
+                  className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                  onClick={() => props.onNewThread?.()}
+                />
+              }
+            >
+              <PlusSignIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">New thread in this workspace</TooltipPopup>
+          </Tooltip>
+        ) : null
+      }
     />
   );
 }

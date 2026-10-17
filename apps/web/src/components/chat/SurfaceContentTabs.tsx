@@ -131,6 +131,11 @@ export function SurfaceContentTabs<Key extends string>(props: {
   selectionAria?: ComponentProps<typeof SurfaceTabChip>["selectionAria"];
   /** Drops the dragged tab onto another tab's slot. Omitted, the tabs are not draggable. */
   onMove?: ((key: Key, overKey: Key) => void) | undefined;
+  /**
+   * Control pinned inside the strip, right after the last tab (a browser's `+`): it scrolls
+   * with the tabs and is not a drop target or a tab. Omitted, the strip ends at the last tab.
+   */
+  trailing?: ReactNode;
 }) {
   const { tabs, activeKey, onMove } = props;
   // A press that travels becomes a drag; a still one stays a click on the tab or its X.
@@ -229,6 +234,7 @@ export function SurfaceContentTabs<Key extends string>(props: {
           <SurfaceTabChip key={tab.key} {...chipProps} />
         );
       })}
+      {props.trailing}
     </SurfaceTabStrip>
   );
 
