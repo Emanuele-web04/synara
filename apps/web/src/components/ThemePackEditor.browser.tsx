@@ -91,6 +91,23 @@ async function pickTextColor(label: string, color: string) {
   await userEvent.keyboard("{Escape}");
 }
 
+function resolvedColor(value: string): string {
+  const probe = document.createElement("span");
+  probe.style.color = value;
+  document.body.append(probe);
+  try {
+    return getComputedStyle(probe).color;
+  } finally {
+    probe.remove();
+  }
+}
+
+function defaultStrongColor(): string {
+  // The integrated primary typography deliberately distinguishes 98% strong
+  // text from body text. Resolve CSS rather than assume an RGB serialization.
+  return resolvedColor("color-mix(in srgb, rgb(13, 13, 13) 98%, transparent)");
+}
+
 function textColor(selector: string): string {
   return getComputedStyle(document.querySelector(selector)!).color;
 }
@@ -114,11 +131,12 @@ it("keeps default Markdown colors and applies independent heading/bold overrides
   // Compare the settled syntax theme, not the lazy highlighter's temporary fallback.
   await expect.poll(() => document.querySelector("#chat-color-test pre.shiki")).not.toBeNull();
   const regular = textColor("#chat-color-test p");
+  const strong = defaultStrongColor();
   const muted = textColor("#chat-color-test h6");
   const code = textColor("#chat-color-test code");
   const codeBlock = textColor("#chat-color-test pre");
-  expect(textColor("#chat-color-test h2")).toBe(regular);
-  expect(textColor("#chat-color-test strong")).toBe(regular);
+  expect(textColor("#chat-color-test h2")).toBe(strong);
+  expect(textColor("#chat-color-test strong")).toBe(strong);
   expect(page.getByText("Follow theme", { exact: true }).elements()).toHaveLength(2);
 
   await pickTextColor("Light theme chat headings color", "#2563eb");
@@ -138,11 +156,11 @@ it("keeps default Markdown colors and applies independent heading/bold overrides
   expect(saved.chromeThemes.dark.chatBoldColor).toBeUndefined();
   await selectLightPreset("Codex");
   await page.getByRole("button", { name: "Reset Light theme chat headings color" }).click();
-  await expect.poll(() => textColor("#chat-color-test h2 strong")).toBe(regular);
+  await expect.poll(() => textColor("#chat-color-test h2 strong")).toBe(strong);
   expect(textColor("#chat-color-test h6")).toBe(muted);
   expect(textColor("#chat-color-test p strong")).toBe("rgb(154, 103, 0)");
   await page.getByRole("button", { name: "Reset Light theme bold text color" }).click();
-  await expect.poll(() => textColor("#chat-color-test p strong")).toBe(regular);
+  await expect.poll(() => textColor("#chat-color-test p strong")).toBe(strong);
 });
 
 it("isolates inactive previews from active custom colors and activates the saved overrides", async () => {
@@ -163,9 +181,9 @@ it("isolates inactive previews from active custom colors and activates the saved
   );
   await render(<ThemePackEditor variant="light" />);
   const preview = page.getByRole("img", { name: "Light theme preview: Synara" });
-  expect(getComputedStyle(preview.element().querySelector("h3")!).color).toBe("rgb(13, 13, 13)");
+  expect(getComputedStyle(preview.element().querySelector("h3")!).color).toBe(defaultStrongColor());
   expect(getComputedStyle(preview.element().querySelector("strong")!).color).toBe(
-    "rgb(13, 13, 13)",
+    defaultStrongColor(),
   );
   await pickTextColor("Light theme bold text color", "#9a6700");
   expect(root.style.getPropertyValue("--chat-bold-color")).toBe("#93c5fd");
@@ -219,5 +237,54 @@ it.each(["dark", "light"] as const)(
     const fontFamily = getComputedStyle(preview.element()).fontFamily;
     expect(fontFamily).toContain("system-ui");
     expect(fontFamily).not.toContain("Inter");
+  },
+);
+
+it.each(["default", "subtle", "process"] as const)(
+  "preserves custom bold colors on paragraph and list leads with %s typography",
+  async (tone) => {
+    await page.viewport(900, 640);
+    localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "light" }));
+    const { container } = await render(
+      <>
+        <div id="custom-lead-colors">
+          <ChatMarkdown
+            cwd={undefined}
+            tone={tone}
+            text={
+              "## **Heading**\n\n**Paragraph lead** details.\n\n- **Tight list lead** details.\n- Other entry.\n\nA separate block.\n\n1. **Loose list lead** details.\n\n   More detail."
+            }
+          />
+        </div>
+        <ThemePackEditor variant="light" />
+      </>,
+    );
+    const leads = () => [
+      ...container.querySelectorAll(
+        "#custom-lead-colors p > strong:first-child, #custom-lead-colors li > strong:first-child",
+      ),
+    ];
+    expect(leads()).toHaveLength(3);
+    const defaultColors = leads().map((lead) => getComputedStyle(lead).color);
+    await pickTextColor("Light theme chat headings color", "#2563eb");
+    await pickTextColor("Light theme bold text color", "#9a6700");
+    await expect.poll(() => root.style.getPropertyValue("--chat-bold-color")).toBe("#9a6700");
+    if (import.meta.env.VITE_PR1878_CAPTURE === "1") {
+      const sample = container.querySelector<HTMLDivElement>("#custom-lead-colors")!;
+      sample.scrollIntoView({ block: "start" });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(sample.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+      expect(sample.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+      await page.screenshot({ path: `__screenshots__/pr1878-lead-${tone}.png` });
+    }
+    await expect
+      .poll(() => leads().map((lead) => getComputedStyle(lead).color))
+      .toEqual(["rgb(154, 103, 0)", "rgb(154, 103, 0)", "rgb(154, 103, 0)"]);
+    expect(textColor("#custom-lead-colors h2 strong")).toBe("rgb(37, 99, 235)");
+    await page.getByRole("button", { name: "Reset Light theme bold text color" }).click();
+    await expect
+      .poll(() => leads().map((lead) => getComputedStyle(lead).color))
+      .toEqual(defaultColors);
+    expect(textColor("#custom-lead-colors h2 strong")).toBe("rgb(37, 99, 235)");
   },
 );

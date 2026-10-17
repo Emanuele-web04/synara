@@ -6,13 +6,13 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("137_ExternalAgentProfiles", () => {
+describe("143_ExternalAgentProfiles", () => {
   it.effect("creates both tables and stays idempotent on a partial replay", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 136 });
+      yield* runMigrations({ toMigrationInclusive: 142 });
 
-      yield* runMigrations({ toMigrationInclusive: 137 });
+      yield* runMigrations({ toMigrationInclusive: 143 });
 
       const profiles = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_agent_profiles'
@@ -24,11 +24,11 @@ describe("137_ExternalAgentProfiles", () => {
       assert.strictEqual(revisions.length, 1);
 
       // Simulate a partially-applied migration (tables exist, migration not yet
-      // tracked): rerunning 137 must be a no-op, not a failure.
+      // tracked): rerunning 143 must be a no-op, not a failure.
       const [alreadyTracked] = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
         FROM effect_sql_migrations
-        WHERE migration_id = 137
+        WHERE migration_id = 143
       `;
       assert.strictEqual(alreadyTracked?.count, 1);
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),

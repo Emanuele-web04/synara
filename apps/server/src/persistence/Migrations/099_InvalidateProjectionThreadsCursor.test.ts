@@ -1,4 +1,4 @@
-import threadTitleRefreshSchema from "./142_ThreadTitleRefresh.ts";
+import threadTitleRefreshSchema from "./148_ThreadTitleRefresh.ts";
 import {
   CommandId,
   CorrelationId,
@@ -42,8 +42,8 @@ import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
 import projectionTurnsWorkspaceInitializationSchema from "./133_ProjectionTurnsWorkspaceInitialization.ts";
 import forkSourceMessageSchema from "./134_ProjectionThreadsForkSourceMessage.ts";
 
-import externalAgentProfilesSchema from "./137_ExternalAgentProfiles.ts";
-import externalAgentLifecycleSchema from "./139_ExternalAgentLifecycle.ts";
+import externalAgentProfilesSchema from "./143_ExternalAgentProfiles.ts";
+import externalAgentLifecycleSchema from "./145_ExternalAgentLifecycle.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),

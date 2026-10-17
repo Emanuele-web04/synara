@@ -65,6 +65,7 @@ it("does not report agents as not installed while the first probe is running", a
     () => new Promise((resolve) => pendingRefreshes.push(resolve)),
   );
   await renderStep();
+  await expect.element(page.getByText("Cline", { exact: true })).toBeVisible();
 
   await expect.element(page.getByText("Detecting agents on this machine…")).toBeVisible();
   expect(page.getByText("Not installed").elements()).toHaveLength(0);
@@ -73,7 +74,7 @@ it("does not report agents as not installed while the first probe is running", a
 
   await expect.element(page.getByText("Connected", { exact: true })).toBeVisible();
   await expect
-    .element(page.getByText("1 connected · 0 need sign-in · 9 not installed"))
+    .element(page.getByText("1 connected · 0 need sign-in · 10 not installed"))
     .toBeVisible();
 });
 
@@ -83,6 +84,7 @@ it("leaves missing agents unknown after a timeout and recovers on retry", async 
     () => new Promise((_resolve, reject) => pendingRefreshes.push(reject)),
   );
   await renderStep();
+  await expect.element(page.getByText("Cline", { exact: true })).toBeVisible();
 
   await expect.element(page.getByText("Detecting agents on this machine…")).toBeVisible();
 
@@ -95,6 +97,6 @@ it("leaves missing agents unknown after a timeout and recovers on retry", async 
   await page.getByRole("button", { name: "Re-detect" }).click();
   await expect.element(page.getByText("Connected", { exact: true })).toBeVisible();
   await expect
-    .element(page.getByText("1 connected · 0 need sign-in · 9 not installed"))
+    .element(page.getByText("1 connected · 0 need sign-in · 10 not installed"))
     .toBeVisible();
 });
