@@ -28,8 +28,7 @@ function fixture(options?: {
   writeFileSync(join(root, image), content);
   writeFileSync(join(root, deb), "deb");
   writeFileSync(join(root, rpm), "rpm");
-  const manifestName =
-    options?.arch === "arm64" ? "latest-linux-arm64.yml" : "latest-linux.yml";
+  const manifestName = options?.arch === "arm64" ? "latest-linux-arm64.yml" : "latest-linux.yml";
   const imageRecord = `  - url: ${image}\n    sha512: ${options?.wrongImageHash ? "invalid-hash" : digest}\n    size: ${content.length}\n`;
   writeFileSync(
     join(root, manifestName),
@@ -37,9 +36,7 @@ function fixture(options?: {
       (options?.noImageEntry ? "" : imageRecord) +
       `  - url: ${deb}\n    sha512: deb-digest\n    size: 3\n` +
       `  - url: ${rpm}\n    sha512: rpm-digest\n    size: 3\n` +
-      (options?.unknownPayload
-        ? "  - url: unknown.zip\n    sha512: unknown\n    size: 5\n"
-        : "") +
+      (options?.unknownPayload ? "  - url: unknown.zip\n    sha512: unknown\n    size: 5\n" : "") +
       `path: ${rpm}\nsha512: rpm-digest\nreleaseDate: '2026-10-17T00:00:00Z'\n`,
   );
   return { root, manifestName, image, digest };
