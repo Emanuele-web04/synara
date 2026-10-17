@@ -42,7 +42,10 @@ export interface EditorModelEntry {
   cwd: string | null;
   relativePath: string;
   session: WorkspaceEditorSession | null;
+  /** Every holder: surfaces, peek dependencies and edit transactions. */
   references: number;
+  /** Holders that show the model; peek dependencies are released when the last one closes. */
+  surfaces: number;
   sourceVersion: number;
   viewStates: Map<string, monaco.editor.ICodeEditorViewState>;
   listeners: Set<(value: string) => void>;
@@ -105,7 +108,9 @@ export function acquireEditorModel(
   relativePath: string,
   value: string,
   sourceVersion: number,
+  options: { surface?: boolean } = {},
 ) {
+  const surface = options.surface ?? true;
   const store = registry(client);
   const key = cwd === null ? `standalone:${++nextStandalone}` : JSON.stringify([cwd, relativePath]);
   let entry = store.entries.get(key);
@@ -127,6 +132,7 @@ export function acquireEditorModel(
       relativePath,
       session,
       references: 0,
+      surfaces: 0,
       sourceVersion,
       viewStates: new Map(),
       listeners: new Set(),
@@ -177,6 +183,7 @@ export function acquireEditorModel(
     entriesByUri.set(model.uri.toString(), entry);
   }
   entry.references++;
+  if (surface) entry.surfaces++;
   clearTimeout(entry.idleTimer);
   let released = false;
   return {
@@ -185,10 +192,10 @@ export function acquireEditorModel(
       if (released) return;
       released = true;
       entry.references--;
+      // Peeked files go with the last surface, not the last reference: two
+      // documents peeking each other would otherwise hold each other forever.
+      if (surface && --entry.surfaces === 0) releaseDependencies(entry);
       if (entry.references > 0) return;
-      // Peeked files go first: two documents peeking each other must not keep
-      // each other referenced past their last surface.
-      releaseDependencies(entry);
       if (cwd === null) {
         entry.dispose();
         return;
@@ -232,7 +239,12 @@ function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Pro
   if (pending) return pending;
   const cwd = entry.cwd!;
   const task = (async () => {
-    if (!entry.dependencies.has(relativePath) && entry.dependencies.size >= MAX_DEPENDENCY_MODELS)
+    // Loads in flight count against the bound, so a burst of results cannot
+    // all pass the check before the first read returns.
+    if (
+      !entry.dependencies.has(relativePath) &&
+      entry.dependencies.size + entry.loading.size >= MAX_DEPENDENCY_MODELS
+    )
       throw new Error("Too many files are held for peek views.");
     const session = getWorkspaceEditorSession(entry.client, cwd, relativePath);
     let contents = session.getSnapshot().value;
@@ -248,7 +260,7 @@ function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Pro
       session.load(data);
       contents = session.getSnapshot().key ? session.getSnapshot().value : data.contents;
     }
-    if (entry.model.isDisposed() || entry.references === 0) throw new Error("The document closed.");
+    if (entry.model.isDisposed() || entry.surfaces === 0) throw new Error("The document closed.");
     if (!entry.dependencies.has(relativePath)) {
       const handle = acquireEditorModel(
         entry.client,
@@ -256,6 +268,7 @@ function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Pro
         relativePath,
         contents,
         session.getSnapshot().version,
+        { surface: false },
       );
       entry.dependencies.set(relativePath, handle.release);
     }
@@ -441,6 +454,7 @@ async function prepareEditorEdits(source: EditorModelEntry, files: readonly Edit
             file.relativePath,
             session.getSnapshot().value,
             session.getSnapshot().version,
+            { surface: false },
           );
           acquired.push(handle);
           target = handle.entry;

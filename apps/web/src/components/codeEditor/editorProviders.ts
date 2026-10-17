@@ -103,7 +103,11 @@ function symbolTree(symbols: Symbols): monaco.languages.DocumentSymbol[] {
   return roots;
 }
 
-/** Locations the engine can peek: models for other workspace files are loaded first. */
+/**
+ * Locations the engine can peek: models for other workspace files are loaded
+ * first, and a file that could not be loaded (read-only format, capacity, the
+ * dependency bound) is left out rather than handed over without a model.
+ */
 async function peekableLocations(
   entry: EditorModelEntry,
   locations: EditorIntelligenceResult["locations"],
@@ -115,10 +119,12 @@ async function peekableLocations(
     results.map((location) => location.relativePath),
   );
   if (token.isCancellationRequested) return [];
-  return results.map((location) => ({
-    uri: editorUri(entry.client, entry.cwd, location.relativePath),
-    range: locationRange(location),
-  }));
+  return results.flatMap((location) => {
+    const uri = editorUri(entry.client, entry.cwd, location.relativePath);
+    return location.relativePath === entry.relativePath || monaco.editor.getModel(uri)
+      ? [{ uri, range: locationRange(location) }]
+      : [];
+  });
 }
 
 export function registerEditorProviders() {

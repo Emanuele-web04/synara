@@ -552,7 +552,13 @@ export function createTypeScriptService(workspaceRoot: string) {
               })),
           };
         case "folding":
-          return { ...base, folding: service.getOutliningSpans(file).map((item) => item.textSpan) };
+          return {
+            ...base,
+            folding: service
+              .getOutliningSpans(file)
+              .slice(0, MAX_RESULT_ITEMS)
+              .map((item) => item.textSpan),
+          };
       }
     },
   };

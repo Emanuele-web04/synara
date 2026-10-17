@@ -11,7 +11,12 @@ vi.mock("~/lib/gitReactQuery", () => ({
 }));
 import "./editorRuntime";
 import { getWorkspaceEditorSession } from "~/lib/workspaceEditorSession";
-import { acquireEditorModel, applyEditorEdits, workspaceDocuments } from "./editorModels";
+import {
+  acquireEditorModel,
+  applyEditorEdits,
+  ensureEditorModels,
+  workspaceDocuments,
+} from "./editorModels";
 
 const clients: QueryClient[] = [];
 const handles: ReturnType<typeof acquireEditorModel>[] = [];
@@ -152,4 +157,41 @@ it("includes unmounted unsaved dependencies, rather than silently reading their 
       }),
     ]),
   );
+});
+
+it("releases peek models with the last surface, even when two documents peek each other", async () => {
+  const queryClient = client();
+  api.projects.readFile.mockImplementation(async ({ relativePath }: { relativePath: string }) =>
+    data(relativePath, `// ${relativePath}`),
+  );
+  const first = open(queryClient, "first.ts", "// first.ts");
+  const firstHandle = handles.at(-1)!;
+  const second = open(queryClient, "second.ts", "// second.ts");
+  const secondHandle = handles.at(-1)!;
+  await ensureEditorModels(first, ["second.ts"]);
+  await ensureEditorModels(second, ["first.ts"]);
+  expect(first.dependencies.has("second.ts")).toBe(true);
+  expect(second.dependencies.has("first.ts")).toBe(true);
+  expect(first.references).toBe(2);
+  expect(second.references).toBe(2);
+  firstHandle.release();
+  secondHandle.release();
+  expect(first.dependencies.size).toBe(0);
+  expect(second.dependencies.size).toBe(0);
+  expect(first.references).toBe(0);
+  expect(second.references).toBe(0);
+});
+
+it("holds at most 64 peek models per document, counting loads in flight", async () => {
+  const queryClient = client();
+  api.projects.readFile.mockImplementation(async ({ relativePath }: { relativePath: string }) =>
+    data(relativePath, `// ${relativePath}`),
+  );
+  const entry = open(queryClient, "main.ts", "// main.ts");
+  const paths = Array.from({ length: 70 }, (_, index) => `dep${index}.ts`);
+  await ensureEditorModels(entry, paths);
+  expect(entry.dependencies.size).toBe(64);
+  expect(api.projects.readFile).toHaveBeenCalledTimes(64);
+  handles.at(-1)!.release();
+  expect(entry.dependencies.size).toBe(0);
 });

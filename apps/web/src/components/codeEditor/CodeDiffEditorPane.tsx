@@ -4,7 +4,7 @@
 // Layer: Web editor UI
 // Exports: CodeDiffEditorPane, CodeDiffEditorPaneProps
 
-import { lazy, type RefObject } from "react";
+import type { RefObject } from "react";
 
 import type { ChatFileReference } from "~/lib/chatReferences";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
@@ -14,8 +14,6 @@ import {
   useCodeEditorSaveKeyDownHandler,
 } from "./CodeEditorPane";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
-
-const MonacoEditorSurface = lazy(() => import("./MonacoEditorSurface"));
 
 export interface CodeDiffEditorPaneProps {
   original: string;
@@ -53,11 +51,9 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
           />
         )}
       >
-        <MonacoEditorSurface
-          {...props}
-          value={props.modified}
-          valueVersion={props.modifiedVersion}
-        />
+        {(Surface) => (
+          <Surface {...props} value={props.modified} valueVersion={props.modifiedVersion} />
+        )}
       </EditorSurfaceBoundary>
     </div>
   );

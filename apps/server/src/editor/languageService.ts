@@ -7,7 +7,18 @@ type Pending = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
-type Session = { worker: Worker; pending: Map<number, Pending>; touched: number };
+type Session = {
+  worker: Worker;
+  pending: Map<number, Pending>;
+  touched: number;
+  /** When the worker last answered anything; a cold project parse counts from creation. */
+  answered: number;
+};
+// A request that outlives its deadline is rejected on its own; the worker keeps
+// its parsed project. Only a worker that has answered nothing for this long
+// while work was pending is treated as stuck and replaced.
+const REQUEST_DEADLINE_MS = 15_000;
+const WORKER_STALL_MS = 60_000;
 
 /** One isolated compiler per RPC client/workspace; lazy, bounded and read-only. */
 export class EditorLanguageService {
@@ -61,12 +72,13 @@ export class EditorLanguageService {
           resourceLimits: { maxOldGenerationSizeMb: 512 },
         },
       );
-      session = { worker, pending: new Map(), touched: Date.now() };
+      session = { worker, pending: new Map(), touched: Date.now(), answered: Date.now() };
       this.sessions.set(key, session);
       const owned = session;
       worker.on(
         "message",
         (message: { id: number; result?: EditorIntelligenceResult; error?: string }) => {
+          owned.answered = Date.now();
           const pending = owned.pending.get(message.id);
           if (!pending) return;
           owned.pending.delete(message.id);
@@ -96,10 +108,14 @@ export class EditorLanguageService {
         if (pending) pending.reject(new Error("Language request was cancelled."));
       };
       const finish = () => signal?.removeEventListener("abort", abort);
-      const timer = setTimeout(
-        () => this.close(key, new Error("Language service exceeded its 15-second deadline.")),
-        15_000,
-      );
+      const timer = setTimeout(() => {
+        const pending = owned.pending.get(id);
+        if (!pending) return;
+        owned.pending.delete(id);
+        pending.reject(new Error("Language service exceeded its 15-second deadline."));
+        if (Date.now() - owned.answered >= WORKER_STALL_MS && this.sessions.get(key) === owned)
+          this.close(key, new Error("Language service stopped responding."));
+      }, REQUEST_DEADLINE_MS);
       owned.pending.set(id, {
         timer,
         resolve: (value) => {

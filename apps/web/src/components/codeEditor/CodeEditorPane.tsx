@@ -11,6 +11,7 @@ import {
   lazy,
   Suspense,
   useCallback,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -28,7 +29,9 @@ import { PanelStateMessage } from "../chat/PanelStateMessage";
 import { Button } from "../ui/button";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
 
-const MonacoEditorSurface = lazy(() => import("./MonacoEditorSurface"));
+// A lazy component remembers a failed import, so Retry builds a new one.
+const createEditorSurface = () => lazy(() => import("./MonacoEditorSurface"));
+export type EditorSurfaceComponent = ReturnType<typeof createEditorSurface>;
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
@@ -89,21 +92,24 @@ class EditorSurfaceErrorBoundary extends Component<
 
 /**
  * Keeps a draft editable when the engine chunk fails to load (offline, a stale
- * build): shows the fallback with a Retry that remounts the surface.
+ * build): shows the fallback with a Retry that imports the engine again with a
+ * fresh lazy component and remounts the surface.
  */
 export function EditorSurfaceBoundary(props: {
-  children: ReactNode;
+  children: (Surface: EditorSurfaceComponent) => ReactNode;
   fallback: (retry: () => void) => ReactNode;
   loading: ReactNode;
 }) {
   const [attempt, setAttempt] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new loader per attempt
+  const Surface = useMemo(createEditorSurface, [attempt]);
   return (
     <EditorSurfaceErrorBoundary
       key={attempt}
       fallback={props.fallback}
       onRetry={() => setAttempt((value) => value + 1)}
     >
-      <Suspense fallback={props.loading}>{props.children}</Suspense>
+      <Suspense fallback={props.loading}>{props.children(Surface)}</Suspense>
     </EditorSurfaceErrorBoundary>
   );
 }
@@ -147,7 +153,7 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
           </>
         )}
       >
-        <MonacoEditorSurface {...props} />
+        {(Surface) => <Surface {...props} />}
       </EditorSurfaceBoundary>
     </div>
   );
