@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.6-remote.16 — 2026-10-17
+
+### Fixed
+
+- Temporary account-service failures and rejected host proofs no longer revoke every paired device. Remote retries with a fresh proof and pauses access when the authorization lease expires. Confirmed ownership denials pause access immediately; sustained denials retire trust only after repeated checks spanning five minutes.
+- Host proof validity starts after key import, preventing a busy worker queue from consuming the proof's lifetime before it is sent. The desktop backend has additional worker capacity so stalled file access is less likely to delay remote authorization.
+- Source-launched Remote and Beta use separate development bundle identities, protecting the installed apps' macOS privacy grants.
+
+### Verification
+
+- Remote remains a separate app, data home and update feed for macOS Apple Silicon, Windows x64 and Linux x64.
+- Already-revoked pairings still require a fresh QR pairing; this update does not restore revoked trust automatically.
+- The companion iOS/iPadOS 0.1 (137) adds connection failure reasons, a pairing recovery action and persistent refresh of discovered tunnel routes. Its TestFlight delivery is qualified separately.
+- The real production GitHub consent/callback remains unverified. Windows uses the exact-version unsigned policy and may show SmartScreen. Exact-tag native signing, startup, Defender and public artifact checks remain required before release completion.
+
 ## 1.0.6-remote.15 — 2026-10-17
 
 ### Added

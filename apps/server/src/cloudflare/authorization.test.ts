@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountApiError, createAccountClient } from "@synara/shared/account";
 import type { AccountErrorCode, HostAuthorizationSnapshot } from "@synara/contracts";
-import { startRemoteAuthorization } from "./authorization";
+import { REMOTE_PERMANENT_DENIAL_MS, startRemoteAuthorization } from "./authorization";
 
 const snapshot: HostAuthorizationSnapshot = {
   ownerUserId: "owner",
@@ -41,23 +41,91 @@ describe("remote authorization lease", () => {
     await poll.done;
   });
   it.each<[number, AccountErrorCode, string]>([
-    [401, "unauthorized", "denied"],
+    [401, "bad_proof", "Host proof is invalid"],
+    [401, "unauthorized", "Host proof required"],
     [403, "unauthorized", "denied"],
-    [403, "not_host_owner", "Only the host owner may do that"],
-    [404, "host_not_found", "denied"],
-  ])("permanently fences a host whose proof returns %s %s", async (status, code, message) => {
+    [404, "internal_error", "Request failed with status 404"],
+    [502, "internal_error", "Identity provider is unavailable"],
+  ])("keeps device trust when a check returns %s %s", async (status, code, message) => {
+    let clock = 0;
+    const abort = new AbortController();
     const unavailable = vi.fn(async () => {});
+    const refresh = vi.fn(async (): Promise<HostAuthorizationSnapshot> => {
+      clock += 60_000;
+      throw new AccountApiError({ status, code, message });
+    });
+    const poll = startRemoteAuthorization({
+      refresh,
+      apply: async () => {},
+      unavailable,
+      signal: abort.signal,
+      now: () => clock,
+      pollIntervalMs: 1,
+    });
+    await vi.waitFor(() => expect(refresh.mock.calls.length).toBeGreaterThan(10));
+    expect(poll.available()).toBe(false);
+    expect(unavailable).not.toHaveBeenCalledWith(true);
+    abort.abort();
+    await poll.done;
+  });
+  it.each<[number, AccountErrorCode, string]>([
+    [401, "host_not_linked", "Host is not linked"],
+    [403, "not_host_owner", "Only the host owner may do that"],
+    [404, "host_not_found", "Host not found"],
+  ])(
+    "retires trust only after %s %s persists past the confirmation window",
+    async (status, code, message) => {
+      let clock = 0;
+      const unavailable = vi.fn(async () => {});
+      const log = vi.fn();
+      const poll = startRemoteAuthorization({
+        refresh: async () => {
+          clock += 120_000;
+          throw new AccountApiError({ status, code, message });
+        },
+        apply: async () => {},
+        unavailable,
+        signal: new AbortController().signal,
+        now: () => clock,
+        pollIntervalMs: 1,
+        log,
+      });
+      await poll.done;
+      expect(poll.available()).toBe(false);
+      expect(unavailable.mock.calls).toEqual([[false], [false], [false], [true]]);
+      expect(log).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining("must pair again"));
+    },
+  );
+  it("forgets a denial streak once the account service answers again", async () => {
+    let clock = 0;
+    let polls = 0;
+    const abort = new AbortController();
+    const unavailable = vi.fn(async () => {});
+    const burst = REMOTE_PERMANENT_DENIAL_MS / 10_000 - 5;
     const poll = startRemoteAuthorization({
       refresh: async () => {
-        throw new AccountApiError({ status, code, message });
+        clock += 10_000;
+        polls += 1;
+        const recovered = polls === burst + 1 || polls > 2 * burst + 1;
+        if (recovered) return snapshot;
+        throw new AccountApiError({
+          status: 404,
+          code: "host_not_found",
+          message: "Host not found",
+        });
       },
       apply: async () => {},
       unavailable,
-      signal: new AbortController().signal,
+      signal: abort.signal,
+      now: () => clock,
+      pollIntervalMs: 1,
     });
+    await vi.waitFor(() => expect(polls).toBeGreaterThan(2 * burst + 2));
+    expect(poll.available()).toBe(true);
+    expect(unavailable).not.toHaveBeenCalledWith(true);
+    abort.abort();
     await poll.done;
-    expect(poll.available()).toBe(false);
-    expect(unavailable).toHaveBeenCalledExactlyOnceWith(true);
   });
   it("recovers from enrollment refusal without revoking approved devices or retaining admission", async () => {
     let enrolled = false;
@@ -82,28 +150,27 @@ describe("remote authorization lease", () => {
       apply,
       unavailable,
       signal: abort.signal,
+      pollIntervalMs: 5,
     });
     try {
-      await vi.waitFor(() => expect(unavailable).toHaveBeenCalledExactlyOnceWith(false));
+      await vi.waitFor(() => expect(unavailable).toHaveBeenCalledWith(false));
       expect(poll.available()).toBe(false);
 
       enrolled = true;
-      await vi.waitFor(() => expect(poll.available()).toBe(true), { timeout: 15_000 });
-      expect(apply).toHaveBeenCalledExactlyOnceWith(snapshot);
+      await vi.waitFor(() => expect(poll.available()).toBe(true));
+      expect(apply).toHaveBeenCalledWith(snapshot);
 
       enrolled = false;
-      await vi.waitFor(() => expect(unavailable).toHaveBeenCalledTimes(2), { timeout: 15_000 });
-      expect(poll.available()).toBe(false);
-      expect(unavailable.mock.calls).toEqual([[false], [false]]);
+      await vi.waitFor(() => expect(poll.available()).toBe(false));
 
       enrolled = true;
-      await vi.waitFor(() => expect(poll.available()).toBe(true), { timeout: 15_000 });
-      expect(apply).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(poll.available()).toBe(true));
+      expect(unavailable).not.toHaveBeenCalledWith(true);
     } finally {
       abort.abort();
       await poll.done;
     }
-  }, 45_000);
+  });
   it("does not turn an API outage or failed tombstone write into permanent revocation or fresh admission", async () => {
     const abort = new AbortController();
     const unavailable = vi.fn(async () => {});
@@ -122,20 +189,35 @@ describe("remote authorization lease", () => {
     abort.abort();
     await poll.done;
   });
-  it("owner removal invalidates the scope after selective revocations are applied", async () => {
+  it("owner removal closes admission at once and invalidates the scope once confirmed", async () => {
+    let clock = 0;
     const calls: string[] = [];
     const poll = startRemoteAuthorization({
-      refresh: async () => ({ ...snapshot, ownerInOrg: false }),
+      refresh: async () => {
+        clock += 120_000;
+        return { ...snapshot, ownerInOrg: false };
+      },
       apply: async () => {
         calls.push("apply");
       },
-      unavailable: async () => {
-        calls.push("deny");
+      unavailable: async (permanent) => {
+        calls.push(permanent ? "retire" : "close");
       },
       signal: new AbortController().signal,
+      now: () => clock,
+      pollIntervalMs: 1,
     });
     await poll.done;
-    expect(calls).toEqual(["apply", "deny"]);
+    expect(calls).toEqual([
+      "apply",
+      "close",
+      "apply",
+      "close",
+      "apply",
+      "close",
+      "apply",
+      "retire",
+    ]);
     expect(poll.available()).toBe(false);
   });
 });

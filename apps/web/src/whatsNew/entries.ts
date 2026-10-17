@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.16",
+    date: "Oct 17",
+    features: [
+      {
+        id: "remote-trust-through-transient-failures",
+        title: "Keep paired devices through temporary failures",
+        description:
+          "Temporary account errors and delayed host proofs no longer forget your devices. Remote retries automatically and pauses access safely when it cannot verify the account.",
+      },
+      {
+        id: "remote-proof-under-worker-load",
+        title: "More reliable remote authorization",
+        description:
+          "Fresh host proofs and additional backend worker capacity reduce interruptions when file access or system permission prompts delay background work.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.15",
     date: "Oct 17",
     features: [

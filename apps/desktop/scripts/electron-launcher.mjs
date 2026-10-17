@@ -16,7 +16,11 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { TCC_SERVICE_NAMES } from "@synara/shared/computerGrants";
-import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
+import {
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
@@ -26,7 +30,7 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
-const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const desktopIdentity = synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor));
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
 const LAUNCHER_VERSION = 7;

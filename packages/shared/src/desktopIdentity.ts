@@ -213,3 +213,20 @@ export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDeskto
     usesScriptedUpdates: false,
   };
 }
+
+/**
+ * Source launches run an ad-hoc signed Electron copy. Sharing an installed
+ * release's identifier makes macOS check that release's privacy grants against
+ * the wrong signature, and the launcher's re-sign reset clears them, so source
+ * copies of the separately installed Beta and Remote apps get their own.
+ */
+export function synaraSourceDesktopIdentity(
+  identity: SynaraDesktopIdentity,
+): SynaraDesktopIdentity {
+  if (identity.flavor !== "beta" && identity.flavor !== "remote") return identity;
+  return {
+    ...identity,
+    displayName: `${identity.displayName} (Source)`,
+    bundleId: `${identity.bundleId}.source`,
+  };
+}

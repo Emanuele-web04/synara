@@ -1,30 +1,68 @@
 # Cloudflare Remote — execution state
 
-## Remote .15 candidate — 2026-10-17
+## Remote .16 / companion 137 candidate — 2026-10-17
 
-Prepared **1.0.6-remote.15** in the existing separate release worktree, merging
-source `31cae11` without changing main or any published tag. The candidate keeps
-all earlier Remote release entries and changes only release workspace versions
-in the lockfile; dependency resolution is unchanged and frozen install passes.
+This candidate integrates desktop source `f8a058e`, preserving the .15 public
+release and all earlier Remote history. It widens transient-check recovery,
+logs authorization lease changes without credentials, timestamps proofs after key
+import, gives the backend a 16-worker default pool and separates source-launched
+Remote/Beta bundle identities from their installed apps. Authoritative ownership
+denials still pause admission immediately; only sustained confirmation spanning
+five minutes permanently retires trust. Previously revoked devices are not restored.
 
-The candidate includes the enrollment recovery and remote-home fixes, the
-integrated main Codex reliability work, and the restored configured GitHub sign-in.
-Local checks pass brand, formatting, lint (0 errors / 1,011 existing warnings),
-12-package typecheck, release smoke, Windows boundary and Remote migration lineage.
-Focused release tests pass 55 cases, updater tests 54, What's New logic 6 and the
-actual Chromium sign-in UI suite 7. The combined source's 18-case built E2E pass
-is recorded below; exact-tag release CI still owns native packaging, signing,
-startup/Defender and publication gates.
+The companion source is `f7be4ea` on `codex/ios-remote-connections` (version 0.1,
+build 137), including the connection-reason and current-route persistence changes
+in `919042f`. Public desktop and TestFlight delivery are pending qualification;
+an archive or a successful compile alone is not distribution evidence.
 
-The operator explicitly authorized publication without waiting for the pending
-real GitHub consent/callback test. That test remains unverified; provider
-configuration and the Chromium UI tests are not live callback proof. No new
-GitHub account access is granted as part of publication. The previously prepared
-isolated OAuth attempt expired without completing login and used no installed
-app credentials or data. Native release CI and public artifact verification are
-still required; no tag or installer was public at candidate preparation.
-Remote distribution stays on its own GitHub release/feed, not the Stable website
-installer links. No API redeployment or new mobile binary is required here.
+## Remote .15 published — 2026-10-17
+
+[Synara Remote 1.0.6-remote.15](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.15)
+is public for macOS ARM64, Windows x64 and Linux x64. The tag names exact source
+`113bd45b0d408bae5e600bb3e887bb6cfb3f9efb`, prepared from feature source `31cae11`
+in the separate release worktree. All 11 installers, provenance documents and
+Remote updater manifests are present; Stable/Beta identities remain separate.
+The [exact-tag workflow](https://github.com/Emanuele-web04/synara/actions/runs/38990068434)
+passed quality, all three server shards, all three packaged startup gates,
+macOS signing/notarization and Windows Defender. CI recorded 18,258 passed tests
+and 298 skipped tests. These packaged checks are not manual installed upgrades
+or a real provider conversation on every operating system.
+
+Public verification downloaded and hashed all 11 assets against GitHub digests,
+exact-source provenance and updater SHA-512 metadata. The published Mac ZIP also
+passed an independent strict/deep signature check, Gatekeeper notarized Developer
+ID assessment and staple validation with the Remote bundle ID and .15 version.
+The real electron-updater GitHub provider, with a fetch HTTP adapter, discovers
+.15 from .14 for Mac, Windows and Linux without selecting Stable/Beta feeds.
+This is discovery evidence, not an installed-app upgrade test. GitHub Latest
+remains Stable `v1.0.6`; the historical `v0.4.2` compatibility release is unchanged.
+The exact-version Windows signing exception was restored to its prior value
+`1.0.6` after the successful run. No production website downloads were changed.
+
+The real production GitHub consent/callback remains unverified. Provider
+configuration and the seven-case Chromium sign-in UI suite pass; publication
+was explicitly requested without waiting for new GitHub account consent.
+No new account permissions or paid services were enabled for this publication.
+Remote distribution uses its own GitHub release/feed rather than replacing
+Stable website downloads. No new iPhone/iPad binary is needed for these host fixes.
+
+### Locked Mini investigation
+
+The installed .14 app's keep-awake blocker was active, system idle sleep was
+disabled, and the backend and Cloudflare connector stayed alive while locked.
+Local health, connector readiness and the current host's public health returned
+200, with four active Cloudflare connections. Host authorization succeeded with
+no account-level revoked devices. A Node probe opened the pinned TLS and inner
+RPC WebSocket over the public tunnel while the screen stayed locked; it did not
+approve a device or send a chat. The OS registry independently confirmed the screen-lock flag. The initial Bun
+probe was unsupported by that runtime; the Node rerun is the transport evidence.
+
+The same account also retains an older, differently identified Mini registration
+with the same display name and an offline endpoint (HTTP 530). Which identity
+the physical iPhone selected is unverified: the screenshot does not identify its
+paired root. Do not merge those trust roots, delete old records or attribute the
+failure to screen lock from the display name alone. A read-only SQLite inspection
+was blocked by the live database's exclusive lock; the database was left intact.
 
 ## Enrollment refusal recovery — 2026-10-17
 
@@ -44,8 +82,8 @@ not revive that host. The repair refuses admission immediately but keeps polling
 without destroying trust for this one enrollment response. Proof refusal, owner
 removal and every other 401/403/404 retain their permanent fence. Re-admission
 still requires a fresh successful snapshot and durable revocation application.
-This runtime repair is source work until included in a new desktop release;
-it does not retroactively restore trust already revoked by an older app.
+This runtime repair ships in Remote .15; it does not retroactively restore trust
+already revoked by an older app.
 
 The built-browser E2E run also reproduced a Remote .14 workspace crash: opening
 the remote home (`/`) with existing threads passed an empty string to the branded

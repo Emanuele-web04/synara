@@ -23,6 +23,7 @@ import {
   SYNARA_PRODUCTION_BUNDLE_ID,
   SYNARA_REMOTE_BUNDLE_ID,
   synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
 } from "./desktopIdentity";
 
 describe("desktopIdentity", () => {
@@ -31,6 +32,23 @@ describe("desktopIdentity", () => {
     expect(SYNARA_DEVELOPMENT_BUNDLE_ID).toBe("com.emanueledipietro.synara.dev");
     expect(synaraDesktopIdentity("production").bundleId).toBe(SYNARA_PRODUCTION_BUNDLE_ID);
     expect(synaraDesktopIdentity("development").bundleId).toBe(SYNARA_DEVELOPMENT_BUNDLE_ID);
+  });
+
+  it("keeps source Beta and Remote launches off the installed apps' privacy identity", () => {
+    const remote = synaraSourceDesktopIdentity(synaraDesktopIdentity("remote"));
+    expect(remote).toEqual({
+      ...synaraDesktopIdentity("remote"),
+      displayName: "Synara Remote (Source)",
+      bundleId: `${SYNARA_REMOTE_BUNDLE_ID}.source`,
+    });
+    expect(synaraSourceDesktopIdentity(synaraDesktopIdentity("beta")).bundleId).toBe(
+      `${SYNARA_BETA_BUNDLE_ID}.source`,
+    );
+    for (const flavor of ["development", "canary", "cua"] as const) {
+      expect(synaraSourceDesktopIdentity(synaraDesktopIdentity(flavor))).toEqual(
+        synaraDesktopIdentity(flavor),
+      );
+    }
   });
 
   it("uses the exact packaged renderer origin and entry URL", () => {
