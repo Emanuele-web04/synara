@@ -10,6 +10,14 @@ export type ActivityDelivery = {
   event: "update" | "end";
   contentState: unknown;
 };
+export type NotificationDelivery = {
+  environment: "sandbox" | "production";
+  token: string;
+  notificationId: string;
+  threadId: string;
+  turnId: string;
+  result: "completed" | "failed";
+};
 export type ApnsResult = "delivered" | "invalid-token" | "retry" | "rejected";
 
 /** One bounded HTTP/2 request. No credentials or Apple response bodies escape this boundary. */
@@ -20,7 +28,8 @@ export function createApnsSender(config: ApnsConfig) {
     : key;
   const cached: Partial<Record<ActivityDelivery["environment"], { jwt: string; created: number }>> =
     {};
-  return async (delivery: ActivityDelivery): Promise<ApnsResult> => {
+  return async (delivery: ActivityDelivery | NotificationDelivery): Promise<ApnsResult> => {
+    const notification = "notificationId" in delivery;
     if (config.environment !== "both" && delivery.environment !== config.environment)
       return "rejected";
     const now = Math.floor(Date.now() / 1000);
@@ -68,11 +77,13 @@ export function createApnsSender(config: ApnsConfig) {
           ":method": "POST",
           ":path": `/3/device/${delivery.token}`,
           authorization: `bearer ${authorization}`,
-          "apns-topic": `${config.bundleId}.push-type.liveactivity`,
-          "apns-push-type": "liveactivity",
-          "apns-priority": delivery.event === "end" ? "10" : "5",
-          "apns-expiration": String(now + 60),
-          "apns-collapse-id": delivery.activityId,
+          "apns-topic": notification
+            ? config.bundleId
+            : `${config.bundleId}.push-type.liveactivity`,
+          "apns-push-type": notification ? "alert" : "liveactivity",
+          "apns-priority": notification || delivery.event === "end" ? "10" : "5",
+          "apns-expiration": String(now + (notification ? 3600 : 60)),
+          "apns-collapse-id": notification ? delivery.notificationId : delivery.activityId,
         });
         let status = 0;
         let body = "";
@@ -101,16 +112,32 @@ export function createApnsSender(config: ApnsConfig) {
           );
         });
         stream.end(
-          JSON.stringify({
-            aps: {
-              timestamp: delivery.timestamp,
-              event: delivery.event,
-              "content-state": delivery.contentState,
-              ...(delivery.event === "end"
-                ? { "dismissal-date": now + 60 }
-                : { "stale-date": now + 90 }),
-            },
-          }),
+          JSON.stringify(
+            notification
+              ? {
+                  aps: {
+                    alert: {
+                      title: "Synara",
+                      body: delivery.result === "completed" ? "Response ready" : "Run failed",
+                    },
+                    sound: "default",
+                  },
+                  source: "codex.runCompletion",
+                  threadId: delivery.threadId,
+                  turnId: delivery.turnId,
+                  result: delivery.result,
+                }
+              : {
+                  aps: {
+                    timestamp: delivery.timestamp,
+                    event: delivery.event,
+                    "content-state": delivery.contentState,
+                    ...(delivery.event === "end"
+                      ? { "dismissal-date": now + 60 }
+                      : { "stale-date": now + 90 }),
+                  },
+                },
+          ),
         );
       });
     });

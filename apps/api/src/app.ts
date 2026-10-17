@@ -58,17 +58,20 @@ export async function createApp(
         config.cloudflareTunnel.domain,
       )
     : undefined;
-  const liveActivities = config.apns
-    ? createLiveActivityService({
-        pool,
-        environment: config.apns.environment,
-        send: createApnsSender(config.apns),
-        isMember: async (userId, orgId) =>
-          (await identity.grants.listUserOrganizations(userId, { freshMembership: true })).some(
-            (org) => org.orgId === orgId,
-          ),
-      })
-    : undefined;
+  const sendPush = config.apns ? createApnsSender(config.apns) : undefined;
+  const liveActivities =
+    config.apns && sendPush
+      ? createLiveActivityService({
+          pool,
+          environment: config.apns.environment,
+          send: sendPush,
+          sendNotification: sendPush,
+          isMember: async (userId, orgId) =>
+            (await identity.grants.listUserOrganizations(userId, { freshMembership: true })).some(
+              (org) => org.orgId === orgId,
+            ),
+        })
+      : undefined;
   const app = new Hono();
 
   // Before the routes, so no handler ever parses an oversized body. 413 in

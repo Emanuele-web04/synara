@@ -509,6 +509,12 @@ export const liveActivities = pgTable(
     deviceId: uuid("device_id")
       .notNull()
       .references(() => devices.id, { onDelete: "cascade" }),
+    // Both destinations share ownership/revocation and watched-turn reporting.
+    deliveryKind: text("delivery_kind")
+      .$type<"liveactivity" | "notification">()
+      .notNull()
+      .default("liveactivity"),
+    notificationSource: text("notification_source"),
     request: jsonb("request").$type<import("@synara/contracts").RegisterLiveActivity>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -519,7 +525,13 @@ export const liveActivities = pgTable(
     lastTimestamp: bigint("last_timestamp", { mode: "number" }).notNull().default(0),
     lastPayload: text("last_payload"),
   },
-  (table) => [index("live_activities_delivery_idx").on(table.ended, table.nextAttemptAt)],
+  (table) => [
+    index("live_activities_delivery_idx").on(table.ended, table.nextAttemptAt),
+    uniqueIndex("live_activities_notification_source_idx").on(
+      table.deviceId,
+      table.notificationSource,
+    ),
+  ],
 ).enableRLS();
 
 export const liveActivityHosts = pgTable("live_activity_hosts", {

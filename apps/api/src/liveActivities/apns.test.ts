@@ -89,6 +89,45 @@ describe("APNs HTTP/2 boundary", () => {
     },
   );
 
+  it.each(["sandbox", "production"] as const)(
+    "sends ordinary %s completion alerts using the app topic and private routing only",
+    async (environment) => {
+      const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+      const requests = captureAppleRequests(200, "");
+      const send = createApnsSender({
+        privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+        keyId: "ABCD123456",
+        teamId: "TEAM123456",
+        bundleId: "com.example.synara",
+        environment: "both",
+      });
+      expect(
+        await send({
+          environment,
+          token: "a".repeat(64),
+          notificationId: "one-exact-turn",
+          threadId: "phone-namespaced-thread",
+          turnId: "raw-turn",
+          result: "completed",
+        }),
+      ).toBe("delivered");
+      const { headers, payload } = requests[0]!;
+      expect(headers).toMatchObject({
+        "apns-topic": "com.example.synara",
+        "apns-push-type": "alert",
+        "apns-priority": "10",
+        "apns-collapse-id": "one-exact-turn",
+      });
+      expect(JSON.parse(payload)).toEqual({
+        aps: { alert: { title: "Synara", body: "Response ready" }, sound: "default" },
+        source: "codex.runCompletion",
+        threadId: "phone-namespaced-thread",
+        turnId: "raw-turn",
+        result: "completed",
+      });
+    },
+  );
+
   it("signs and caches each environment with its own Apple credential", async () => {
     const sandbox = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
     const production = generateKeyPairSync("ec", { namedCurve: "prime256v1" });

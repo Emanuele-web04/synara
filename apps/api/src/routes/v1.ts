@@ -1,4 +1,9 @@
-import { RegisterLiveActivity, LiveActivityHostSnapshot } from "@synara/contracts";
+import {
+  RegisterLiveActivity,
+  RegisterTurnNotification,
+  RemoveTurnNotifications,
+  LiveActivityHostSnapshot,
+} from "@synara/contracts";
 import type { LiveActivityService } from "../liveActivities/service";
 import { createAccountDeletionService, type AccountDeletionService } from "../accountDeletion";
 import { DeleteAccountRequest } from "@synara/contracts";
@@ -1743,6 +1748,52 @@ export function createV1Routes(deps: {
     if (!isUuid(c.req.param("id")))
       return errorResponse(c, 400, "validation_failed", "Invalid activity");
     await deps.liveActivities?.remove({ ...session, orgId: session.orgId }, c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  // Ordinary alert destinations use the same current-device and host-owner
+  // admission as ActivityKit, with their own device-token delivery kind.
+  v1.put("/notification-subscriptions", async (c) => {
+    if (!deps.liveActivities)
+      return errorResponse(c, 503, "internal_error", "Completion push is not configured");
+    const session = await requireOrgSession(c, { freshMembership: true });
+    if (session instanceof Response) return session;
+    const deviceSession = await getDeviceSession(c);
+    if (!deviceSession || deviceSession.userId !== session.userId)
+      return errorResponse(c, 401, "unauthorized", "Session changed");
+    if (!liveActivityLimiter.tryConsume(session.userId))
+      return errorResponse(c, 429, "rate_limited", "Too many push updates");
+    const body = await c.req.json().catch(() => null);
+    if (!Schema.is(RegisterTurnNotification)(body))
+      return errorResponse(c, 400, "validation_failed", "Invalid completion push registration");
+    try {
+      await deps.liveActivities.registerNotification(
+        { ...session, sessionId: deviceSession.sessionId },
+        body,
+      );
+      return c.json({ ok: true });
+    } catch (error) {
+      return hostDomainError(c, error);
+    }
+  });
+  v1.delete("/notification-subscriptions", async (c) => {
+    const session = await getDeviceSession(c);
+    if (!session?.orgId) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    const body = await c.req.json().catch(() => null);
+    if (!Schema.is(RemoveTurnNotifications)(body))
+      return errorResponse(c, 400, "validation_failed", "Invalid completion push removal");
+    await deps.liveActivities?.removeNotifications({ ...session, orgId: session.orgId }, body);
+    return c.json({ ok: true });
+  });
+  v1.delete("/notification-subscriptions/:id", async (c) => {
+    const session = await getDeviceSession(c);
+    if (!session?.orgId) return errorResponse(c, 401, "unauthorized", "Not authenticated");
+    if (!isUuid(c.req.param("id")))
+      return errorResponse(c, 400, "validation_failed", "Invalid completion push subscription");
+    await deps.liveActivities?.remove(
+      { ...session, orgId: session.orgId },
+      c.req.param("id"),
+      "notification",
+    );
     return c.json({ ok: true });
   });
   v1.get("/hosts/:id/live-activities", async (c) => {

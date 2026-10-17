@@ -100,7 +100,7 @@ changing these bindings so the API loads them. See the
 for DNS prerequisites and the two-Mac test. Forwarding these optional bindings
 does not provision a tunnel or enroll anyone by itself.
 
-For ActivityKit background updates, configure all five optional secrets together:
+For ActivityKit updates and ordinary completion alerts, configure all five optional secrets together:
 `APNS_PRIVATE_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, and
 `APNS_ENVIRONMENT` (`sandbox`, `production`, or `both`). Partial configuration fails API
 startup. The private key is a P-256 PEM; keep it exclusively in Worker secrets.
@@ -120,6 +120,12 @@ now run the compatible sender. An APNs synthetic-token probe distinguishes the
 valid Production signer (`BadDeviceToken`) from an invalid signature
 (`InvalidProviderToken`). Actual Production/TestFlight device delivery remains
 unqualified; deployment, startup and credential acceptance are not delivery proof.
+Migration 0023 adds ordinary exact-turn completion destinations to the existing
+private outbox; apply it before deploying the matching native client. It reuses
+the same environment-specific keys and host reporter while keeping ActivityKit
+and ordinary device tokens distinct. Review a private backup and the deployed
+Drizzle journal before the additive schema update; preserve table ownership and
+RLS. See [completion notification operations](../../../docs/cloudflare-remote.md#completion-notification-delivery).
 Migration 0021 adds private activity subscriptions
 and host snapshots; it was applied and its Drizzle journal verified on 2026-10-09.
 For simultaneous development and TestFlight builds, deploy the compatible API
