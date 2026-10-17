@@ -1,4 +1,4 @@
-// Exercise the real standalone Code-OSS editor inside Synara: buffers, history, layout, and virtualization.
+// The editable surface inside Synara: shared buffers, history, layout changes, and the native pickers.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRef, useState } from "react";
@@ -8,7 +8,7 @@ import { render } from "vitest-browser-react";
 import { CodeEditorPane } from "./CodeEditorPane";
 import { monaco } from "./editorRuntime";
 import { CodeDiffEditorPane } from "./CodeDiffEditorPane";
-import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
+import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
 
 afterEach(() => document.documentElement.classList.remove("dark"));
 
@@ -64,7 +64,6 @@ function Harness({
         <CodeDiffEditorPane
           {...common}
           original="const value = 0;\n"
-          originalVersion={0}
           modified={value}
           modifiedVersion={version}
           renderSideBySide={split}
@@ -216,7 +215,6 @@ it("does not mark unchanged CRLF lines as changes alongside a real edit", async 
       <div style={{ width: 900, height: 500, display: "flex", flexDirection: "column" }}>
         <CodeDiffEditorPane
           original={"one\r\ntwo\r\nthree\r\n"}
-          originalVersion={0}
           modified={"one\nchanged\nthree\n"}
           modifiedVersion={0}
           fileName="same.txt"
@@ -293,19 +291,17 @@ it("opens Synara's native command picker without a workbench or second navigatio
   await view.unmount();
 });
 
-it("keeps the editor mounted while typing a new symbol name", async () => {
+it("keeps the editor mounted while typing in the command picker", async () => {
   const view = await mount();
   const editor = await ready();
-  editor.setPosition({ lineNumber: 1, column: 8 });
-  await userEvent.keyboard("{F2}");
-  const name = page.getByRole("textbox", { name: "New symbol name", exact: true });
-  await expect.element(name).toHaveValue("value");
-  await userEvent.keyboard("{End}{Backspace}{Backspace}");
-  await expect.element(name).toHaveValue("val");
-  await userEvent.keyboard("ueRenamed");
-  await expect.element(name).toHaveValue("valueRenamed");
+  await userEvent.keyboard("{F1}");
+  const input = page.getByRole("combobox", { name: "Editor commands", exact: true });
+  await expect.element(input).toBeVisible();
+  await userEvent.keyboard("fold");
+  await expect.element(input).toHaveValue("fold");
+  await expect.element(page.getByText("Fold all", { exact: true })).toBeVisible();
   expect(activeEditor()).toBe(editor);
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await userEvent.keyboard("{Escape}");
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   expect(activeEditor()).toBe(editor);
   await view.unmount();

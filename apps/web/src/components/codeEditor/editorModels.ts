@@ -1,3 +1,11 @@
+// FILE: editorModels.ts
+// Purpose: One engine text model per native document session, shared by the
+//          file, diff and preview surfaces, plus the typed bridge to the
+//          server's language service and the multi-file edit transaction.
+// Layer: Web editor runtime
+// Exports: acquireEditorModel, requestIntelligence, applyEditorEdits, editor
+//          URI/location helpers.
+
 import * as monaco from "monaco-editor/editor/editor.api";
 import type {
   EditorDocument,
@@ -15,6 +23,15 @@ import {
 } from "~/lib/workspaceEditorSession";
 import { projectReadFileQueryOptions } from "~/lib/projectReactQuery";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
+import { editorLanguageForPath } from "./editorHighlighting";
+import { INTELLIGENCE_LANGUAGES } from "./editorProviders";
+
+// A released model stays warm this long so reopening the file keeps its undo
+// history; dirty or saving sessions are never disposed.
+const IDLE_MODEL_DISPOSE_MS = 60_000;
+// A remembered reveal target that no surface consumed (the open was declined
+// or redirected) must not jump a later open of that file.
+const PENDING_LOCATION_TTL_MS = 15_000;
 
 export interface EditorModelEntry {
   model: monaco.editor.ITextModel;
@@ -28,6 +45,7 @@ export interface EditorModelEntry {
   listeners: Set<(value: string) => void>;
   statusListeners: Set<(message: string | null) => void>;
   status: string | null;
+  idleTimer?: ReturnType<typeof setTimeout> | undefined;
   dispose: () => void;
 }
 const registries = new WeakMap<
@@ -35,7 +53,7 @@ const registries = new WeakMap<
   { id: number; entries: Map<string, EditorModelEntry> }
 >();
 const entriesByUri = new Map<string, EditorModelEntry>();
-const pendingLocations = new Map<string, monaco.IRange>();
+const pendingLocations = new Map<string, { range: monaco.IRange; at: number }>();
 let nextRegistry = 0;
 let nextStandalone = 0;
 function registry(client: QueryClient) {
@@ -65,22 +83,10 @@ export function setEditorServiceStatus(entry: EditorModelEntry, message: string 
   entry.status = message;
   entry.statusListeners.forEach((listener) => listener(message));
 }
-export function editorLanguage(relativePath: string) {
-  const name = relativePath.split(/[\\/]/).at(-1) ?? relativePath;
-  const extension = name.includes(".") ? `.${name.split(".").at(-1)}` : "";
-  return (
-    monaco.languages
-      .getLanguages()
-      .find(
-        (language) =>
-          language.filenames?.includes(name) || language.extensions?.includes(extension),
-      )?.id ?? "plaintext"
-  );
-}
 export function supportsProjectIntelligence(entry: EditorModelEntry) {
   return (
     entry.cwd !== null &&
-    ["typescript", "javascript"].includes(entry.model.getLanguageId()) &&
+    (INTELLIGENCE_LANGUAGES as readonly string[]).includes(entry.model.getLanguageId()) &&
     entry.model.getValueLength() <= 2_000_000
   );
 }
@@ -101,7 +107,7 @@ export function acquireEditorModel(
     const snapshot = session?.getSnapshot();
     const model = monaco.editor.createModel(
       snapshot?.key ? snapshot.value : value,
-      editorLanguage(relativePath),
+      editorLanguageForPath(relativePath),
       cwd === null
         ? monaco.Uri.from({ scheme: "synara-standalone", path: `/${key}/${relativePath}` })
         : editorUri(client, cwd, relativePath),
@@ -130,11 +136,14 @@ export function acquireEditorModel(
         return;
       }
       changingFromSession = true;
-      // Reloads/discards deliberately reset history; ordinary cross-surface changes do not.
-      if (state.version !== owned.sourceVersion) model.setValue(state.value);
-      else replaceEditorText(model, state.value);
-      owned.sourceVersion = state.version;
-      changingFromSession = false;
+      try {
+        // Reloads/discards deliberately reset history; ordinary cross-surface changes do not.
+        if (state.version !== owned.sourceVersion) model.setValue(state.value);
+        else replaceEditorText(model, state.value);
+        owned.sourceVersion = state.version;
+      } finally {
+        changingFromSession = false;
+      }
     });
     const change = model.onDidChangeContent(() => {
       if (changingFromSession) return;
@@ -142,11 +151,8 @@ export function acquireEditorModel(
       session?.change(contents);
       owned.listeners.forEach((listener) => listener(contents));
     });
-    const idle = setInterval(() => {
-      if (owned.references === 0 && !session?.dirty && !session?.saving) owned.dispose();
-    }, 60_000);
     owned.dispose = () => {
-      clearInterval(idle);
+      clearTimeout(owned.idleTimer);
       unsubscribe?.();
       change.dispose();
       store.entries.delete(key);
@@ -161,6 +167,7 @@ export function acquireEditorModel(
     entriesByUri.set(model.uri.toString(), entry);
   }
   entry.references++;
+  clearTimeout(entry.idleTimer);
   let released = false;
   return {
     entry,
@@ -168,7 +175,16 @@ export function acquireEditorModel(
       if (released) return;
       released = true;
       entry.references--;
-      if (cwd === null && entry.references === 0) entry.dispose();
+      if (entry.references > 0) return;
+      if (cwd === null) {
+        entry.dispose();
+        return;
+      }
+      clearTimeout(entry.idleTimer);
+      entry.idleTimer = setTimeout(() => {
+        if (entry.references === 0 && !entry.session?.dirty && !entry.session?.saving)
+          entry.dispose();
+      }, IDLE_MODEL_DISPOSE_MS);
     },
   };
 }
@@ -197,27 +213,28 @@ export function locationRange(location: EditorLocation) {
   );
 }
 export function rememberEditorLocation(uri: monaco.Uri, range: monaco.IRange) {
-  pendingLocations.set(uri.toString(), range);
+  pendingLocations.set(uri.toString(), { range, at: Date.now() });
+}
+export function forgetEditorLocation(uri: monaco.Uri) {
+  pendingLocations.delete(uri.toString());
 }
 export function takeEditorLocation(uri: monaco.Uri) {
-  const result = pendingLocations.get(uri.toString());
-  pendingLocations.delete(uri.toString());
-  return result;
+  const key = uri.toString();
+  const pending = pendingLocations.get(key);
+  pendingLocations.delete(key);
+  return pending && Date.now() - pending.at <= PENDING_LOCATION_TTL_MS ? pending.range : undefined;
 }
+/**
+ * The snapshots a language request carries: the requesting document plus every
+ * unsaved workspace buffer, so cross-file results see in-progress edits. Clean
+ * buffers equal the disk copy the server already reads.
+ */
 export function workspaceDocuments(entry: EditorModelEntry): EditorDocument[] {
   const documents = new Map<string, EditorDocument>(
     (entry.cwd ? getUnsavedWorkspaceEditorDocuments(entry.client, entry.cwd) : []).map(
       (document) => [document.relativePath, document],
     ),
   );
-  for (const item of registry(entry.client).entries.values()) {
-    if (item.cwd !== entry.cwd || !(item.references > 0 || item.session?.dirty)) continue;
-    documents.set(item.relativePath, {
-      relativePath: item.relativePath,
-      contents: item.model.getValue(),
-      version: item.model.getVersionId(),
-    });
-  }
   documents.set(entry.relativePath, {
     relativePath: entry.relativePath,
     contents: entry.model.getValue(),
@@ -308,10 +325,7 @@ export async function requestIntelligence(
 }
 
 /** Prepare every target before any mutation; reject stale buffers, read-only formats and conflicts. */
-export async function prepareEditorEdits(
-  source: EditorModelEntry,
-  files: readonly EditorFileEdits[],
-) {
+async function prepareEditorEdits(source: EditorModelEntry, files: readonly EditorFileEdits[]) {
   if (!source.cwd) throw new Error("A workspace is required for project edits.");
   const acquired: ReturnType<typeof acquireEditorModel>[] = [];
   try {
@@ -405,21 +419,4 @@ export async function applyEditorEdits(
     );
     target.model.pushStackElement();
   }
-}
-
-export async function monacoWorkspaceEdits(
-  source: EditorModelEntry,
-  files: readonly EditorFileEdits[],
-): Promise<monaco.languages.WorkspaceEdit> {
-  const targets = await prepareEditorEdits(source, files);
-  validateEditorEditTargets(targets);
-  return {
-    edits: targets.flatMap(({ target, file }) =>
-      file.edits.map((edit) => ({
-        resource: target.model.uri,
-        versionId: target.model.getVersionId(),
-        textEdit: { range: offsetRange(target.model, edit), text: edit.newText },
-      })),
-    ),
-  };
 }

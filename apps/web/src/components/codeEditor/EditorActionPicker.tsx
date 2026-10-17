@@ -1,3 +1,9 @@
+// FILE: EditorActionPicker.tsx
+// Purpose: Synara's command picker for editor commands, navigation results,
+//          problems and workspace symbols.
+// Layer: Web editor UI
+// Exports: EditorActionPicker, EditorActionRow
+
 import {
   Command,
   CommandDialog,
@@ -5,17 +11,20 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandShortcut,
   CommandStatus,
 } from "../ui/command";
 
 export interface EditorActionRow {
   id: string;
   label: string;
-  detail?: string;
+  /** Secondary text: a location, a severity, an action kind. */
+  detail?: string | undefined;
+  /** The configured chord, formatted for the platform (ShortcutKbd capsule). */
+  shortcut?: string | undefined;
   run: () => void | Promise<void>;
 }
 
-/** Editor commands and language results reuse Synara's accessible command-picker primitives. */
 export function EditorActionPicker(props: {
   open: boolean;
   title: string;
@@ -61,6 +70,7 @@ export function EditorActionPicker(props: {
                     {row.detail}
                   </span>
                 ) : null}
+                {row.shortcut ? <CommandShortcut>{row.shortcut}</CommandShortcut> : null}
               </CommandItem>
             ))}
           </CommandList>

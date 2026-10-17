@@ -10,7 +10,7 @@ import { CodeDiffEditorPane } from "../codeEditor/CodeDiffEditorPane";
 import {
   INITIAL_CODE_EDIT_HISTORY_STATE,
   type CodeEditHistoryControls,
-} from "../codeEditor/pierreEdit";
+} from "../codeEditor/codeEditHistory";
 import { ChatHeaderIconButton } from "./chatHeaderControls";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
@@ -55,13 +55,6 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
     }),
   );
   const original = originalQuery.data?.missing ? "" : (originalQuery.data?.contents ?? "");
-  const originalVersionRef = useRef({ contents: original, version: 0 });
-  if (originalVersionRef.current.contents !== original) {
-    originalVersionRef.current = {
-      contents: original,
-      version: originalVersionRef.current.version + 1,
-    };
-  }
   const originalTruncated = originalQuery.data?.truncated ?? false;
   const originalError =
     originalQuery.error instanceof Error
@@ -140,7 +133,6 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
       ) : (
         <CodeDiffEditorPane
           original={original}
-          originalVersion={originalVersionRef.current.version}
           modified={session.state.value}
           modifiedVersion={session.state.version}
           fileName={session.relativePath ?? props.filePath}

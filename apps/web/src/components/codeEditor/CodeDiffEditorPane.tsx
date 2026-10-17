@@ -1,12 +1,24 @@
-import { lazy, Suspense, type RefObject } from "react";
+// FILE: CodeDiffEditorPane.tsx
+// Purpose: The editable diff surface over the same native document model as
+//          the file editor, with the shared boundary and save chord.
+// Layer: Web editor UI
+// Exports: CodeDiffEditorPane, CodeDiffEditorPaneProps
+
+import { lazy, type RefObject } from "react";
+
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { EditorSurfaceBoundary, useCodeEditorSaveKeyDownHandler } from "./CodeEditorPane";
-import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
+import { PanelStateMessage } from "../chat/PanelStateMessage";
+import {
+  EditorSurfaceBoundary,
+  EditorSurfaceRetry,
+  useCodeEditorSaveKeyDownHandler,
+} from "./CodeEditorPane";
+import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
+
 const MonacoEditorSurface = lazy(() => import("./MonacoEditorSurface"));
 
 export interface CodeDiffEditorPaneProps {
   original: string;
-  originalVersion: number;
   modified: string;
   modifiedVersion: number;
   fileName: string;
@@ -29,26 +41,23 @@ export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
       onKeyDownCapture={saveKeyDownHandler}
     >
       <EditorSurfaceBoundary
-        fallback={
-          <p role="alert" className="p-3 text-ui-sm">
-            The diff editor could not load. Your draft is preserved. Reopen the file to continue
-            editing.
-          </p>
+        loading={
+          <PanelStateMessage density="compact" fill="flex">
+            <p>Loading diff editor…</p>
+          </PanelStateMessage>
         }
-      >
-        <Suspense
-          fallback={
-            <p role="status" className="p-3 text-ui-sm text-muted-foreground">
-              Loading diff editor…
-            </p>
-          }
-        >
-          <MonacoEditorSurface
-            {...props}
-            value={props.modified}
-            valueVersion={props.modifiedVersion}
+        fallback={(retry) => (
+          <EditorSurfaceRetry
+            message="The diff editor could not load. Your draft is preserved."
+            onRetry={retry}
           />
-        </Suspense>
+        )}
+      >
+        <MonacoEditorSurface
+          {...props}
+          value={props.modified}
+          valueVersion={props.modifiedVersion}
+        />
       </EditorSurfaceBoundary>
     </div>
   );

@@ -6,7 +6,7 @@ import { CodeEditorPane } from "../codeEditor/CodeEditorPane";
 import {
   INITIAL_CODE_EDIT_HISTORY_STATE,
   type CodeEditHistoryControls,
-} from "../codeEditor/pierreEdit";
+} from "../codeEditor/codeEditHistory";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
   WorkspaceFileEditorConflictBar,

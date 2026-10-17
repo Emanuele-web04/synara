@@ -17,6 +17,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useRef,
   useState,
@@ -54,6 +55,7 @@ import {
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
+import { useEditorRailStore, type EditorRailItem } from "~/editorRailStore";
 import { Skeleton } from "./ui/skeleton";
 import {
   ChatHeaderButton,
@@ -67,7 +69,6 @@ import { fileRowClassName } from "./chat/fileRowStyles";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import {
-  ExplorerActivityBarButton,
   setFileReferenceDragData,
   WorkspaceFilesSidebar,
   WorkspaceSearchSidebar,
@@ -345,46 +346,6 @@ function DiffFilesSidebar(props: {
   );
 }
 
-function EditorActivityBar(props: {
-  centerMode: EditorCenterMode;
-  searchActive: boolean;
-  sidebarVisible: boolean;
-  onSelectItem: (item: EditorActivityBarItem) => void;
-}) {
-  const centerFamily = editorCenterModeFamily(props.centerMode);
-  const filesActive = props.sidebarVisible && !props.searchActive && centerFamily === "file";
-  const diffActive = props.sidebarVisible && !props.searchActive && centerFamily === "diff";
-  const searchActive = props.sidebarVisible && props.searchActive;
-  return (
-    <nav
-      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 app-content-surface"
-      aria-label="Editor activity bar"
-    >
-      <ExplorerActivityBarButton
-        label={filesActive ? "Hide files sidebar" : "Files"}
-        active={filesActive}
-        onClick={() => props.onSelectItem("file")}
-      >
-        <FoldersIcon className="size-5" />
-      </ExplorerActivityBarButton>
-      <ExplorerActivityBarButton
-        label={diffActive ? "Hide diff sidebar" : "Diff"}
-        active={diffActive}
-        onClick={() => props.onSelectItem("diff")}
-      >
-        <ChangesIcon className="size-5" />
-      </ExplorerActivityBarButton>
-      <ExplorerActivityBarButton
-        label={searchActive ? "Hide search sidebar" : "Search files"}
-        active={searchActive}
-        onClick={() => props.onSelectItem("search")}
-      >
-        <SearchIcon className="size-5" />
-      </ExplorerActivityBarButton>
-    </nav>
-  );
-}
-
 export interface EditorLeaveGuard {
   guardLeavingEdit: (run: () => void) => void;
 }
@@ -461,6 +422,47 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     setSearchPaneActive(false);
     onCenterModeChange(item);
   };
+  // Files / Diff / Search live in the fixed rail while this view is mounted
+  // (editorRailStore), so the editor has one icon column. Re-clicking the
+  // active item collapses the sidebar; a center-pane switch goes through the
+  // dirty-editor guard first.
+  const selectRailItem = useEffectEvent((item: EditorActivityBarItem) => {
+    if (editorActivityBarSelectionLeavesEditor(activityBarSelection(item)))
+      guardLeavingEdit(() => handleActivityBarSelectItem(item));
+    else handleActivityBarSelectItem(item);
+  });
+  const publishRailItems = useEditorRailStore((store) => store.publish);
+  const clearRailItems = useEditorRailStore((store) => store.clear);
+  const filesActive = sidebarVisible && !searchPaneActive && centerFamily === "file";
+  const diffActive = sidebarVisible && !searchPaneActive && centerFamily === "diff";
+  const searchActive = sidebarVisible && searchPaneActive;
+  useEffect(() => {
+    const items: EditorRailItem[] = [
+      {
+        id: "file",
+        glyph: FoldersIcon,
+        label: filesActive ? "Hide files sidebar" : "Files",
+        active: filesActive,
+        onSelect: () => selectRailItem("file"),
+      },
+      {
+        id: "diff",
+        glyph: ChangesIcon,
+        label: diffActive ? "Hide diff sidebar" : "Diff",
+        active: diffActive,
+        onSelect: () => selectRailItem("diff"),
+      },
+      {
+        id: "search",
+        glyph: SearchIcon,
+        label: searchActive ? "Hide search sidebar" : "Search files",
+        active: searchActive,
+        onSelect: () => selectRailItem("search"),
+      },
+    ];
+    publishRailItems(items);
+  }, [filesActive, diffActive, searchActive, publishRailItems]);
+  useEffect(() => clearRailItems, [clearRailItems]);
   const toggleChatPaneVisible = () => {
     setChatPaneVisible((previous) => {
       const next = !previous;
@@ -651,17 +653,9 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           <span className="truncate font-normal">Chat</span>
         </ChatHeaderButton>
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        <EditorActivityBar
-          centerMode={props.centerMode}
-          searchActive={searchPaneActive}
-          sidebarVisible={sidebarVisible}
-          onSelectItem={(item) =>
-            editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
-              ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
-              : handleActivityBarSelectItem(item)
-          }
-        />
+      {/* The body sits on the content block below the top bar; clip the opaque
+          panes to the block's rounded corners so none paints a square over them. */}
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden [border-radius:var(--app-rail-block-radii,0)]">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {!sidebarVisible ? null : searchPaneActive ? (
             <WorkspaceSearchSidebar

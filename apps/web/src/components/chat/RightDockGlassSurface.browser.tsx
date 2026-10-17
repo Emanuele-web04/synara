@@ -9,7 +9,7 @@ import { cleanup, render } from "vitest-browser-react";
 
 import { CodeDiffEditorPane } from "../codeEditor/CodeDiffEditorPane";
 import { CodeEditorPane } from "../codeEditor/CodeEditorPane";
-import type { CodeEditHistoryControls } from "../codeEditor/pierreEdit";
+import type { CodeEditHistoryControls } from "../codeEditor/codeEditHistory";
 import { DiffPanelShell } from "../DiffPanelShell";
 import { monaco } from "../codeEditor/editorRuntime";
 
@@ -149,7 +149,6 @@ it.each([
           <div data-right-dock-content style={{ width: 600, height: 240, display: "flex" }}>
             <CodeDiffEditorPane
               original="const unchanged = 0;\nconst before = 1;\n"
-              originalVersion={0}
               modified="const unchanged = 0;\nconst after = 2;\n"
               modifiedVersion={0}
               fileName="sample.ts"

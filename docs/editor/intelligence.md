@@ -4,11 +4,13 @@ Synara keeps its Files, Changes, file headers, chat, search, Git, terminal, and 
 
 ## Supported operations
 
-TypeScript and JavaScript use the project's nearest `tsconfig.json`/`jsconfig.json`, including unsaved open dependencies. Without a configuration, the compiler creates an inferred project. Completion, completion documentation, signature help, hover, declaration/definition/type navigation, references, symbol search, rename, diagnostics, text-only quick fixes/refactors, formatting, organize imports, semantic classification, inlay hints, and folding use the actual TypeScript language service. No static suggestions or tsserver plugins are loaded. Project-local dependencies are readable; symlinks and configuration references outside the workspace are deliberately not traversed.
+TypeScript and JavaScript use the project's nearest `tsconfig.json`/`jsconfig.json`, including unsaved open dependencies. Without a configuration, the compiler creates an inferred project. Completion, completion documentation, signature help, hover, definition/type navigation, references, symbol search, rename, diagnostics, text-only quick fixes/refactors, formatting, organize imports, and folding use the actual TypeScript language service. No static suggestions or tsserver plugins are loaded. Project-local dependencies are readable; symlinks and configuration references outside the workspace are deliberately not traversed.
 
-JSON, CSS and HTML have Monaco's standalone language workers. Other registered languages retain syntax highlighting, editing, folding, and find/replace; they do not gain a project language server from this PR. Workspace text search remains Synara's existing search interface. Workspace-symbol search is limited to the current compiler project, not every nested project in a monorepo. Auto-import completion and code actions requiring arbitrary commands or file creation are not advertised.
+Every other language keeps syntax highlighting, editing, bracket matching, folding, and find/replace; none gains a project language server here. Syntax colours come from the same Shiki highlighter and GitHub themes the read-only previews and diffs use (`editorHighlighting.ts`), so edited code looks exactly like previewed code; the engine's own grammars, language workers, inlay hints and semantic colouring are not loaded. Workspace text search remains Synara's existing search interface. Workspace-symbol search is limited to the current compiler project, not every nested project in a monorepo. Auto-import completion and code actions requiring arbitrary commands or file creation are not advertised.
 
-Press F1 in an editor for Synara's command picker. F12 navigates to a definition, Shift+F12 opens references, and F2 opens the native rename dialog. Completion and signature widgets live inside the editor engine and use Synara's theme tokens. Diagnostics and code actions are contextual, with a native problems picker. Selected code can still be referenced in chat through the existing callback.
+Editor shortcuts are ordinary Synara keybindings (`editor.commands`, `editor.rename`, `editor.goToDefinition`, `editor.findReferences`, `editor.goToSymbol`, `editor.problems` and the `editor.debug.*` commands in [KEYBINDINGS.md](../../KEYBINDINGS.md)), resolved on the editor container and configurable in Settings. By default F1 opens Synara's command picker, F12 navigates to a definition, Shift+F12 lists references, and F2 opens the shared rename dialog. Completion, hover and signature widgets live inside the editor engine and take their colours, radius and fonts from Synara's tokens. Diagnostics show as squiggles plus a count strip under the editor that opens the problems picker; quick fixes, refactors and navigation results use the same picker. Right-click opens Synara's context menu with grouped Navigate, Debug and Refactor submenus. Selected code can still be referenced in chat.
+
+In the editor view the Files, Diff and Search panes are rail items: the editor workspace publishes them to the fixed app rail while it is mounted (`editorRailStore.ts`), so there is no second activity bar next to the rail.
 
 ## Ownership and safety
 
@@ -22,7 +24,7 @@ Large file previews retain Synara's existing numbered-textarea fallback (more th
 
 ## Debugging
 
-F5 opens a native launch confirmation; F9 or the gutter toggles a breakpoint. The command picker also offers attach to a Node inspector on the **server machine's loopback interface**. Launch first flushes native workspace buffers. The dialog explicitly states that starting a program executes trusted workspace code and downloads the checksum-pinned debugger on first use.
+`editor.debug.start` (F5) opens the launch dialog; `editor.debug.toggleBreakpoint` (F9) or the gutter toggles a breakpoint. The command picker also offers attach to a Node inspector on the **server machine's loopback interface**. Launch first flushes native workspace buffers. The dialog explicitly states that starting a program executes trusted workspace code and downloads the checksum-pinned debugger on first use.
 
 The contextual debug section provides continue/pause/stop, step into/over/out, call stack, scopes/variables, watches, console evaluation and output. It uses Microsoft's real standalone `vscode-js-debug` DAP server, including its child-target handshake. Debug sessions belong to the owner RPC connection and expire after disconnected inactivity. Synara's existing shared process boundary owns spawn/teardown. An attached external process is detached, not killed. Debug console/watch evaluation runs code in the debuggee and must be treated accordingly.
 
@@ -34,7 +36,7 @@ Packaged desktop builds retain TypeScript’s `lib*.d.ts` standard libraries as 
 
 ## Upstream versions and licenses
 
-- `monaco-editor` **0.57.0**, MIT: the standalone Code-OSS editor engine, not the workbench. The dependency and workers are lazy-loaded by editing surfaces. Existing Pierre read-only diff rendering remains intact.
+- `monaco-editor` **0.57.0**, MIT: the standalone Code-OSS editor engine, not the workbench. Only the editing features in `editorRuntime.ts` are bundled, with one base worker; the engine's language grammars and language workers are not. The dependency is lazy-loaded by editing surfaces. Existing Pierre read-only rendering remains intact, and the former Pierre edit patch is gone with the Pierre edit engine.
 - `typescript`: the repository's existing catalog range and lockfile resolution (**5.9.3** in this candidate), Apache-2.0. Promoted from server development-only to a server runtime dependency; no compiler upgrade.
 - `microsoft/vscode-js-debug` **1.140.0**, MIT, standalone `js-debug-dap-v1.140.0.tar.gz`; SHA-256 `27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968`. Downloaded only on explicit debugging into the current Stable/Beta data directory. License files are retained from the verified archive.
 

@@ -1,4 +1,6 @@
-/* The editor engine has no application chrome; all surrounding controls are Synara's. */
+/* The editor engine has no application chrome; every surrounding control is Synara's.
+   Colours come from the theme built in editorRuntime.ts; this file only maps the
+   engine's surfaces onto Synara's code-viewer, radius and typography tokens. */
 .synara-code-editor .monaco-editor,
 .synara-code-editor .monaco-editor-background,
 .synara-code-editor .monaco-editor .margin {
@@ -18,16 +20,42 @@
 .synara-code-editor .monaco-diff-editor .line-delete-margin {
   background: var(--app-code-viewer-deletion-row, var(--vscode-diffEditor-removedLineBackground));
 }
+
+/* In-editor popovers (suggestions, hover, signature help, find) read as Synara
+   popovers: the popover radius and shadow, the UI font and the chosen UI size. */
 .synara-code-editor .monaco-editor .suggest-widget,
 .synara-code-editor .monaco-editor .monaco-hover,
 .synara-code-editor .monaco-editor .parameter-hints-widget,
 .synara-code-editor .monaco-editor .find-widget {
-  border-radius: var(--radius-lg, 10px);
-  font-family: var(--font-system-ui, system-ui);
-  font-size: var(--app-font-size-ui, 12px);
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px -8px var(--vscode-widget-shadow);
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui);
 }
-.synara-code-editor .monaco-editor .suggest-widget .monaco-list-row {
-  border-radius: var(--radius-sm, 4px);
+.synara-code-editor .monaco-editor .find-widget {
+  top: 8px;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+.synara-code-editor .monaco-editor .suggest-widget .monaco-list-row,
+.synara-code-editor .monaco-editor .find-widget .monaco-inputbox,
+.synara-code-editor .monaco-editor .find-widget .button {
+  border-radius: var(--radius-sm);
+}
+.synara-code-editor .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label,
+.synara-code-editor .monaco-editor .monaco-hover .hover-contents,
+.synara-code-editor .monaco-editor .parameter-hints-widget .signature {
+  font-family: var(--font-chat-code-family);
+}
+.synara-code-editor .monaco-editor .monaco-hover .hover-contents code,
+.synara-code-editor .monaco-editor .monaco-hover .hover-contents pre {
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code);
+}
+/* The engine's scrollbars sit flush with the row edge; keep them Synara-thin and clear. */
+.synara-code-editor .monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px;
 }
 @media (prefers-reduced-motion: reduce) {
   .synara-code-editor .monaco-editor * {
@@ -36,20 +64,26 @@
   }
 }
 
+/* Breakpoints and the paused line use the status tokens the rest of Synara uses. */
 .synara-code-editor .synara-debug-breakpoint::after {
   content: "";
   display: block;
   width: 10px;
   height: 10px;
-  margin: 4px auto;
+  margin: 5px auto;
   border-radius: 50%;
   background: var(--color-destructive);
 }
 .synara-code-editor .synara-debug-stopped-line {
-  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
 }
 .synara-code-editor .synara-debug-stopped-arrow::before {
-  content: "→";
-  color: var(--color-primary);
-  font-weight: bold;
+  content: "";
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 5px auto;
+  border-style: solid;
+  border-width: 5px 0 5px 8px;
+  border-color: transparent transparent transparent var(--color-warning);
 }
