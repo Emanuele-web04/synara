@@ -58,18 +58,26 @@ it("cancels an outstanding adapter installation without spawning a debuggee", as
   await service.dispose();
 });
 
-// Opt-in downloads the checksum-pinned upstream adapter. A preinstalled path can
-// be supplied by an offline verification workspace; neither mode uses a fake DAP peer.
-const live =
-  process.env.SYNARA_TEST_JS_DEBUG === "1" || Boolean(process.env.SYNARA_TEST_JS_DEBUG_PATH);
+it("skips a breakpoint whose source was deleted instead of failing the launch", async () => {
+  const { service, cwd, input } = await setup(async () => {
+    throw new Error("adapter requested");
+  });
+  await writeFile(path.join(cwd, "index.js"), "");
+  await expect(
+    service.start("owner", { ...input, breakpoints: [{ relativePath: "deleted.js", line: 1 }] }),
+  ).rejects.toThrow("adapter requested");
+  await expect(
+    service.start("owner", { ...input, breakpoints: [{ relativePath: "../escape.js", line: 1 }] }),
+  ).rejects.toThrow("workspace-relative");
+});
+
+// SYNARA_TEST_JS_DEBUG=1 downloads the checksum-pinned upstream adapter; no fake DAP peer.
+const live = process.env.SYNARA_TEST_JS_DEBUG === "1";
 describe.runIf(live)("actual Microsoft JavaScript debugger", () => {
-  async function actual() {
-    const fixture = await setup(
-      async (signal) =>
-        process.env.SYNARA_TEST_JS_DEBUG_PATH ??
-        ensureDebugAdapter(path.join(os.tmpdir(), "synara-js-debug-test-cache"), signal),
+  function actual() {
+    return setup((signal) =>
+      ensureDebugAdapter(path.join(os.tmpdir(), "synara-js-debug-test-cache"), signal),
     );
-    return fixture;
   }
   async function wait(
     service: EditorDebugService,
@@ -100,6 +108,16 @@ describe.runIf(live)("actual Microsoft JavaScript debugger", () => {
     expect(() => service.poll("another-owner", sessionId, 0)).toThrow("connection");
     const stopped = await wait(service, sessionId, 0, "stopped");
     const target = { sessionId, connectionId: stopped.connectionId };
+    expect(
+      (
+        await service.action("owner", {
+          ...target,
+          action: "setBreakpoints",
+          relativePath: "deleted.js",
+          breakpoints: [{ relativePath: "deleted.js", line: 1 }],
+        })
+      ).breakpoints,
+    ).toEqual([{ verified: false, line: 1, message: "The source file no longer exists." }]);
     const threadId =
       stopped.threadId ??
       (await service.action("owner", { ...target, action: "threads" })).threads![0]!.id;

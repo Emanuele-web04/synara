@@ -1,4 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
+// Explicit suffix: in source mode Node loads this worker directly, without a bundler.
 import { createTypeScriptService } from "./typescriptService.ts";
 import type { EditorIntelligenceInput } from "@synara/contracts";
 

@@ -16,7 +16,6 @@ export const EditorOperation = Schema.Literals([
   "hover",
   "signature",
   "definition",
-  "declaration",
   "typeDefinition",
   "references",
   "rename",
@@ -26,7 +25,6 @@ export const EditorOperation = Schema.Literals([
   "codeActions",
   "format",
   "organizeImports",
-  "semanticTokens",
   "inlayHints",
   "folding",
 ]);
@@ -109,8 +107,6 @@ export const EditorIntelligenceResult = Schema.Struct({
   signatures: Schema.optional(Schema.Array(EditorSignature)),
   activeSignature: Schema.optional(NonNegativeInt),
   activeParameter: Schema.optional(NonNegativeInt),
-  /** TypeScript's TwentyTwenty semantic classifications: [start, length, classification]. */
-  tokens: Schema.optional(Schema.Array(NonNegativeInt)),
   hints: Schema.optional(
     Schema.Array(
       Schema.Struct({

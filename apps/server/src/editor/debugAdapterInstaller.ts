@@ -4,19 +4,17 @@ import path from "node:path";
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 
-export const JS_DEBUG_VERSION = "1.140.0";
-export const JS_DEBUG_SHA256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968";
+const JS_DEBUG_VERSION = "1.140.0";
+const JS_DEBUG_SHA256 = "27dab92937ec1ab35821ae955aac867544fe06a1b6307229049f2d789af10968";
 const JS_DEBUG_URL = `https://github.com/microsoft/vscode-js-debug/releases/download/v${JS_DEBUG_VERSION}/js-debug-dap-v${JS_DEBUG_VERSION}.tar.gz`;
 const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 64 * 1024 * 1024;
 const installs = new Map<string, Promise<string>>();
+const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
 /** Narrow extractor for the checksum-pinned upstream tar: no links, devices, or path traversal. */
-export async function extractDebugAdapter(archive: Uint8Array, destination: string): Promise<void> {
-  if (
-    archive.byteLength > MAX_ARCHIVE_BYTES ||
-    createHash("sha256").update(archive).digest("hex") !== JS_DEBUG_SHA256
-  ) {
+async function extractDebugAdapter(archive: Uint8Array, destination: string): Promise<void> {
+  if (archive.byteLength > MAX_ARCHIVE_BYTES || sha256(archive) !== JS_DEBUG_SHA256) {
     throw new Error("The JavaScript debugger download failed its SHA-256 integrity check.");
   }
   const tar = await promisify(gunzip)(archive, { maxOutputLength: MAX_EXPANDED_BYTES });
@@ -59,7 +57,26 @@ export async function extractDebugAdapter(archive: Uint8Array, destination: stri
   }
 }
 
-/** Called only after an explicit launch/attach action. Stored in the current app's private state directory. */
+/** Keep the checked archive hash and recheck the executable too, rather than trusting an empty marker. */
+async function isInstalled(destination: string, entry: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(
+      await readFile(path.join(destination, "integrity.json"), "utf8"),
+    ) as {
+      archive?: string;
+      entry?: string;
+    };
+    return manifest.archive === JS_DEBUG_SHA256 && manifest.entry === sha256(await readFile(entry));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Called only after an explicit launch/attach action. Stored in the current app's private
+ * state directory. One install runs per state directory at a time; a partial, stale, or
+ * modified install is removed and replaced rather than trusted or reported to the user.
+ */
 export function ensureDebugAdapter(stateDir: string, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted();
   const key = path.resolve(stateDir);
@@ -69,25 +86,9 @@ export function ensureDebugAdapter(stateDir: string, signal?: AbortSignal): Prom
     const parent = path.join(key, "editor-runtimes");
     const destination = path.join(parent, `js-debug-${JS_DEBUG_VERSION}`);
     const entry = path.join(destination, "js-debug", "src", "dapDebugServer.js");
-    try {
-      // Keep the checked archive and recheck the executable too, rather than trusting an empty marker.
-      const manifest = JSON.parse(
-        await readFile(path.join(destination, "integrity.json"), "utf8"),
-      ) as { archive?: string; entry?: string };
-      if (
-        manifest.archive === JS_DEBUG_SHA256 &&
-        manifest.entry ===
-          createHash("sha256")
-            .update(await readFile(entry))
-            .digest("hex")
-      )
-        return entry;
-      throw new Error(
-        "The installed JavaScript debugger has changed. Remove its version directory before reinstalling.",
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    if (await isInstalled(destination, entry)) return entry;
+    // Only this pinned version's directory under Synara's private state, never user files.
+    await rm(destination, { recursive: true, force: true });
     await mkdir(parent, { recursive: true, mode: 0o700 });
     const staging = await mkdtemp(path.join(parent, ".js-debug-"));
     try {
@@ -121,15 +122,20 @@ export function ensureDebugAdapter(stateDir: string, signal?: AbortSignal): Prom
       signal?.throwIfAborted();
       await extractDebugAdapter(archive, staging);
       signal?.throwIfAborted();
-      const entryHash = createHash("sha256")
-        .update(await readFile(path.join(staging, "js-debug", "src", "dapDebugServer.js")))
-        .digest("hex");
+      const entryHash = sha256(
+        await readFile(path.join(staging, "js-debug", "src", "dapDebugServer.js")),
+      );
       await writeFile(
         path.join(staging, "integrity.json"),
         JSON.stringify({ archive: JS_DEBUG_SHA256, entry: entryHash }),
         { mode: 0o600 },
       );
-      await rename(staging, destination);
+      try {
+        await rename(staging, destination);
+      } catch (error) {
+        // Another server process sharing this state directory may have finished first.
+        if (!(await isInstalled(destination, entry))) throw error;
+      }
       return entry;
     } finally {
       // Only our unique, newly created staging directory; never a user's workspace or an installed runtime.

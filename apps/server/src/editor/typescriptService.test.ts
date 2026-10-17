@@ -61,8 +61,7 @@ describe("real TypeScript project intelligence", () => {
     ).toContain("toFixed");
     expect(request("hover").text).toContain("Add two values");
     expect(request("signature", { offset: call + "add(1,".length }).activeParameter).toBe(1);
-    for (const operation of ["definition", "declaration"] as const)
-      expect(request(operation).locations?.[0]?.relativePath).toBe("math.ts");
+    expect(request("definition").locations?.[0]?.relativePath).toBe("math.ts");
     expect(
       request("typeDefinition", { offset: main.lastIndexOf("item.value") }).locations?.[0]
         ?.relativePath,
@@ -124,7 +123,7 @@ describe("real TypeScript project intelligence", () => {
     );
   });
 
-  it("returns real quick fixes, formatting/import edits, semantic tokens, inlay hints, and folding ranges", () => {
+  it("returns real quick fixes, formatting/import edits, inlay hints, and folding ranges", () => {
     const code =
       "import { add, item } from './math';\nconst text = 'hello';\ntext.toUppercase();\nfunction greet(name:string){\nreturn 'hello '+name;\n}\nadd(1,2);\n";
     documents = [
@@ -147,7 +146,6 @@ describe("real TypeScript project intelligence", () => {
     ).toBe(true);
     expect(request("format", { offset: 0 }).edits?.[0]?.edits.length).toBeGreaterThan(0);
     expect(request("organizeImports", { offset: 0 }).edits?.[0]?.edits.length).toBeGreaterThan(0);
-    expect(request("semanticTokens", { offset: 0 }).tokens?.length).toBeGreaterThan(0);
     expect(
       request("inlayHints", { offset: 0 }).hints?.some((hint) => hint.kind === "parameter"),
     ).toBe(true);

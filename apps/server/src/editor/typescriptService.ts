@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createRequire } from "node:module";
 import ts from "typescript";
+import { isPathInside } from "@synara/shared/pathContainment";
 import type {
   EditorIntelligenceInput,
   EditorIntelligenceResult,
@@ -13,13 +14,6 @@ const MAX_PROJECT_FILES = 10_000;
 const MAX_RESULT_ITEMS = 2_000;
 const display = (parts: readonly ts.SymbolDisplayPart[] | undefined) =>
   ts.displayPartsToString(parts ? [...parts] : undefined);
-const contained = (root: string, file: string) => {
-  const relative = path.relative(root, file);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-};
 
 /** Runs only in the compiler worker. No tsserver plugins, emit, shell, or disk writes. */
 export function createTypeScriptService(workspaceRoot: string) {
@@ -33,6 +27,8 @@ export function createTypeScriptService(workspaceRoot: string) {
   let projectVersion = 0;
   let files: string[] = [];
   let options: ts.CompilerOptions = {};
+  let configuredFiles: string[] = [];
+  let configuredOptions: ts.CompilerOptions = {};
   let configStamp = "";
   let inferredJavaScript = false;
   const inferredOptions: ts.CompilerOptions = {
@@ -49,10 +45,10 @@ export function createTypeScriptService(workspaceRoot: string) {
 
   const allowed = (file: string) => {
     const absolute = path.resolve(file);
-    if (!contained(root, absolute) && !contained(libraryRoot, absolute)) return false;
+    if (!isPathInside(root, absolute) && !isPathInside(libraryRoot, absolute)) return false;
     try {
       const real = ts.sys.realpath?.(absolute) ?? absolute;
-      return contained(root, real) || contained(libraryRoot, real);
+      return isPathInside(root, real) || isPathInside(libraryRoot, real);
     } catch {
       return false;
     }
@@ -61,7 +57,7 @@ export function createTypeScriptService(workspaceRoot: string) {
     if (path.isAbsolute(relative) || relative.includes("\0"))
       throw new Error("Expected a workspace-relative path.");
     const file = path.resolve(root, relative);
-    if (!contained(root, file) || !allowed(file))
+    if (!isPathInside(root, file) || !allowed(file))
       throw new Error("Language request escaped its workspace.");
     return file;
   };
@@ -90,7 +86,7 @@ export function createTypeScriptService(workspaceRoot: string) {
     // Honor the nearest package configuration, not just a monorepo's root config.
     let directory = path.dirname(requestedFile);
     let configFile: string | undefined;
-    while (contained(root, directory)) {
+    while (isPathInside(root, directory)) {
       configFile = [
         path.join(directory, "tsconfig.json"),
         path.join(directory, "jsconfig.json"),
@@ -98,11 +94,21 @@ export function createTypeScriptService(workspaceRoot: string) {
       if (configFile || directory === root) break;
       directory = path.dirname(directory);
     }
-    const baseDirectory = configFile ? path.dirname(configFile) : root;
-    const javascript = /\.[cm]?jsx?$/i.test(requestedFile);
-    const stamp = `${configFile ?? "inferred"}:${configFile ? ts.sys.getModifiedTime?.(configFile)?.getTime() : 0}:${javascript}`;
+    // The stamp names the configuration only, so alternating .ts/.js requests in one
+    // project keep its program and semantic cache warm.
+    const stamp = `${configFile ?? "inferred"}:${configFile ? ts.sys.getModifiedTime?.(configFile)?.getTime() : 0}`;
     // Refresh inherited configs/file lists periodically without scanning a project on every keystroke.
-    if (stamp === configStamp && Date.now() - lastConfigRefresh < 2_000) return;
+    if (stamp !== configStamp || Date.now() - lastConfigRefresh >= 2_000)
+      parseConfig(configFile, stamp);
+    // TS-only configurations reject JavaScript even when it is an open root.
+    // Use an inferred project for those requests without enabling JS or changing
+    // strictness in the configured TS project. Switching back restores its options.
+    inferredJavaScript = /\.[cm]?jsx?$/i.test(requestedFile) && !configuredOptions.allowJs;
+    files = inferredJavaScript ? [] : configuredFiles;
+    options = inferredJavaScript ? inferredOptions : configuredOptions;
+  };
+  const parseConfig = (configFile: string | undefined, stamp: string) => {
+    const baseDirectory = configFile ? path.dirname(configFile) : root;
     const config = configFile ? ts.readConfigFile(configFile, readFile) : undefined;
     if (config?.error)
       throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
@@ -128,14 +134,8 @@ export function createTypeScriptService(workspaceRoot: string) {
       throw new Error(
         "This project exceeds the language service's 10,000-file limit. Open a narrower workspace.",
       );
-    // TS-only configurations reject JavaScript even when it is an open root.
-    // Use an inferred project for those requests without enabling JS or changing
-    // strictness in the configured TS project. Switching back restores its options.
-    inferredJavaScript = javascript && !parsed.options.allowJs;
-    files = inferredJavaScript ? [] : parsed.fileNames.filter(allowed);
-    options = inferredJavaScript
-      ? inferredOptions
-      : { ...parsed.options, noEmit: true, plugins: [] };
+    configuredFiles = parsed.fileNames.filter(allowed);
+    configuredOptions = { ...parsed.options, noEmit: true, plugins: [] };
     projectDirectory = baseDirectory;
     if (configStamp !== stamp) service.cleanupSemanticCache();
     configStamp = stamp;
@@ -187,7 +187,7 @@ export function createTypeScriptService(workspaceRoot: string) {
     includeInlayEnumMemberValueHints: true,
   };
   const location = (file: string, span: ts.TextSpan): EditorLocation | undefined => {
-    if (!contained(root, file) || !allowed(file)) return undefined;
+    if (!isPathInside(root, file) || !allowed(file)) return undefined;
     const source = service.getProgram()?.getSourceFile(file);
     if (!source) return undefined;
     const start = source.getLineAndCharacterOfPosition(span.start);
@@ -210,7 +210,7 @@ export function createTypeScriptService(workspaceRoot: string) {
     return changes.map((change) => {
       if (
         change.isNewFile ||
-        !contained(root, change.fileName) ||
+        !isPathInside(root, change.fileName) ||
         !allowed(change.fileName) ||
         path
           .relative(root, change.fileName)
@@ -371,7 +371,6 @@ export function createTypeScriptService(workspaceRoot: string) {
             : base;
         }
         case "definition":
-        case "declaration":
         case "typeDefinition":
         case "references": {
           const entries =
@@ -533,15 +532,6 @@ export function createTypeScriptService(workspaceRoot: string) {
             edits: fileEdits(
               service.organizeImports({ type: "file", fileName: file }, formatting, preferences),
             ),
-          };
-        case "semanticTokens":
-          return {
-            ...base,
-            tokens: service.getEncodedSemanticClassifications(
-              file,
-              { start: 0, length: document.contents.length },
-              ts.SemanticClassificationFormat.TwentyTwenty,
-            ).spans,
           };
         case "inlayHints":
           return {

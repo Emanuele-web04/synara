@@ -38,7 +38,8 @@ jobs:
       - name: Test real compiler and DAP lifecycle
         env:
           SYNARA_TEST_JS_DEBUG: "1"
-        run: bun run --cwd apps/server test src/editor/typescriptService.test.ts src/editor/dapConnection.test.ts src/editor/debugService.test.ts src/editor/editorChildEnvironment.test.ts src/platform/protocolProcessTeardown.test.ts
+        run: bun run --cwd apps/server test src/editor src/platform/protocolProcessTeardown.test.ts
+  # ci.yml already runs every browser test; this job adds only the editor acceptance journey.
   browser:
     name: Native editor and real application acceptance
     runs-on: ubuntu-24.04
@@ -49,8 +50,6 @@ jobs:
       - run: bun run --cwd apps/web test:browser:install
       - name: Shared sessions and file safety
         run: bun run --cwd apps/web test src/lib/workspaceEditorSession.test.ts src/lib/workspaceFileEditor.test.ts
-      - name: Real editor component regression tests
-        run: bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.browser.tsx src/components/codeEditor/editorModels.browser.tsx src/components/chat/RightDockGlassSurface.browser.tsx src/components/chat/DockExplorerPane.autosave.browser.tsx src/components/WorkspaceFilePreview.editing.browser.tsx
       - name: Real application journey and screenshots
         if: ${{ !cancelled() }}
         run: bun run --cwd apps/web test:editor:e2e
@@ -58,24 +57,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: native-editor-browser-evidence
-          path: |
-            apps/web/test-results
-            apps/web/src/components/**/__screenshots__
+          path: apps/web/test-results
           retention-days: 7
           if-no-files-found: warn
-      - name: Preserve exact source for offline reproduction
-        if: ${{ !cancelled() }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/editor-source"
-          git archive --format=tar HEAD | zstd -T0 -3 -o "$RUNNER_TEMP/editor-source/source.tar.zst"
-          git rev-parse HEAD > "$RUNNER_TEMP/editor-source/commit.txt"
-          cd "$RUNNER_TEMP/editor-source"
-          sha256sum source.tar.zst > SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
-          name: native-editor-source
-          path: ${{ runner.temp }}/editor-source
-          retention-days: 1
-          compression-level: 0
-          if-no-files-found: error

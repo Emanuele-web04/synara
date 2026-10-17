@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import { resolveExecutable } from "@synara/shared/executable";
+import { isPathInside } from "@synara/shared/pathContainment";
 import type {
   EditorDebugActionInput,
   EditorDebugActionResult,
@@ -14,15 +15,18 @@ import type {
 } from "@synara/contracts";
 import { createProtocolProcessTeardown } from "../platform/protocolProcessTeardown";
 import {
+  stripSynaraControlPlaneEnvironment,
+  withoutProviderCredentialEnvironment,
+} from "../providerChildEnvironment";
+import {
   DapConnection,
   dapArray,
   dapNumber,
   dapObject,
   dapString,
   type DapObject,
-} from "./dapConnection.ts";
-import { ensureDebugAdapter } from "./debugAdapterInstaller.ts";
-import { editorChildEnvironment } from "./editorChildEnvironment";
+} from "./dapConnection";
+import { ensureDebugAdapter } from "./debugAdapterInstaller";
 
 type Connection = { id: string; name: string; dap: DapConnection; ready: boolean; ended: boolean };
 type DebugSession = {
@@ -41,13 +45,6 @@ type DebugSession = {
   cleanupComplete?: boolean;
   teardown?: () => Promise<void>;
   stopping?: Promise<void>;
-};
-const inside = (root: string, file: string) => {
-  const relative = path.relative(root, file);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
 };
 const requiredId = (value: number | undefined, name: string) => {
   if (value === undefined) throw new Error(`A ${name} is required for this debug command.`);
@@ -118,13 +115,23 @@ export class EditorDebugService {
     )
       throw new Error("Expected a workspace-relative debug source.");
     const file = await realpath(path.resolve(root, relativePath));
-    if (!inside(root, file))
+    if (!isPathInside(root, file))
       throw new Error("Debug source escaped its workspace through a symlink.");
     return file;
   }
+  /** Like `workspaceFile`, but a since-deleted breakpoint source is `undefined`, not an error. */
+  private async breakpointSource(root: string, relativePath: string) {
+    try {
+      return await this.workspaceFile(root, relativePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+      throw error;
+    }
+  }
   private sourcePath(session: DebugSession, value: unknown) {
     const file = dapString(value);
-    return file && path.isAbsolute(file) && inside(session.cwd, file)
+    return file && path.isAbsolute(file) && isPathInside(session.cwd, file)
       ? path.relative(session.cwd, file).split(path.sep).join("/")
       : undefined;
   }
@@ -167,7 +174,8 @@ export class EditorDebugService {
       );
     const breakpoints = new Map<string, readonly EditorDebugBreakpoint[]>();
     for (const bp of input.breakpoints) {
-      await this.workspaceFile(cwd, bp.relativePath);
+      // A deleted file's breakpoints are skipped; they must not block the launch.
+      if (!(await this.breakpointSource(cwd, bp.relativePath))) continue;
       breakpoints.set(bp.relativePath, [...(breakpoints.get(bp.relativePath) ?? []), bp]);
     }
     const cancellation = signal
@@ -189,7 +197,13 @@ export class EditorDebugService {
       );
     });
     if (signal?.aborted || this.disposed) throw new Error("Debug launch was cancelled.");
-    const env = editorChildEnvironment(process.env, Boolean(process.versions.electron));
+    // The adapter and debuggee get the user's environment, never Synara's authority or
+    // provider credentials. Packaged desktop reuses Electron's executable, so Node mode is
+    // set explicitly rather than inherited.
+    const env = withoutProviderCredentialEnvironment(
+      stripSynaraControlPlaneEnvironment(process.env),
+    );
+    if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
     const node = process.versions.bun ? resolveExecutable("node", { cwd, env }) : process.execPath;
     if (!node)
       throw new Error(
@@ -311,6 +325,12 @@ export class EditorDebugService {
     request: "launch" | "attach",
     configuration: DapObject,
   ) {
+    // Finished child targets do not count toward the cap; short-lived workers come and go.
+    for (const [key, item] of session.connections)
+      if (item.ended && key !== "root") {
+        item.dap.dispose();
+        session.connections.delete(key);
+      }
     if (session.terminated || session.connections.size >= 8)
       throw new Error("The debug session is closed or has too many targets.");
     const connection: Connection = {
@@ -358,6 +378,7 @@ export class EditorDebugService {
     dap.onClose = (error) => {
       connection.ready = false;
       if (!session.terminated && !connection.ended) this.emit(session, id, "error", error.message);
+      connection.ended = true;
     };
     dap.onRequest = async (command, args) => {
       if (command !== "startDebugging")
@@ -413,8 +434,16 @@ export class EditorDebugService {
     connection: Connection,
     relativePath: string,
     breakpoints: readonly EditorDebugBreakpoint[],
-  ) {
-    const absolute = await this.workspaceFile(session.cwd, relativePath);
+  ): Promise<DapObject> {
+    const absolute = await this.breakpointSource(session.cwd, relativePath);
+    if (!absolute)
+      return {
+        breakpoints: breakpoints.map(({ line }) => ({
+          verified: false,
+          line,
+          message: "The source file no longer exists.",
+        })),
+      };
     return connection.dap.request("setBreakpoints", {
       source: { path: absolute },
       breakpoints: breakpoints.map(({ line, condition, hitCondition, logMessage }) => ({
@@ -532,7 +561,8 @@ export class EditorDebugService {
           input.breakpoints.some((item) => item.relativePath !== input.relativePath)
         )
           throw new Error("Breakpoints must belong to the requested source file.");
-        await this.workspaceFile(session.cwd, input.relativePath);
+        // Rejects escapes before storing; a deleted file is reported unverified below.
+        await this.breakpointSource(session.cwd, input.relativePath);
         session.breakpoints.set(input.relativePath, input.breakpoints);
         const results = await Promise.all(
           [...session.connections.values()]

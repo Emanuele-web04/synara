@@ -1,5 +1,5 @@
 import { EditorDebugService } from "./editor/debugService";
-import { EditorLanguageService } from "./editor/languageService.ts";
+import { EditorLanguageService } from "./editor/languageService";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -1785,10 +1785,11 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.editorDebugStart]: (input, { clientId }) =>
           requireWsOwnerSession.pipe(
-            Effect.andThen(() =>
+            Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
+            Effect.andThen((cwd) =>
               rpcEffect(
                 Effect.tryPromise({
-                  try: (signal) => editorDebug.start(String(clientId), input, signal),
+                  try: (signal) => editorDebug.start(String(clientId), { ...input, cwd }, signal),
                   catch: (cause) =>
                     cause instanceof Error ? cause : new Error("Debug launch failed."),
                 }),
@@ -1823,13 +1824,19 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [WS_METHODS.editorIntelligence]: (input, { clientId }) =>
-          rpcEffect(
-            Effect.tryPromise({
-              try: (signal) => editorLanguages.request(String(clientId), input, signal),
-              catch: (cause) =>
-                cause instanceof Error ? cause : new Error("Language service failed."),
-            }),
-            "Language service failed",
+          requireWsOwnerSession.pipe(
+            Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
+            Effect.andThen((cwd) =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: (signal) =>
+                    editorLanguages.request(String(clientId), { ...input, cwd }, signal),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Language service failed."),
+                }),
+                "Language service failed",
+              ),
+            ),
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           workspaceFileSystem.writeFile(input).pipe(
