@@ -47,6 +47,7 @@ import {
 } from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { parseLinuxPackageTargets } from "./lib/linux-package-targets.ts";
+import { finalizeLinuxAppImageUpdateFeed } from "./lib/linux-appimage-update-feed.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1530,6 +1531,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
       );
     }
+  }
+
+  if (
+    options.platform === "linux" &&
+    parseLinuxPackageTargets(options.target).includes("AppImage") &&
+    !artifactIdentity.identity.usesScriptedUpdates
+  ) {
+    yield* Effect.log("[desktop-artifact] Finalizing AppImage-only Linux updater feed...");
+    yield* Effect.tryPromise({
+      try: () =>
+        finalizeLinuxAppImageUpdateFeed({
+          stageDistDir,
+          arch: options.arch as "x64" | "arm64",
+          version: appVersion,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Linux AppImage updater feed finalization failed.",
+          cause,
+        }),
+    });
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);
