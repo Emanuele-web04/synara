@@ -8,6 +8,7 @@
  */
 import {
   IsoDateTime,
+  MessageId,
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
@@ -67,6 +68,7 @@ export const ProjectionThread = Schema.Struct({
   subagentNickname: Schema.optional(Schema.NullOr(Schema.String)),
   subagentRole: Schema.optional(Schema.NullOr(Schema.String)),
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   // Standalone sidechats only (see ThreadSidechatContext); null for every other thread.
   sidechatContext: Schema.optional(Schema.NullOr(ThreadSidechatContext)),

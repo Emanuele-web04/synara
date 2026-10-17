@@ -1,0 +1,40 @@
+---
+title: Conversation history and reload
+description: Restore conversation state from the server and understand rollback recovery and imported history.
+---
+
+Since **1.0.3 Stable and the following Beta**, native chats restore their full projected conversation from the server. The recent-history pager, **Go to first message** loader and private IndexedDB detail cache introduced in 1.0.2 have been removed. This change does not truncate stored conversations or exports.
+
+## Reload and reconnect
+
+Recovery snapshots include the last projected rollback or revert. Messages removed while a client was disconnected do not reappear when it reconnects. Ordinary refreshes still preserve newer streamed text. A displayed transcript alone is not proof that a provider turn is live; inspect its current state before retrying a send.
+
+Stable and Beta retain separate identities, browser profiles and data homes. See [Synara Beta](/docs/features/synara-beta) for their channel boundaries.
+
+## Imported provider history
+
+[Imported conversations](/docs/features/project-import) keep their separate **Load earlier messages** control. It reads older provider history without sending a turn or changing native context. Temporary capacity errors retry with backoff; a loading error offers retry while keeping messages already shown.
+
+## Work labels
+
+Active turns show **Working for** with a live duration. Finished work folds into **Worked for** above the final answer; expand it to read the tools and narration. Disabling finished-turn folding keeps that work visible. Labels follow your chat font size, without model badges or completion icons.
+
+See [organize and navigate](/docs/features/organize), [queue pause controls](/docs/features/composer#pause-and-resume-queued-messages), and [task recovery](/docs/troubleshooting/tasks-and-runtime).
+
+Source evidence: Synara v1.0.3 `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts`, `apps/web/src/storeNormalization.ts`, `apps/web/src/projectImport/ImportedHistoryButton.tsx` and `apps/web/src/components/chat/TurnHeaderLine.tsx`.
+
+## Long conversations in 1.0.4
+
+Chat opening and switching do less layout work. Row heights use content-aware estimates and reuse measured heights only where the message and presentation are still compatible. The server still supplies the full projected conversation; this does not reintroduce the removed history pager or private detail cache.
+
+The transcript follows growing content while you remain at the bottom. Scrolling up releases follow, including while tools run. Background task and Monitor completions arriving during active work stay within that response instead of splitting it into a second turn.
+
+For work interrupted by an unexpected app/server shutdown, see [automatic chat recovery](/docs/troubleshooting/tasks-and-runtime#unexpected-shutdown-recovery).
+
+Source evidence: Synara v1.0.4 (`a62d7c733d19f5538ffc0d126d57437b3b578ff1`) `apps/web/src/components/chat/timelineRowHeight.logic.ts`, `useTimelineRowHeightHints.ts`, `MessagesTimeline.tsx`, `apps/web/src/workLog.ts` and `apps/web/src/routes/__root.tsx`.
+
+## Task-heavy conversations in 1.0.5
+
+Opening a conversation with many task updates resolves task state without repeated quadratic scans. Stale measurements from rows that have left the transcript are ignored. These fixes address specific query and layout cases, not every server or provider stall.
+
+Source evidence: feature head `4b2441d`; `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` and `apps/web/src/components/chat/useTimelineRowHeightHints.ts`.

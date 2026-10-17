@@ -42,6 +42,7 @@ import {
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
+import { SubagentsDockPane } from "./SubagentsDockPane";
 import { DockPaneHeader } from "./DockPaneHeader";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
@@ -95,6 +96,7 @@ function SplitPaneEmbeddedPanel(props: {
   threadId: ThreadId | null;
   projectId: ProjectId | null;
   onClosePanel: () => void;
+  onOpenThread: (threadId: ThreadId) => void;
   panelState: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
   isFocused: boolean;
   onUpdatePanelState: (
@@ -105,7 +107,12 @@ function SplitPaneEmbeddedPanel(props: {
   const terminalPane = dockState.open
     ? dockState.panes.find((pane) => pane.id === dockState.activePaneId && pane.kind === "terminal")
     : undefined;
-  const panel = terminalPane ? null : props.panel;
+  const subagentsPane = dockState.open
+    ? dockState.panes.find(
+        (pane) => pane.id === dockState.activePaneId && pane.kind === "subagents",
+      )
+    : undefined;
+  const panel = terminalPane || subagentsPane ? null : props.panel;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panelWidthStorageKey =
     panel === "browser" ? "browser" : panel === "diff" ? "diff" : "panel";
@@ -181,7 +188,7 @@ function SplitPaneEmbeddedPanel(props: {
     });
   };
 
-  if ((!props.panelOpen && !terminalPane) || !props.threadId) {
+  if ((!props.panelOpen && !terminalPane && !subagentsPane) || !props.threadId) {
     return null;
   }
 
@@ -202,7 +209,16 @@ function SplitPaneEmbeddedPanel(props: {
         className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-[var(--app-surface-divider)]"
         onPointerDown={startResize}
       />
-      {terminalPane ? (
+      {subagentsPane ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <DockPaneHeader
+            title="Subagents"
+            closeLabel="Hide subagents"
+            onClose={props.onClosePanel}
+          />
+          <SubagentsDockPane hostThreadId={props.threadId} onOpenThread={props.onOpenThread} />
+        </div>
+      ) : terminalPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DockPaneHeader
             title="Terminal"
@@ -450,6 +466,7 @@ function SplitPaneSurface(props: {
           props.splitView.ownerProjectId
         }
         onClosePanel={props.onClosePanel}
+        onOpenThread={props.onSelectThread}
         panelState={props.panelState}
         isFocused={props.isFocused}
         onUpdatePanelState={props.onUpdatePanelState}
@@ -608,7 +625,10 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const dock = selectRightDockState(leaf.threadId)(useRightDockStore.getState());
     const terminalOpen =
       dock.open &&
-      dock.panes.some((pane) => pane.id === dock.activePaneId && pane.kind === "terminal");
+      dock.panes.some(
+        (pane) =>
+          pane.id === dock.activePaneId && (pane.kind === "terminal" || pane.kind === "subagents"),
+      );
     updatePanePanelState(
       paneId,
       resolveToggledChatPanelPatch(
@@ -660,7 +680,11 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       const dock = selectRightDockState(leaf.threadId)(store);
       if (
         dock.open &&
-        dock.panes.some((pane) => pane.id === dock.activePaneId && pane.kind === "terminal")
+        dock.panes.some(
+          (pane) =>
+            pane.id === dock.activePaneId &&
+            (pane.kind === "terminal" || pane.kind === "subagents"),
+        )
       ) {
         store.setDockOpen(leaf.threadId, false);
         return;

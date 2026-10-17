@@ -47,6 +47,7 @@ import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
+import { createConnectorIconElement } from "../ConnectorIcon";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 import { ProviderIcon } from "../ProviderIcon";
 
@@ -129,24 +130,31 @@ function renderMentionChipDom(
   resetInlineChipContainer(container);
 
   const icon =
-    kind === "thread"
-      ? (() => {
-          const host = document.createElement("span");
-          host.className = COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME;
-          host.innerHTML = renderToStaticMarkup(
-            <ProviderIcon
-              provider={provider}
-              className="size-full"
-              fallback={<MessageCircleIcon className="size-full" />}
-            />,
+    kind === "connector"
+      ? createConnectorIconElement(pathValue, COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME)
+      : kind === "thread"
+        ? (() => {
+            const host = document.createElement("span");
+            host.className = COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME;
+            host.innerHTML = renderToStaticMarkup(
+              <ProviderIcon
+                provider={provider}
+                className="size-full"
+                fallback={<MessageCircleIcon className="size-full" />}
+              />,
+            );
+            return host;
+          })()
+        : createMentionChipIconElement(
+            pathValue,
+            kind,
+            COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
           );
-          return host;
-        })()
-      : createMentionChipIconElement(pathValue, kind, COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME);
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  label.textContent = kind === "thread" ? pathValue : basenameOfPath(pathValue);
+  label.textContent =
+    kind === "thread" || kind === "connector" ? pathValue : basenameOfPath(pathValue);
 
   container.append(icon, label);
 }

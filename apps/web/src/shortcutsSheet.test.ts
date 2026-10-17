@@ -27,6 +27,7 @@ describe("buildShortcutSheetSections", () => {
       ["thread.archive", "Archive thread", "⌥⇧⌘A"],
       ["thread.snooze", "Snooze thread", "⌥⇧⌘S"],
       ["thread.markUnread", "Mark thread unread", "⌥⇧⌘U"],
+      ["chat.attention.next", "Next chat needing attention", "⌥⌘A"],
     ] as const) {
       expect(entries.find((entry) => entry.command === command)).toMatchObject({
         label,

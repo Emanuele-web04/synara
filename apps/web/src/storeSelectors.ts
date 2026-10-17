@@ -542,6 +542,8 @@ export interface SidebarThreadVisibilityOptions {
   readonly hideAutomationRunThreads?: boolean;
   /** Explicit access for Snoozed sections and user-initiated search. */
   readonly includeSnoozed?: boolean;
+  /** Status aggregation includes hidden children, navigation does not. */
+  readonly includeSubagents?: boolean;
 }
 
 /** A snoozed task also hides its subagent subtree, including pinned children. */
@@ -569,6 +571,7 @@ export function isSidebarThreadVisible(
 ): boolean {
   // Sidechats live in their host's dock (a thread's, or the inbox's for standalone ones).
   if (isSidechatThread(thread)) return false;
+  if (thread.parentThreadId && !options?.includeSubagents) return false;
   if (thread.snoozedUntil != null && !options?.includeSnoozed) return false;
   if (!options?.hideAutomationRunThreads) return true;
   if (thread.isPinned) return true;
@@ -626,6 +629,8 @@ export function createSidechatSummariesForGitHubItemSelector(item: {
   );
 }
 
+// Sidebar lists show top-level threads only. Subagent threads live in the
+// Environment panel, the Subagents dock and their parent's transcript.
 export function createSidebarDisplayThreadsSelector(
   options?: SidebarThreadVisibilityOptions,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
@@ -647,37 +652,6 @@ export function createSidebarDisplayThreadsSelector(
         isSidebarThreadVisible(thread, options),
     );
     return previousDisplaySummaries;
-  };
-}
-
-// Sidebar tree source: unlike the flat display selector above, this keeps
-// child (subagent) threads so buildProjectThreadTree can nest them under
-// their parent row behind the "N subagents" expand toggle. Flat consumers
-// (pinned rows, search palette) should keep using the display selector.
-export function createSidebarTreeThreadsSelector(
-  options?: SidebarThreadVisibilityOptions,
-): (state: AppState) => readonly SidebarThreadSummary[] {
-  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
-  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
-  let previousTreeSummaries: readonly SidebarThreadSummary[] = [];
-
-  return (state) => {
-    const sidebarSummaries = selectSidebarSummaries(state);
-    if (sidebarSummaries === previousSummaries) {
-      return previousTreeSummaries;
-    }
-
-    previousSummaries = sidebarSummaries;
-    const snoozedThreadIds = options?.includeSnoozed
-      ? null
-      : collectSnoozedThreadIds(sidebarSummaries);
-    previousTreeSummaries = sidebarSummaries.filter(
-      (thread) =>
-        thread.archivedAt == null &&
-        !snoozedThreadIds?.has(thread.id) &&
-        isSidebarThreadVisible(thread, options),
-    );
-    return previousTreeSummaries;
   };
 }
 

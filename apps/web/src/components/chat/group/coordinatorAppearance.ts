@@ -1,8 +1,8 @@
 // FILE: coordinatorAppearance.ts
 // Purpose: Fixed icon and color sets for the group coordinator identity, plus the
 //          resolver that maps stored config keys to a renderable icon + classes.
-//          Unknown or cleared keys fall back to today's bot glyph and inherited
-//          text color so old/partial configs always render.
+//          Unknown or cleared keys fall back to the Hubs glyph (the rail's Hugeicons
+//          `dashboard-circle`) and inherited text color so old/partial configs always render.
 // Layer: Web logic
 
 import {
@@ -16,6 +16,7 @@ import {
   GiftIcon,
   GlobeIcon,
   GoalIcon,
+  HubIcon,
   LightbulbIcon,
   PluginIcon,
   SkillCubeIcon,
@@ -41,6 +42,7 @@ export interface CoordinatorColorOption {
 }
 
 export const COORDINATOR_ICON_OPTIONS: ReadonlyArray<CoordinatorIconOption> = [
+  { key: "hub", label: "Hub", Icon: HubIcon },
   { key: "bot", label: "Bot", Icon: BotIcon },
   { key: "brain", label: "Brain", Icon: BrainIcon },
   { key: "lightbulb", label: "Lightbulb", Icon: LightbulbIcon },
@@ -97,7 +99,7 @@ export const COORDINATOR_COLOR_OPTIONS: ReadonlyArray<CoordinatorColorOption> = 
   },
 ];
 
-export const DEFAULT_COORDINATOR_ICON_KEY = "bot";
+export const DEFAULT_COORDINATOR_ICON_KEY = "hub";
 export const DEFAULT_COORDINATOR_COLOR_KEY = "default";
 
 export interface CoordinatorAppearance {
@@ -118,7 +120,7 @@ export function resolveCoordinatorAppearance(input: {
     (option) => option.key === input.coordinatorColor,
   );
   return {
-    Icon: iconOption?.Icon ?? BotIcon,
+    Icon: iconOption?.Icon ?? HubIcon,
     iconClassName: colorOption?.iconClassName ?? "",
     iconKey: iconOption?.key ?? DEFAULT_COORDINATOR_ICON_KEY,
     colorKey: colorOption?.key ?? DEFAULT_COORDINATOR_COLOR_KEY,

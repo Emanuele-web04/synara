@@ -147,6 +147,26 @@ it("bounds a hung revalidation without stopping another auth-tracked session", a
   expect(stop).toHaveBeenCalledOnce();
 }, 1_000);
 
+it("keeps a healthy session when an event-loop stall outlasts the revalidation timeout", async () => {
+  const { manager, threadId, stop } = fixture({ authRevalidationTimeoutMs: 100 });
+  let entered!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const realpath = fs.promises.realpath.bind(fs.promises);
+  vi.spyOn(fs.promises, "realpath").mockImplementationOnce(async (file) => {
+    entered();
+    return realpath(file);
+  });
+  const inspection = manager.inspectSessionAsync(threadId);
+  await reading;
+  // Block the loop well past the timeout while the read is in flight. Expired
+  // timers run before the I/O that finished meanwhile is delivered.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+  await expect(inspection).resolves.toBeDefined();
+  expect(stop).not.toHaveBeenCalled();
+}, 2_000);
+
 it("binds queued events to their original context even without a generation tag", async () => {
   const { manager, context, sessions, threadId, stop } = fixture();
   const origin = manager.getSessionEventOrigin(threadId);

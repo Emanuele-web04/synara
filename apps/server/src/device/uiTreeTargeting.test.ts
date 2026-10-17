@@ -139,7 +139,7 @@ describe("reading a tap request", () => {
   });
 
   it("refuses shapes that are neither, and says which to use", () => {
-    expect(() => readTapRequest({})).toThrow(/either label .* or both x and y/);
+    expect(() => readTapRequest({})).toThrow(/an element \(identifier or label.* or both x and y/);
     expect(() => readTapRequest({ x: 10 })).toThrow(/both x and y/);
     // Both forms at once is ambiguous: silently preferring one would make the
     // other's presence a lie about what got tapped.
@@ -149,6 +149,33 @@ describe("reading a tap request", () => {
 
 describe("planning a scroll step", () => {
   const screen = node({ role: "Application", frame: { x: 0, y: 0, width: 402, height: 874 } });
+
+  it.each([
+    { unframed: true, frame: { x: 0, y: 0, width: 0, height: 0 } },
+    { frame: { x: 0, y: 0, width: 402, height: 0 } },
+  ])("ignores a keyboard with no usable frame when planning a swipe", (keyboard) => {
+    const obscured = node({
+      role: "Application",
+      frame: screen.frame,
+      children: [node({ role: "Keyboard", ...keyboard })],
+    });
+    const below = node({ role: "Button", frame: { x: 0, y: 1_500, width: 402, height: 44 } });
+    const step = planScrollStep(below, obscured)!;
+    expect(step.fromY).toBeGreaterThanOrEqual(0);
+    expect(step.toY).toBeGreaterThanOrEqual(0);
+    expect(step.fromY).toBeLessThanOrEqual(874);
+    expect(step.toY).toBeLessThanOrEqual(874);
+  });
+
+  it("refuses a swipe when a high keyboard covers the safe band", () => {
+    const obscured = node({
+      role: "Application",
+      frame: screen.frame,
+      children: [node({ role: "Keyboard", frame: { x: 0, y: 50, width: 402, height: 824 } })],
+    });
+    const below = node({ role: "Button", frame: { x: 0, y: 1_500, width: 402, height: 44 } });
+    expect(() => planScrollStep(below, obscured)).toThrow(/dismiss it before scrolling/);
+  });
 
   it("treats a row under the status bar as needing a scroll, not as visible", () => {
     // On screen by coordinates, untappable in practice: the band exists so a

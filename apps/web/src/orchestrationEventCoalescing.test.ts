@@ -77,6 +77,37 @@ describe("coalesceOrchestrationUiEvents", () => {
     expect(result[2]!.sequence).toBe(3);
   });
 
+  it("keeps text segment boundaries when merging deltas", () => {
+    const withSegment = (event: OrchestrationEvent, segmentSequence: number) =>
+      event.type === "thread.message-sent"
+        ? {
+            ...event,
+            payload: {
+              ...event.payload,
+              segmentStartedAt: event.payload.createdAt,
+              segmentSequence,
+            },
+          }
+        : event;
+    const result = coalesceOrchestrationUiEvents([
+      withSegment(delta(THREAD_A, MESSAGE_A, "a1", 1), 100),
+      delta(THREAD_A, MESSAGE_A, "a2", 2),
+      withSegment(delta(THREAD_A, MESSAGE_A, "b1", 3), 300),
+      delta(THREAD_A, MESSAGE_A, "b2", 4),
+    ]);
+    expect(result.map(messageText)).toEqual(["a1a2", "b1b2"]);
+    expect(
+      result.map((event) =>
+        event.type === "thread.message-sent"
+          ? [event.payload.segmentSequence, event.payload.segmentStartedAt]
+          : null,
+      ),
+    ).toEqual([
+      [100, "2026-01-01T00:00:01.000Z"],
+      [300, "2026-01-01T00:00:03.000Z"],
+    ]);
+  });
+
   it("keeps the first delta's createdAt and the latest event's sequence", () => {
     const result = coalesceOrchestrationUiEvents([
       delta(THREAD_A, MESSAGE_A, "x", 1, { createdAt: "2026-01-01T00:00:01.000Z" }),

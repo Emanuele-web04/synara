@@ -39,7 +39,9 @@ const exportedPaths = [
   "scripts/lib/build-timing.ts",
   "docs/computer-use-cua/CUA-LICENSE.txt",
 ];
-const currentRelease = JSON.parse(readFileSync(join(root, releasePath), "utf8"));
+const candidateRelease = JSON.parse(
+  execFileSync("git", ["show", `${candidate}:${releasePath}`], { encoding: "utf8" }),
+);
 const results: Array<{
   name: string;
   commit: string;
@@ -54,7 +56,13 @@ async function build(script: string, env: NodeJS.ProcessEnv, logPath: string): P
   writeFileSync(logPath, "");
   const child = spawn(
     process.execPath,
-    [script, "--destination", join(env.CARGO_TARGET_DIR!, "staged")],
+    [
+      script,
+      "--arch",
+      env.SYNARA_CUA_TARGET_ARCH || process.arch,
+      "--destination",
+      join(env.CARGO_TARGET_DIR!, "staged"),
+    ],
     {
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -97,7 +105,7 @@ const snapshots = (
   execFileSync("tar", ["-xf", archive, "-C", checkout]);
   const release = JSON.parse(readFileSync(join(checkout, releasePath), "utf8"));
   for (const key of ["source", "version", "nativeRevision", "rustVersion"])
-    assert.equal(release[key], currentRelease[key], `A/B builds must share ${key}.`);
+    assert.equal(release[key], candidateRelease[key], `A/B builds must share ${key}.`);
   assert(
     readFileSync(join(checkout, "docs/computer-use-cua/CUA-LICENSE.txt")).length > 0,
     "Cua license missing from benchmark snapshot.",

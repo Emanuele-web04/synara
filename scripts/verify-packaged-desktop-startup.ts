@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findMacBundleArchitectureMismatches } from "./lib/mac-bundle-architecture.ts";
+
 export type PackagedDesktopPlatform = "linux" | "mac" | "win";
 
 export interface PackagedDesktopStartupOptions {
@@ -137,7 +139,11 @@ interface PackagedRuntime {
   readonly resourcesDirectory: string;
 }
 
-function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareMacLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  arch: string,
+): LaunchCommand {
   const archive = requireSingleAsset(assetsDirectory, ".zip");
   runCommand("ditto", ["-x", "-k", archive, extractionRoot]);
   const appBundles = readdirSync(extractionRoot).filter((entry) => entry.endsWith(".app"));
@@ -145,6 +151,10 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
     throw new Error(`Expected one packaged macOS app in ${basename(archive)}.`);
   }
   const appBundle = join(extractionRoot, appBundles[0]!);
+  const mismatches = findMacBundleArchitectureMismatches(appBundle, arch);
+  if (mismatches.length > 0) {
+    throw new Error(`Packaged macOS ${arch} app has foreign binaries:\n${mismatches.join("\n")}`);
+  }
   const executables = findFiles(join(appBundle, "Contents", "MacOS"), (candidate) =>
     statSync(candidate).isFile(),
   );
@@ -260,7 +270,7 @@ function prepareLaunch(
   extractionRoot: string,
 ): LaunchCommand {
   if (options.platform === "mac") {
-    return prepareMacLaunch(options.assetsDirectory, extractionRoot);
+    return prepareMacLaunch(options.assetsDirectory, extractionRoot, options.arch);
   }
   if (options.platform === "linux") {
     return prepareLinuxLaunch(options.assetsDirectory, extractionRoot, options.executableName);

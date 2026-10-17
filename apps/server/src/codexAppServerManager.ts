@@ -94,7 +94,9 @@ import {
 import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
+import { classifyTerminalTurnApplicability } from "./provider/terminalTurnApplicability.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
+import { startEventLoopDeadline } from "./eventLoopDeadline.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
   teardownChildProcessTree,
@@ -102,6 +104,7 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
+import { MCP_CONNECTOR_SERVER_NAME_SUFFIX } from "@synara/shared/mcpConnectors";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
   CodexAppServerTransportError,
@@ -427,6 +430,20 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
+// Codex's MCP client failing OAuth for a server from the user's own
+// config.toml (e.g. an expired Stripe grant). That is the user's Codex setup,
+// not this chat, so it stays out of the transcript; Synara's own server and
+// connectors never use Codex OAuth.
+const CODEX_MCP_OAUTH_LOG_REGEX = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/;
+const loggedUserMcpOAuthServers = new Set<string>();
+
+function userConfiguredMcpOAuthServer(line: string): string | null {
+  const server = CODEX_MCP_OAUTH_LOG_REGEX.exec(line)?.[1];
+  if (!server) return null;
+  return server === SYNARA_MCP_SERVER_NAME || server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX)
+    ? null
+    : server;
+}
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -1069,6 +1086,17 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
     if (isBenignError) {
       return null;
     }
+
+    const userMcpServer = userConfiguredMcpOAuthServer(line);
+    if (userMcpServer) {
+      if (!loggedUserMcpOAuthServers.has(userMcpServer)) {
+        loggedUserMcpOAuthServers.add(userMcpServer);
+        log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
+          server: userMcpServer,
+        });
+      }
+      return null;
+    }
   }
 
   return { message: normalizeCodexUserVisibleErrorMessage(line) };
@@ -1100,6 +1128,10 @@ export interface CodexAppServerManagerEvents {
 }
 
 const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+// Child (sub-agent) conversations outlive the parent turn that spawned them, so
+// their routing is kept until the child closes; cap it for sessions whose
+// children never report a close.
+const CODEX_COLLAB_RECEIVER_MAX_ENTRIES = 200;
 const GATEWAY_TURN_CANCELLATION_TIMEOUT_MS = 2_000;
 
 function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
@@ -1202,10 +1234,10 @@ function codexProcessEnvInputForOptions(
     : { ...process.env };
   return {
     env: { ...inheritedEnvironment, ...explicitProviderEnvironment },
+    ...(explicitProviderEnvironment ? { explicitProviderEnvironment } : {}),
     ...(accountScoped
       ? {
           isolateProviderCredentials: true,
-          explicitProviderEnvironment: explicitProviderEnvironment ?? {},
         }
       : {}),
     ...(options?.homePath ? { homePath: options.homePath } : {}),
@@ -1257,6 +1289,40 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // they settle, even after the caller's deadline rejects its session origin.
   // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
   private readonly authReadSlots = Semaphore.makeUnsafe(2);
+
+  /** Codex deep-merges MCP tables: never mix a connector with the user's server. */
+  private async gatewayThreadConfig(
+    context: CodexSessionContext,
+    connection: AgentGatewaySessionLease["connection"],
+  ): Promise<ReturnType<typeof buildCodexMcpThreadConfig>> {
+    if (!connection.connectors?.length) return buildCodexMcpThreadConfig(connection);
+    let configured: Record<string, unknown>;
+    try {
+      const response = this.readObject(
+        await this.sendRequest(context, "config/read", {
+          includeLayers: false,
+          cwd: context.session.cwd,
+        }),
+      );
+      const config = this.readObject(response, "config");
+      if (!config) throw new Error("Missing Codex configuration.");
+      configured = this.readObject(config, "mcp_servers") ?? {};
+    } catch {
+      // Do not guess a free namespace or log raw config errors containing secrets.
+      log.warn(
+        "Codex connector configuration could not be checked; connectors omitted for this session",
+      );
+      return buildCodexMcpThreadConfig({ ...connection, connectors: [] });
+    }
+    const connectors = connection.connectors.filter((connector) => {
+      if (!Object.hasOwn(configured, connector.name)) return true;
+      log.warn("Codex connector name is already configured; preserving the user's MCP server", {
+        server: connector.name,
+      });
+      return false;
+    });
+    return buildCodexMcpThreadConfig({ ...connection, connectors });
+  }
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1497,7 +1563,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const sessionOverrides = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
@@ -1694,8 +1760,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
       );
     }
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
@@ -2161,8 +2225,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     this.clearTaskCompleteFallback(context);
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
     context.reviewTurnIds.delete(turnId);
     this.updateSession(context, {
       status: "ready",
@@ -2552,7 +2614,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
       const forkParams = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         threadId: sourceProviderThreadId,
         excludeTurns: true,
@@ -3115,7 +3177,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           model: context.session.model ?? null,
           ...(context.serviceTier !== undefined ? { serviceTier: context.serviceTier } : {}),
           ...mapCodexRuntimeMode(context.session.runtimeMode),
-          config: buildCodexMcpThreadConfig(replacement.connection),
+          config: await this.gatewayThreadConfig(context, replacement.connection),
         }),
       );
       if (
@@ -3160,6 +3222,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.stopping) {
       context.stopping = true;
       this.clearTaskCompleteFallback(context);
+      context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       context.gatewaySessionLease?.release();
 
       const stopError =
@@ -3315,7 +3379,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       try {
         let expired = false;
         const abort = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelDeadline: (() => void) | undefined;
         const read = async () => {
           for (let attempt = 0; ; attempt++) {
             if (expired || context.authInvalidation)
@@ -3343,17 +3407,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               this.authReadSlots.withPermit(Effect.uninterruptible(Effect.promise(read))),
               { signal: abort.signal },
             ),
+            // A timeout stops the session, so a server event-loop stall must not
+            // count against the read: only a hung read on a live loop expires.
             new Promise<never>((_, reject) => {
-              timer = setTimeout(() => {
+              cancelDeadline = startEventLoopDeadline(this.authRevalidationTimeoutMs, () => {
                 expired = true;
                 abort.abort();
                 reject(new Error("Codex auth revalidation timed out."));
-              }, this.authRevalidationTimeoutMs);
-              timer.unref();
+              });
             }),
           ]);
         } finally {
-          if (timer) clearTimeout(timer);
+          cancelDeadline?.();
         }
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
@@ -4343,6 +4408,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         notification.method === "thread/status/changed")
     )
       return;
+    if (isChildConversation && notification.method === "thread/closed" && providerThreadId) {
+      // The child conversation ended; nothing more will arrive from it.
+      context.collabReceiverTurns.delete(providerThreadId);
+      context.collabReceiverParents.delete(providerThreadId);
+    }
     if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
@@ -4374,9 +4444,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (notification.method === "turn/completed" ||
         notification.method === "turn/aborted" ||
         isTerminalError);
-    const terminalGatewayTurnId = isTerminalParentTurn
-      ? (rawRoute.turnId ?? context.session.activeTurnId)
-      : undefined;
+    const appliesToActiveTurn =
+      !isTerminalParentTurn ||
+      classifyTerminalTurnApplicability({
+        activeTurnId: context.session.activeTurnId,
+        eventTurnId: rawRoute.turnId,
+      }).applicable;
+    const terminalGatewayTurnId =
+      isTerminalParentTurn && appliesToActiveTurn
+        ? (rawRoute.turnId ?? context.session.activeTurnId)
+        : undefined;
     const gatewayTurnAuthorityRetired =
       terminalGatewayTurnId !== undefined && context.gatewaySessionLease !== undefined;
     if (gatewayTurnAuthorityRetired) {
@@ -4413,6 +4490,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       textDelta,
       payload: eventPayload,
     });
+
+    // Keep late outcomes in history without releasing a newer native turn.
+    // The legacy completion fallback can finish before stalled stdout catches up.
+    if (isTerminalParentTurn && !appliesToActiveTurn) {
+      // Clean the old review membership without touching the current owner.
+      // Otherwise a later exitedReviewMode can mistake that finished review
+      // for an active chain and settle an unrelated newer turn.
+      if (rawRoute.turnId) context.reviewTurnIds.delete(rawRoute.turnId);
+      return;
+    }
 
     if (notification.method === "thread/started") {
       const startedThreadId = normalizeProviderThreadId(
@@ -4469,8 +4556,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4494,8 +4579,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4967,8 +5050,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       context.reviewTurnIds.delete(turnId);
       const gatewayTurnAuthorityRetired = context.gatewaySessionLease !== undefined;
       if (gatewayTurnAuthorityRetired) {
@@ -5255,14 +5336,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     params: unknown,
   ): ResolvedCollaborationRoute {
-    const parentTurnId = this.readChildParentTurnId(context, params);
     const providerThreadId = normalizeProviderThreadId(this.readProviderConversationId(params));
-    const mappedProviderParentThreadId = this.readChildParentProviderThreadId(context, params);
     const activeProviderThreadId = normalizeProviderThreadId(
       readResumeThreadId({
         resumeCursor: context.session.resumeCursor,
       }),
     );
+    // Receiver maps outlive parent turns, so never let a stale entry reroute
+    // the active root conversation as a child.
+    const isActiveRootConversation =
+      providerThreadId !== undefined && providerThreadId === activeProviderThreadId;
+    const mappedParentTurnId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentTurnId(context, params);
+    const mappedProviderParentThreadId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentProviderThreadId(context, params);
     // A child can emit events before its collab tool-call payload populates the
     // receiver maps. During a live parent turn, another provider thread belongs
     // to that active conversation. Preserve the mapped parent when one exists;
@@ -5277,6 +5366,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const providerParentThreadId =
       mappedProviderParentThreadId ??
       (isUnmappedChildConversation ? activeProviderThreadId : undefined);
+    let parentTurnId = mappedParentTurnId;
+    if (isUnmappedChildConversation) {
+      // Codex often spawns children without a collab tool-call item, so this
+      // fallback may be the only time the child is recognized. Remember it so
+      // notifications after the parent turn ends still route as a child.
+      parentTurnId ??= context.session.activeTurnId;
+      this.rememberChildConversation(
+        context,
+        providerThreadId,
+        activeProviderThreadId,
+        parentTurnId,
+      );
+    }
 
     return {
       ...(parentTurnId ? { parentTurnId } : {}),
@@ -5319,19 +5421,62 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
-      return;
-    }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
+    // Multi-agent v2 announces a spawned child with a subAgentActivity item
+    // (agentThreadId) instead of a collab tool call naming receivers.
+    if (itemType === "subAgentActivity") {
+      const agentThreadId = normalizeProviderThreadId(this.readString(item, "agentThreadId"));
+      if (agentThreadId) {
+        this.rememberChildConversation(
+          context,
+          agentThreadId,
+          parentProviderThreadId,
+          parentTurnId,
+        );
+      }
+      return;
+    }
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
+      return;
+    }
 
     const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {
-      context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
-      if (parentProviderThreadId) {
-        context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
-      }
+      this.rememberChildConversation(
+        context,
+        receiverThreadId,
+        parentProviderThreadId,
+        parentTurnId,
+      );
+    }
+  }
+
+  private rememberChildConversation(
+    context: CodexSessionContext,
+    childProviderThreadId: string,
+    parentProviderThreadId: string | undefined,
+    parentTurnId: TurnId | undefined,
+  ): void {
+    if (childProviderThreadId === parentProviderThreadId) {
+      return;
+    }
+    if (parentTurnId) {
+      setRecentCacheEntry(
+        context.collabReceiverTurns,
+        childProviderThreadId,
+        parentTurnId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
+    }
+    if (parentProviderThreadId) {
+      setRecentCacheEntry(
+        context.collabReceiverParents,
+        childProviderThreadId,
+        parentProviderThreadId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
     }
   }
 
