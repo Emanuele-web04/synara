@@ -1,21 +1,58 @@
 # Cloudflare Remote — execution state
 
-## Remote .18 / mobile 139 candidate — 2026-10-17
+## Remote .18 and companion 139 delivered — 2026-10-17
 
-Reviewed user sources `1f81242` and `0ab4258`. Additional desktop/shared/Worker
-hardening in `7cc0b2e` reproduces and removes free-text diagnostics leakage at both
-queue and D1 ingestion boundaries. Native privacy declarations also cover Analytics
-for account/installation identifiers and linked startup Performance Data.
-The actual public website still describes opt-in-only analytics; a separate clean
-privacy-only website candidate names Remote .18/mobile 139 and is qualified separately.
+[Synara Remote 1.0.6-remote.18](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.18)
+is public for macOS ARM64, Windows x64 and Linux x64. Immutable tag source
+`d586357deee7209080f012d5849ec8b0b3b4bebc` integrates reviewed analytics source
+`1f81242` and the additional technical-only error sanitizer in `7cc0b2e`.
+Remote usage sharing is enabled by default while preserving explicit opt-outs;
+Stable/Beta product collection stays opt-in and Stable diagnostics stay disabled.
 
-The D1 upgrade preserves 100 existing product rows and 100 diagnostics in temporary
-SQLite. Existing Wrangler credentials lack D1 write; read access failed with 7403,
-and the existing CF CLI profile is read-only too. Production export/migration and
-Worker deployment are pending the scoped OAuth refresh. Preserve existing Worker
-variables with `--keep-vars`. No Remote .18 tag or mobile 139 distribution is
-allowed before receiver migration/deployment and live synthetic ingestion succeed.
-The existing .17 and TestFlight 138 remain available.
+- **Receiver first:** protected D1 exports were saved outside the checkout. The
+  original export contains literal NULs in old logs; a separate portable copy
+  preserves them with `char(0)` and restores successfully. Migration 0006 ran,
+  and a full before/after comparison preserves every old row and common column.
+  Worker version `2bcbb1de-c02f-4a02-9744-c1f641a165fa` was deployed with
+  `--keep-vars`, retaining dashboard authentication and existing bindings.
+- **Live ingestion:** synthetic desktop/iPhone/iPad Remote events, Beta
+  compatibility, deduplication, account hashes, fixed commands/failure reasons,
+  technical-only errors and usage-turn categories/tokens pass against production
+  D1. The unauthenticated dashboard still returns 401. Only the identified
+  synthetic fixture rows were removed after verification.
+- **Desktop qualification:** local final checks and the
+  [single exact-source release workflow](https://github.com/Emanuele-web04/synara/actions/runs/39054643680)
+  pass, including all server shards, three packaged-startup checks, macOS
+  signing/notarization and Windows Defender. All 11 public assets match their
+  digests, provenance and updater checksums. The public Mac ZIP independently
+  passes strict/deep signatures, Gatekeeper and staple validation. The real
+  updater provider discovers .18 from .17 on all three platforms. Stable Latest
+  and legacy `v0.4.2` remain unchanged; the Windows exception is restored to
+  `1.0.6`. Windows may still show SmartScreen.
+- **Mobile:** universal **0.1 (139)** is uploaded from `761ff54` with user source
+  `0ab4258`. App/widget signatures, iPhone/iPad families, production APNs and
+  disabled debugging are independently verified in the exported uploaded IPA.
+  Both existing TestFlight groups show **Test in corso** (one internal and 21
+  external testers). Notes and automatic notifications are saved; membership and
+  older builds are preserved. App Store privacy is published for the ten manifest
+  categories, with Analytics for linked identifiers, Product Interaction and
+  Performance Data and no tracking. Existing cloud signing was reused after
+  refreshing profiles; no API key or new certificate was required.
+- **Public policy:** website privacy PR #14,
+  merge `5441ab0`, is deployed by Vercel and verified at
+  [trysynara.com/privacy](https://www.trysynara.com/privacy). The maintained mirror
+  agrees. Contract, sponsorship, lint, types, links and builds pass on the Mini;
+  Linux browser functional, accessibility, performance and all 11 visual checks
+  pass. Nine stale golden images were identical between unchanged main and the
+  privacy candidate and were refreshed in a separate test-only commit. Hosted
+  website CI could not start because of GitHub billing; a 2 GB Linux build exited
+  137 and its sponsorship subprocess failed without assertion details, so the
+  successful Mini checks and Linux browser gates are reported separately.
+
+The authorized visible changes are Remote analytics/dashboard controls, privacy
+text, release history and matching mobile disclosures; the delivery work adds no
+unrelated UI redesign. New live provider turns, manual .18 upgrades on every OS
+and physical-device APNs delivery remain unverified. The phones were not used.
 
 ## Remote .17 and companion 138 delivered — 2026-10-17
 
