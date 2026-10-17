@@ -2831,31 +2831,36 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("surfaces untracked numstat read failures instead of undercounting", () =>
-      Effect.gen(function* () {
-        const realCore = yield* GitCore;
-        const tmp = yield* makeTmpDir();
-        yield* initRepoWithCommit(tmp);
-        // Git cannot diff a directory against /dev/null either.
-        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "not-a-file")));
-        const core = yield* makeIsolatedGitCore((input) =>
-          input.operation.endsWith(".untrackedFiles")
-            ? Effect.succeed({ code: 0, stdout: "not-a-file\0", stderr: "" })
-            : realCore.execute(input),
-        );
+    for (const useGitFallback of [false, true]) {
+      it.effect(
+        `surfaces untracked numstat read failures (${useGitFallback ? "Git fallback" : "fast path"})`,
+        () =>
+          Effect.gen(function* () {
+            const realCore = yield* GitCore;
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            if (useGitFallback) yield* git(tmp, ["config", "core.bigFileThreshold", "1024"]);
+            // Git cannot diff a directory against /dev/null either.
+            yield* Effect.promise(() => fs.mkdir(path.join(tmp, "not-a-file")));
+            const core = yield* makeIsolatedGitCore((input) =>
+              input.operation.endsWith(".untrackedFiles")
+                ? Effect.succeed({ code: 0, stdout: "not-a-file\0", stderr: "" })
+                : realCore.execute(input),
+            );
 
-        const result = yield* Effect.result(core.readDiffStats(tmp, "unstaged"));
+            const result = yield* Effect.result(core.readDiffStats(tmp, "unstaged"));
 
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({
-            _tag: "GitCommandError",
-            operation: "GitCore.readDiffStats.untrackedNumstat",
-          });
-          expect(result.failure.detail).toContain("not-a-file");
-        }
-      }),
-    );
+            expect(result._tag).toBe("Failure");
+            if (result._tag === "Failure") {
+              expect(result.failure).toMatchObject({
+                _tag: "GitCommandError",
+                operation: "GitCore.readDiffStats.untrackedNumstat",
+              });
+              expect(result.failure.detail).toContain("not-a-file");
+            }
+          }),
+      );
+    }
 
     it.effect("counts untracked numstats in-process with Git's numstat semantics", () =>
       Effect.gen(function* () {
@@ -2939,6 +2944,37 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(commands.filter((args) => args[0] === "check-attr")).toHaveLength(1);
       }),
     );
+
+    for (const fallback of ["attribute", "threshold"] as const) {
+      it.effect(`skips a vanished untracked file during the ${fallback} Git fallback`, () =>
+        Effect.gen(function* () {
+          const realCore = yield* GitCore;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          if (fallback === "attribute") {
+            yield* writeTextFile(path.join(tmp, ".gitattributes"), "vanished.txt diff\n");
+            yield* git(tmp, ["add", ".gitattributes"]);
+            yield* git(tmp, ["commit", "-m", "attributes"]);
+          } else {
+            yield* git(tmp, ["config", "core.bigFileThreshold", "1024"]);
+          }
+          yield* writeTextFile(path.join(tmp, "vanished.txt"), "gone\n");
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.operation.endsWith(".untrackedNumstat")) {
+              return Effect.promise(() => fs.rm(path.join(tmp, "vanished.txt"))).pipe(
+                Effect.andThen(realCore.execute(input)),
+              );
+            }
+            return realCore.execute(input);
+          });
+          expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
+            additions: 0,
+            deletions: 0,
+            fileCount: 0,
+          });
+        }),
+      );
+    }
 
     it.effect("honors a configured Git large-file threshold for untracked totals", () =>
       Effect.gen(function* () {

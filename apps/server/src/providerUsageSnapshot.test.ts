@@ -240,7 +240,7 @@ describe("readRecentClaudeUsageSamples", () => {
     expect(second).toEqual(first);
   });
 
-  it("parses only appended records and keeps deduping across the boundary", async () => {
+  it("keeps deduping appended records across the verified cache boundary", async () => {
     const { root, projectDir } = await makeProjectsRoot();
     const file = path.join(projectDir, "a.jsonl");
     const prefix = line(2, 40, "m1");
@@ -250,17 +250,8 @@ describe("readRecentClaudeUsageSamples", () => {
     // The repeated m1 record is the SDK writing another content block of the same message.
     await fs.appendFile(file, line(2, 40, "m1") + line(1, 60, "m2"));
     await touchLater(file);
-    const probe = await fs.open(file, "r");
-    const handlePrototype = Object.getPrototypeOf(probe) as Pick<typeof probe, "createReadStream">;
-    await probe.close();
-    const createReadStream = vi.spyOn(handlePrototype, "createReadStream");
-
     const samples = await readRecentClaudeUsageSamples(root);
     expect(samples.map((sample) => sample.totalTokens)).toEqual([40, 60]);
-    expect(createReadStream).toHaveBeenCalledTimes(1);
-    expect(createReadStream.mock.calls[0]?.[0]).toMatchObject({
-      start: Buffer.byteLength(prefix),
-    });
   });
 
   it("reparses a transcript that was truncated or replaced", async () => {
@@ -279,6 +270,21 @@ describe("readRecentClaudeUsageSamples", () => {
     await fs.rename(replacement, file);
     await touchLater(file);
     expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(20);
+  });
+
+  it("reparses an in-place rewrite that grows past the previous newline", async () => {
+    const { root, projectDir } = await makeProjectsRoot();
+    const file = path.join(projectDir, "a.jsonl");
+    await fs.writeFile(file, line(2, 100, "m1"));
+    const original = await fs.stat(file);
+    expect(totalTokens(await readRecentClaudeUsageSamples(root))).toBe(100);
+
+    await fs.writeFile(file, line(2, 200, "m1") + line(1, 20, "m2"));
+    await touchLater(file);
+    expect((await fs.stat(file)).ino).toBe(original.ino);
+    expect((await readRecentClaudeUsageSamples(root)).map((sample) => sample.totalTokens)).toEqual([
+      200, 20,
+    ]);
   });
 
   it("defers a partial trailing record until its newline arrives", async () => {

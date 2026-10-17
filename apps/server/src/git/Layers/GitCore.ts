@@ -2149,17 +2149,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
                   }).pipe(
                     Effect.flatMap((result) =>
-                      isSuccessfulNoIndexDiff(result)
-                        ? Effect.succeed(result.stdout)
-                        : Effect.fail(
-                            createGitCommandError(
-                              operation,
-                              cwd,
-                              args,
-                              result.stderr.trim() ||
-                                `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                      Effect.gen(function* () {
+                        if (isSuccessfulNoIndexDiff(result)) return result.stdout;
+                        // Git also exits 1 for unreadable paths. Only a confirmed
+                        // vanished path may be skipped, just like the fast reader.
+                        if (result.code === 1 && result.stdout.length === 0) {
+                          const vanished = yield* Effect.promise(() =>
+                            nodeFs.lstat(nodePath.join(cwd, filePath)).then(
+                              () => false,
+                              (cause: unknown) => isVanishedPathError(cause),
                             ),
-                          ),
+                          );
+                          if (vanished) return null;
+                        }
+                        return yield* createGitCommandError(
+                          operation,
+                          cwd,
+                          args,
+                          result.stderr.trim() ||
+                            `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                        );
+                      }),
                     ),
                   );
                 }

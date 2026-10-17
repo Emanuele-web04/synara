@@ -1,6 +1,7 @@
 // FILE: providerUsageSnapshot.ts
 // Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
+import { createHash, type Hash } from "node:crypto";
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
@@ -73,6 +74,7 @@ interface ClaudeTranscriptCacheEntry {
   readonly size: number;
   readonly mtimeMs: number;
   readonly offset: number;
+  readonly prefixDigest: string;
   readonly lineCount: number;
   readonly samples: ReadonlyArray<ClaudeUsageSample>;
   readonly tailSamples: ReadonlyArray<ClaudeUsageSample>;
@@ -575,6 +577,7 @@ interface ClaudeTranscriptScan {
   // Samples from a final record that has no newline yet.
   readonly tailSamples: ClaudeUsageSample[];
   readonly nextOffset: number;
+  readonly prefixDigest: string;
   readonly nextLineIndex: number;
   readonly complete: boolean;
 }
@@ -599,6 +602,7 @@ async function scanClaudeTranscript(input: {
   readonly end: number;
   readonly lineIndex: number;
   readonly seenKeys: ReadonlySet<string>;
+  readonly prefixHash?: Hash;
 }): Promise<ClaudeTranscriptScan> {
   const samples: ClaudeUsageSample[] = [];
   const tailSamples: ClaudeUsageSample[] = [];
@@ -619,6 +623,8 @@ async function scanClaudeTranscript(input: {
   let nextOffset = input.start;
   let skippingOversizedLine = false;
   let complete = true;
+  const hash = input.prefixHash ?? createHash("sha256");
+  let completePrefixHash = hash.copy();
 
   const collectLine = (line: Buffer, index: number, terminated: boolean): void => {
     if (line.length === 0) {
@@ -701,6 +707,16 @@ async function scanClaudeTranscript(input: {
     let position = input.start;
     try {
       for await (const chunk of stream as AsyncIterable<Buffer>) {
+        // Commit a digest only through the last complete record. A partial tail
+        // is parsed again later and must not become part of the cached prefix.
+        const lastNewline = chunk.lastIndexOf(0x0a);
+        if (lastNewline >= 0) {
+          hash.update(chunk.subarray(0, lastNewline + 1));
+          completePrefixHash = hash.copy();
+          hash.update(chunk.subarray(lastNewline + 1));
+        } else {
+          hash.update(chunk);
+        }
         let lineStart = 0;
         for (
           let index = chunk.indexOf(0x0a);
@@ -734,6 +750,7 @@ async function scanClaudeTranscript(input: {
     dedupeKeys: [...newKeys],
     tailSamples,
     nextOffset,
+    prefixDigest: completePrefixHash.digest("hex"),
     nextLineIndex: lineIndex,
     complete,
   };
@@ -743,14 +760,22 @@ function cachedClaudeSamples(entry: ClaudeTranscriptCacheEntry): ReadonlyArray<C
   return entry.tailSamples.length === 0 ? entry.samples : entry.samples.concat(entry.tailSamples);
 }
 
-// A transcript that only grew still has a newline right before the resume offset; one
-// rewritten in place almost never does, and is reparsed from the start.
-async function hasNewlineBefore(handle: FileHandle, offset: number): Promise<boolean> {
-  if (offset === 0) {
-    return true;
+// Growth and inode identity cannot distinguish append from an in-place rewrite.
+// Verify the committed prefix in bounded chunks before reusing parsed samples;
+// unchanged transcripts still take the metadata-only cache path below.
+async function hashClaudeTranscriptPrefix(
+  handle: FileHandle,
+  offset: number,
+): Promise<Hash | null> {
+  const hash = createHash("sha256");
+  let position = 0;
+  while (position < offset) {
+    const bytes = await readFileRange(handle, position, Math.min(64 * 1024, offset - position));
+    if (bytes.length === 0) return null;
+    hash.update(bytes);
+    position += bytes.length;
   }
-  const byte = await readFileRange(handle, offset - 1, 1);
-  return byte.length === 1 && byte[0] === 0x0a;
+  return hash;
 }
 
 export async function readClaudeUsageSamples(
@@ -808,13 +833,15 @@ async function readCachedClaudeUsageSamples(
 
   try {
     const stats = await handle.stat();
-    const base =
-      cached &&
-      cached.ino === stats.ino &&
-      stats.size > cached.size &&
-      (await hasNewlineBefore(handle, cached.offset))
-        ? cached
-        : null;
+    let base: ClaudeTranscriptCacheEntry | null = null;
+    let prefixHash: Hash | undefined;
+    if (cached && cached.ino === stats.ino && stats.size > cached.size) {
+      const candidateHash = await hashClaudeTranscriptPrefix(handle, cached.offset);
+      if (candidateHash?.copy().digest("hex") === cached.prefixDigest) {
+        base = cached;
+        prefixHash = candidateHash;
+      }
+    }
     const scan = await scanClaudeTranscript({
       handle,
       path: file.path,
@@ -822,6 +849,7 @@ async function readCachedClaudeUsageSamples(
       end: stats.size,
       lineIndex: base?.lineCount ?? 0,
       seenKeys: base?.seenKeys ?? EMPTY_KEYS,
+      ...(prefixHash ? { prefixHash } : {}),
     });
 
     let seenKeys: ReadonlySet<string> = new Set(scan.dedupeKeys);
@@ -837,6 +865,7 @@ async function readCachedClaudeUsageSamples(
       size: stats.size,
       mtimeMs: stats.mtimeMs,
       offset: scan.nextOffset,
+      prefixDigest: scan.prefixDigest,
       lineCount: scan.nextLineIndex,
       samples: base ? base.samples.concat(scan.samples) : scan.samples,
       tailSamples: scan.tailSamples,
