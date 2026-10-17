@@ -1,0 +1,133 @@
+name: PR 1878 migration and Markdown repair validation
+on:
+  push:
+    branches: [qa/pr-1878-repair-validation-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  verify:
+    name: Repair ${{ matrix.kind }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [static-migrations, browser-before, browser-after]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain readable candidate construction outside application source
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr1878-repair-driver"
+          cp .github/qa/apply-repair.py .github/qa/theme-lead-tests.txt .github/qa/migration-compatibility.test.txt "$RUNNER_TEMP/pr1878-repair-driver/"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Reconstruct and verify exact reviewed source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-repair-${{ matrix.kind }}"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/source-parent.txt"
+          python "$RUNNER_TEMP/pr1878-repair-driver/apply-repair.py" | tee "$out/construction.log"
+          git diff --cached --name-only --diff-filter=ACMR -z | xargs -0 ./node_modules/.bin/oxfmt
+          git add apps/server/src/persistence apps/web/src/index.css apps/web/src/components/OnboardingProvidersStep.browser.tsx apps/web/src/components/ThemePackEditor.browser.tsx
+          git write-tree > "$out/code-tree.txt"
+          ./node_modules/.bin/oxfmt docs/integration/issue-driven-selection-20261016.md
+          git add docs/integration/issue-driven-selection-20261016.md
+          git write-tree > "$out/final-tree.txt"
+          git diff --cached --binary --full-index > "$out/review.patch"
+          git diff --exit-code > "$out/source-clean.diff"
+          git diff --cached --check
+      - name: Required static gates and real persistence suites
+        if: matrix.kind == 'static-migrations'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-repair-${{ matrix.kind }}"
+          failed=0
+          for check in fmt:check lint typecheck windows-runtime:check migrations:check; do
+            name="${check//:/-}"
+            if bun run "$check" > "$out/$name.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+            cat "$out/$name.log"
+            printf '%s\t%s\n' "$check" "$rc" >> "$out/exits.tsv"
+          done
+          if bun run --cwd apps/server test src/persistence --reporter=default --reporter=json --outputFile.json="$out/persistence.json" > "$out/persistence.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+          cat "$out/persistence.log"
+          printf 'persistence\t%s\n' "$rc" >> "$out/exits.tsv"
+          git diff --exit-code > "$out/source-clean-after.diff" || failed=1
+          printf '%s\n' "$failed" > "$out/exit.txt"
+          exit "$failed"
+      - name: Install real browser
+        if: matrix.kind != 'static-migrations'
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Restore original production web CSS for the negative control
+        if: matrix.kind == 'browser-before'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$QA_SOURCE:apps/web/src/index.css" > apps/web/src/index.css
+          git diff -- apps/web/src/index.css > "$RUNNER_TEMP/pr1878-repair-browser-before/original-css-control.patch"
+          git hash-object apps/web/src/index.css > "$RUNNER_TEMP/pr1878-repair-browser-before/actual-css-blob.txt"
+      - name: Run unchanged browser assertions with original or repaired production CSS
+        if: matrix.kind != 'static-migrations'
+        shell: bash
+        env:
+          VITE_PR1878_CAPTURE: '1'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-repair-${{ matrix.kind }}"
+          if [ '${{ matrix.kind }}' = 'browser-before' ]; then
+            if bun run --cwd apps/web test:browser src/components/ThemePackEditor.browser.tsx --testNamePattern='preserves custom bold colors on paragraph and list leads' --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          else
+            if bun run --cwd apps/web test:browser src/components/OnboardingProvidersStep.browser.tsx src/components/ThemePackEditor.browser.tsx --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          fi
+          cat "$out/browser.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          exit "$rc"
+      - name: Export exact candidate bytes and verification metadata
+        if: always()
+        shell: bash
+        env:
+          QA_KIND: ${{ matrix.kind }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess,json,hashlib,shutil,os
+          out=Path(os.environ['RUNNER_TEMP'])/('pr1878-repair-'+os.environ['QA_KIND'])
+          if not (out/'final-tree.txt').exists():
+              raise SystemExit('Candidate construction failed; no source export is valid')
+          code=(out/'code-tree.txt').read_text().strip()
+          tree=(out/'final-tree.txt').read_text().strip()
+          base=os.environ['QA_SOURCE']
+          rows=subprocess.check_output(['git','diff','--name-status','--no-renames',base,tree],text=True).splitlines()
+          assert len(rows)==42,len(rows)
+          files=[]
+          for row in rows:
+              status,path=row.split('\t')
+              assert path.startswith('apps/server/src/persistence/') or path in ['apps/web/src/index.css','apps/web/src/components/OnboardingProvidersStep.browser.tsx','apps/web/src/components/ThemePackEditor.browser.tsx','docs/integration/issue-driven-selection-20261016.md'],path
+              if status=='D':
+                  files.append({'path':path,'status':status,'sha':None});continue
+              data=subprocess.check_output(['git','show',tree+':'+path])
+              sha=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              dest=out/'files'/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+              files.append({'path':path,'status':status,'sha':sha,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+          (out/'candidate-manifest.json').write_text(json.dumps({'source':base,'initialTree':'3e89bf1cf3af6c6c0e7d465c023825e6314e92ea','codeTree':code,'finalTree':tree,'files':files},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-repair-${{ matrix.kind }}
+          path: |
+            ${{ runner.temp }}/pr1878-repair-${{ matrix.kind }}
+            apps/web/src/components/__screenshots__
+          retention-days: 14
+          if-no-files-found: error
