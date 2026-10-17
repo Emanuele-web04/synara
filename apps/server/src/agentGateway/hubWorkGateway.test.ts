@@ -30,6 +30,11 @@ const tests = it.layer(
 );
 const now = "2026-10-02T10:00:00.000Z";
 const turn = TurnId.makeUnsafe("human-turn");
+const toolText = (result: { readonly content: readonly { readonly type: string }[] }) =>
+  result.content
+    .filter((entry) => entry.type === "text")
+    .map((entry) => (entry as { readonly text: string }).text)
+    .join("\n");
 const source = {
   id: MessageId.makeUnsafe("human-message"),
   role: "user",
@@ -363,8 +368,101 @@ tests("Hub work gateway integration", (it) => {
       );
     }),
   );
-  it.effect("keeps explicit old sources separate from implicit current sources in one batch", () =>
+  it.effect(
+    "creates one worker per task key across a retry and a restart, and adds new keys without forking",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness("keyed-workers");
+        const keyed = {
+          requestId: "keyed-request",
+          threads: [
+            {
+              prompt: "Task 1",
+              taskKey: "First-Task",
+              routingReason: "Two independent fixes",
+              target: { provider: "codex" as const, model: "fixture-model" },
+            },
+            {
+              prompt: "Task 2",
+              taskKey: "second-task",
+              target: { provider: "codex" as const, model: "fixture-model" },
+            },
+          ],
+        };
+        const accepted = yield* h.gateway.submit(keyed, h.context);
+        assert.equal(accepted?.isError, undefined);
+        yield* h.gateway.tick;
+        // One worker slot: the first task starts, the second stays queued.
+        assert.equal(h.calls.length, 1);
+        const records = yield* h.repository.list(h.projectId);
+        assert.deepEqual(
+          records.map((record) => record.taskKey),
+          ["first-task", "second-task"],
+        );
+        assert.equal(records[0]!.routingReason, "Two independent fixes");
+
+        // A retry of the same plan in a new wake, and again after a restart. The
+        // retry cites the original message explicitly, as a later wake must.
+        const retryInput = {
+          requestId: "keyed-retry",
+          threads: keyed.threads.map((thread) => ({
+            ...thread,
+            contextMessageIds: [source.id],
+          })),
+        };
+        const retry = yield* h.recreate().submit(retryInput, {
+          ...h.context,
+          callerTurnId: "retry-turn",
+        });
+        assert.equal(retry?.isError, undefined);
+        assert.equal(JSON.parse(toolText(retry!)).replayed, true);
+        yield* h.recreate().tick;
+        assert.equal(h.calls.length, 1);
+        assert.equal(h.calls[0]!.threads[0]!.taskKey, "first-task");
+        yield* h.recreate().tick;
+        assert.equal(h.calls.length, 1);
+
+        // A new key from the same original message adds a task instead of
+        // reworking the frozen one.
+        const extended = yield* h.recreate().submit(
+          {
+            ...retryInput,
+            requestId: "keyed-extended",
+            threads: [...retryInput.threads, { ...retryInput.threads[0]!, taskKey: "third-task" }],
+          },
+          { ...h.context, callerTurnId: "extended-turn" },
+        );
+        assert.equal(extended?.isError, undefined);
+        yield* h.recreate().tick;
+        // The frozen second task was admitted once the first one finished earlier.
+        assert.equal((yield* h.repository.list(h.projectId)).length, 3);
+      }),
+  );
+
+  it.effect("refuses a forged citation without creating any Hub work", () =>
     Effect.gen(function* () {
+      const h = yield* harness("forged-citation");
+      const forged = yield* h.gateway.submit(
+        {
+          ...h.input,
+          threads: [
+            {
+              ...h.input.threads[0]!,
+              contextMessageIds: [MessageId.makeUnsafe("human-message-the-user-never-sent")],
+            },
+          ],
+        },
+        h.context,
+      );
+      assert.equal(forged?.isError, true);
+      assert.notInclude(toolText(forged!), source.text);
+      assert.equal((yield* h.repository.list(h.projectId)).length, 0);
+      yield* h.gateway.tick;
+      assert.equal(h.calls.length, 0);
+    }),
+  );
+
+  it.effect("keeps explicit old sources separate from implicit current sources in one batch", () =>    Effect.gen(function* () {
       const h = yield* harness("mixed-context");
       const older = {
         ...source,

@@ -245,6 +245,7 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
         const decisions: Array<{
           readonly taskKey: string;
           readonly fingerprint: string;
+          readonly spec: HubWorkRecord["creationSpec"];
           readonly task: (typeof input.tasks)[number];
           readonly taskSources: readonly HubWorkSourceMessage[];
           readonly targetProjectId: ProjectId;
@@ -289,9 +290,11 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
               fail(`Task key '${taskKey}' appears twice in one hub work plan.`, "invalid"),
             );
           claimedKeys.add(taskKey);
-          // The routing reason annotates the decision; it is not part of its identity,
-          // so a refined reason never forks a second worker for the same task.
-          const { routingReason, ...decisionSpec } = task.spec;
+          // The frozen key belongs to the plan, so a retry that proposes the same key
+          // differently still addresses the same decision. The routing reason
+          // annotates that decision and is not part of its identity.
+          const frozenSpec = { ...task.spec, taskKey };
+          const { routingReason, ...decisionSpec } = frozenSpec;
           const fingerprint = hubWorkTaskFingerprint({
             sourceMessages: taskSources,
             spec: decisionSpec,
@@ -314,6 +317,7 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
           decisions.push({
             taskKey,
             fingerprint,
+            spec: frozenSpec,
             task,
             taskSources,
             targetProjectId,
@@ -343,7 +347,7 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
         const records: HubWorkRecord[] = [];
         for (const decision of fresh) {
           taskIndex += 1;
-          const spec = { ...decision.task.spec, taskKey: decision.taskKey };
+          const spec = decision.spec;
           const record = yield* Schema.decodeUnknownEffect(HubWorkRecord)({
             id: hubWorkWorkItemId({
               projectId: principal.projectId,
