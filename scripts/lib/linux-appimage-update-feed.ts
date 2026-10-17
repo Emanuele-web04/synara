@@ -80,8 +80,7 @@ export async function finalizeLinuxAppImageUpdateFeed(
   for (const file of files) {
     if (
       basename(file.url) !== file.url ||
-      (file.url !== appImageName &&
-        (!entries.includes(file.url) || !/\.(deb|rpm)$/.test(file.url)))
+      (file.url !== appImageName && (!entries.includes(file.url) || !/\.(deb|rpm)$/.test(file.url)))
     ) {
       throw new Error(`Unexpected Linux updater payload: ${file.url}`);
     }
