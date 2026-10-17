@@ -1,11 +1,11 @@
-name: PR 1878 Linux feed formatter and focused tests
+name: PR 1878 exact-head static and browser regressions
 on:
   push:
     branches: [qa/pr1878-linux-feed-format-20261017]
 permissions:
   contents: read
 env:
-  SOURCE_SHA: 34defa8bc52755f13b999e8ef20290ade7358401
+  SOURCE_SHA: 67f2098e4e5389d81daa914a9becc9bb115ab261
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -18,12 +18,41 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-workspace
         with:
-          scope: static
-      - name: Expose exact formatting delta
-        run: |
-          ./node_modules/.bin/oxfmt scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts
-          git diff -- scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts
+          scope: full
+      - name: Verify exact source formatting without modification
+        run: ./node_modules/.bin/oxfmt --check scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts scripts/build-desktop-artifact.ts
       - name: Focused Linux updater and provenance tests
         run: bun run --cwd scripts test lib/linux-appimage-update-feed.test.ts build-desktop-artifact.test.ts lib/release-artifact-provenance.test.ts release-linux-packaging.test.ts
       - name: Scripts typecheck
         run: bun run --cwd scripts typecheck
+      - name: Root source quality gates
+        run: |
+          bun run lint
+          bun run migrations:check
+          bun run windows-runtime:check
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: full
+      - name: Install real Chromium
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Reproduce isolated interaction failures without altered assertions
+        shell: bash
+        run: |
+          bun run --cwd apps/web test:browser src/components/ChatView.browser.tsx --testNamePattern='preserves the .* picker on first window activation|keeps close-button pointer travel|steps through horizontal tabs with the previous/next tab shortcuts|reveals an opened transcript once its end scroll lands|uses the settled turn model and instance while preserving a different composer draft'
+      - name: Preserve browser failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-focused-interaction-screenshots
+          path: apps/web/src/components/__screenshots__/ChatView.browser.tsx/
+          if-no-files-found: ignore
+          retention-days: 14
