@@ -137,8 +137,29 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "com.apple.Preferences");
   });
 
+  it("keeps hub roles out of reach of a worker without loosening normal conversations", () => {
+    // Sessions with gateway control get the hub role line; sessions without it
+    // are told nothing about hub routing they cannot perform anyway.
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    assert.include(policy, "Hub roles come from the server");
+    assert.include(
+      policy,
+      "only the hub coordinator routes work, starts threads, and owns hub automations",
+    );
+    assert.include(
+      policy,
+      "a hub worker does its assigned work and never creates threads or messages other threads",
+    );
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "Hub roles come from the server",
+    );
+  });
+
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
+    // The hub-role line (W0) is the only addition since the 6,030-character
+    // guard; the cap stays tight around the current policy text.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_250);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {

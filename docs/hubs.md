@@ -96,6 +96,11 @@ Inside a thread the coordinator started, the task is labelled with the hub, for 
 the Release Synara coordinator**.
 Click it to go back to the coordinator conversation.
 
+Follow-ups to a running thread are **queued** by default: the thread finishes its current turn
+and reads the message next, and nothing is interrupted. The coordinator reserves **steering**
+for a correction that has to land immediately — it steers the live turn where the provider
+supports that, and otherwise stops the running turn so the follow-up runs next.
+
 Pending approvals from hub threads also appear above the coordinator's composer. Each card
 names the thread (click to open it), shows the command or tool request, and offers the same
 choices as the thread: **Approve once**, **Always allow this session** when available,
@@ -239,6 +244,16 @@ including threads in linked repositories, receives a context packet with:
 - The **MEMORY.md** index of shared hub memory
 - The list of **linked repositories** and the **Library** location
 - The hub's default thread model
+
+Each section of that packet names who wrote it — your instructions, Synara's own records, hub
+memory and decisions, a report from another thread, or Synara's role rules — and the packet
+states that only you grant authority. A memory note, decision, task description, or worker
+report is context: it never authorizes work, spending, or external actions on its own.
+
+The packet also follows the thread's role. A coordinator additionally gets its playbook, watch
+rules, worker roster, and worker reports; a worker or manual member thread gets its assignment
+and the shared hub context instead, and is told not to route hub work. Your own edits to the
+playbook are kept as written — Synara only refreshes a playbook it authored itself.
 
 Edit these in hub settings → **Memory**:
 

@@ -84,6 +84,10 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import {
+  FOLLOW_UP_DISPATCH_DESCRIPTION,
+  FOLLOW_UP_MODE_DESCRIPTION,
+} from "../followUpDispatchPolicy.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
@@ -637,15 +641,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     requiresActiveTurn: true,
     definition: {
       name: "synara_send_message",
-      description:
-        'Send a Synara follow-up message to an existing thread. mode "queue" (default) waits for the current turn. "steer" uses native steering when available; otherwise it queues the follow-up first and interrupts the running turn. With no live turn, it starts normally. Use "queue" for ordinary follow-ups.',
+      description: FOLLOW_UP_DISPATCH_DESCRIPTION,
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string", description: "Target thread." },
           message: { type: "string", description: "Message text." },
           contextMessageIds: contextMessageIdsSchema,
-          mode: { type: "string", enum: ["queue", "steer"], description: "Dispatch mode." },
+          mode: {
+            type: "string",
+            enum: ["queue", "steer"],
+            description: FOLLOW_UP_MODE_DESCRIPTION,
+          },
         },
         required: ["threadId", "message"],
         additionalProperties: false,
