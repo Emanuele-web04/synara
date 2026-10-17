@@ -41,12 +41,25 @@ it.each([390, 767])(
   },
 );
 
+it("allows a first desktop click on Add project without pre-hover", async () => {
+  await page.viewport(1440, 900);
+  const { onAdd, button } = await renderToolbar();
+  const toolbar = button.element().parentElement!;
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("0");
+  expect(getComputedStyle(toolbar).pointerEvents).toBe("auto");
+  await button.click();
+  expect(onAdd).toHaveBeenCalledTimes(1);
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("1");
+});
+
 it("keeps desktop hover and keyboard focus as independent reveal paths", async () => {
   await page.viewport(1000, 600);
   const { onAdd, button } = await renderToolbar();
   const toolbar = button.element().parentElement!;
   await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("0");
-  expect(getComputedStyle(toolbar).pointerEvents).toBe("none");
+  // Invisible hover actions must remain hit-testable to avoid the header label
+  // intercepting a user's very first pointer click.
+  expect(getComputedStyle(toolbar).pointerEvents).toBe("auto");
   await page.getByTestId("project-header").hover();
   await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("1");
   await button.click();
