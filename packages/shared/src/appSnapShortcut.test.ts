@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appSnapModifierPairFromEventCodes,
   appSnapShortcutAccelerator,
   appSnapShortcutLabels,
   appSnapShortcutSystemConflict,
   isAppSnapShortcut,
   isAppSnapShortcutKey,
+  sameAppSnapShortcut,
 } from "./appSnapShortcut";
 
 describe("AppSnap shortcuts", () => {
@@ -22,6 +24,23 @@ describe("AppSnap shortcuts", () => {
     expect(
       appSnapShortcutAccelerator({ kind: "key-chord", modifier: "option", key: "Enter" }),
     ).toBe("Alt+Return");
+  });
+
+  it("recognizes both physical keys of one modifier as a shortcut", () => {
+    expect(appSnapModifierPairFromEventCodes(["MetaLeft", "MetaRight"])).toEqual({
+      kind: "both-command-keys",
+    });
+    expect(appSnapModifierPairFromEventCodes(["AltRight", "AltLeft"])).toEqual({
+      kind: "both-option-keys",
+    });
+    expect(appSnapModifierPairFromEventCodes(["MetaLeft", "AltRight"])).toBeNull();
+    expect(appSnapModifierPairFromEventCodes(["MetaLeft"])).toBeNull();
+    expect(appSnapShortcutLabels({ kind: "both-command-keys" })).toEqual(["⌘ left", "⌘ right"]);
+    expect(isAppSnapShortcut({ kind: "both-command-keys" })).toBe(true);
+    expect(isAppSnapShortcut({ kind: "both-control-keys" })).toBe(false);
+    expect(sameAppSnapShortcut({ kind: "both-command-keys" }, { kind: "both-option-keys" })).toBe(
+      false,
+    );
   });
 
   it("rejects unsupported persisted key codes", () => {
