@@ -1,0 +1,56 @@
+name: PR 1878 full ChatView before versus after
+on:
+  push:
+    branches: [qa/pr1878-chatview-full-attribution-20261017]
+permissions:
+  contents: read
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  chatview:
+    name: Full ChatView (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main
+            repository: Emanuele-web04/synara
+            source: df87a48b9f2d403e3d2785ef11502f2ce2922f5b
+          - variant: checker
+            repository: cmdr-chara/synara
+            source: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+      - name: Pin tested source
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ matrix.source }}"
+          mkdir -p "$RUNNER_TEMP/pr1878-chatview"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-chatview/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Install real Chromium browser
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Run unfiltered original ChatView browser file
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/pr1878-chatview"
+          if bun run --cwd apps/web test:browser src/components/ChatView.browser.tsx --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/browser.log"
+          printf 'exit=%s\n' "$rc" > "$out/exit.txt"
+          exit "$rc"
+      - name: Upload true test exits and failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-chatview-${{ matrix.variant }}
+          path: |
+            ${{ runner.temp }}/pr1878-chatview/
+            apps/web/src/**/__screenshots__/
+            apps/web/test-results/
+          if-no-files-found: warn
+          retention-days: 14
