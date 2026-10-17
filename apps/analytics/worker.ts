@@ -383,6 +383,75 @@ interface UsageProviderRow {
   turnsFailed: number;
 }
 
+/** Finished turns of one usage.daily window sharing the same fixed categories. */
+interface UsageTurnRow {
+  provider: string;
+  model: string;
+  effort: string;
+  interactionMode: string;
+  runtimeMode: string;
+  origin: string;
+  outcome: string;
+  turns: number;
+  durationMs: number;
+  durationSamples: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  tokenSamples: number;
+}
+
+const MAX_USAGE_TURN_ROWS = 200;
+// usage_turns binds 21 params per row; 4 rows stay under D1's 100-parameter cap.
+const USAGE_TURN_ROWS_PER_STATEMENT = 4;
+const USAGE_TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
+const USAGE_TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
+const USAGE_TURN_TOTAL_MAX = 1_000_000_000_000;
+
+function normalizeUsageTurns(value: unknown): UsageTurnRow[] {
+  if (!Array.isArray(value)) return [];
+  const total = (raw: unknown) =>
+    isFiniteNumber(raw) && raw >= 0 ? Math.min(Math.floor(raw), USAGE_TURN_TOTAL_MAX) : 0;
+  const rows: UsageTurnRow[] = [];
+  for (const entry of value.slice(0, MAX_USAGE_TURN_ROWS)) {
+    if (!isRecord(entry)) continue;
+    const categories = [
+      entry.provider,
+      entry.model,
+      entry.effort,
+      entry.interactionMode,
+      entry.runtimeMode,
+      entry.origin,
+    ];
+    if (
+      !categories.every(
+        (item) => typeof item === "string" && USAGE_TURN_CATEGORY_PATTERN.test(item),
+      ) ||
+      typeof entry.outcome !== "string" ||
+      !USAGE_TURN_OUTCOMES.has(entry.outcome)
+    ) {
+      continue;
+    }
+    rows.push({
+      provider: entry.provider as string,
+      model: entry.model as string,
+      effort: entry.effort as string,
+      interactionMode: entry.interactionMode as string,
+      runtimeMode: entry.runtimeMode as string,
+      origin: entry.origin as string,
+      outcome: entry.outcome,
+      turns: clampUsageCount(entry.turns),
+      durationMs: total(entry.durationMs),
+      durationSamples: clampUsageCount(entry.durationSamples),
+      inputTokens: total(entry.inputTokens),
+      outputTokens: total(entry.outputTokens),
+      cachedInputTokens: total(entry.cachedInputTokens),
+      tokenSamples: clampUsageCount(entry.tokenSamples),
+    });
+  }
+  return rows;
+}
+
 interface NormalizedEvent {
   /** Client-generated event id; unique in the events table for idempotency. */
   clientId: string | null;
@@ -411,6 +480,8 @@ interface NormalizedEvent {
   activeThreads: number | null;
   /** usage.daily only: per-provider rows, merged and capped. */
   providers: UsageProviderRow[] | null;
+  /** usage.daily only: finished turns by model, effort, mode, origin and outcome. */
+  turns: UsageTurnRow[] | null;
 }
 
 /** Returns a normalized row for the `events` table, or null to drop. */
@@ -498,9 +569,11 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
   // usage.daily: the event is dropped unless providers is an array; each entry
   // keeps only a provider token and clamped counts, merged per provider.
   let providers: UsageProviderRow[] | null = null;
+  let turns: UsageTurnRow[] | null = null;
   let projects: number | null = null;
   let activeThreads: number | null = null;
   if (raw.event === "usage.daily") {
+    turns = normalizeUsageTurns(payload.turnBreakdown);
     if (!Array.isArray(payload.providers)) return null;
     const merged = new Map<string, UsageProviderRow>();
     for (const entry of payload.providers.slice(0, MAX_USAGE_PROVIDERS)) {
@@ -555,6 +628,7 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     projects,
     activeThreads,
     providers,
+    turns,
   };
 }
 
@@ -627,6 +701,53 @@ function usageProviderStatement(
     `INSERT INTO usage_providers (
       event_id, install_id, day, app_version, platform,
       provider, threads, turns, turns_failed, received_at
+    ) VALUES ${values}`,
+  ).bind(...binds);
+}
+
+/** Multi-row usage_turns INSERT; rows stay under D1's bind cap. */
+function usageTurnStatement(
+  env: Env,
+  eventId: number,
+  event: NormalizedEvent,
+  rows: UsageTurnRow[],
+  receivedAt: string,
+): D1PreparedStatement {
+  const binds: (string | number)[] = [];
+  const values = rows
+    .map((row) => {
+      binds.push(
+        eventId,
+        event.installId,
+        event.ts.slice(0, 10),
+        event.appVersion,
+        event.platform,
+        event.flavor,
+        row.provider,
+        row.model,
+        row.effort,
+        row.interactionMode,
+        row.runtimeMode,
+        row.origin,
+        row.outcome,
+        row.turns,
+        row.durationMs,
+        row.durationSamples,
+        row.inputTokens,
+        row.outputTokens,
+        row.cachedInputTokens,
+        row.tokenSamples,
+        receivedAt,
+      );
+      return "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    })
+    .join(", ");
+  return env.DB.prepare(
+    `INSERT INTO usage_turns (
+      event_id, install_id, day, app_version, platform, flavor,
+      provider, model, effort, interaction_mode, runtime_mode, origin, outcome,
+      turns, duration_ms, duration_samples, input_tokens, output_tokens,
+      cached_input_tokens, token_samples, received_at
     ) VALUES ${values}`,
   ).bind(...binds);
 }
@@ -902,6 +1023,8 @@ interface ApiFilters {
    */
   scopeClause: string;
   scopeBinds: string[];
+  /** scopeClause qualified with the `e.` events alias, for joins with usage tables. */
+  eventScopeClause: string;
   /** Flavor + platform — for the per-version releases table. */
   platformClause: string;
   platformBinds: string[];
@@ -955,7 +1078,6 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
     scopeParts.push("platform = ?");
     scopeBinds.push(platform);
   }
-  // Only `events` has a flavor column, so usage_providers joins stay unambiguous.
   if (flavor) {
     scopeParts.push("flavor = ?");
     scopeBinds.push(flavor);
@@ -992,6 +1114,8 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
     binds,
     scopeClause: scopeParts.length > 0 ? ` AND ${scopeParts.join(" AND ")}` : "",
     scopeBinds,
+    eventScopeClause:
+      scopeParts.length > 0 ? ` AND ${scopeParts.map((part) => `e.${part}`).join(" AND ")}` : "",
     platformClause: `${platform ? " AND platform = ?" : ""}${flavor ? " AND flavor = ?" : ""}`,
     platformBinds: [...(platform ? [platform] : []), ...(flavor ? [flavor] : [])],
   };
@@ -1740,57 +1864,65 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (url.pathname === "/api/usage" && request.method === "GET") {
     // Install-level metrics use scopeClause (version + platform) only.
-    const [active, installsByDay, turnStats, newInstallRows, leftRows, providerRows, localeRows] =
-      await Promise.all([
-        env.DB.prepare(
-          `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .first<{ n: number }>(),
-        env.DB.prepare(
-          `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT install_id) AS n
+    const [
+      active,
+      installsByDay,
+      turnStats,
+      newInstallRows,
+      leftRows,
+      providerRows,
+      localeRows,
+      turnBreakdownRows,
+    ] = await Promise.all([
+      env.DB.prepare(
+        `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .first<{ n: number }>(),
+      env.DB.prepare(
+        `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT install_id) AS n
            FROM events WHERE ts >= ?${f.scopeClause} GROUP BY day ORDER BY day`,
-        )
-          .bind(f.bucketSince, ...f.scopeBinds)
-          .all<{ day: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT COALESCE(SUM(up.turns), 0) AS turns,
+      )
+        .bind(f.bucketSince, ...f.scopeBinds)
+        .all<{ day: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(up.turns), 0) AS turns,
                   COALESCE(SUM(up.turns_failed), 0) AS failed
            FROM usage_providers up JOIN events e ON e.id = up.event_id
-           WHERE e.ts >= ?${f.scopeClause}`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .first<{ turns: number; failed: number }>(),
-        env.DB.prepare(
-          `SELECT outcome, COUNT(*) AS n FROM events
+           WHERE e.ts >= ?${f.eventScopeClause}`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .first<{ turns: number; failed: number }>(),
+      env.DB.prepare(
+        `SELECT outcome, COUNT(*) AS n FROM events
            WHERE event = 'beta.installed' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ outcome: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT outcome, COUNT(*) AS n FROM events
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ outcome: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT outcome, COUNT(*) AS n FROM events
            WHERE event = 'beta.left' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ outcome: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT up.provider AS provider, COUNT(DISTINCT up.install_id) AS installs,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ outcome: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT up.provider AS provider, COUNT(DISTINCT up.install_id) AS installs,
                   SUM(up.threads) AS threads, SUM(up.turns) AS turns,
                   SUM(up.turns_failed) AS failed
            FROM usage_providers up JOIN events e ON e.id = up.event_id
-           WHERE e.ts >= ?${f.scopeClause} GROUP BY up.provider ORDER BY installs DESC`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{
-            provider: string;
-            installs: number;
-            threads: number;
-            turns: number;
-            failed: number;
-          }>(),
-        // Each install's latest app.start in range carries its OS and locale.
-        env.DB.prepare(
-          `SELECT e.platform AS platform, e.os_version AS osVersion, e.locale AS locale,
+           WHERE e.ts >= ?${f.eventScopeClause} GROUP BY up.provider ORDER BY installs DESC`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{
+          provider: string;
+          installs: number;
+          threads: number;
+          turns: number;
+          failed: number;
+        }>(),
+      // Each install's latest app.start in range carries its OS and locale.
+      env.DB.prepare(
+        `SELECT e.platform AS platform, e.os_version AS osVersion, e.locale AS locale,
                   COUNT(DISTINCT e.install_id) AS installs
            FROM events e
            INNER JOIN (
@@ -1799,10 +1931,45 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
            ) m ON m.install_id = e.install_id AND e.ts = m.mts
            WHERE e.event = 'app.start'
            GROUP BY e.platform, e.os_version, e.locale`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ platform: string; osVersion: string; locale: string; installs: number }>(),
-      ]);
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ platform: string; osVersion: string; locale: string; installs: number }>(),
+      // usage_turns carries its own version, platform and flavor columns.
+      env.DB.prepare(
+        `SELECT provider, model, effort, interaction_mode AS interactionMode,
+                  runtime_mode AS runtimeMode, origin,
+                  COUNT(DISTINCT install_id) AS installs, SUM(turns) AS turns,
+                  SUM(CASE WHEN outcome = 'succeeded' THEN turns ELSE 0 END) AS succeeded,
+                  SUM(CASE WHEN outcome = 'failed' THEN turns ELSE 0 END) AS failed,
+                  SUM(CASE WHEN outcome = 'cancelled' THEN turns ELSE 0 END) AS cancelled,
+                  SUM(duration_ms) AS durationMs, SUM(duration_samples) AS durationSamples,
+                  SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+                  SUM(cached_input_tokens) AS cachedInputTokens, SUM(token_samples) AS tokenSamples
+           FROM usage_turns WHERE day >= ?${f.scopeClause}
+           GROUP BY provider, model, effort, interaction_mode, runtime_mode, origin
+           ORDER BY turns DESC LIMIT 100`,
+      )
+        .bind(f.bucketSince.slice(0, 10), ...f.scopeBinds)
+        .all<{
+          provider: string;
+          model: string;
+          effort: string;
+          interactionMode: string;
+          runtimeMode: string;
+          origin: string;
+          installs: number;
+          turns: number;
+          succeeded: number;
+          failed: number;
+          cancelled: number;
+          durationMs: number;
+          durationSamples: number;
+          inputTokens: number;
+          outputTokens: number;
+          cachedInputTokens: number;
+          tokenSamples: number;
+        }>(),
+    ]);
     const activeInstalls = active?.n ?? 0;
     const turns = turnStats?.turns ?? 0;
     const turnsFailed = turnStats?.failed ?? 0;
@@ -1846,6 +2013,26 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         threads: r.threads,
         turns: r.turns,
         failedPct: r.turns > 0 ? Math.round((r.failed / r.turns) * 1000) / 10 : 0,
+      })),
+      turnBreakdown: turnBreakdownRows.results.map((row) => ({
+        provider: row.provider,
+        model: row.model,
+        effort: row.effort,
+        interactionMode: row.interactionMode,
+        runtimeMode: row.runtimeMode,
+        origin: row.origin,
+        installs: row.installs,
+        turns: row.turns,
+        succeeded: row.succeeded,
+        failed: row.failed,
+        cancelled: row.cancelled,
+        meanDurationMs:
+          row.durationSamples > 0 ? Math.round(row.durationMs / row.durationSamples) : null,
+        meanInputTokens:
+          row.tokenSamples > 0 ? Math.round(row.inputTokens / row.tokenSamples) : null,
+        meanOutputTokens:
+          row.tokenSamples > 0 ? Math.round(row.outputTokens / row.tokenSamples) : null,
+        cachedInputTokens: row.cachedInputTokens,
       })),
       osVersions: [...osMap.values()].sort((a, b) => b.installs - a.installs),
       locales: [...localeMap.entries()]
@@ -2253,10 +2440,22 @@ export default {
         const providerStatements: D1PreparedStatement[] = [];
         results.forEach((result, index) => {
           const event = normalizedEvents[index]!;
-          if (!event.providers || event.providers.length === 0) return;
           const changes = result.meta?.changes ?? 0;
           const eventId = result.meta?.last_row_id;
           if (changes <= 0 || typeof eventId !== "number") return;
+          const turns = event.turns ?? [];
+          for (let i = 0; i < turns.length; i += USAGE_TURN_ROWS_PER_STATEMENT) {
+            providerStatements.push(
+              usageTurnStatement(
+                env,
+                eventId,
+                event,
+                turns.slice(i, i + USAGE_TURN_ROWS_PER_STATEMENT),
+                receivedAt,
+              ),
+            );
+          }
+          if (!event.providers || event.providers.length === 0) return;
           for (let i = 0; i < event.providers.length; i += USAGE_PROVIDER_ROWS_PER_STATEMENT) {
             providerStatements.push(
               usageProviderStatement(

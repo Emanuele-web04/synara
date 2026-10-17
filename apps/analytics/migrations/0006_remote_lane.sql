@@ -54,3 +54,31 @@ CREATE INDEX IF NOT EXISTS idx_product_events_channel_surface_ts
   ON product_events (channel, surface, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_event_ts ON product_events (event, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_install_ts ON product_events (install_id, ts);
+
+-- Finished turns per usage.daily window by fixed categories: provider, catalogued
+-- model name, effort, interaction and permission mode, origin and outcome.
+CREATE TABLE IF NOT EXISTS usage_turns (
+  event_id INTEGER NOT NULL,
+  install_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT '',
+  flavor TEXT NOT NULL DEFAULT 'beta',
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  effort TEXT NOT NULL,
+  interaction_mode TEXT NOT NULL,
+  runtime_mode TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'cancelled')),
+  turns INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  duration_samples INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  token_samples INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_turns_day ON usage_turns (day);
+CREATE INDEX IF NOT EXISTS idx_usage_turns_event ON usage_turns (event_id);

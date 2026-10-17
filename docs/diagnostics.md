@@ -137,14 +137,20 @@ the same failure do not emit another event; a new failed attempt does.
 
 `usage.daily` works differently from the other events: the main process cannot
 read the projection database, so the server writes
-`~/.synara-beta/diagnostics/usage-snapshot.json` every 6 hours (counts only —
+`<app home>/diagnostics/usage-snapshot.json` every 6 hours (counts only —
 provider names, thread and turn counts, project count) and the main process
-relays it once per UTC day. `beta.installed` is emitted once, on the first
+relays it once per UTC day. Its optional `turnBreakdown` groups finished turns
+of the last 24 hours — including turns started from a phone, an automation or
+an agent — by provider, model, effort, interaction mode, permission mode, origin
+and outcome, with turn counts, summed durations and main-turn token totals. A
+model name is kept only when it is in the bundled catalog or a public model
+family; anything else is reported as `other`. Usage keys that name models are
+never copied. `beta.installed` is emitted once, on the first
 backend start after a fresh install, and says whether stable data was imported.
 `beta.left` fires when you switch back to stable and says only whether the beta
 app was moved to the Trash.
 
-Every event also carries: a random per-install UUID, `flavor: "beta"`,
+Every event also carries: a random per-install UUID, `flavor` (`"beta"` or `"remote"`),
 `platform`, `arch`, the app version, and a timestamp; `app.start` additionally
 carries the OS version (major.minor) and UI language. The install UUID is
 generated locally on first launch (`crypto.randomUUID`) — it is not derived

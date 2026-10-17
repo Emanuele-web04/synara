@@ -343,6 +343,106 @@ describe("product event route and D1 storage", () => {
     expect((await filters.json()).flavors).toEqual(["beta", "remote"]);
   });
 
+  it("stores the daily turn breakdown and reports it per lane", async () => {
+    const usage = {
+      v: 1,
+      id: crypto.randomUUID(),
+      ts: new Date(now).toISOString(),
+      installId: "00000000-0000-4000-8000-0000000000c1",
+      appVersion: "1.0.6-remote.17",
+      flavor: "remote",
+      platform: "win32",
+      arch: "x64",
+      event: "usage.daily",
+      payload: {
+        kind: "usage",
+        providers: [{ provider: "claudeAgent", threads: 1, turns: 3, turnsFailed: 1 }],
+        projects: 1,
+        activeThreads: 1,
+        turnBreakdown: [
+          {
+            provider: "claudeAgent",
+            model: "claude-fable-5-1",
+            effort: "high",
+            interactionMode: "plan",
+            runtimeMode: "full-access",
+            origin: "user",
+            outcome: "succeeded",
+            turns: 2,
+            durationMs: 30000,
+            durationSamples: 2,
+            inputTokens: 1000,
+            outputTokens: 200,
+            cachedInputTokens: 50,
+            tokenSamples: 2,
+          },
+          {
+            provider: "claudeAgent",
+            model: "claude-fable-5-1",
+            effort: "high",
+            interactionMode: "plan",
+            runtimeMode: "full-access",
+            origin: "user",
+            outcome: "failed",
+            turns: 1,
+          },
+          // Free text never passes the category check.
+          {
+            provider: "claudeAgent",
+            model: "My Secret Model",
+            effort: "high",
+            interactionMode: "plan",
+            runtimeMode: "full-access",
+            origin: "user",
+            outcome: "failed",
+            turns: 9,
+          },
+        ],
+      },
+    };
+    const response = await worker.fetch(
+      new Request("https://worker.invalid/v1/events", {
+        method: "POST",
+        headers: { "content-type": "application/x-ndjson" },
+        body: JSON.stringify(usage),
+      }),
+      env,
+    );
+    expect(response.status).toBeLessThan(300);
+    expect(db.database.prepare("SELECT COUNT(*) AS n FROM usage_turns").get().n).toBe(2);
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const read = (flavor) =>
+      worker
+        .fetch(
+          new Request(
+            `https://worker.invalid/api/usage?days=7&flavor=${flavor}&version=1.0.6-remote.17&platform=win32`,
+            {
+              headers: { cookie: `synara_beta_dash=${token}` },
+            },
+          ),
+          env,
+        )
+        .then((result) => result.json());
+    const remote = await read("remote");
+    expect(remote.turnBreakdown).toEqual([
+      expect.objectContaining({
+        model: "claude-fable-5-1",
+        effort: "high",
+        interactionMode: "plan",
+        turns: 3,
+        succeeded: 2,
+        failed: 1,
+        meanDurationMs: 15000,
+        meanInputTokens: 500,
+        meanOutputTokens: 100,
+        installs: 1,
+      }),
+    ]);
+    expect(remote.turns).toBe(3);
+    expect((await read("beta")).turnBreakdown).toEqual([]);
+  });
+
   it("counts terminal desktop observations by provider without treating requests or missing usage as completed turns", async () => {
     const turn = (patch) =>
       envelope({ event: "turn.completed", feature: undefined, durationMs: undefined, ...patch });

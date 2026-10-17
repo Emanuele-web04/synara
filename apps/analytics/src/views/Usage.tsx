@@ -243,6 +243,92 @@ export function Usage({
           )}
         </section>
 
+        {data.turnBreakdown && (
+          <section className="section" aria-labelledby="turn-breakdown">
+            <h2 id="turn-breakdown" className="heading-20 section-head">
+              Turns by model and mode
+            </h2>
+            <p className="chart-caption">
+              Finished turns reported by each computer, including those started from a phone,
+              automation or agent. Models outside the catalog are grouped as other.
+            </p>
+            {data.turnBreakdown.length === 0 ? (
+              <EmptyLine text="No turn details in range." />
+            ) : (
+              <TableWrap>
+                <table className="data">
+                  <caption className="visually-hidden">
+                    Finished turns by provider, model, effort and mode
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Model</th>
+                      <th scope="col">Effort</th>
+                      <th scope="col">Mode</th>
+                      <th scope="col">Permissions</th>
+                      <th scope="col">Started by</th>
+                      <th scope="col" className="num">
+                        Turns
+                      </th>
+                      <th scope="col" className="num">
+                        Failed
+                      </th>
+                      <th scope="col" className="num">
+                        Mean time
+                      </th>
+                      <th scope="col" className="num">
+                        Mean tokens in / out
+                      </th>
+                      <th scope="col" className="num">
+                        Installs
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.turnBreakdown.map((row) => (
+                      <tr
+                        key={[
+                          row.provider,
+                          row.model,
+                          row.effort,
+                          row.interactionMode,
+                          row.runtimeMode,
+                          row.origin,
+                        ].join("|")}
+                      >
+                        <td>{row.model === "other" ? `${row.provider} (other)` : row.model}</td>
+                        <td>{row.effort}</td>
+                        <td>{row.interactionMode}</td>
+                        <td>{row.runtimeMode}</td>
+                        <td>{row.origin}</td>
+                        <td className="num">{row.turns.toLocaleString()}</td>
+                        <td className="num">
+                          {row.turns > 0
+                            ? `${Math.round((row.failed / row.turns) * 1000) / 10}%`
+                            : "—"}
+                        </td>
+                        <td className="num">
+                          {row.meanDurationMs === null
+                            ? "—"
+                            : `${Math.round(row.meanDurationMs / 100) / 10} s`}
+                        </td>
+                        <td className="num">
+                          {row.meanInputTokens === null
+                            ? "—"
+                            : `${row.meanInputTokens.toLocaleString()} / ${(
+                                row.meanOutputTokens ?? 0
+                              ).toLocaleString()}`}
+                        </td>
+                        <td className="num">{row.installs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableWrap>
+            )}
+          </section>
+        )}
+
         {mergeEnvironment ? (
           <section className="section" aria-labelledby="environment">
             <h2 id="environment" className="heading-20 section-head">

@@ -155,7 +155,27 @@ export interface IssueDetail {
   }[];
 }
 
+export interface UsageTurnBreakdown {
+  provider: string;
+  model: string;
+  effort: string;
+  interactionMode: string;
+  runtimeMode: string;
+  origin: string;
+  installs: number;
+  turns: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  meanDurationMs: number | null;
+  meanInputTokens: number | null;
+  meanOutputTokens: number | null;
+  cachedInputTokens: number;
+}
+
 export interface UsageData {
+  /** Finished turns by model, effort and mode; absent from older deployments. */
+  turnBreakdown?: UsageTurnBreakdown[];
   activeInstalls: number;
   installsByDay: { day: string; n: number }[];
   turns: number;

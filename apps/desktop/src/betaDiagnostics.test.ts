@@ -761,6 +761,56 @@ describe("BetaDiagnostics", () => {
     expect(readQueue(root).filter((event) => event.event === "usage.daily")).toHaveLength(1);
   });
 
+  it("relays the turn breakdown with categories only", () => {
+    const root = makeRoot();
+    const now = new Date("2026-10-17T12:00:00.000Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      now: () => now,
+      flavor: "remote",
+    });
+    const row = {
+      provider: "claudeAgent",
+      model: "claude-fable-5-1",
+      effort: "high",
+      interactionMode: "plan",
+      runtimeMode: "full-access",
+      origin: "user",
+      outcome: "succeeded",
+      turns: 2,
+      durationMs: 1000,
+      durationSamples: 2,
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedInputTokens: 1,
+      tokenSamples: 2,
+    };
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date(now.getTime() - 60_000).toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+        turnBreakdown: [
+          row,
+          { ...row, model: "a model with spaces" },
+          { ...row, outcome: "running" },
+          { ...row, secret: "dropped" },
+        ],
+      }),
+    );
+    diag.maybeTrackDailyUsage();
+    const [event] = readQueue(root).filter((e) => e.event === "usage.daily");
+    expect(event.flavor).toBe("remote");
+    expect(event.payload.turnBreakdown).toEqual([row, row]);
+  });
+
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
     const root = makeRoot();
     const now = new Date("2026-09-24T12:00:00.000Z");
