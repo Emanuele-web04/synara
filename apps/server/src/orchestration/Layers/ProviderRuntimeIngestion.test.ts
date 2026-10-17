@@ -8153,6 +8153,68 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread.session?.providerInstanceId).toBe("codex_work");
   });
 
+  it("updates a native subagent child model from its resolved model without touching the parent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-resolved-model"),
+        threadId: asThreadId("thread-1"),
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-5-5",
+        },
+      }),
+    );
+
+    const subagentRefs = {
+      providerThreadId: "child-resolved-model",
+      providerParentThreadId: "parent-provider-1",
+    };
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-resolved-turn-started"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-resolved"),
+      providerRefs: subagentRefs,
+      payload: {},
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) => entry.parentThreadId === "thread-1",
+      2000,
+      asThreadId("subagent:thread-1:child-resolved-model"),
+    );
+
+    harness.emit({
+      type: "thread.metadata.updated",
+      eventId: asEventId("evt-child-resolved-model"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      providerRefs: subagentRefs,
+      payload: { metadata: { model: "claude-haiku-5-5" } },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) => entry.modelSelection.model === "claude-haiku-5-5",
+      2000,
+      asThreadId("subagent:thread-1:child-resolved-model"),
+    );
+    expect(childThread.modelSelection.provider).toBe("claudeAgent");
+    expect(childThread.modelSelection.instanceId).toBe(
+      (await waitForThread(harness.engine, (entry) => entry.id === "thread-1")).modelSelection
+        .instanceId,
+    );
+    const parentThread = await waitForThread(harness.engine, (entry) => entry.id === "thread-1");
+    expect(parentThread.modelSelection.model).toBe("claude-opus-5-5");
+  });
+
   it("handles collab receiver and child provider refs on the same event without duplicate thread creation", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

@@ -3534,6 +3534,26 @@ const make = Effect.gen(function* () {
         });
       }
 
+      // A native subagent's resolved model (agent definition, env or tool input)
+      // only shows up in its own messages. Child threads only: the parent's
+      // model is the user's selection.
+      if (event.type === "thread.metadata.updated" && thread.id !== parentThread.id) {
+        const resolvedModel = event.payload.metadata?.model;
+        if (
+          thread.creationSource === "provider_native" &&
+          typeof resolvedModel === "string" &&
+          resolvedModel.length > 0 &&
+          resolvedModel !== thread.modelSelection.model
+        ) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.meta.update",
+            commandId: providerCommandId(event, "subagent-thread-model-update", thread.id),
+            threadId: thread.id,
+            modelSelection: { ...thread.modelSelection, model: resolvedModel },
+          });
+        }
+      }
+
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
         // This event loads only the thread shell (see eventNeedsHeavyThreadDetail):

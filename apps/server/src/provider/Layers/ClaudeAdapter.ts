@@ -401,6 +401,9 @@ interface ClaudeSubagentRun {
   // its prompt as a user message; a background spawn or resume does not, so
   // the launching call supplies it and a later forwarded copy is skipped.
   lastBrief: string | undefined;
+  // The last resolved model id surfaced for this subagent (from its assistant
+  // messages), so the child thread is updated once per distinct model.
+  reportedModel: string | undefined;
 }
 
 type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fresh-assistant";
@@ -3992,6 +3995,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         launchTurnId: launcher.turnState?.turnId,
         launchTool,
         lastBrief: undefined,
+        reportedModel: undefined,
         title:
           typeof launchTool?.input.description === "string"
             ? nonEmptyTrimmed(launchTool.input.description)
@@ -6240,6 +6244,37 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // The SDK resolves a subagent's model from its agent definition, env or the
+    // Agent tool input; the assistant messages carry the id that actually ran.
+    const reportSubagentResolvedModel = (
+      run: ClaudeSubagentRun,
+      message: Extract<SDKMessage, { type: "assistant" }>,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const rawModel = message.message.model;
+        if (typeof rawModel !== "string" || rawModel.length === 0 || rawModel === "<synthetic>") {
+          return;
+        }
+        const model = stripClaudeContextWindowSuffix(rawModel);
+        if (model.length === 0 || model === run.reportedModel) {
+          return;
+        }
+        run.reportedModel = model;
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(run.context, {
+          type: "thread.metadata.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: run.context.session.threadId,
+          ...(run.context.turnState
+            ? { turnId: asCanonicalTurnId(run.context.turnState.turnId) }
+            : {}),
+          payload: { metadata: { model } },
+          providerRefs: nativeProviderRefs(run.context),
+        });
+      });
+
     const handleSdkMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -6266,6 +6301,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               yield* handleUserMessage(run.context, message);
               return;
             case "assistant":
+              yield* reportSubagentResolvedModel(run, message);
               yield* handleAssistantMessage(run.context, message);
               return;
             default:
