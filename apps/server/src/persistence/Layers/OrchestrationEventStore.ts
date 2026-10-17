@@ -556,7 +556,11 @@ const makeEventStore = Effect.gen(function* () {
             event_type IN ('thread.created', 'thread.archived', 'thread.deleted')
             OR (
               event_type = 'thread.meta-updated'
-              AND json_type(payload_json, '$.title') = 'text'
+              AND (
+                json_type(payload_json, '$.title') = 'text'
+                OR json_type(payload_json, '$.manualTitlePinned') IS NOT NULL
+                OR json_type(payload_json, '$.titleRefreshMode') IS NOT NULL
+              )
             )
           )
       `,

@@ -410,6 +410,7 @@ import {
 } from "./chat/chatHeaderControls";
 import type { LateComposerSendHandlers } from "./chat/chatSendTypes";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
+import { TitleSuggestionSlot } from "./TitleSuggestionBanner";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
@@ -6199,6 +6200,14 @@ export default function ChatView({
             {settledThreadBranchMismatch ? (
               <div className="pb-2">
                 <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />
+              </div>
+            ) : null}
+            {activeThread?.pendingSuggestedTitle && activeThread ? (
+              <div className="pb-2">
+                <TitleSuggestionSlot
+                  threadId={activeThread.id}
+                  candidate={activeThread.pendingSuggestedTitle}
+                />
               </div>
             ) : null}
             {/* Pending approvals and AskUserQuestion prompts both render as a detached
