@@ -2952,6 +2952,42 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           toCheckpointRef: asCheckpointRef("checkpoint-b"),
         });
       }
+
+      // The turn-diff context matches the checkpoint context's completed filter:
+      // the incomplete placeholder (count 3) neither raises the max nor resolves.
+      const turnDiffContext = yield* snapshotQuery.getThreadTurnDiffContext(
+        ThreadId.makeUnsafe("thread-context"),
+        asTurnId("turn-2"),
+      );
+      assert.deepEqual(
+        turnDiffContext,
+        Option.some({
+          maxCheckpointTurnCount: 2,
+          checkpoint: {
+            turnId: asTurnId("turn-2"),
+            checkpointTurnCount: 2,
+            checkpointRef: asCheckpointRef("checkpoint-b"),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-03-02T00:00:05.000Z",
+          },
+        }),
+      );
+      assert.deepEqual(
+        yield* snapshotQuery.getThreadTurnDiffContext(
+          ThreadId.makeUnsafe("thread-context"),
+          asTurnId("turn-placeholder"),
+        ),
+        Option.some({ maxCheckpointTurnCount: 2, checkpoint: null }),
+      );
+      assert.deepEqual(
+        yield* snapshotQuery.getThreadTurnDiffContext(
+          ThreadId.makeUnsafe("thread-missing"),
+          asTurnId("turn-2"),
+        ),
+        Option.none(),
+      );
     }),
   );
 
@@ -3415,6 +3451,31 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           limit: 1,
         }),
         [ThreadId.makeUnsafe("thread-queued-oldest")],
+      );
+
+      // A turn running a long command or subagent writes no message, but
+      // ingestion still stamps the session's last activity. Recent activity
+      // keeps it out of the candidates despite old lifecycle timestamps.
+      const quietThreadId = ThreadId.makeUnsafe("thread-archived-running");
+      const quietCandidates = (updatedBefore: string) =>
+        snapshotQuery.listStaleInFlightThreadIds({ updatedBefore, limit: 10 });
+      assert.equal(
+        (yield* quietCandidates("2026-07-23T09:00:00.000Z")).includes(quietThreadId),
+        true,
+      );
+      yield* sql`
+        UPDATE projection_thread_sessions
+        SET last_activity_at = '2026-07-23T09:30:00.000Z'
+        WHERE thread_id = 'thread-archived-running'
+      `;
+      assert.equal(
+        (yield* quietCandidates("2026-07-23T09:00:00.000Z")).includes(quietThreadId),
+        false,
+      );
+      // Once that activity is itself older than the cutoff, it is stale again.
+      assert.equal(
+        (yield* quietCandidates("2026-07-23T10:00:00.000Z")).includes(quietThreadId),
+        true,
       );
     }),
   );

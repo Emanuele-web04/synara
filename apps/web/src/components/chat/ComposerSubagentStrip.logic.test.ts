@@ -41,11 +41,35 @@ function subagent(overrides: Partial<WorkLogSubagent> & { threadId: string }): W
   return overrides;
 }
 
-function subagentRows(rows: ComposerSubagentStripRow[]): ComposerSubagentStripItem[] {
+function subagentRows(rows: ReadonlyArray<ComposerSubagentStripRow>): ComposerSubagentStripItem[] {
   return rows.filter((row): row is ComposerSubagentStripItem => row.kind === "subagent");
 }
 
 describe("deriveComposerSubagentStripItems", () => {
+  it("returns one shared empty result whenever no row is shown", () => {
+    const empty = deriveComposerSubagentStripItems({ workEntries: [], liveTurnId: null });
+
+    expect(empty).toEqual([]);
+    expect(
+      deriveComposerSubagentStripItems({
+        workEntries: [workEntry({ id: "plain", turnId: "turn-1" })],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    ).toBe(empty);
+    expect(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "settled",
+            turnId: "turn-1",
+            subagents: [subagent({ threadId: "done-agent", rawStatus: "completed" })],
+          }),
+        ],
+        liveTurnId: null,
+      }),
+    ).toBe(empty);
+  });
+
   it("keeps prior running background rows alongside subagents from the live turn", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [

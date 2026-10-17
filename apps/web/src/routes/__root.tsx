@@ -162,7 +162,11 @@ import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries, refreshGitQueriesForCwdsAfterActivity } from "../lib/gitReactQuery";
+import {
+  invalidateGitQueries,
+  refreshGitQueriesForCwdsAfterActivity,
+  refreshLocalGitQueriesForCwdsAfterActivity,
+} from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
@@ -209,6 +213,9 @@ import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
+  getTurnDiffInvalidationThreadIdForEvent,
+  invalidateFinalizedTurnDiffQueries,
+  isLocalGitActivityInvalidationEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -1360,7 +1367,10 @@ function EventRouter() {
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
+    // Tool completions: local Git state only (no GitHub repository / pull-request reads).
+    let pendingLocalGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
+    let pendingTurnDiffInvalidationThreadIds = new Set<ThreadId>();
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
@@ -1957,11 +1967,25 @@ function EventRouter() {
       if (needsProviderInvalidation) {
         needsProviderInvalidation = false;
         pendingProjectFileInvalidationThreadIds = new Set();
+        pendingTurnDiffInvalidationThreadIds = new Set();
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         // Invalidate workspace entry queries so the @-mention file picker
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-      } else if (pendingProjectFileInvalidationThreadIds.size > 0) {
+      } else if (pendingTurnDiffInvalidationThreadIds.size > 0) {
+        // Scoped to the finalized turns' threads; their file queries ride the
+        // file-change pass below unless every project cache was already dropped.
+        const scoped = invalidateFinalizedTurnDiffQueries(
+          queryClient,
+          useStore.getState(),
+          pendingTurnDiffInvalidationThreadIds,
+        );
+        pendingTurnDiffInvalidationThreadIds = new Set();
+        if (!scoped) {
+          pendingProjectFileInvalidationThreadIds = new Set();
+        }
+      }
+      if (pendingProjectFileInvalidationThreadIds.size > 0) {
         // Mid-turn file-change activities: refresh the editor file tree and
         // open file preview for just the affected workspaces.
         const currentState = useStore.getState();
@@ -1991,24 +2015,40 @@ function EventRouter() {
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
+        pendingLocalGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
-      } else if (pendingGitInvalidationThreadIds.size > 0) {
+      } else if (
+        pendingGitInvalidationThreadIds.size > 0 ||
+        pendingLocalGitInvalidationThreadIds.size > 0
+      ) {
         const currentState = useStore.getState();
         const scopedCwds = new Set<string>();
+        const localCwds = new Set<string>();
         let hasUnresolvedThread = false;
-        for (const threadId of pendingGitInvalidationThreadIds) {
-          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
-          if (cwd) {
-            scopedCwds.add(cwd);
-          } else {
-            hasUnresolvedThread = true;
+        for (const [threadIds, cwds] of [
+          [pendingGitInvalidationThreadIds, scopedCwds],
+          [pendingLocalGitInvalidationThreadIds, localCwds],
+        ] as const) {
+          for (const threadId of threadIds) {
+            const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+            if (cwd) {
+              cwds.add(cwd);
+            } else {
+              hasUnresolvedThread = true;
+            }
           }
         }
         pendingGitInvalidationThreadIds = new Set();
-        if (hasUnresolvedThread || scopedCwds.size === 0) {
+        pendingLocalGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || (scopedCwds.size === 0 && localCwds.size === 0)) {
           void invalidateGitQueries(queryClient);
         } else {
           refreshGitQueriesForCwdsAfterActivity(queryClient, scopedCwds);
+          // A full refresh for the same checkout already covers its local state.
+          refreshLocalGitQueriesForCwdsAfterActivity(
+            queryClient,
+            [...localCwds].filter((cwd) => !scopedCwds.has(cwd)),
+          );
         }
       }
     };
@@ -2027,6 +2067,10 @@ function EventRouter() {
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
+      const turnDiffThreadId = getTurnDiffInvalidationThreadIdForEvent(event);
+      if (turnDiffThreadId) {
+        pendingTurnDiffInvalidationThreadIds.add(turnDiffThreadId);
+      }
       const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
       if (projectFileThreadId) {
         pendingProjectFileInvalidationThreadIds.add(projectFileThreadId);
@@ -2037,7 +2081,9 @@ function EventRouter() {
       }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
-        if (threadId) {
+        if (threadId && isLocalGitActivityInvalidationEvent(event)) {
+          pendingLocalGitInvalidationThreadIds.add(threadId);
+        } else if (threadId) {
           pendingGitInvalidationThreadIds.add(threadId);
         } else {
           needsBroadGitInvalidation = true;
@@ -2205,7 +2251,8 @@ function EventRouter() {
         if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
-          needsProviderInvalidation = true;
+          pendingTurnDiffInvalidationThreadIds.add(threadId);
+          pendingProjectFileInvalidationThreadIds.add(threadId);
           pendingGitInvalidationThreadIds.add(threadId);
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
@@ -2865,6 +2912,8 @@ function EventRouter() {
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
+      pendingLocalGitInvalidationThreadIds = new Set();
+      pendingTurnDiffInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
       threadProjectionTerminalFencePending.clear();
