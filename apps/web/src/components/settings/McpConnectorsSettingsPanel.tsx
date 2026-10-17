@@ -401,8 +401,8 @@ export function McpConnectorsSettingsPanel(props: { active: boolean }) {
       ) : null}
 
       <p className="px-3 text-ui-sm text-muted-foreground">
-        Agents in new chats can use the services you connect here. Pi, Devin, and Antigravity don't
-        support connectors yet.
+        One sign-in works for every account and provider on this computer. Agents in new chats can
+        use the services you connect here. Pi, Devin, and Antigravity don't support connectors yet.
       </p>
 
       <AddCustomConnectorDialog open={addOpen} onOpenChange={setAddOpen} onSubmit={addCustom} />

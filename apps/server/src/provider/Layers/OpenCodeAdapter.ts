@@ -338,6 +338,15 @@ const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(functio
           ),
         ).pipe(
           Effect.timeout("10 seconds"),
+          Effect.flatMap((added) => {
+            const connectorStatus = added.data?.[connector.name]?.status;
+            return connectorStatus === "connected"
+              ? Effect.void
+              : Effect.logWarning("OpenCode connector MCP install failed", {
+                  connector: connector.name,
+                  detail: `status: ${connectorStatus ?? "missing"}`,
+                });
+          }),
           // Log the summarized detail only: the raw cause can echo request headers.
           Effect.catch((error) =>
             Effect.logWarning("OpenCode connector MCP install failed", {

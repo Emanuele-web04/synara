@@ -530,6 +530,44 @@ describe("McpConnectorRuntime.forward", () => {
     ]);
   });
 
+  it("does not refresh again when another call already rotated the rejected token", async () => {
+    const harness = makeRuntime();
+    const connector = await connectSupabase(harness);
+    const staleReplies = [
+      Promise.withResolvers<McpConnectorProxyResult>(),
+      Promise.withResolvers<McpConnectorProxyResult>(),
+    ];
+    let staleCalls = 0;
+    mocks.forward.mockImplementation(async (request: { accessToken?: string }) =>
+      request.accessToken === "access-1"
+        ? staleReplies[staleCalls++]!.promise
+        : ok({ token: request.accessToken }),
+    );
+    mocks.refreshAuthorization.mockResolvedValue({
+      access_token: "access-2",
+      token_type: "bearer",
+      expires_in: 3600,
+      refresh_token: "refresh-2",
+    });
+
+    const first = harness.runtime.forward(connector.connectorId, { method: "POST", body: call });
+    const second = harness.runtime.forward(connector.connectorId, { method: "POST", body: call });
+    await vi.waitFor(() => expect(mocks.forward).toHaveBeenCalledTimes(2));
+    // The first call's refresh finishes before the second call sees its 401.
+    staleReplies[0]!.resolve(unauthorized);
+    await expect(first).resolves.toEqual(ok({ token: "access-2" }));
+    staleReplies[1]!.resolve(unauthorized);
+    await expect(second).resolves.toEqual(ok({ token: "access-2" }));
+
+    expect(mocks.refreshAuthorization).toHaveBeenCalledTimes(1);
+    expect(mocks.forward.mock.calls.map(([request]) => request.accessToken)).toEqual([
+      "access-1",
+      "access-1",
+      "access-2",
+      "access-2",
+    ]);
+  });
+
   it.each([true, false])(
     "does not deliver after disconnect during refresh (expired: %s)",
     async (expired) => {

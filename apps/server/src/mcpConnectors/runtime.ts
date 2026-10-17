@@ -535,6 +535,8 @@ export class McpConnectorRuntime {
       );
     }
     if (connector.status === "needs-auth") return reconnectResult(request.body, connector.name);
+    // The token the last request actually carried, which is the one a 401 rejected.
+    let sentToken: string | undefined;
     const send = (accessToken: string | undefined) => {
       // Recheck ownership after token refresh: Disconnect or Reconnect may have finished.
       const current = this.find(connectorId);
@@ -549,6 +551,7 @@ export class McpConnectorRuntime {
       }
       if (current.status === "needs-auth")
         return Promise.resolve(reconnectResult(request.body, current.name));
+      sentToken = current.oauth?.tokens.access_token ?? accessToken;
       return forwardMcpConnectorRequest(
         {
           url: current.url,
@@ -556,7 +559,7 @@ export class McpConnectorRuntime {
           body: request.body,
           sessionId: request.sessionId,
           protocolVersion: request.protocolVersion,
-          accessToken: current.oauth?.tokens.access_token ?? accessToken,
+          accessToken: sentToken,
           signal: request.signal,
         },
         current.name,
@@ -568,13 +571,12 @@ export class McpConnectorRuntime {
     }
 
     try {
-      const first = await send(await this.accessToken(connectorId, false));
+      const first = await send(await this.accessToken(connectorId));
       if (first.status !== 401) return first;
-      const retryToken = await this.accessToken(connectorId, true);
-      const retried = await send(retryToken);
+      const retried = await send(await this.accessToken(connectorId, sentToken));
       if (retried.status !== 401) return retried;
       const current = this.find(connectorId)?.oauth;
-      if (current?.tokens.access_token === retryToken) {
+      if (sentToken !== undefined && current?.tokens.access_token === sentToken) {
         await this.markNeedsAuth(connectorId, current);
       }
       return reconnectResult(request.body, connector.name);
@@ -724,9 +726,19 @@ export class McpConnectorRuntime {
     });
   }
 
-  private accessToken(connectorId: string, force: boolean): Promise<string> {
+  /**
+   * Returns the token to send. Passing `rejected` (the token a 401 refused)
+   * forces a refresh, unless another call already rotated past that token.
+   */
+  private accessToken(connectorId: string, rejected?: string): Promise<string> {
     const oauth = this.find(connectorId)?.oauth;
     if (!oauth) return Promise.reject(new McpConnectorNeedsAuth());
+    const force = rejected !== undefined;
+    // A refresh that finished after this call sent its request already replaced
+    // the rejected token; refreshing again would only rotate it once more.
+    if (force && oauth.tokens.access_token !== rejected) {
+      return Promise.resolve(oauth.tokens.access_token);
+    }
     const fresh =
       oauth.expiresAtMs === null || oauth.expiresAtMs - TOKEN_REFRESH_LEEWAY_MS > this.now();
     if (!force && fresh) return Promise.resolve(oauth.tokens.access_token);
