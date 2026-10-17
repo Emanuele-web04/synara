@@ -92,6 +92,7 @@ import {
 
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -379,6 +380,16 @@ function shouldDropResumeCursorForProviderOptionsChange(input: {
   // dirs. Reusing a provider-native cursor across any of those changes can
   // silently resume the previous account/endpoint.
   return input.providerOptionsChanged;
+}
+
+// Providers whose fresh-session transcript bootstrap is also persisted on the
+// provider binding (OpenCode, plus Devin and Grok after a stale-cursor fresh
+// start). Synara must clear that durable flag once the bootstrap is consumed,
+// or every later start of the session would ask for the transcript again.
+function persistsPriorTranscriptBootstrap(
+  provider: string | undefined,
+): provider is "opencode" | "devin" | "grok" {
+  return provider === "opencode" || provider === "devin" || provider === "grok";
 }
 
 function escapeRegExp(value: string): string {
@@ -2118,6 +2129,20 @@ const make = Effect.gen(function* () {
       );
     }
 
+    // The hidden Git ref is the durable recovery record, discoverable by thread
+    // even after restart. Keep it out of chat activities and retain it on success:
+    // it may be the only copy of files changed since the restored checkpoint.
+    const rescueCheckpointRef = checkpointRefForThreadRevertRescue(
+      input.threadId,
+      crypto.randomUUID(),
+    );
+    yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: rescueCheckpointRef });
+    yield* Effect.logInfo("edit replay workspace recovery snapshot retained", {
+      threadId: input.threadId,
+      checkpointRef: rescueCheckpointRef,
+      restoreTargetRef: targetCheckpointRef,
+    });
+
     return {
       cwd,
       checkpointRef: targetCheckpointRef,
@@ -2656,9 +2681,15 @@ const make = Effect.gen(function* () {
         return deferComputerControlRestart;
       }
       const restartedSession = restartedOutcome.session;
+      // Dropping the cursor here does not make the restart fresh: ProviderService
+      // reuses the persisted cursor when the launch is compatible, and Droid then
+      // reloads its native history. Only bootstrap when that reload did not happen.
       if (
         shouldRegisterContextBootstrap &&
-        ((currentProvider === "droid" && !providerChanged && resumeCursor === undefined) ||
+        ((currentProvider === "droid" &&
+          !providerChanged &&
+          resumeCursor === undefined &&
+          !restartedOutcome.nativeResumeSucceeded) ||
           restartedOutcome.priorTranscriptBootstrapPending === true)
       ) {
         freshSessionContextBootstrapThreadIds.add(threadId);
@@ -2836,7 +2867,7 @@ const make = Effect.gen(function* () {
       if (shouldRegisterContextBootstrap) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       } else if (
-        (preferredProvider === "opencode" || preferredProvider === "devin") &&
+        persistsPriorTranscriptBootstrap(preferredProvider) &&
         providerService.completePriorTranscriptBootstrap
       ) {
         // An explicit stop intentionally discards pending synthetic context.
@@ -3968,7 +3999,7 @@ const make = Effect.gen(function* () {
         activeSession?.provider === "droid" &&
         (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null);
       const tracksDurableContextAcceptance =
-        (selectedProvider === "opencode" || selectedProvider === "devin") &&
+        persistsPriorTranscriptBootstrap(selectedProvider) &&
         ((hasPendingFreshSessionTranscriptBootstrap &&
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
@@ -4199,7 +4230,7 @@ const make = Effect.gen(function* () {
       let durableCompletionSucceeded = true;
       if (
         hasPendingFreshSessionTranscriptBootstrap &&
-        (selectedProvider === "opencode" || selectedProvider === "devin") &&
+        persistsPriorTranscriptBootstrap(selectedProvider) &&
         providerService.completePriorTranscriptBootstrap
       ) {
         durableCompletionSucceeded = yield* persistPriorTranscriptBootstrapCompletion(
@@ -6783,7 +6814,7 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : thread.modelSelection.provider;
     if (
-      (stoppedProvider === "opencode" || stoppedProvider === "devin") &&
+      persistsPriorTranscriptBootstrap(stoppedProvider) &&
       providerService.completePriorTranscriptBootstrap
     ) {
       yield* providerService.completePriorTranscriptBootstrap({ threadId: thread.id }).pipe(

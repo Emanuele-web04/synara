@@ -275,7 +275,6 @@ interface ClaudeTurnState {
   readonly explicitCompaction?: { readonly nativeSessionId: string; boundaryObserved: boolean };
   // Set while a "Compacting context" progress row awaits its compact boundary.
   compactionInProgress?: boolean;
-  readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly reasoningBlocks: Map<
     string,
@@ -455,10 +454,12 @@ interface ClaudeSessionContext {
   // "ask" outcome through its reviewer/user boundary.
   approvalsAlwaysAllowedForSession: boolean;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  readonly turns: Array<{
-    id: TurnId;
-    items: Array<unknown>;
-  }>;
+  // Completed turn ids only. SDK message bodies (tool results, file reads, edit
+  // inputs) are not retained: nothing live reads them back, and keeping them made
+  // memory grow with every turn of a long session. `readThread` reports each turn
+  // with an empty `items` list; the durable transcript lives in Claude's own
+  // session files and in Synara's runtime event log.
+  readonly turns: Array<{ readonly id: TurnId }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly trackedTasks: Map<string, ClaudeTrackedTask>;
   turnState: ClaudeTurnState | undefined;
@@ -2683,10 +2684,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         return {
           threadId,
-          turns: context.turns.map((turn) => ({
-            id: turn.id,
-            items: [...turn.items],
-          })),
+          turns: context.turns.map((turn) => ({ id: turn.id, items: [] })),
         };
       });
 
@@ -3843,10 +3841,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           });
         }
 
-        context.turns.push({
-          id: turnState.turnId,
-          items: [...turnState.items],
-        });
+        context.turns.push({ id: turnState.turnId });
 
         if (usageSnapshot) {
           const usageStamp = yield* makeEventStamp();
@@ -4505,10 +4500,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        if (context.turnState) {
-          context.turnState.items.push(stripDiagnosticImages(message.message));
-        }
-
         // A subagent conversation's user turns are what its launcher sent it:
         // the brief, or a later message on resume.
         const subagentRoot = subagentRootContext(context);
@@ -4912,7 +4903,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           startedAt,
           interactionMode: "default",
           synthetic: true,
-          items: [],
           assistantTextBlocks: new Map(),
           reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
@@ -5089,7 +5079,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(stripDiagnosticImages(message.message));
           if (Array.isArray(content)) {
             for (const [index, block] of content.entries()) {
               if (block.type !== "thinking" || typeof block.thinking !== "string") continue;
@@ -8046,7 +8035,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 },
               }
             : {}),
-          items: [],
           assistantTextBlocks: new Map(),
           reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],

@@ -354,7 +354,7 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   // Session exits and runtime errors flush the turn's pending generated images
   // into the terminal assistant message, which requires thread.messages.
   // `turn.diff.updated` only needs checkpoints, which its handler reads through
-  // the narrow checkpoint context (Codex emits one per patch).
+  // the narrow turn-diff context (Codex emits one per patch).
   return (
     event.type === "turn.proposed.completed" ||
     event.type === "turn.completed" ||
@@ -3540,21 +3540,24 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.diff.updated") {
+      // A newer snapshot of this turn's cumulative diff later in the same journal
+      // page supersedes this one (see coalesceProviderRuntimeProgress): skip the
+      // patch parse and placeholder write, the survivor carries the newest files.
+      if (event.type === "turn.diff.updated" && !suppressProgressActivity) {
         const turnId = toTurnId(event.turnId);
         // This event loads only the thread shell (see eventNeedsHeavyThreadDetail):
-        // read the checkpoints through the narrow context query, which selects the
-        // same checkpoint rows as the full detail. A thread that cannot be read
-        // any more is skipped, as it was when the full detail came back empty.
-        const checkpointContext =
+        // read the max checkpoint turn count and this turn's checkpoint through the
+        // narrow turn-diff context, under the same completed-checkpoint filter as
+        // the full detail. A thread that cannot be read any more is skipped, as it
+        // was when the full detail came back empty.
+        const turnDiffContext =
           turnId && (yield* isGitRepoForThread(thread.id))
             ? yield* projectionSnapshotQuery
-                .getThreadCheckpointContext(thread.id)
+                .getThreadTurnDiffContext(thread.id, turnId)
                 .pipe(Effect.catch(() => Effect.succeed(Option.none())))
             : Option.none();
-        if (turnId && Option.isSome(checkpointContext)) {
-          const checkpoints = checkpointContext.value.checkpoints;
-          const existingCheckpoint = checkpoints.find((c) => c.turnId === turnId);
+        if (turnId && Option.isSome(turnDiffContext)) {
+          const existingCheckpoint = turnDiffContext.value.checkpoint ?? undefined;
           const placeholderKey = providerTurnKey(thread.id, turnId);
           const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(
             placeholderKey,
@@ -3574,10 +3577,7 @@ const make = Effect.gen(function* () {
           } else {
             const canParseLiveDiffPatch = yield* supportsLiveTurnDiffPatch(event.provider);
             const livePlaceholder = trackedPlaceholder ?? existingProviderPlaceholder;
-            const maxTurnCount = checkpoints.reduce(
-              (max, c) => Math.max(max, c.checkpointTurnCount),
-              0,
-            );
+            const maxTurnCount = turnDiffContext.value.maxCheckpointTurnCount;
             const files =
               (canParseLiveDiffPatch
                 ? yield* parseProviderTurnDiffFiles(event.payload.unifiedDiff)
@@ -4037,7 +4037,8 @@ const make = Effect.gen(function* () {
           runtimeJournalPageBlocked = false;
           const progressSurvivors = new Set(coalesceProviderRuntimeProgress(page));
           // Every row still updates process-local state and durable cursor
-          // bookkeeping; only replaceable activity snapshots are suppressed.
+          // bookkeeping; only replaceable activity snapshots and superseded
+          // turn diffs are suppressed.
           yield* Effect.forEach(page, (entry) =>
             worker.enqueue({
               source: "runtime",

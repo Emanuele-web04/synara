@@ -1540,9 +1540,12 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/diff/updated") {
+    // Each patch resends the whole cumulative turn diff. Keep it only in
+    // payload.unifiedDiff: copying it into raw doubles every journal write,
+    // sizing pass and decode for no reader.
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...runtimeDeltaEventBase(event, canonicalThreadId),
         type: "turn.diff.updated",
         payload: {
           unifiedDiff:

@@ -179,12 +179,18 @@ export function collectForegroundRunningSubagentStripItems(
 }
 
 const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
+// One shared empty result keeps memoized consumers (and the Ctrl+B handler built
+// from it) stable on the common no-subagent path, where every flush re-derives.
+const NO_STRIP_ROWS: ReadonlyArray<ComposerSubagentStripRow> = Object.freeze([]);
 
 function withParentRow(
   items: ComposerSubagentStripItem[],
   parentRow: { threadId: ThreadId; label: string | null } | null | undefined,
-): ComposerSubagentStripRow[] {
-  if (items.length === 0 || !parentRow) {
+): ReadonlyArray<ComposerSubagentStripRow> {
+  if (items.length === 0) {
+    return NO_STRIP_ROWS;
+  }
+  if (!parentRow) {
     return items;
   }
   return [
@@ -207,12 +213,12 @@ export function deriveComposerSubagentStripItems(input: {
   viewedThreadId?: ThreadId | null;
   // Present while a subagent thread is open: prepends a row back to the parent.
   parentRow?: { threadId: ThreadId; label: string | null } | null;
-}): ComposerSubagentStripRow[] {
+}): ReadonlyArray<ComposerSubagentStripRow> {
   const entriesWithSubagents = input.workEntries.filter(
     (entry) => (entry.subagents?.length ?? 0) > 0,
   );
   if (entriesWithSubagents.length === 0) {
-    return [];
+    return NO_STRIP_ROWS;
   }
 
   const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
@@ -248,5 +254,5 @@ export function deriveComposerSubagentStripItems(input: {
   );
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)
-    : [];
+    : NO_STRIP_ROWS;
 }

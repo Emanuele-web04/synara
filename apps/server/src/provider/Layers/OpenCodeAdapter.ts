@@ -1394,9 +1394,12 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
 
   yield* runOpenCodeSdk("session.abort", () =>
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
-
-  yield* releaseOpenCodeSessionResources(context, beforeRelease);
+  ).pipe(
+    Effect.ignore({ log: true }),
+    // A cancelled abort still retires the stopped context before recovery can
+    // replace it. Otherwise its managed server and gateway lease are abandoned.
+    Effect.ensuring(releaseOpenCodeSessionResources(context, beforeRelease)),
+  );
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -4567,7 +4570,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.sync(() => [...sessions.values()].map((context) => context.session));
 
       const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
-        Effect.sync(() => sessions.has(threadId));
+        Effect.sync(() => {
+          const context = sessions.get(threadId);
+          return context !== undefined && !Ref.getUnsafe(context.stopped);
+        });
 
       const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
         function* (threadId) {

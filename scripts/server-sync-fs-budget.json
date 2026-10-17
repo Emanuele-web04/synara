@@ -259,7 +259,10 @@
       "rmSync": 2,
       "renameSync": 2,
       "readdirSync": 1,
-      "statSync": 1
+      "statSync": 1,
+      "openSync": 2,
+      "writeSync": 1,
+      "closeSync": 1
     }
   },
   "packages/shared/src/loginShellEnvironment.ts": {
