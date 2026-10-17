@@ -3154,7 +3154,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return yield* createGitCommandError(
             "GitCore.pullCurrentBranch",
             cwd,
-            ["pull", "--ff-only"],
+            ["pull", "--ff-only", "--no-rebase"],
             "Cannot pull from detached HEAD.",
           );
         }
@@ -3162,7 +3162,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return yield* createGitCommandError(
             "GitCore.pullCurrentBranch",
             cwd,
-            ["pull", "--ff-only"],
+            ["pull", "--ff-only", "--no-rebase"],
             "Current branch has no upstream configured. Push with upstream first.",
           );
         }
@@ -3172,17 +3172,24 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ["rev-parse", "HEAD"],
           true,
         ).pipe(Effect.map((stdout) => stdout.trim()));
-        yield* executeGit("GitCore.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
-          timeoutMs: 30_000,
-          fallbackErrorMessage: "git pull failed",
-        }).pipe(
+        // Fast-forward-only must not inherit pull.rebase: Git otherwise rejects
+        // even unrelated local edits before attempting the fast-forward.
+        yield* executeGit(
+          "GitCore.pullCurrentBranch.pull",
+          cwd,
+          ["pull", "--ff-only", "--no-rebase"],
+          {
+            timeoutMs: 30_000,
+            fallbackErrorMessage: "git pull failed",
+          },
+        ).pipe(
           Effect.mapError((error) => {
             const friendlyDetail = explainPullBlockedByLocalChanges(error);
             if (!friendlyDetail) return error;
             return createGitCommandError(
               "GitCore.pullCurrentBranch.pull",
               cwd,
-              ["pull", "--ff-only"],
+              ["pull", "--ff-only", "--no-rebase"],
               friendlyDetail,
               error,
             );
