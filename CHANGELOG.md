@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.6-remote.18 — 2026-10-17
+
+### Added
+
+- Remote usage reporting and private dashboard filters for macOS, Windows, Linux, iPhone and iPad, with daily/weekly/monthly active installations and pseudonymous account counts across devices.
+- Host turn aggregates by provider, catalogued model, effort, interaction/permission mode, origin, outcome, duration and available tokens. Built-in shortcut/slash-command categories and fixed connection/pairing/request failure categories are included; custom names become fixed categories.
+
+### Changed
+
+- Remote shares limited usage and technical diagnostics by default. Settings → Privacy → Share usage and diagnostics turns both off on that installation. An existing explicit off preference is preserved; Stable/Beta product analytics remain opt-in and Stable never runs diagnostics.
+- Account identifiers are hashed before analytics delivery. These hashes are pseudonymous and linked to the user, not anonymous. Privacy disclosures cover account/installation identifiers, product interactions and startup timing; no advertising tracking is introduced.
+
+### Fixed
+
+- Remote diagnostic errors keep built-in error types, contract-validated issue categories and numeric source locations only. Injected stack lines, custom error names, spoofed issue labels and Remote log tails are stripped by both the desktop and receiving Worker. Raw crash memory is not uploaded.
+- Opt-out clears unsent events and stops new collection; resumed daily snapshots exclude activity from the opted-out window. Custom model and command names stay on the device.
+
+### Verification
+
+- Receiver migration 0006 and the updated analytics Worker must be live before these apps are distributed. A temporary SQLite upgrade preserves 100 preexisting product rows and 100 diagnostic rows with an integrity check; actual D1 backup, migration and ingestion are qualified separately.
+- Companion universal iOS/iPadOS 0.1 (139) sends the Remote lane and account hash, preserves opt-out and declares linked Product Interaction, identifiers and startup Performance Data for Analytics, without tracking.
+- Exact-source quality/server tests, three-platform packaged startup, macOS signing/notarization, Windows Defender and public artifact/feed checks are required before publication completion. Windows retains the exact-version unsigned policy and may show SmartScreen. New live provider turns, physical-device APNs delivery and manual installed upgrades are not established by these automated checks.
+
 ## 1.0.6-remote.17 — 2026-10-17
 
 ### Fixed

@@ -22,6 +22,24 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.18",
+    date: "Oct 17",
+    features: [
+      {
+        id: "remote-usage-sharing",
+        title: "Help improve Remote",
+        description:
+          "Remote now shares limited usage and technical diagnostics by default. Turn it off in Settings → Privacy → Share usage and diagnostics. An existing off choice is preserved.",
+      },
+      {
+        id: "remote-technical-diagnostics",
+        title: "Technical reports without your conversation text",
+        description:
+          "Reports use fixed categories, numeric error locations and bounded usage counts. Prompts, files, custom model names and raw crash memory stay out of Remote analytics.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.17",
     date: "Oct 17",
     features: [

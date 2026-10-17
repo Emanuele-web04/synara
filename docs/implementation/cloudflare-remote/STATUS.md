@@ -1,5 +1,22 @@
 # Cloudflare Remote — execution state
 
+## Remote .18 / mobile 139 candidate — 2026-10-17
+
+Reviewed user sources `1f81242` and `0ab4258`. Additional desktop/shared/Worker
+hardening in `7cc0b2e` reproduces and removes free-text diagnostics leakage at both
+queue and D1 ingestion boundaries. Native privacy declarations also cover Analytics
+for account/installation identifiers and linked startup Performance Data.
+The actual public website still describes opt-in-only analytics; a separate clean
+privacy-only website candidate names Remote .18/mobile 139 and is qualified separately.
+
+The D1 upgrade preserves 100 existing product rows and 100 diagnostics in temporary
+SQLite. Existing Wrangler credentials lack D1 write; read access failed with 7403,
+and the existing CF CLI profile is read-only too. Production export/migration and
+Worker deployment are pending the scoped OAuth refresh. Preserve existing Worker
+variables with `--keep-vars`. No Remote .18 tag or mobile 139 distribution is
+allowed before receiver migration/deployment and live synthetic ingestion succeed.
+The existing .17 and TestFlight 138 remain available.
+
 ## Remote .17 and companion 138 delivered — 2026-10-17
 
 [Synara Remote 1.0.6-remote.17](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.17)
