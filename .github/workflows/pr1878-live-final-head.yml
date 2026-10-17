@@ -1,4 +1,4 @@
-name: PR1878 source-pinned real app persistence and startup acceptance
+name: PR1878 real project creation and restart acceptance
 on:
   push:
     branches: [qa/pr1878-live-final-head-20261017]
@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 35
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      SOURCE_SHA: c6312c042ddab5e1f2ae9587d50264511dfecb13
+      SOURCE_SHA: cca055eae0a65d4e5cdf167baa2c49506a58e636
     steps:
       - uses: actions/checkout@v6
         with:
