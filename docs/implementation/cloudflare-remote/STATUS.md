@@ -1,5 +1,47 @@
 # Cloudflare Remote — execution state
 
+## Remote .17 and companion 138 delivered — 2026-10-17
+
+[Synara Remote 1.0.6-remote.17](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.17)
+is public for macOS ARM64, Windows x64 and Linux x64. Tag source
+`56d6b7691fe66f93a1035c8db74ab79ee80dce99` integrates `8502ff8`.
+Claude's discovered effort ladder retains its model default; the composer also
+recovers it from older hosts. An explicit host default or user choice is preserved.
+The authorized visible changes are the corrected effort selection and curated
+release-history entry; no unrelated UI changes were made.
+
+Local formatting, lint, typecheck, brand, frozen install and release smoke pass,
+along with 296 affected adapter/composer/release-history tests. The
+[same exact-source workflow](https://github.com/Emanuele-web04/synara/actions/runs/39047673920)
+passes all quality/server gates: **18,267 tests passed, 298 skipped**. Native
+packaged startup passes on all three platforms; macOS signing/notarization and
+Windows Defender pass. Attempt 1's Windows Defender service was unavailable
+(`0x800106ba`), so no scan result was established. Attempt 2 restored the same
+candidate, reverified identity/digests and passed Defender, startup and upload;
+successful tests and platform builds were retained.
+
+All 11 public assets match GitHub digests, exact-source provenance and updater
+checksums. The public Mac ZIP independently passes strict/deep signature,
+Gatekeeper and staple checks with the Remote identity and .17 version. The actual
+electron-updater provider discovers .17 from .16 on macOS, Windows and Linux,
+without consulting Stable/Beta feeds. Stable Latest remains `v1.0.6`; historical
+`v0.4.2` assets are unchanged. The Windows unsigned exception was restored to its
+previous exact value `1.0.6`; the installer may still show SmartScreen. Remote
+identity, local data and account/pairing/migration behavior are unchanged. Existing
+setup/recovery guides remain valid; the general website's Stable/Beta downloads
+were not changed for this separate Remote release.
+
+Universal iOS/iPadOS **0.1 (138)**, source `3eff4fa` with fix `8a41c51`, passes all
+10 catalog tests, archive and Organizer upload. The exported uploaded IPA passes
+strict app/widget signatures, matching 138 versions and iPhone/iPad families,
+debugging disabled, and the app's production APNs/Apple sign-in entitlements.
+App Store Connect build `a87aadaf-3a88-48e7-8696-e4dbc423f7ad` is **Test in corso**
+in the existing internal and external groups; testing notes and automatic
+notifications are saved. Earlier builds and tester membership remain available.
+No new credential, API key, payment or physical device was needed. These are
+catalog/contract, packaged-startup and distribution proofs, not new live Claude
+turns, manual installed upgrades on every OS or physical-device push delivery.
+
 ## Remote .16 published / companion 137 on TestFlight — 2026-10-17
 
 [Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)
