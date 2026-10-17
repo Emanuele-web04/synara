@@ -6,8 +6,8 @@ import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
 
-import { makeThread } from "../../storeTestFixtures";
-import type { WorkLogEntry } from "../../session-logic";
+import { makeActivity, makeThread } from "../../storeTestFixtures";
+import { deriveSubagentTaskEnds, type WorkLogEntry } from "../../session-logic";
 import { SubagentRunCard } from "./SubagentRunCard";
 import { SubagentRunningChip } from "./SubagentRunningChip";
 import { SubagentThreadIntro } from "./SubagentThreadIntro";
@@ -126,6 +126,152 @@ it("keeps Stop visible, Message keyboard reachable, and nested controls collapse
   await screen.getByRole("button", { name: "Stop all", exact: true }).click();
   expect(value.onStop).toHaveBeenCalledWith(expect.objectContaining({ providerThreadId: "outer" }));
 });
+
+it("settles background cards across parent turns and rebuilds their state after reload", async () => {
+  const work: WorkLogEntry = {
+    ...entry,
+    subagents: [
+      { ...entry.subagents![0]!, model: "claude-sonnet-4-6", effort: "medium" },
+      { threadId: "second", nickname: "APM runtime flow research", rawStatus: "running" },
+    ],
+    subagentRun: {
+      members: [
+        ...entry.subagentRun!.members,
+        {
+          key: "second",
+          launchedAt,
+          latestStep: null,
+          outcome: null,
+          failure: null,
+          settledAt: null,
+        },
+      ],
+    },
+  };
+  const starts = ["outer", "second"].map((toolUseId, index) =>
+    makeActivity({
+      id: `start-${toolUseId}`,
+      kind: "task.started",
+      sequence: index + 1,
+      turnId: "turn",
+      createdAt: launchedAt,
+      payload: { taskId: `task-${toolUseId}`, toolUseId, taskType: "subagent" },
+    }),
+  );
+  const ends = ["outer", "second"].map((toolUseId, index) =>
+    makeActivity({
+      id: `done-${toolUseId}`,
+      kind: index === 0 ? "task.updated" : "task.completed",
+      sequence: index + 3,
+      ...(index === 0 ? {} : { turnId: "another-turn" }),
+      createdAt: "2026-10-10T00:00:36.000Z",
+      payload: { taskId: `task-${toolUseId}`, status: "completed" },
+    }),
+  );
+  const view = (activities: typeof starts, liveTurnId: SubagentRunContextValue["liveTurnId"]) => {
+    const value = context({
+      liveTurnId,
+      threads: [],
+      backgroundedProviderThreadIds: new Set(["outer", "second"]),
+      taskEndByToolUseId: deriveSubagentTaskEnds(activities),
+    });
+    return (
+      <div style={{ width: 650 }}>
+        <SubagentRunContext.Provider value={value}>
+          <SubagentRunCard workEntry={work} />
+        </SubagentRunContext.Provider>
+      </div>
+    );
+  };
+  let screen = await render(view(starts, entry.turnId ?? null));
+  await userEvent.click(screen.getByTestId("subagent-run-card").element().querySelector("button")!);
+  expect(screen.container.querySelectorAll('[data-phase="running"]')).toHaveLength(2);
+  await screen.rerender(view(starts, null)); // interrupting the parent does not finish background work
+  await expect.element(screen.getByRole("button", { name: "Stop all", exact: true })).toBeVisible();
+  await screen.rerender(view([...starts, ends[0]!], null));
+  expect(screen.container.querySelectorAll('[data-phase="running"]')).toHaveLength(1);
+  expect(screen.container.querySelectorAll('[data-phase="done"]')).toHaveLength(1);
+  await screen.rerender(view([...starts, ...ends], null));
+  expect(screen.container.querySelectorAll('[data-phase="done"]')).toHaveLength(2);
+  expect(screen.container.querySelectorAll(".animate-spin-stepped")).toHaveLength(0);
+  expect(screen.container.querySelector('[aria-label^="Stop"]')).toBeNull();
+  expect(screen.container.textContent).not.toContain("running");
+  expect(screen.container.textContent).toContain("36s");
+  await screen.unmount();
+  // A cold mount reconstructs from serialized persisted events, with no child detail loaded.
+  vi.setSystemTime(new Date("2026-10-13T08:00:00.000Z"));
+  screen = await render(view(JSON.parse(JSON.stringify([...starts, ...ends])), null));
+  expect(screen.container.querySelectorAll(".animate-spin-stepped")).toHaveLength(0);
+  expect(screen.container.querySelector('[aria-label^="Stop"]')).toBeNull();
+  expect(screen.container.textContent).not.toContain("running");
+  expect(screen.container.textContent).toContain("36s");
+});
+
+it.each([620, 360])(
+  "keeps identity, background state and a long command from overlapping at %ipx",
+  async (width) => {
+    const command =
+      'cd /Users/usuario/projects/manager-components-front; git show origin/master:src/pages/integrationConfigPage/MultiValueInput.tsx | grep -n -E "allowed_values|Select|Popover|Checkbox|kind|group|pair" | head -20';
+    const work: WorkLogEntry = {
+      ...entry,
+      subagents: [
+        {
+          ...entry.subagents![0]!,
+          nickname: "Integration config panel research",
+          model: "claude-sonnet-4-6",
+          effort: "medium",
+        },
+      ],
+    };
+    const value = context({
+      backgroundedProviderThreadIds: new Set(["outer"]),
+      threads: [
+        makeThread({
+          id: outer,
+          createdAt: launchedAt,
+          activities: [
+            makeActivity({
+              kind: "tool.completed",
+              createdAt: launchedAt,
+              payload: { itemType: "command_execution", data: { toolCallId: "cmd", command } },
+            }),
+          ],
+        }),
+      ],
+    });
+    const screen = await render(
+      <div style={{ width }}>
+        <SubagentRunContext.Provider value={value}>
+          <SubagentRunCard workEntry={work} />
+        </SubagentRunContext.Provider>
+      </div>,
+    );
+    await userEvent.click(
+      screen.getByTestId("subagent-run-card").element().querySelector("button")!,
+    );
+    const background = screen.getByText("background", { exact: true }).element();
+    const running = screen.getByText("Running", { exact: true }).element();
+    const code = screen.container.querySelector("code")!;
+    expect(code.textContent).toBe(command);
+    const backgroundBox = background.getBoundingClientRect();
+    const runningBox = running.getBoundingClientRect();
+    const rowBox = screen.getByTestId("subagent-run-row").element().getBoundingClientRect();
+    expect(backgroundBox.right <= runningBox.left || backgroundBox.bottom <= runningBox.top).toBe(
+      true,
+    );
+    expect(code.getBoundingClientRect().width).toBeGreaterThan(80);
+    expect(runningBox.right).toBeLessThanOrEqual(rowBox.right);
+    expect(screen.getByTestId("subagent-run-row").element().scrollWidth).toBeLessThanOrEqual(
+      rowBox.width + 1,
+    );
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("subagent-run-card").element().getBoundingClientRect().bottom,
+      ).toBeGreaterThanOrEqual(rowBox.bottom),
+    );
+    await page.screenshot({ path: `__screenshots__/subagent-row-layout-${width}.png` });
+  },
+);
 
 it("reports card visibility in its scroll viewport and lets the running chip bring it back", async () => {
   const visibility = createSubagentRunVisibilityStore();

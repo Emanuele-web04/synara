@@ -641,11 +641,13 @@ function taskEndForLaunch(
   if (launchedAtMs === null) return end;
   let matching: SubagentTaskEnd | undefined;
   for (let candidate = end; candidate; candidate = candidate.previous) {
-    const endedAtMs = parseTimeMs(candidate.endedAt);
+    // A delayed notification can be received after the next launch. Prefer
+    // the task's own start association; legacy completions retain the end-time fallback.
+    const ownerAtMs = parseTimeMs(candidate.startedAt ?? candidate.endedAt);
     if (
-      endedAtMs !== null &&
-      endedAtMs >= launchedAtMs &&
-      (nextLaunchedAtMs === null || endedAtMs < nextLaunchedAtMs)
+      ownerAtMs !== null &&
+      ownerAtMs >= launchedAtMs &&
+      (nextLaunchedAtMs === null || ownerAtMs < nextLaunchedAtMs)
     )
       matching = candidate;
   }

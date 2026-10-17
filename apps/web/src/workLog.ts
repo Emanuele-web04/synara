@@ -851,36 +851,71 @@ function subagentOutcomeFromStatus(
 export interface SubagentTaskEnd {
   outcome: "completed" | "failed" | "stopped";
   endedAt: string;
+  /** Launch ownership when a notification arrives after another invocation starts. */
+  startedAt?: string;
   /** The same provider task's previous, already settled invocation. */
   previous?: SubagentTaskEnd;
 }
 
 /**
  * When and how each subagent task ended, keyed by its launching tool call id,
- * from the parent's task completions. A background subagent's own thread ends
- * its first turn at launch, so this is the only reliable end it has.
+ * from the parent's terminal task updates and completions. A background
+ * subagent's own thread ends its first turn at launch, so this is the only
+ * reliable end it has.
  */
 export function deriveSubagentTaskEnds(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyMap<string, SubagentTaskEnd> {
-  const ends = new Map<string, SubagentTaskEnd>();
-  const resumed = new Set<string>();
-  for (const activity of activities) {
+  type Invocation = { startedAt?: string; end?: SubagentTaskEnd };
+  const invocationsByToolUseId = new Map<string, Invocation[]>();
+  const invocationByTaskId = new Map<string, Invocation>();
+  const toolUseIdByTaskId = new Map<string, string>();
+  for (const activity of orderedActivities(activities)) {
+    if (
+      activity.kind !== "task.started" &&
+      activity.kind !== "task.updated" &&
+      activity.kind !== "task.progress" &&
+      activity.kind !== "task.completed"
+    )
+      continue;
     const payload = asRecord(activity.payload);
-    const toolUseId = asTrimmedString(payload?.toolUseId);
-    if (activity.kind === "task.started" && toolUseId && ends.has(toolUseId)) {
-      resumed.add(toolUseId);
+    const taskId = asTrimmedString(payload?.taskId);
+    const reportedToolUseId = asTrimmedString(payload?.toolUseId);
+    if (taskId && reportedToolUseId) toolUseIdByTaskId.set(taskId, reportedToolUseId);
+    // Background notifications can omit the launch handle and arrive in a
+    // different parent turn (or none). Task identity, not turn identity, owns
+    // their completion; retain the launch association for persisted replay too.
+    const toolUseId = reportedToolUseId ?? (taskId ? toolUseIdByTaskId.get(taskId) : undefined);
+    if (!toolUseId) continue;
+    const invocations = invocationsByToolUseId.get(toolUseId) ?? [];
+    let invocation = (taskId ? invocationByTaskId.get(taskId) : undefined) ?? invocations.at(-1);
+    // Every start opens an invocation, including SendMessage resuming the
+    // same native task ID when a compact snapshot omitted its earlier end.
+    if (!invocation || activity.kind === "task.started") {
+      invocation = {};
+      invocations.push(invocation);
+      invocationsByToolUseId.set(toolUseId, invocations);
     }
-    if (activity.kind !== "task.completed") continue;
+    if (activity.kind === "task.started") invocation.startedAt ??= activity.createdAt;
+    if (taskId) {
+      invocationByTaskId.set(taskId, invocation);
+    }
+    if (activity.kind !== "task.completed" && activity.kind !== "task.updated") continue;
     const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
-    if (toolUseId && outcome) {
-      const previous = resumed.has(toolUseId) ? ends.get(toolUseId) : ends.get(toolUseId)?.previous;
-      ends.set(toolUseId, {
+    if (outcome && !(invocation.end && invocation !== invocations.at(-1))) {
+      invocation.end = {
         outcome,
         endedAt: activity.createdAt,
-        ...(previous ? { previous } : {}),
-      });
-      resumed.delete(toolUseId);
+        ...(invocation.startedAt ? { startedAt: invocation.startedAt } : {}),
+      };
+    }
+  }
+  const ends = new Map<string, SubagentTaskEnd>();
+  for (const [toolUseId, invocations] of invocationsByToolUseId) {
+    for (const { end } of invocations) {
+      if (!end) continue;
+      const previous = ends.get(toolUseId);
+      ends.set(toolUseId, { ...end, ...(previous ? { previous } : {}) });
     }
   }
   return ends;
