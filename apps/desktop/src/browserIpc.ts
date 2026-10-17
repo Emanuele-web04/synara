@@ -120,6 +120,16 @@ export function registerBrowserIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.clearSiteData);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.clearSiteData, async (_event, input: BrowserTabInput) =>
+    browserManager.clearSiteData(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.clearAllData);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.clearAllData, async (_event, input: BrowserThreadInput) =>
+    browserManager.clearAllData(input),
+  );
+
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.requestCopyLink);
   ipcMain.handle(BROWSER_IPC_CHANNELS.requestCopyLink, async (_event, input: BrowserTabInput) => {
     browserManager.copyLink(input);
