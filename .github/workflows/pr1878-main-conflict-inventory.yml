@@ -1,0 +1,55 @@
+name: PR 1878 current-main conflict inventory
+on:
+  push:
+    branches: [qa/pr1878-main-conflict-inventory-20261017]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  conflicts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Verify stored exact-source compatibility report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/Emanuele-web04/synara/actions/artifacts/12100362325/zip \
+            --output "$RUNNER_TEMP/compat.zip"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, zipfile, collections
+          p=Path(__import__('os').environ['RUNNER_TEMP'])/'compat.zip'
+          digest=hashlib.sha256(p.read_bytes()).hexdigest()
+          assert digest=='459590a0f963920c4fb6e66db45f70cf94e226b8cb873f15a1b096aaaa36af99',digest
+          with zipfile.ZipFile(p) as f:
+              assert f.testzip() is None
+              a=[n for n in f.namelist() if n.endswith('/conflicts.json')]
+              b=[n for n in f.namelist() if n.endswith('/identities.json')]
+              assert len(a)==len(b)==1,(a,b)
+              conflicts=json.loads(f.read(a[0]))
+              identity=json.loads(f.read(b[0]))
+          assert len(conflicts)==38,len(conflicts)
+          assert identity['candidateTree']=='5484335d09c1334234a01c0ad935d5cb2ed03189'
+          assert identity['main']=='df87a48b9f2d403e3d2785ef11502f2ce2922f5b'
+          groups=collections.defaultdict(list)
+          for path in sorted(conflicts):
+              key=path.split('/')[0]+'/'+path.split('/')[1] if '/' in path else path
+              groups[key].append(path)
+          output={'commit':identity,'count':len(conflicts),'groups':dict(groups),'conflicts':conflicts}
+          Path('report/conflicts.json').write_text(json.dumps(output,indent=2)+'\n')
+          print('Total conflicts:',len(conflicts))
+          for group,paths in groups.items():
+              print('GROUP',group,len(paths))
+              for path in paths: print(' ',path,sorted(conflicts[path]))
+          PY
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-main-conflict-inventory
+          path: report/conflicts.json
+          if-no-files-found: error
+          retention-days: 14
