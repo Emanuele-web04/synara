@@ -26,6 +26,12 @@ export const makeHubWorkRepository = Effect.gen(function* () {
     Effect.forEach(rows, (row) => decodeRecord(row.recordJson));
   const readOne = (rows: readonly RecordRow[]) =>
     rows[0] ? decodeRecord(rows[0].recordJson) : Effect.succeed(null);
+  const readScope = (projectId: ProjectId, scopeKey: string) =>
+    sql<RecordRow>`
+      SELECT record_json AS "recordJson" FROM project_agent_work_items
+      WHERE project_id = ${projectId} AND scope_key = ${scopeKey}
+      ORDER BY task_index
+    `.pipe(Effect.flatMap(decodeRows), Effect.mapError(storageError));
 
   const availableCapacity = sql`(
               (SELECT COUNT(*) FROM project_agent_work_items held
@@ -43,73 +49,49 @@ export const makeHubWorkRepository = Effect.gen(function* () {
             ) < MIN(8, COALESCE(json_extract(config.limits_json, '$.maxConcurrentWorkers'), 8))`;
 
   const repository: HubWorkRepositoryShape = {
-    submit: (records) =>
+    submit: (input) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
-            const first = records[0];
-            if (!first) return { items: [], replayed: false };
-            if (
-              records.some(
-                (record) =>
-                  record.projectId !== first.projectId ||
-                  record.requestId !== first.requestId ||
-                  record.scopeKey !== first.scopeKey ||
-                  record.fingerprint !== first.fingerprint,
-              )
-            ) {
-              return yield* Effect.fail(
-                conflict("All hub tasks must belong to the same frozen request."),
-              );
-            }
-            const [request] = yield* sql<{
-              readonly scopeKey: string;
-              readonly fingerprint: string;
-            }>`
-              SELECT scope_key AS "scopeKey", fingerprint FROM project_agent_work_requests
-              WHERE project_id = ${first.projectId} AND request_id = ${first.requestId}
+            // A request id belongs to one frozen source scope. Reusing it for a
+            // different scope is a different decision and must not be mistaken
+            // for a replay of the first one.
+            const [request] = yield* sql<{ readonly scopeKey: string }>`
+              SELECT scope_key AS "scopeKey" FROM project_agent_work_requests
+              WHERE project_id = ${input.projectId} AND request_id = ${input.requestId}
             `;
-            if (
-              request &&
-              (request.scopeKey !== first.scopeKey || request.fingerprint !== first.fingerprint)
-            ) {
+            if (request && request.scopeKey !== input.scopeKey) {
               return yield* Effect.fail(
                 conflict("This request ID already belongs to a different hub work plan."),
               );
             }
-            const existing = yield* sql<RecordRow>`
-        SELECT record_json AS "recordJson" FROM project_agent_work_items
-        WHERE project_id = ${first.projectId} AND scope_key = ${first.scopeKey}
-        ORDER BY task_index
-      `.pipe(Effect.flatMap(decodeRows));
-            if (existing.length > 0) {
-              if (
-                existing.length !== records.length ||
-                existing.some((record) => record.fingerprint !== first.fingerprint)
-              ) {
-                return yield* Effect.fail(
-                  conflict("This request already has a different hub work plan."),
-                );
-              }
-              yield* sql`
-                INSERT OR IGNORE INTO project_agent_work_requests (project_id, request_id, scope_key, fingerprint)
-                VALUES (${first.projectId}, ${first.requestId}, ${first.scopeKey}, ${first.fingerprint})
-              `;
-              return { items: existing, replayed: true };
-            }
+            const existing = yield* readScope(input.projectId, input.scopeKey);
+            const frozen = new Set(existing.map((record) => record.id));
+            // Already frozen under this scope: keep the first decision instead of
+            // forking a second worker for the same task.
+            const records = input.records.filter((record) => !frozen.has(record.id));
             for (const record of records) {
               yield* sql`
-          INSERT INTO project_agent_work_items
-            (work_item_id, project_id, scope_key, task_index, state, worker_thread_id, slot_held, revision, record_json)
-          VALUES (${record.id}, ${record.projectId}, ${record.scopeKey}, ${record.taskIndex},
-            ${record.state}, ${record.workerThreadId}, ${record.slotHeld ? 1 : 0}, ${record.revision}, ${JSON.stringify(record)})
-        `;
+                INSERT OR IGNORE INTO project_agent_work_items
+                  (work_item_id, project_id, scope_key, task_index, state, worker_thread_id, slot_held, revision, record_json)
+                VALUES (${record.id}, ${record.projectId}, ${record.scopeKey}, ${record.taskIndex},
+                  ${record.state}, ${record.workerThreadId}, ${record.slotHeld ? 1 : 0}, ${record.revision}, ${JSON.stringify(record)})
+              `;
+            }
+            const items = yield* readScope(input.projectId, input.scopeKey);
+            if (records.some((record) => !items.some((item) => item.id === record.id))) {
+              return yield* Effect.fail(
+                conflict(
+                  "Another request is persisting this hub task. Retry with the same request.",
+                ),
+              );
             }
             yield* sql`
               INSERT INTO project_agent_work_requests (project_id, request_id, scope_key, fingerprint)
-              VALUES (${first.projectId}, ${first.requestId}, ${first.scopeKey}, ${first.fingerprint})
+              VALUES (${input.projectId}, ${input.requestId}, ${input.scopeKey}, ${input.fingerprint})
+              ON CONFLICT (project_id, request_id) DO UPDATE SET fingerprint = excluded.fingerprint
             `;
-            return { items: records, replayed: false };
+            return { items, replayed: records.length === 0 };
           }),
         )
         .pipe(Effect.mapError(storageError)),
@@ -119,6 +101,8 @@ export const makeHubWorkRepository = Effect.gen(function* () {
       SELECT record_json AS "recordJson" FROM project_agent_work_items
       WHERE project_id = ${projectId} ORDER BY sequence
     `.pipe(Effect.flatMap(decodeRows), Effect.mapError(storageError)),
+
+    listByScope: (projectId, scopeKey) => readScope(projectId, scopeKey),
 
     get: (id) =>
       sql<RecordRow>`

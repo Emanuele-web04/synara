@@ -2,7 +2,7 @@ import { ProjectId, ThreadId, type HubWorkRecord } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Exit, Layer } from "effect";
 
-import { HubWorkRepository } from "../Services/HubWorkRepository";
+import { HubWorkRepository, type HubWorkRepositoryShape } from "../Services/HubWorkRepository";
 import { ProjectAgentRepository } from "../Services/ProjectAgentRepository";
 import { HubWorkRepositoryLive } from "./HubWorkRepository";
 import { ProjectAgentRepositoryLive } from "./ProjectAgentRepository";
@@ -47,6 +47,19 @@ function work(id: string, index: number): HubWorkRecord {
   };
 }
 
+const submitWork = (
+  repository: HubWorkRepositoryShape,
+  records: readonly HubWorkRecord[],
+  overrides: { readonly requestId?: string; readonly scopeKey?: string } = {},
+) =>
+  repository.submit({
+    projectId: records[0]!.projectId,
+    requestId: overrides.requestId ?? records[0]!.requestId,
+    scopeKey: overrides.scopeKey ?? records[0]!.scopeKey,
+    fingerprint: records[0]!.fingerprint,
+    records,
+  });
+
 const configure = (hubId = projectId) =>
   Effect.gen(function* () {
     const repository = yield* ProjectAgentRepository;
@@ -84,7 +97,7 @@ layer("Hub work durable admission", (it) => {
       Effect.gen(function* () {
         yield* configure();
         const repository = yield* HubWorkRepository;
-        yield* repository.submit([work("first", 0), work("second", 1)]);
+        yield* submitWork(repository, [work("first", 0), work("second", 1)]);
         const claims = yield* Effect.all(
           [repository.claimNext(projectId), repository.claimNext(projectId)],
           { concurrency: 2 },
@@ -119,13 +132,23 @@ layer("Hub work durable admission", (it) => {
       Effect.gen(function* () {
         const repository = yield* HubWorkRepository;
         const record = { ...work("replay", 0), projectId: ProjectId.makeUnsafe("hub-replay") };
-        yield* repository.submit([record]);
-        const replay = yield* repository.submit([record]);
+        yield* submitWork(repository, [record]);
+        const replay = yield* submitWork(repository, [record]);
         assert.equal(replay.replayed, true);
-        const changed = yield* Effect.exit(
-          repository.submit([{ ...record, fingerprint: "changed" }]),
+        assert.deepEqual(
+          replay.items.map((item) => item.id),
+          [record.id],
         );
-        assert.equal(Exit.isFailure(changed), true);
+        // A frozen task is never forked by a retry that carries a different plan.
+        const changed = yield* submitWork(repository, [{ ...record, fingerprint: "changed" }]);
+        assert.equal(changed.replayed, true);
+        // The same request id may not be reused for a different source scope.
+        const rescoped = yield* Effect.exit(
+          submitWork(repository, [{ ...record, id: "rescoped", scopeKey: "other-source" }], {
+            scopeKey: "other-source",
+          }),
+        );
+        assert.equal(Exit.isFailure(rescoped), true);
         const saved = yield* repository.save({
           record: {
             ...record,
@@ -160,21 +183,25 @@ layer("Hub work durable admission", (it) => {
         targetProjectId: pausedHub,
         scopeKey: "cancelled",
       };
-      yield* repository.submit([record]);
+      yield* submitWork(repository, [record]);
       yield* repository.save({
         record: { ...record, revision: 1, state: "cancelled" },
         expectedRevision: 0,
       });
       assert.equal(yield* repository.claimNext(pausedHub), null);
-      yield* repository.submit([
-        {
-          ...work("paused", 0),
-          projectId: pausedHub,
-          targetProjectId: pausedHub,
-          scopeKey: "paused",
-          requestId: "paused-request",
-        },
-      ]);
+      yield* submitWork(
+        repository,
+        [
+          {
+            ...work("paused", 0),
+            projectId: pausedHub,
+            targetProjectId: pausedHub,
+            scopeKey: "paused",
+            requestId: "paused-request",
+          },
+        ],
+        { requestId: "paused-request", scopeKey: "paused" },
+      );
       const existing = yield* configRepository.getConfig(pausedHub);
       if (existing._tag !== "Some") throw new Error("Expected configured hub");
       yield* configRepository.saveConfig(
@@ -198,7 +225,7 @@ layer("Hub work durable admission", (it) => {
         state: "idle" as const,
       };
       const queued = { ...work("competing", 1), projectId: hub, targetProjectId: hub };
-      yield* repository.submit([first, queued]);
+      yield* submitWork(repository, [first, queued]);
       const admitted = yield* repository.reserveWorker({
         threadId: first.workerThreadId,
         commandId: "followup-command",

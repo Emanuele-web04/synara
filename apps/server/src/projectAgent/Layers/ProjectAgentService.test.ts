@@ -4271,36 +4271,45 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
       null,
     );
     const hubWork = yield* HubWorkRepository;
-    yield* hubWork.submit([
-      {
-        id: "hub-work-packet",
-        projectId: groupId,
-        targetProjectId: groupId,
-        sourceThreadId: coordinatorThreadId,
-        sourceMessageId: null,
-        title: "Fix the flaky suite",
-        workerThreadId,
-        state: "working",
-        queueReason: null,
-        resultSummary: null,
-        progress: { revision: 3, steps: [{ id: "read", text: "Read suite", status: "completed" }] },
-        requestId: "hub-work-packet-request",
-        scopeKey: "hub-work-packet-scope",
-        fingerprint: "hub-work-packet-plan",
-        taskIndex: 0,
-        creationSpec: { prompt: "Fix the flaky suite", target: modelSelection },
-        sourceMessages: [],
-        slotHeld: true,
-        admittedAt: now,
-        admissionCommandId: null,
-        admissionMessageId: null,
-        admissionPreviousState: null,
-        admissionPreviousSlotHeld: false,
-        revision: 4,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]);
+    yield* hubWork.submit({
+      projectId: groupId,
+      requestId: "hub-work-packet-request",
+      scopeKey: "hub-work-packet-scope",
+      fingerprint: "hub-work-packet-plan",
+      records: [
+        {
+          id: "hub-work-packet",
+          projectId: groupId,
+          targetProjectId: groupId,
+          sourceThreadId: coordinatorThreadId,
+          sourceMessageId: null,
+          title: "Fix the flaky suite",
+          workerThreadId,
+          state: "working",
+          queueReason: null,
+          resultSummary: null,
+          progress: {
+            revision: 3,
+            steps: [{ id: "read", text: "Read suite", status: "completed" }],
+          },
+          requestId: "hub-work-packet-request",
+          scopeKey: "hub-work-packet-scope",
+          fingerprint: "hub-work-packet-plan",
+          taskIndex: 0,
+          creationSpec: { prompt: "Fix the flaky suite", target: modelSelection },
+          sourceMessages: [],
+          slotHeld: true,
+          admittedAt: now,
+          admissionCommandId: null,
+          admissionMessageId: null,
+          admissionPreviousState: null,
+          admissionPreviousSlotHeld: false,
+          revision: 4,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
     const workerPacket = yield* service.formatContextPacketForTurn(workerThreadId);
     assert.equal(workerPacket.includes("welcome message from you"), false);
     assert.include(workerPacket, "## Hub tools");
@@ -4671,19 +4680,31 @@ it.effect("rolls up one created worker only after its unstarted Hub peers fail o
       createdAt: now,
       updatedAt: now,
     });
-    yield* workRepository.submit([
-      makeWork("hub-roll-a", 0, threadA),
-      makeWork("hub-roll-failed", 1, null),
-      makeWork("hub-roll-cancelled", 2, null),
-    ]);
-    yield* workRepository.submit([
-      {
-        ...makeWork("unrelated-queued", 0, null),
-        scopeKey: "unrelated-scope",
-        fingerprint: "unrelated-plan",
-        requestId: "unrelated-request",
-      },
-    ]);
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "original-request",
+      scopeKey: "original-scope",
+      fingerprint: "original-plan",
+      records: [
+        makeWork("hub-roll-a", 0, threadA),
+        makeWork("hub-roll-failed", 1, null),
+        makeWork("hub-roll-cancelled", 2, null),
+      ],
+    });
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "unrelated-request",
+      scopeKey: "unrelated-scope",
+      fingerprint: "unrelated-plan",
+      records: [
+        {
+          ...makeWork("unrelated-queued", 0, null),
+          scopeKey: "unrelated-scope",
+          fingerprint: "unrelated-plan",
+          requestId: "unrelated-request",
+        },
+      ],
+    });
     harness.dispatched.length = 0;
     const rollups = () =>
       harness.dispatched.filter(

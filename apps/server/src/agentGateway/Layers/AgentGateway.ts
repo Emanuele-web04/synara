@@ -455,6 +455,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     description:
       "IDs of original human messages in this coordinator conversation. Omit only when delegating the current human turn. Synara forwards their canonical text and attachments.",
   };
+  const taskKeySchema = {
+    type: "string",
+    maxLength: 128,
+    description:
+      "Stable identity of this task inside the request. In a Hub, pass one short lowercase key per task (letters, digits, '.', '_', ':', '-'). Synara freezes the key at the first decision, so retrying or restarting with the same key reuses the same worker instead of creating a second one, while a new key adds a new task from the same original message. Ignore this outside Hubs.",
+  };
+  const routingReasonSchema = {
+    type: "string",
+    maxLength: 500,
+    description:
+      "One short sentence explaining to the user why this task is routed to a worker. Recorded with the task card; it grants no permission.",
+  };
 
   const createThreads: ToolEntry = {
     requiredCapability: "thread:write",
@@ -462,7 +474,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
+        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Give each Hub task a stable taskKey: the Hub freezes that key at the first decision, so a retry after a crash or a restart replays the same worker, while a new key from the same original message adds another task. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -484,6 +496,8 @@ export const makeAgentGateway = Effect.gen(function* () {
                     "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
                 },
                 contextMessageIds: contextMessageIdsSchema,
+                taskKey: taskKeySchema,
+                routingReason: routingReasonSchema,
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
@@ -528,7 +542,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. Hub coordinators receive a durable workItems entry that can remain queued until a worker slot is available. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead. The result includes a ready-to-use link (`thread://<threadId>`); when you mention the thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
+        "Create exactly one standalone Synara thread. Hub coordinators receive a durable workItems entry that can remain queued until a worker slot is available; pass a stable taskKey so a retry after a crash or restart reuses the same worker. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead. The result includes a ready-to-use link (`thread://<threadId>`); when you mention the thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -539,6 +553,8 @@ export const makeAgentGateway = Effect.gen(function* () {
               "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
           },
           contextMessageIds: contextMessageIdsSchema,
+          taskKey: taskKeySchema,
+          routingReason: routingReasonSchema,
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
@@ -594,6 +610,8 @@ export const makeAgentGateway = Effect.gen(function* () {
         for (const key of [
           "title",
           "contextMessageIds",
+          "taskKey",
+          "routingReason",
           "projectId",
           "environment",
           "baseRef",
