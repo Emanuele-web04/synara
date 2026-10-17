@@ -5,6 +5,7 @@
 
 import * as betaOperationalIssue from "../../betaOperationalIssue";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -22,6 +23,7 @@ import type {
 } from "@synara/contracts";
 import {
   ApprovalRequestId,
+  CheckpointRef,
   type ChatAttachment,
   CommandId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -109,6 +111,8 @@ import {
   type ProviderHealthShape,
 } from "../../provider/Services/ProviderHealth.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitCoreLive } from "../../git/Layers/GitCore.ts";
+import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
@@ -145,7 +149,10 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  isManagedCheckpointRefForThread,
+} from "../../checkpointing/Utils.ts";
 import {
   CheckpointStore,
   type CheckpointStoreShape,
@@ -12258,137 +12265,225 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it.each([
-    "success",
-    "capture-failed",
-    "record-failed",
-    "rollback-failed",
-    "restore-failed",
-  ] as const)("preserves edit replay recovery when %s", async (mode) => {
-    const deletedRefs = vi.fn<CheckpointStoreShape["deleteCheckpointRefs"]>(() => Effect.void);
-    const harness = await createHarness({ checkpointStore: { deleteCheckpointRefs: deletedRefs } });
-    const operations: string[] = [];
-    const gitFailure = () =>
-      new GitCommandError({
-        operation: "test.edit-recovery",
-        cwd: "/tmp/provider-project",
-        command: "git",
-        detail: mode,
+  it.each(["success", "capture-failed", "rollback-failed", "restore-failed"] as const)(
+    "preserves edit replay recovery when %s",
+    async (mode) => {
+      const deletedRefs = vi.fn<CheckpointStoreShape["deleteCheckpointRefs"]>(() => Effect.void);
+      const harness = await createHarness({
+        checkpointStore: { deleteCheckpointRefs: deletedRefs },
       });
-    harness.captureCheckpoint.mockImplementation(() =>
-      Effect.suspend(() => {
-        operations.push("capture");
-        return mode === "capture-failed" ? Effect.fail(gitFailure()) : Effect.void;
-      }),
-    );
-    harness.rollbackConversation.mockImplementation(() =>
-      Effect.suspend(() => {
-        operations.push("rollback");
-        return mode === "rollback-failed"
-          ? Effect.fail(
-              new ProviderAdapterRequestError({
-                provider: "codex",
-                method: "thread/rollback",
-                detail: mode,
-              }),
-            )
-          : Effect.void;
-      }),
-    );
-    harness.restoreCheckpoint.mockImplementation(() =>
-      Effect.suspend(() => {
-        operations.push("restore");
-        return mode === "restore-failed" ? Effect.fail(gitFailure()) : Effect.succeed(true);
-      }),
-    );
-    harness.interceptEngineDispatch((command) => {
-      if (
-        command.type !== "thread.activity.append" ||
-        command.activity.kind !== "checkpoint.edit-replay.snapshot"
-      )
-        return undefined;
-      operations.push("record");
-      return mode === "record-failed"
-        ? Effect.fail(
-            new OrchestrationCommandInternalError({
-              commandId: command.commandId,
-              commandType: command.type,
-              detail: mode,
-            }),
-          )
-        : undefined;
-    });
-    const now = new Date().toISOString();
-    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+      const operations: string[] = [];
+      const gitFailure = () =>
+        new GitCommandError({
+          operation: "test.edit-recovery",
+          cwd: "/tmp/provider-project",
+          command: "git",
+          detail: mode,
+        });
+      harness.captureCheckpoint.mockImplementation(() =>
+        Effect.suspend(() => {
+          operations.push("capture");
+          return mode === "capture-failed" ? Effect.fail(gitFailure()) : Effect.void;
+        }),
+      );
+      harness.rollbackConversation.mockImplementation(() =>
+        Effect.suspend(() => {
+          operations.push("rollback");
+          return mode === "rollback-failed"
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "thread/rollback",
+                  detail: mode,
+                }),
+              )
+            : Effect.void;
+        }),
+      );
+      harness.restoreCheckpoint.mockImplementation(() =>
+        Effect.suspend(() => {
+          operations.push("restore");
+          return mode === "restore-failed" ? Effect.fail(gitFailure()) : Effect.succeed(true);
+        }),
+      );
+      const now = new Date().toISOString();
+      harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
 
+      await seedRollbackTarget(harness, {
+        messageId: asMessageId("user-message-checkpoint-edit"),
+        turnId: asTurnId("turn-checkpoint-edit"),
+        createdAt: now,
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.makeUnsafe("cmd-checkpoint-edit-complete"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId("turn-checkpoint-edit"),
+          completedAt: now,
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+          status: "ready",
+          files: [],
+          assistantMessageId: asMessageId("assistant-user-message-checkpoint-edit"),
+          checkpointTurnCount: 1,
+          createdAt: now,
+        }),
+      );
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.message.edit-and-resend",
+          commandId: CommandId.makeUnsafe("cmd-edit-checkpoint-resend"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: asMessageId("user-message-checkpoint-edit"),
+          text: "edited checkpoint prompt",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+
+      if (mode === "success") {
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-project",
+          checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+          fallbackToHead: true,
+        });
+        expect(operations).toEqual(["capture", "rollback", "restore"]);
+      } else {
+        await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        if (mode === "capture-failed") {
+          expect(harness.rollbackConversation).not.toHaveBeenCalled();
+          expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+        }
+        expect((await readHarnessThread(harness))?.session?.lastError).toContain(mode);
+      }
+      expect(deletedRefs).not.toHaveBeenCalled();
+      const rescueRef = harness.captureCheckpoint.mock.calls[0]?.[0].checkpointRef;
+      expect(rescueRef).toContain("/revert-rescue/");
+      expect((await readHarnessThread(harness))?.activities).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "checkpoint.edit-replay.snapshot" }),
+        ]),
+      );
+    },
+  );
+
+  it("retains a discoverable file recovery snapshot across edit replay and store restart", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-edit-replay-recovery-"));
+    createdBaseDirs.add(cwd);
+    const git = (args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
+    git(["init", "--initial-branch=main"]);
+    git(["config", "user.email", "test@example.com"]);
+    git(["config", "user.name", "Test User"]);
+    git(["config", "core.autocrlf", "false"]);
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "baseline\n");
+    git(["add", "."]);
+    git(["commit", "-m", "Initial"]);
+    const storeLayer = CheckpointStoreLive.pipe(
+      Layer.provide(
+        GitCoreLive.pipe(
+          Layer.provide(ServerConfig.layerTest(cwd, { prefix: "synara-edit-replay-recovery-" })),
+        ),
+      ),
+      Layer.provide(NodeServices.layer),
+    );
+    const firstRuntime = ManagedRuntime.make(storeLayer);
+    runtimes.add(firstRuntime);
+    const store = await firstRuntime.runPromise(Effect.service(CheckpointStore));
+    const harness = await createHarness({ checkpointStore: store });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.makeUnsafe("edit-recovery-real-project"),
+        projectId: asProjectId("project-1"),
+        workspaceRoot: cwd,
+      }),
+    );
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
     await seedRollbackTarget(harness, {
-      messageId: asMessageId("user-message-checkpoint-edit"),
-      turnId: asTurnId("turn-checkpoint-edit"),
+      messageId: asMessageId("user-edit-recovery-real"),
+      turnId: asTurnId("turn-edit-recovery-real"),
       createdAt: now,
     });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-checkpoint-edit-complete"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-checkpoint-edit"),
+        commandId: CommandId.makeUnsafe("edit-recovery-real-checkpoint"),
+        threadId,
+        turnId: asTurnId("turn-edit-recovery-real"),
         completedAt: now,
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
         status: "ready",
         files: [],
-        assistantMessageId: asMessageId("assistant-user-message-checkpoint-edit"),
+        assistantMessageId: asMessageId("assistant-user-edit-recovery-real"),
         checkpointTurnCount: 1,
         createdAt: now,
       }),
     );
-
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "user changed this after the turn\n");
+    fs.writeFileSync(path.join(cwd, "untracked.txt"), "unsaved elsewhere\n");
+    let refsBeforeRollback = "";
+    harness.rollbackConversation.mockImplementation(() =>
+      Effect.sync(() => {
+        refsBeforeRollback = git([
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/synara/checkpoints",
+        ]);
+      }),
+    );
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.message.edit-and-resend",
-        commandId: CommandId.makeUnsafe("cmd-edit-checkpoint-resend"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        messageId: asMessageId("user-message-checkpoint-edit"),
+        commandId: CommandId.makeUnsafe("edit-recovery-real-resend"),
+        threadId,
+        messageId: asMessageId("user-edit-recovery-real"),
         text: "edited checkpoint prompt",
         runtimeMode: "approval-required",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         createdAt: now,
       }),
     );
-
-    if (mode === "success") {
-      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-      expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
-        cwd: "/tmp/provider-project",
-        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
-        fallbackToHead: true,
-      });
-      expect(operations).toEqual(["capture", "record", "rollback", "restore"]);
-    } else {
-      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      if (mode === "capture-failed" || mode === "record-failed") {
-        expect(harness.rollbackConversation).not.toHaveBeenCalled();
-        expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
-      }
-      expect((await readHarnessThread(harness))?.session?.lastError).toContain(mode);
-    }
-    expect(deletedRefs).not.toHaveBeenCalled();
-    const rescueRef = harness.captureCheckpoint.mock.calls[0]?.[0].checkpointRef;
-    expect(rescueRef).toContain("/revert-rescue/");
-    const snapshot = (await readHarnessThread(harness))?.activities.find(
-      (activity) => activity.kind === "checkpoint.edit-replay.snapshot",
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    // Provider history can be trimmed only after durable file recovery exists.
+    expect(refsBeforeRollback).toContain("/revert-rescue/");
+    expect(fs.readFileSync(path.join(cwd, "tracked.txt"), "utf8")).toBe("baseline\n");
+    expect(fs.existsSync(path.join(cwd, "untracked.txt"))).toBe(false);
+    const rescueRefs = git(["for-each-ref", "--format=%(refname)", "refs/synara/checkpoints"])
+      .trim()
+      .split("\n")
+      .filter(
+        (ref) => ref.includes("/revert-rescue/") && isManagedCheckpointRefForThread(ref, threadId),
+      );
+    expect(rescueRefs).toHaveLength(1);
+    await firstRuntime.dispose();
+    runtimes.delete(firstRuntime);
+    const reopenedRuntime = ManagedRuntime.make(storeLayer);
+    runtimes.add(reopenedRuntime);
+    await reopenedRuntime.runPromise(
+      Effect.gen(function* () {
+        const reopenedStore = yield* CheckpointStore;
+        expect(
+          yield* reopenedStore.restoreCheckpoint({
+            cwd,
+            checkpointRef: CheckpointRef.makeUnsafe(rescueRefs[0]!),
+          }),
+        ).toBe(true);
+      }),
     );
-    if (mode === "capture-failed" || mode === "record-failed") {
-      expect(snapshot).toBeUndefined();
-      if (mode === "record-failed") {
-        expect((await readHarnessThread(harness))?.session?.lastError).toContain(rescueRef);
-      }
-    } else {
-      expect(snapshot).toMatchObject({ turnId: null, payload: { checkpointRef: rescueRef } });
-      if (mode === "restore-failed") {
-        expect((await readHarnessThread(harness))?.session?.lastError).toContain(rescueRef);
-      }
-    }
+    expect(fs.readFileSync(path.join(cwd, "tracked.txt"), "utf8")).toBe(
+      "user changed this after the turn\n",
+    );
+    expect(fs.readFileSync(path.join(cwd, "untracked.txt"), "utf8")).toBe("unsaved elsewhere\n");
+    expect((await readHarnessThread(harness))?.activities).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "checkpoint.edit-replay.snapshot" }),
+      ]),
+    );
   });
 
   it("clears the edit loading state when provider rollback fails before resend", async () => {
