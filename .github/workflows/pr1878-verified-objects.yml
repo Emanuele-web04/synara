@@ -1,0 +1,124 @@
+name: PR 1878 verified object transfer and compatibility
+on:
+  push:
+    branches: [qa/pr1878-verified-objects-20261017]
+permissions: {}
+jobs:
+  blobs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Transfer only digest-pinned reviewed data to Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p receipts
+          python - <<'PY'
+          import base64, hashlib, io, json, os, pathlib, subprocess, urllib.request, zipfile
+          repo='Emanuele-web04/synara'
+          headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'}
+          uploaded=set(); receipts=[]
+          def blob(data):
+              sha=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              if sha not in uploaded:
+                  req=urllib.request.Request('https://api.github.com/repos/'+repo+'/git/blobs',data=json.dumps({'content':base64.b64encode(data).decode(),'encoding':'base64'}).encode(),headers=headers,method='POST')
+                  with urllib.request.urlopen(req,timeout=30) as response: result=json.load(response)
+                  assert result['sha']==sha
+                  uploaded.add(sha)
+              return sha
+          archives=[(12100685931,'c1ab56aa31328fa0d2f9807f4ed4ec3ea4744393211ecb4600808613f74dc7a1','source'),(12100601624,'cf39325faf73331a6caca2b465dbf37002f84d59cbd24d6de10b1ff030fe5f3c','before'),(12100636262,'baaacd4bef5b810c2389b55eee50bcce20f67dd702cf5fa37cff77393e7af8ca','after')]
+          image_names={'pr1878-lead-default.png','pr1878-lead-subtle.png','pr1878-lead-process.png','pr1878-toolbar-390.png','pr1878-toolbar-767.png'}
+          for artifact,digest,kind in archives:
+              target=pathlib.Path(os.environ['RUNNER_TEMP'])/(kind+'.zip')
+              subprocess.run(['curl','--fail','--silent','--show-error','--location','--header','Authorization: Bearer '+os.environ['GH_TOKEN'],'https://api.github.com/repos/'+repo+'/actions/artifacts/'+str(artifact)+'/zip','--output',str(target)],check=True)
+              raw=target.read_bytes(); assert hashlib.sha256(raw).hexdigest()==digest
+              with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                  assert z.testzip() is None
+                  if kind=='source':
+                      matches=[n for n in z.namelist() if n.endswith('/candidate-manifest.json')]; assert len(matches)==1
+                      m=json.loads(z.read(matches[0])); assert m['source']=='2608353b8258995192e0d4aa6cd4ad5c3f979a9e' and m['finalTree']=='5484335d09c1334234a01c0ad935d5cb2ed03189' and len(m['files'])==45
+                      prefix=matches[0].rsplit('/',1)[0]+'/files/'
+                      for f in m['files']:
+                          path=f['path']; assert '..' not in pathlib.PurePosixPath(path).parts and not path.startswith('/')
+                          assert path.startswith('apps/server/src/persistence/') or path.startswith('apps/web/src/') or path=='docs/integration/issue-driven-selection-20261016.md'
+                          if f['status']=='D': receipts.append({'kind':kind,'path':path,'sha':None}); continue
+                          data=z.read(prefix+path); assert len(data)==f['bytes'] and hashlib.sha256(data).hexdigest()==f['sha256']
+                          sha=blob(data); assert sha==f['sha']; receipts.append({'kind':kind,'path':path,'sha':sha})
+                  else:
+                      names=[n for n in z.namelist() if pathlib.PurePosixPath(n).name in image_names]
+                      assert len(names)==5 and {pathlib.PurePosixPath(n).name for n in names}==image_names
+                      for n in names:
+                          data=z.read(n); assert data.startswith(b'\x89PNG\r\n\x1a\n')
+                          receipts.append({'kind':kind,'path':'.github/pr-assets/pr1878-acceptance-20261017/'+kind+'/'+pathlib.PurePosixPath(n).name,'sha':blob(data),'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'artifact':artifact,'archiveSha256':digest})
+          pathlib.Path('receipts/blobs.json').write_text(json.dumps({'repository':repo,'operations':'Git blob creation only; no trees, commits or refs changed','files':receipts},indent=2)+'\n')
+          print('Verified',len(receipts),'entries;',len(uploaded),'unique blobs. No ref or commit write performed.')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-verified-blob-receipt
+          path: receipts/
+          if-no-files-found: error
+          retention-days: 14
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read-only current-main merge analysis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p receipts
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/Emanuele-web04/synara/actions/artifacts/12100685931/zip --output "$RUNNER_TEMP/input.zip"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,subprocess,zipfile
+          def git(*args):return subprocess.check_output(['git',*args])
+          p=Path(os.environ['RUNNER_TEMP'])/'input.zip';assert hashlib.sha256(p.read_bytes()).hexdigest()=='c1ab56aa31328fa0d2f9807f4ed4ec3ea4744393211ecb4600808613f74dc7a1'
+          with zipfile.ZipFile(p) as z:
+              name=next(n for n in z.namelist() if n.endswith('/candidate-manifest.json'));m=json.loads(z.read(name));prefix=name.rsplit('/',1)[0]+'/files/'
+              for f in m['files']:
+                  path=Path(f['path']);assert path.resolve().is_relative_to(Path.cwd()) and '..' not in path.parts
+                  if f['status']=='D':path.unlink();continue
+                  data=z.read(prefix+f['path']);assert hashlib.sha256(data).hexdigest()==f['sha256'];path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+          subprocess.run(['git','add','apps/server/src/persistence','apps/web/src','docs/integration/issue-driven-selection-20261016.md'],check=True)
+          tree=git('write-tree').decode().strip();assert tree=='5484335d09c1334234a01c0ad935d5cb2ed03189'
+          parent='2608353b8258995192e0d4aa6cd4ad5c3f979a9e'
+          local=subprocess.check_output(['git','-c','user.name=Synara QA','-c','user.email=qa@example.invalid','commit-tree',tree,'-p',parent],input=b'Local compatibility probe only; not published\n').decode().strip()
+          main=git('rev-parse','origin/main').decode().strip()
+          result=subprocess.run(['git','merge-tree','--write-tree',local,main],capture_output=True)
+          out=Path('receipts');(out/'merge-tree.txt').write_bytes(result.stdout);(out/'merge-tree.stderr.txt').write_bytes(result.stderr)
+          assert result.returncode in (0,1),result.stderr
+          merged=result.stdout.decode().splitlines()[0]
+          (out/'identities.json').write_text(json.dumps({'source':parent,'candidateTree':tree,'probeCommit':local,'main':main,'mergeTree':merged,'exit':result.returncode},indent=2)+'\n')
+          (out/'main-delta.patch').write_bytes(git('diff',parent,main,'--', 'AGENTS.md','.mise.toml','package.json'))
+          (out/'candidate-to-main-union.patch').write_bytes(git('diff','--binary',tree,merged))
+          conflicts={}
+          for line in result.stdout.decode().splitlines()[1:]:
+              if '\t' not in line:continue
+              info,path=line.split('\t',1);parts=info.split()
+              if len(parts)!=3 or parts[2] not in ('1','2','3'):continue
+              assert '..' not in Path(path).parts and not path.startswith('/')
+              conflicts.setdefault(path,{})[parts[2]]=parts[1]
+              dest=out/'conflicts'/parts[2]/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(git('cat-file','blob',parts[1]))
+          (out/'conflicts.json').write_text(json.dumps(conflicts,indent=2)+'\n')
+          print('Read-only compatibility:',len(conflicts),'conflicted paths, main',main)
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-current-main-compatibility
+          path: receipts/
+          if-no-files-found: error
+          retention-days: 14
