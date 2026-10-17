@@ -34,7 +34,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as projectImportPaths from "../projectImportPaths.ts";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
@@ -254,6 +254,21 @@ function runGit(cwd: string, args: ReadonlyArray<string>) {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
+}
+
+function isolatePlainWorkspaceDiscovery(workspace: string) {
+  const physicalWorkspace = fs.realpathSync(workspace);
+  const findWorkspace = projectImportPaths.findImportGitWorkspace;
+  // Temp directories may inherit a host .git marker. Keep this fixture plain
+  // until the test initializes Git, then use real discovery for its repository.
+  const discovery = vi
+    .spyOn(projectImportPaths, "findImportGitWorkspace")
+    .mockImplementation((cwd) =>
+      cwd === physicalWorkspace && !fs.existsSync(path.join(physicalWorkspace, ".git"))
+        ? Promise.resolve(null)
+        : findWorkspace(cwd),
+    );
+  onTestFinished(() => discovery.mockRestore());
 }
 
 /**
@@ -1089,40 +1104,46 @@ describe("CheckpointReactor", () => {
   it("caches non-Git workspace identity across native rows and lane scans", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-negative-checkpoint-"));
     tempDirs.push(cwd);
-    const harness = await createHarness({
-      seedFilesystemCheckpoints: false,
-      projectWorkspaceRoot: cwd,
-      threadWorktreePath: cwd,
-      providerSessionCwd: cwd,
-    });
-    await harness.drain();
-    // Pin the TTL clock so the cache window does not depend on test speed.
+    // Pin the TTL clock before any reactor work can classify the workspace.
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const classify = vi.spyOn(projectImportPaths, "canonicalImportPath");
-    const startTurn = async (index: number) => {
-      await Effect.runPromise(
-        harness.runtimeEvents.append({
-          type: "turn.started",
-          eventId: EventId.makeUnsafe(`negative-start-${index}`),
-          provider: "codex",
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          turnId: asTurnId(`negative-turn-${index}`),
-          createdAt: new Date().toISOString(),
-          payload: {},
-        }),
-      );
-      await settleCheckpointWork(harness.reactor.drain);
-    };
     try {
-      for (let index = 0; index < 5; index++) await startTurn(index);
-      expect(classify.mock.calls).toHaveLength(1);
-      // After the negative TTL a turn may have initialized Git: reclassify.
-      now += 1_001;
-      await startTurn(5);
-      expect(classify.mock.calls).toHaveLength(2);
+      const harness = await createHarness({
+        startReactor: false,
+        seedFilesystemCheckpoints: false,
+        projectWorkspaceRoot: cwd,
+        threadWorktreePath: cwd,
+        providerSessionCwd: cwd,
+      });
+      const classify = vi.spyOn(projectImportPaths, "canonicalImportPath");
+      isolatePlainWorkspaceDiscovery(cwd);
+      const startTurn = async (index: number) => {
+        await Effect.runPromise(
+          harness.runtimeEvents.append({
+            type: "turn.started",
+            eventId: EventId.makeUnsafe(`negative-start-${index}`),
+            provider: "codex",
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            turnId: asTurnId(`negative-turn-${index}`),
+            createdAt: new Date().toISOString(),
+            payload: {},
+          }),
+        );
+        await settleCheckpointWork(harness.reactor.drain);
+      };
+      try {
+        await harness.start();
+        await harness.drain();
+        for (let index = 0; index < 5; index++) await startTurn(index);
+        expect(classify.mock.calls).toHaveLength(1);
+        // After the negative TTL a turn may have initialized Git: reclassify.
+        now += 1_001;
+        await startTurn(5);
+        expect(classify.mock.calls).toHaveLength(2);
+      } finally {
+        classify.mockRestore();
+      }
     } finally {
-      classify.mockRestore();
       clock.mockRestore();
     }
   });
@@ -3782,6 +3803,7 @@ describe("CheckpointReactor", () => {
     // A scaffolding turn starts in a plain folder and runs `git init` mid-turn.
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-plain-"));
     tempDirs.push(workspace);
+    isolatePlainWorkspaceDiscovery(workspace);
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
       providerName: "claudeAgent",
@@ -3858,6 +3880,7 @@ describe("CheckpointReactor", () => {
   it("uses the durable workspace marker when completion follows a reactor restart", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-restart-plain-"));
     tempDirs.push(workspace);
+    isolatePlainWorkspaceDiscovery(workspace);
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
       providerName: "claudeAgent",
