@@ -22,6 +22,18 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.17",
+    date: "Oct 17",
+    features: [
+      {
+        id: "claude-default-effort-selection",
+        title: "Keep your Claude effort selection",
+        description:
+          "Claude's effort picker now keeps High selected when it is the model's default, including when connecting to an older host. Other explicit effort choices are preserved.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.16",
     date: "Oct 17",
     features: [

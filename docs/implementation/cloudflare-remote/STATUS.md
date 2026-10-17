@@ -1,5 +1,16 @@
 # Cloudflare Remote — execution state
 
+## Remote .17 / companion 138 candidate — 2026-10-17
+
+The release candidate integrates desktop source `8502ff8` and native source
+`8a41c51`. Claude model discovery retains its catalog effort default; the desktop
+composer and native catalog recover it from older hosts while honoring explicit
+host defaults and supported effort ladders. No authorization, migration, process
+or data-home changes are introduced. Existing setup/recovery guides remain valid;
+Remote's curated release history is updated here and in the app, without changing
+the general website's Stable/Beta downloads. Publication and distribution evidence
+will be recorded after the exact-source checks complete.
+
 ## Remote .16 published / companion 137 on TestFlight — 2026-10-17
 
 [Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)

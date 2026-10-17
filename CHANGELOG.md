@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.6-remote.17 — 2026-10-17
+
+### Fixed
+
+- Claude's effort picker keeps High selected when it is the model's default. CLI-reported effort levels now retain the catalog default instead of displaying the first level after the composer omits a redundant setting.
+- The desktop composer recovers the default from older host catalogs without overriding an explicit host default or an explicit user choice.
+
+### Verification
+
+- Adapter and composer regressions cover the discovered model catalog, selecting High and preserving an explicit Medium choice. These checks use protocol fixtures, not a live Claude turn.
+- Companion iOS/iPadOS 0.1 (138) uses the host's effort default, with a built-in fallback for older hosts. Its TestFlight delivery is qualified separately.
+- Remote retains its separate identity, data home and three-platform update feeds. No account, pairing, migration or billing behavior changes. Exact-tag quality, native startup, macOS signing/notarization, Windows Defender and public artifact checks remain required before release completion. Windows uses the exact-version unsigned policy and may show SmartScreen.
+
 ## 1.0.6-remote.16 — 2026-10-17
 
 ### Fixed
