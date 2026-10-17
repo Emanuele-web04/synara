@@ -134,6 +134,37 @@ describe("desktop bundle file selection", () => {
     }
   });
 
+  it("excludes nested native rebuild metadata while preserving binaries and notices", () => {
+    const patterns = createDesktopBundleFilePatterns("win");
+    for (const root of ["node_modules", "node_modules/effect/node_modules"]) {
+      for (const file of [
+        "msgpackr-extract/build/Release/extract.exp",
+        "msgpackr-extract/build/Release/extract.iobj",
+        "msgpackr-extract/build/Release/extract.ipdb",
+        "msgpackr-extract/build/Release/extract.lib",
+        "msgpackr-extract/build/Release/obj/extract/extract.node.recipe",
+        "msgpackr-extract/build/Release/obj/extract/extract.tlog/CL.command.1.tlog",
+        "msgpackr-extract/build/Release/obj/extract/extract.tlog/extract.lastbuildstate",
+        "msgpackr-extract/build/extract.vcxproj.filters",
+        "node-pty/node-addon-api/node_addon_api_except.vcxproj",
+        "node-pty/node-addon-api/Release/obj/node_addon_api_except/Cl.items.tlog",
+      ]) {
+        expect(excluded(`${root}/${file}`, patterns), `${root}/${file}`).toBe(true);
+      }
+      for (const file of [
+        "msgpackr-extract/build/Release/extract.node",
+        "node-pty/build/Release/conpty.node",
+        "node-pty/build/Release/winpty.dll",
+        "node-pty/build/Release/winpty-agent.exe",
+        "node-pty/node-addon-api/LICENSE.md",
+        "node-pty/node-addon-api/napi.h",
+      ]) {
+        expect(excluded(`${root}/${file}`, patterns), `${root}/${file}`).toBe(false);
+      }
+    }
+    expect(excluded("node_modules/unrelated/build/runtime.lib", patterns)).toBe(false);
+  });
+
   it("keeps native PTY prebuilds for the target platform, including both Mac architectures", () => {
     const mac = createDesktopBundleFilePatterns("mac");
     expect(excluded("node_modules/node-pty/prebuilds/darwin-arm64/pty.node", mac)).toBe(false);

@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
 import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
@@ -47,7 +48,10 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, false);
-    assert.ok(config.afterSign?.endsWith("/mac-after-sign.cjs"));
+    assert.equal(
+      config.afterSign,
+      fileURLToPath(new URL("./lib/mac-after-sign.cjs", import.meta.url)),
+    );
     assert.equal(mac.identity, undefined);
     assert.equal(dmg.sign, true);
     assert.equal(dmg.writeUpdateInfo, false);
@@ -161,7 +165,10 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(config.mac?.timestamp, undefined);
     assert.equal(config.mac?.hardenedRuntime, true);
     assert.equal(config.mac?.notarize, false);
-    assert.ok(config.afterSign?.endsWith("/mac-after-sign.cjs"));
+    assert.equal(
+      config.afterSign,
+      fileURLToPath(new URL("./lib/mac-after-sign.cjs", import.meta.url)),
+    );
   });
 
   it("packages the Linux driver as an external executable and leaves Windows unchanged", () => {
