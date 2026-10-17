@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_SHA: 67f2098e4e5389d81daa914a9becc9bb115ab261
+  SOURCE_SHA: c6312c042ddab5e1f2ae9587d50264511dfecb13
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -20,13 +20,14 @@ jobs:
         with:
           scope: full
       - name: Verify exact source formatting without modification
-        run: ./node_modules/.bin/oxfmt --check scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts scripts/build-desktop-artifact.ts
+        run: ./node_modules/.bin/oxfmt --check scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts scripts/build-desktop-artifact.ts docs/release.md
       - name: Focused Linux updater and provenance tests
         run: bun run --cwd scripts test lib/linux-appimage-update-feed.test.ts build-desktop-artifact.test.ts lib/release-artifact-provenance.test.ts release-linux-packaging.test.ts
       - name: Scripts typecheck
         run: bun run --cwd scripts typecheck
       - name: Root source quality gates
         run: |
+          bun run fmt:check
           bun run lint
           bun run migrations:check
           bun run windows-runtime:check
