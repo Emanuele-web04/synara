@@ -24,7 +24,7 @@ export function parseHash(hash: string): { route: Route; filters: Filters } {
   const filters: Filters = { ...EMPTY_FILTERS };
   const days = Number(params.get("days") ?? "");
   if (Number.isFinite(days) && days >= 1) filters.days = Math.min(365, Math.floor(days));
-  for (const name of ["version", "platform", "kind", "q"] as const) {
+  for (const name of ["version", "platform", "flavor", "kind", "q"] as const) {
     const value = params.get(name);
     if (value) filters[name] = value;
   }
@@ -71,6 +71,7 @@ export function routeHash(route: Route, filters: Filters): string {
   if (filters.days !== EMPTY_FILTERS.days) params.set("days", String(filters.days));
   if (filters.version) params.set("version", filters.version);
   if (filters.platform) params.set("platform", filters.platform);
+  if (filters.flavor) params.set("flavor", filters.flavor);
   if (filters.kind) params.set("kind", filters.kind);
   if (filters.q) params.set("q", filters.q);
   const query = params.toString();

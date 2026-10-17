@@ -4,6 +4,8 @@ import {
   ProductTurnObserver,
   productRpcActivity,
   trackProductNavigation,
+  trackShortcutCommand,
+  trackSlashCommand,
 } from "./productAnalytics";
 
 const track = vi.fn();
@@ -98,4 +100,22 @@ it("classifies only explicit actions and fixed navigation categories", () => {
     outcome: "succeeded",
     feature: "inbox",
   });
+});
+
+it("reports built-in command names only and counts one key press once", () => {
+  track.mockClear();
+  const press = {};
+  trackShortcutCommand(press, "terminal.toggle");
+  trackShortcutCommand(press, "terminal.toggle");
+  trackShortcutCommand({}, "thread.jump.3");
+  trackShortcutCommand({}, "script.run:deploy-prod");
+  trackSlashCommand("/Plan");
+  trackSlashCommand("my-team-skill");
+  expect(track.mock.calls.map(([input]) => input.command)).toEqual([
+    "shortcut:terminal.toggle",
+    "shortcut:thread.jump",
+    "shortcut:custom",
+    "slash:plan",
+    "slash:custom",
+  ]);
 });

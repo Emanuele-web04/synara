@@ -5,6 +5,8 @@ export interface Filters {
   days: number;
   version: string;
   platform: string;
+  /** Desktop lane: "" (all), "beta" or "remote". */
+  flavor: string;
   kind: string;
   q: string;
 }
@@ -13,6 +15,7 @@ export const EMPTY_FILTERS: Filters = {
   days: 7,
   version: "",
   platform: "",
+  flavor: "",
   kind: "",
   q: "",
 };
@@ -31,6 +34,7 @@ export function filtersQuery(f: Filters): string {
   const p = new URLSearchParams({ days: String(f.days) });
   if (f.version) p.set("version", f.version);
   if (f.platform) p.set("platform", f.platform);
+  if (f.flavor) p.set("flavor", f.flavor);
   if (f.kind) p.set("kind", f.kind);
   if (f.q) p.set("q", f.q);
   return `?${p}`;
@@ -151,7 +155,27 @@ export interface IssueDetail {
   }[];
 }
 
+export interface UsageTurnBreakdown {
+  provider: string;
+  model: string;
+  effort: string;
+  interactionMode: string;
+  runtimeMode: string;
+  origin: string;
+  installs: number;
+  turns: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  meanDurationMs: number | null;
+  meanInputTokens: number | null;
+  meanOutputTokens: number | null;
+  cachedInputTokens: number;
+}
+
 export interface UsageData {
+  /** Finished turns by model, effort and mode; absent from older deployments. */
+  turnBreakdown?: UsageTurnBreakdown[];
   activeInstalls: number;
   installsByDay: { day: string; n: number }[];
   turns: number;
@@ -173,7 +197,7 @@ export interface UsageData {
 export interface ProductFilters {
   from: string;
   to: string;
-  channel: "" | "stable" | "beta";
+  channel: "" | "stable" | "beta" | "remote";
   surface: "" | "desktop" | "ios" | "ipados";
 }
 
@@ -184,6 +208,36 @@ export interface ProductData {
   surface: string | null;
   events: number;
   activeInstallations: number;
+  /** Rolling windows ending now; engaged installations sent a chat request. */
+  activeUsers?: {
+    day: number;
+    week: number;
+    month: number;
+    engagedDay: number;
+    engagedWeek: number;
+    engagedMonth: number;
+    /** Signed-in people count once across devices; others count per installation. */
+    peopleDay?: number;
+    peopleWeek?: number;
+    peopleMonth?: number;
+    signedInMonth?: number;
+  };
+  platforms?: {
+    surface: string;
+    platform: string;
+    installations: number;
+    events: number;
+    failedRequests: number;
+    failedConnections: number;
+  }[];
+  commands?: { command: string; events: number; installations: number }[];
+  failureReasons?: {
+    event: string;
+    reason: string;
+    surface: string;
+    events: number;
+    installations: number;
+  }[];
   daily: { day: string; events: number; installations: number; turns: number }[];
   features: { feature: string; events: number; installations: number }[];
   outcomes: { event: string; outcome: string; events: number }[];
@@ -234,7 +288,8 @@ export const api = {
       credentials: "same-origin",
     }),
   logout: () => fetch("/api/logout", { method: "POST", credentials: "same-origin" }),
-  filterOptions: () => get<{ versions: string[]; platforms: string[] }>("/api/filters"),
+  filterOptions: () =>
+    get<{ versions: string[]; platforms: string[]; flavors?: string[] }>("/api/filters"),
   overview: (f: Filters) => get<OverviewData>(`/api/overview${filtersQuery(f)}`),
   issues: (f: Filters, status: string, sort: string) =>
     get<{ issues: Issue[] }>(`/api/issues${filtersQuery(f)}&status=${status}&sort=${sort}`),

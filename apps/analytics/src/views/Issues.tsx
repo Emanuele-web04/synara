@@ -16,8 +16,8 @@ import {
   useApiData,
 } from "../components";
 
-const FIELDS = ["days", "version", "platform", "kind", "search"] as const;
-const REQ_FIELDS = ["version", "platform", "kind", "q"] as const;
+const FIELDS = ["days", "flavor", "version", "platform", "kind", "search"] as const;
+const REQ_FIELDS = ["flavor", "version", "platform", "kind", "q"] as const;
 
 const STATUS_TABS = [
   { value: "open", label: "Open" },

@@ -76,6 +76,10 @@ export function plural(n: number, word: string, pluralWord?: string): string {
   return `${n} ${n === 1 ? word : (pluralWord ?? `${word}s`)}`;
 }
 
+export function flavorLabel(flavor: string): string {
+  return flavor === "remote" ? "Synara Remote" : flavor === "beta" ? "Synara Beta" : flavor;
+}
+
 export function platformLabel(p: string): string {
   return p === "darwin" ? "macOS" : p === "win32" ? "Windows" : p === "linux" ? "Linux" : p;
 }
@@ -125,22 +129,24 @@ export function useApiData<T>(fetcher: () => Promise<T>, deps: unknown[], onAuth
   };
 }
 
-/** Version/platform option lists for the filter bar. */
+/** Version/platform/lane option lists for the filter bar. */
 export function useFilterOptions(onAuthError: () => void) {
   const [versions, setVersions] = useState<string[]>([]);
   const [platforms, setPlatforms] = useState<string[]>([]);
+  const [flavors, setFlavors] = useState<string[]>([]);
   useEffect(() => {
     api
       .filterOptions()
       .then((d) => {
         setVersions(d.versions);
         setPlatforms(d.platforms);
+        setFlavors(d.flavors ?? []);
       })
       .catch((e) => {
         if (e instanceof AuthError) onAuthError();
       });
   }, [onAuthError]);
-  return { versions, platforms };
+  return { versions, platforms, flavors };
 }
 
 export function rangeLabel(filters: Filters): string {
@@ -152,7 +158,7 @@ export function rangeLabel(filters: Filters): string {
 /** True when every filter sits at its default — the filter sentence stays
     hidden in that case. */
 export function filtersAreDefault(f: Filters): boolean {
-  return f.days === EMPTY_FILTERS.days && !f.version && !f.platform && !f.kind && !f.q;
+  return f.days === EMPTY_FILTERS.days && !f.version && !f.platform && !f.flavor && !f.kind && !f.q;
 }
 
 /** "Sep 17" — the year is appended only when the range crosses a boundary. */
@@ -181,11 +187,11 @@ export function FilterBar({
   filters: Filters;
   onChange: (f: Partial<Filters>, opts?: { replace?: boolean }) => void;
   onAuthError: () => void;
-  fields: ("days" | "version" | "platform" | "kind" | "status" | "search")[];
+  fields: ("days" | "flavor" | "version" | "platform" | "kind" | "status" | "search")[];
   sentence?: string;
   right?: ReactNode;
 }) {
-  const { versions, platforms } = useFilterOptions(onAuthError);
+  const { versions, platforms, flavors } = useFilterOptions(onAuthError);
   // Controlled search: commits 300ms after the last keystroke via replaceState,
   // and resyncs when Back/Forward or a link changes filters.q.
   const [searchValue, setSearchValue] = useState(filters.q);
@@ -212,6 +218,24 @@ export function FilterBar({
             {!DAY_OPTIONS.some((o) => o.value === String(filters.days)) && (
               <option value={String(filters.days)}>{filters.days} days</option>
             )}
+          </select>
+        </span>
+      )}
+      {fields.includes("flavor") && (
+        <span className="select-wrap">
+          <select
+            className="select"
+            aria-label="App"
+            value={filters.flavor}
+            onChange={(e) => onChange({ flavor: e.target.value })}
+          >
+            <option value="">Beta and Remote</option>
+            {["beta", "remote"].map((flavor) => (
+              <option key={flavor} value={flavor}>
+                {flavorLabel(flavor)}
+                {flavors.length > 0 && !flavors.includes(flavor) ? " (no data)" : ""}
+              </option>
+            ))}
           </select>
         </span>
       )}

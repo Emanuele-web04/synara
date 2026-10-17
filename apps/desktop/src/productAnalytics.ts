@@ -1,7 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX,
+  PRODUCT_ANALYTICS_COMMAND_PATTERN,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
@@ -18,6 +20,15 @@ const MAX_BACKOFF_MS = 60_000;
 const MAX_COUNTER = 1_000_000_000_000;
 const MAX_DURATION_MS = 86_400_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
+
+/** Counts one person across devices; the account id itself never leaves the app. */
+export function productAnalyticsAccountHash(userId: string): string {
+  return createHash("sha256")
+    .update(`${PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX}${userId}`)
+    .digest("hex")
+    .slice(0, 32);
+}
 type ProductAnalyticsOptionalFields = {
   -readonly [Key in keyof Omit<
     ProductAnalyticsInput,
@@ -27,7 +38,9 @@ type ProductAnalyticsOptionalFields = {
 
 const EVENTS = [
   "app.open",
+  "app.active",
   "feature.used",
+  "command.used",
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
@@ -49,6 +62,18 @@ const FEATURES = [
 ] as const;
 const MODES = ["local", "remote"] as const;
 const PROVIDERS = ["codex", "claude", "other"] as const;
+const REASONS = [
+  "unreachable",
+  "not_accepting",
+  "account_unavailable",
+  "host_unlinked",
+  "pairing_required",
+  "incompatible",
+  "timeout",
+  "invalid_code",
+  "rejected",
+  "other",
+] as const;
 const PLATFORMS = ["darwin", "win32", "linux", "ios", "ipados", "other"] as const;
 
 function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -70,22 +95,30 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
   return isOneOf(PLATFORMS, value) ? value : "other";
 }
 
-/** Consent-gated, bounded sender. It stores only reconstructed allowlisted envelopes. */
+/**
+ * Consent-gated, bounded sender. It stores only reconstructed allowlisted envelopes.
+ * `defaultEnabled` applies until the user makes a choice; an explicit opt-out persists.
+ */
 export class ProductAnalytics {
   private readonly consentPath: string;
   private readonly installIdPath: string;
+  private readonly accountHashPath: string;
   private readonly queuePath: string;
   private readonly channel: ProductAnalyticsChannel;
   private readonly appVersion: string;
   private readonly platform: ProductAnalyticsEnvelope["platform"];
   private enabled = false;
+  private readonly defaultEnabled: boolean;
+  private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
   private installId: string | null = null;
+  private accountHash: string | null = null;
   private queue: ProductAnalyticsEnvelope[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private controller: AbortController | null = null;
   private failures = 0;
+  private activeDay: string | null = null;
   private epoch = 0;
   private flushing = false;
   private disposed = false;
@@ -95,20 +128,24 @@ export class ProductAnalytics {
     channel: ProductAnalyticsChannel;
     appVersion: string;
     platform: string;
+    defaultEnabled?: boolean;
     fetcher?: typeof fetch;
   }) {
     const dir = join(input.homeDir, "product-analytics");
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
+    this.accountHashPath = join(dir, "account-hash");
     this.queuePath = join(dir, "events.json");
     this.channel = input.channel;
     this.appVersion = semver(input.appVersion);
     this.platform = platform(input.platform);
     this.fetcher = input.fetcher ?? fetch;
+    this.defaultEnabled = input.defaultEnabled === true;
     this.enabled = this.readConsent();
     if (this.enabled) {
       try {
         this.installId = this.readOrCreateInstallId();
+        this.accountHash = this.readAccountHash();
         this.queue = this.readQueue();
       } catch {
         this.installId = null;
@@ -123,13 +160,42 @@ export class ProductAnalytics {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.flush(), FLUSH_INTERVAL_MS);
+    this.timer = setInterval(() => {
+      this.trackActiveDay();
+      void this.flush();
+    }, FLUSH_INTERVAL_MS);
     this.timer.unref?.();
+    this.trackActiveDay();
     if (this.enabled && !this.retryTimer) void this.flush();
+  }
+
+  /** One app.active per UTC day while the app runs, so long sessions count every day. */
+  private trackActiveDay(): void {
+    if (!this.enabled) return;
+    const day = new Date().toISOString().slice(0, 10);
+    if (day === this.activeDay) return;
+    this.activeDay = day;
+    this.track({ event: "app.active", outcome: "succeeded" });
   }
 
   getState(): { enabled: boolean } {
     return { enabled: this.enabled };
+  }
+
+  /** Follows the user's choice, so companion diagnostics share one switch. */
+  onChange(listener: (enabled: boolean) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(this.enabled);
+      } catch {
+        // A listener never changes the user's choice.
+      }
+    }
   }
 
   setEnabled(value: unknown): { enabled: boolean } {
@@ -167,6 +233,7 @@ export class ProductAnalytics {
       if (this.consentNeedsPersistence) this.persistConsent();
       this.clearPersistentDataStrict();
       this.installId = this.readOrCreateInstallId();
+      if (this.accountHash) this.writeAtomic(this.accountHashPath, `${this.accountHash}\n`);
       this.queue = [];
       this.enabled = true;
       try {
@@ -180,6 +247,7 @@ export class ProductAnalytics {
       this.failures = 0;
       if (this.timer && !this.retryTimer) void this.flush();
     }
+    this.notify();
     return this.getState();
   }
 
@@ -195,6 +263,27 @@ export class ProductAnalytics {
       if (this.timer && !this.retryTimer) void this.flush();
     } catch {
       // Analytics never affects the observed product action.
+    }
+  }
+
+  /** Tracks the signed-in account by hash only; null clears it after sign-out. */
+  setAccount(userId: unknown): void {
+    if (this.disposed) return;
+    const next =
+      typeof userId === "string" && userId.trim().length > 0 && userId.length <= 256
+        ? productAnalyticsAccountHash(userId.trim())
+        : null;
+    if (next === this.accountHash) return;
+    this.accountHash = next;
+    if (!this.enabled) return;
+    if (next) {
+      this.writeAtomic(this.accountHashPath, `${next}\n`);
+      return;
+    }
+    try {
+      rmSync(this.accountHashPath, { force: true });
+    } catch {
+      // Local analytics persistence must never affect the app.
     }
   }
 
@@ -293,6 +382,18 @@ export class ProductAnalytics {
       if (!isOneOf(PROVIDERS, input.provider)) return null;
       fields.provider = input.provider;
     }
+    if (input.reason !== undefined) {
+      if (!isOneOf(REASONS, input.reason)) return null;
+      fields.reason = input.reason;
+    }
+    if (input.command !== undefined) {
+      if (
+        typeof input.command !== "string" ||
+        !PRODUCT_ANALYTICS_COMMAND_PATTERN.test(input.command)
+      )
+        return null;
+      fields.command = input.command;
+    }
     if (input.durationMs !== undefined) {
       if (!validInteger(input.durationMs, MAX_DURATION_MS)) return null;
       fields.durationMs = input.durationMs;
@@ -316,6 +417,8 @@ export class ProductAnalytics {
       allowed.add("mode");
       allowed.add("provider");
       allowed.add("durationMs");
+      // Only a failure has a cause.
+      if (outcome === "failed") allowed.add("reason");
     }
     if (event === "turn.completed") {
       allowed.add("mode");
@@ -326,14 +429,17 @@ export class ProductAnalytics {
       allowed.add("cachedInputTokens");
     }
     if (event === "performance.startup") allowed.add("durationMs");
+    if (event === "command.used") allowed.add("command");
     if (Object.keys(fields).some((key) => !allowed.has(key))) return null;
     if (event === "feature.used" && fields.feature === undefined) return null;
+    if (event === "command.used" && fields.command === undefined) return null;
     const now = new Date();
     return {
       v: 1,
       id: randomUUID(),
       ts: now.toISOString(),
       installId: this.installId!,
+      ...(this.accountHash ? { accountHash: this.accountHash } : {}),
       channel: this.channel,
       surface: "desktop",
       platform: this.platform,
@@ -345,10 +451,18 @@ export class ProductAnalytics {
   }
 
   private readConsent(): boolean {
+    let raw: string;
     try {
-      const value = JSON.parse(readFileSync(this.consentPath, "utf8")) as { enabled?: unknown };
+      raw = readFileSync(this.consentPath, "utf8");
+    } catch (error) {
+      // Only a choice never made falls back to the default; an unreadable one stays off.
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? this.defaultEnabled : false;
+    }
+    try {
+      const value = JSON.parse(raw) as { enabled?: unknown };
       return value.enabled === true;
     } catch {
+      // A recorded but unreadable choice never re-enables collection.
       return false;
     }
   }
@@ -358,11 +472,20 @@ export class ProductAnalytics {
       const existing = readFileSync(this.installIdPath, "utf8").trim();
       if (UUID_PATTERN.test(existing)) return existing;
     } catch {
-      // Created below only after explicit consent.
+      // Created below once collection is enabled.
     }
     const id = randomUUID();
     this.writeAtomic(this.installIdPath, `${id}\n`, true);
     return id;
+  }
+
+  private readAccountHash(): string | null {
+    try {
+      const value = readFileSync(this.accountHashPath, "utf8").trim();
+      return ACCOUNT_HASH_PATTERN.test(value) ? value : null;
+    } catch {
+      return null;
+    }
   }
 
   private readQueue(): ProductAnalyticsEnvelope[] {
@@ -406,18 +529,25 @@ export class ProductAnalytics {
       "feature",
       "mode",
       "provider",
+      "reason",
+      "command",
       "durationMs",
       "inputTokens",
       "outputTokens",
       "cachedInputTokens",
     ])
       if (Object.hasOwn(row, key)) input[key] = row[key];
-    const safe = this.buildEnvelope(input);
-    if (!safe) return null;
+    const built = this.buildEnvelope(input);
+    if (!built) return null;
+    // A stored event keeps the account it was recorded under, not the current one.
+    const { accountHash: _current, ...safe } = built;
     return {
       ...safe,
       id: row.id,
       ts: new Date(row.ts).toISOString(),
+      ...(typeof row.accountHash === "string" && ACCOUNT_HASH_PATTERN.test(row.accountHash)
+        ? { accountHash: row.accountHash }
+        : {}),
       channel: row.channel as ProductAnalyticsChannel,
       platform: row.platform,
       appVersion: row.appVersion,
@@ -448,7 +578,7 @@ export class ProductAnalytics {
   }
 
   private clearPersistentData(): void {
-    for (const path of [this.installIdPath, this.queuePath]) {
+    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
       try {
         rmSync(path, { force: true });
       } catch {
@@ -458,7 +588,7 @@ export class ProductAnalytics {
   }
 
   private clearPersistentDataStrict(): void {
-    for (const path of [this.installIdPath, this.queuePath]) {
+    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
       rmSync(path, { force: true });
     }
   }

@@ -1,5 +1,18 @@
 # Product analytics implementation
 
+## Remote lane — 17 October 2026
+
+- Synara Remote shares product events (`remote` channel) and diagnostics
+  (`flavor: "remote"`) by default; Settings → General → Privacy → **Share usage and
+  diagnostics** stops both and clears unsent events. Stable stays default-off and
+  sends no diagnostics; Remote never uploads raw crash dumps.
+- New: `app.active` once per UTC day, a fixed `reason` on failed connections,
+  pairings and chat requests, and Remote server usage snapshots.
+- Dashboard: active installations over 24 hours, 7 days and 30 days (and those that
+  sent a chat request), devices by platform, failure causes, and a Beta/Remote filter
+  on the diagnostics views. D1 migration `0006_remote_lane.sql` must be applied before
+  the Worker that writes the new columns.
+
 ## Audit — 16 October 2026
 
 - The common Electron sender supports macOS, Windows and Linux. Analytics remain
@@ -105,3 +118,19 @@ Client builds and physical-device qualification remain release work.
 Privacy copy is synchronized in desktop diagnostics documentation, marketing
 privacy text and native privacy documents. No account data or existing diagnostics
 migration is required for the new product table.
+
+## Remote .18 receiver and disclosure qualification
+
+An additional adversarial regression reproduced free text surviving in injected
+stack lines, custom error names and spoofed handled-issue labels. Remote now uses
+the same technical-only sanitizer before desktop queueing and at Worker ingestion:
+built-in error types, contract-validated issue codes and numeric source positions.
+Function/file names and Remote log tails do not reach D1. Beta redaction stays
+unchanged. The existing desktop and real SQLite-backed Worker route regressions
+cover both boundaries, including bounded handled-issue durations.
+
+The account hash is pseudonymous: an operator with account IDs could recompute it.
+Native privacy declarations therefore include Analytics for User ID and Device ID,
+linked Product Interaction, and linked startup Performance Data, all without
+tracking. Public website copy is qualified separately and names Remote .18/mobile
+139 so older versions retain an accurate description during rollout.

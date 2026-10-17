@@ -1,6 +1,7 @@
 // FILE: betaDiagnostics.ts
-// Purpose: Beta-only diagnostics queue for Synara Beta desktop builds.
-// Layer: Desktop telemetry (runs only when the baked build flavor is "beta").
+// Purpose: Diagnostics queue for Synara Beta and Synara Remote desktop builds.
+// Layer: Desktop telemetry (runs only when the baked build flavor is "beta" or
+// "remote"; Remote follows the user's usage-sharing switch).
 //
 // Privacy contract (also documented in docs/diagnostics.md):
 // - Only the fixed event names and payload fields declared in BetaDiagnosticsEvent
@@ -13,8 +14,8 @@
 // - Usage counters do not read prompts, chat text, file contents, provider
 //   payloads, credentials, or environment variables. Free-text error fields
 //   can still contain fragments; raw crash dumps are not redacted.
-// - The install id is a random UUID generated on first launch of a beta install;
-//   it identifies an install, not a person.
+// - The install id is a random UUID generated on first launch of a beta or remote
+//   install; it identifies an install, not a person.
 // - Stable/production builds never construct this object, so the stable binary
 //   has no live diagnostics code path.
 
@@ -45,7 +46,10 @@ import {
   LEGACY_PROVIDER_MIGRATIONS,
   ProviderKind,
 } from "@synara/contracts";
-import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import {
+  redactDiagnosticText,
+  sanitizeRemoteDiagnosticError,
+} from "@synara/shared/diagnosticsRedaction";
 import { Schema } from "effect";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
@@ -64,6 +68,8 @@ const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
 const USAGE_SNAPSHOT_FIRST_DELAY_MS = 2 * 60 * 1000;
 const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// The server snapshot counts the 24 hours before it was written.
+const USAGE_SNAPSHOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const USAGE_COUNT_MAX = 100_000;
 
 export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH;
@@ -101,6 +107,24 @@ export type BetaDiagnosticsEventName =
   | "usage.daily"
   | "beta.installed"
   | "beta.left";
+
+/** Finished turns of the last 24h sharing one set of fixed categories. */
+export interface UsageTurnBreakdownEntry {
+  readonly provider: string;
+  readonly model: string;
+  readonly effort: string;
+  readonly interactionMode: string;
+  readonly runtimeMode: string;
+  readonly origin: string;
+  readonly outcome: "succeeded" | "failed" | "cancelled";
+  readonly turns: number;
+  readonly durationMs: number;
+  readonly durationSamples: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly tokenSamples: number;
+}
 
 /** One provider's anonymous 24h counts inside a usage.daily event. */
 export interface BetaUsageProviderEntry {
@@ -147,11 +171,14 @@ export type BetaDiagnosticsPayload =
       readonly providers: readonly BetaUsageProviderEntry[];
       readonly projects: number;
       readonly activeThreads: number;
+      readonly turnBreakdown?: readonly UsageTurnBreakdownEntry[];
     }
   | {
       readonly kind: "beta";
       readonly outcome: "imported" | "import-failed" | "fresh" | "trash" | "keep";
     };
+
+export type DiagnosticsFlavor = "beta" | "remote";
 
 export interface BetaDiagnosticsEvent {
   readonly v: 1;
@@ -159,7 +186,7 @@ export interface BetaDiagnosticsEvent {
   readonly ts: string;
   readonly installId: string;
   readonly appVersion: string;
-  readonly flavor: "beta";
+  readonly flavor: DiagnosticsFlavor;
   readonly platform: string;
   readonly arch: string;
   readonly event: BetaDiagnosticsEventName;
@@ -191,6 +218,76 @@ const sanitizeLocale = (value: unknown): string | undefined => {
   const primary = value.split("-")[0]?.toLowerCase();
   return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 };
+
+/**
+ * Remote shares no free text: errors keep fixed categories and numeric locations, a crash
+ * its process and reason without the log tail, an update failure its step only.
+ */
+function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayload {
+  if (payload.kind === "error") {
+    return {
+      kind: "error",
+      source: payload.source,
+      fingerprint: payload.fingerprint,
+      ...sanitizeRemoteDiagnosticError(payload),
+    };
+  }
+  if (payload.kind === "crash") {
+    return { kind: "crash", processType: payload.processType, reason: payload.reason };
+  }
+  if (payload.kind === "update") {
+    const { message: _message, ...rest } = payload;
+    return rest;
+  }
+  return payload;
+}
+
+const TURN_BREAKDOWN_MAX_ROWS = 200;
+const TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
+const TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
+const TURN_TOTAL_MAX = 1_000_000_000_000;
+
+/** Keeps only short lowercase categories and clamped counts; anything else is dropped. */
+function sanitizeTurnBreakdown(value: unknown): UsageTurnBreakdownEntry[] {
+  if (!Array.isArray(value)) return [];
+  const rows: UsageTurnBreakdownEntry[] = [];
+  const total = (raw: unknown) =>
+    typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+      ? Math.min(Math.floor(raw), TURN_TOTAL_MAX)
+      : 0;
+  for (const entry of value.slice(0, TURN_BREAKDOWN_MAX_ROWS)) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const categories = [
+      row.provider,
+      row.model,
+      row.effort,
+      row.interactionMode,
+      row.runtimeMode,
+      row.origin,
+    ];
+    if (!categories.every((item) => typeof item === "string" && TURN_CATEGORY_PATTERN.test(item)))
+      continue;
+    if (typeof row.outcome !== "string" || !TURN_OUTCOMES.has(row.outcome)) continue;
+    rows.push({
+      provider: row.provider as string,
+      model: row.model as string,
+      effort: row.effort as string,
+      interactionMode: row.interactionMode as string,
+      runtimeMode: row.runtimeMode as string,
+      origin: row.origin as string,
+      outcome: row.outcome as UsageTurnBreakdownEntry["outcome"],
+      turns: clampUsageCount(row.turns),
+      durationMs: total(row.durationMs),
+      durationSamples: clampUsageCount(row.durationSamples),
+      inputTokens: total(row.inputTokens),
+      outputTokens: total(row.outputTokens),
+      cachedInputTokens: total(row.cachedInputTokens),
+      tokenSamples: clampUsageCount(row.tokenSamples),
+    });
+  }
+  return rows;
+}
 
 const BETA_OUTCOMES_BY_EVENT: Partial<Record<BetaDiagnosticsEventName, ReadonlySet<string>>> = {
   "beta.installed": new Set(["imported", "import-failed", "fresh"]),
@@ -287,6 +384,7 @@ export function sanitizeBetaDiagnosticsPayload(
         });
       }
     }
+    const turnBreakdown = sanitizeTurnBreakdown(payload.turnBreakdown);
     return {
       kind: "usage",
       providers: [...merged.entries()].map(([provider, counts]) => ({
@@ -297,6 +395,7 @@ export function sanitizeBetaDiagnosticsPayload(
       })),
       projects: clampUsageCount(payload.projects),
       activeThreads: clampUsageCount(payload.activeThreads),
+      ...(turnBreakdown.length > 0 ? { turnBreakdown } : {}),
     };
   }
   // kind === "beta"
@@ -390,6 +489,7 @@ export class BetaDiagnostics {
   private readonly usageSnapshotPath: string;
   private readonly usageLastDayPath: string;
   private readonly installPendingPath: string;
+  private readonly sharingResumedPath: string;
   private readonly endpoint: string;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private usageTimers: ReturnType<typeof setTimeout>[] = [];
@@ -409,11 +509,15 @@ export class BetaDiagnostics {
     readonly env?: NodeJS.ProcessEnv;
     readonly now?: () => Date;
     readonly sampleMemory?: () => DiagnosticMemoryCounters;
+    readonly flavor?: DiagnosticsFlavor;
+    /** Collection gate; nothing is queued or sent while it returns false. */
+    readonly isEnabled?: () => boolean;
   }) {
     this.queuePath = join(input.homeDir, "diagnostics", "events.jsonl");
     this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
     this.usageLastDayPath = join(input.homeDir, "diagnostics", "usage-last-day");
     this.installPendingPath = join(input.homeDir, "diagnostics", "install-pending");
+    this.sharingResumedPath = join(input.homeDir, "diagnostics", "sharing-resumed-at");
     this.endpoint = resolveBetaDiagnosticsEndpoint(input.env ?? process.env);
     this.installId = this.loadInstallId(input.homeDir);
     this.now = input.now ?? (() => new Date());
@@ -422,8 +526,12 @@ export class BetaDiagnostics {
     this.arch = input.arch;
     this.homeDir = input.homeDir;
     this.sampleMemory = input.sampleMemory;
+    this.flavor = input.flavor ?? "beta";
+    this.isEnabled = input.isEnabled ?? (() => true);
   }
 
+  private readonly flavor: DiagnosticsFlavor;
+  private readonly isEnabled: () => boolean;
   private readonly now: () => Date;
   private readonly appVersion: string;
   private readonly platform: string;
@@ -504,9 +612,10 @@ export class BetaDiagnostics {
     this.usageTimers.push(first);
   }
 
-  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): string | undefined {
-    if (this.disposed) return;
-    if (payload.kind === "crash" && payload.reason === "clean-exit") return;
+  track(event: BetaDiagnosticsEventName, input: BetaDiagnosticsPayload): string | undefined {
+    if (this.disposed || !this.isEnabled()) return;
+    if (input.kind === "crash" && input.reason === "clean-exit") return;
+    const payload = this.flavor === "remote" ? withoutFreeText(input) : input;
     const withContext =
       payload.kind === "crash"
         ? {
@@ -525,7 +634,7 @@ export class BetaDiagnostics {
       ts: this.now().toISOString(),
       installId: this.installId,
       appVersion: this.appVersion,
-      flavor: "beta",
+      flavor: this.flavor,
       platform: this.platform,
       arch: this.arch,
       event,
@@ -546,7 +655,7 @@ export class BetaDiagnostics {
 
   /** Reuse the deployed app.error envelope; no receiver schema change is required. */
   trackIssue(source: "main" | "renderer", input: unknown): string | null {
-    if (this.disposed) return null;
+    if (this.disposed || !this.isEnabled()) return null;
     try {
       if (!Schema.is(DesktopDiagnosticIssue)(input)) return null;
       if (
@@ -596,7 +705,7 @@ export class BetaDiagnostics {
 
   /** Reconstruct from the allowlist so unknown IPC properties never enter the ring. */
   recordActivity(input: unknown): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       if (!Schema.is(DesktopDiagnosticBreadcrumb)(input)) return;
       const at = this.now().getTime();
@@ -615,7 +724,7 @@ export class BetaDiagnostics {
   }
 
   private captureMemorySample(): void {
-    if (this.disposed || !this.sampleMemory) return;
+    if (this.disposed || !this.sampleMemory || !this.isEnabled()) return;
     try {
       const input = this.sampleMemory();
       const counters = {
@@ -709,7 +818,7 @@ export class BetaDiagnostics {
    * per 10 minutes and the session is capped at 30 errors per hour.
    */
   trackError(source: "main" | "renderer", error: unknown): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       const rendererError =
         source === "renderer" && error !== null && typeof error === "object"
@@ -758,7 +867,7 @@ export class BetaDiagnostics {
    * may have been down), and days already recorded in usage-last-day.
    */
   maybeTrackDailyUsage(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       if (!existsSync(this.usageSnapshotPath)) return;
       const raw = JSON.parse(readFileSync(this.usageSnapshotPath, "utf8")) as {
@@ -767,6 +876,7 @@ export class BetaDiagnostics {
         providers?: unknown;
         projects?: unknown;
         activeThreads?: unknown;
+        turnBreakdown?: unknown;
       };
       if (typeof raw.generatedAt !== "string") return;
       const generatedMs = Date.parse(raw.generatedAt);
@@ -777,6 +887,17 @@ export class BetaDiagnostics {
         generatedMs > nowMs ||
         nowMs - generatedMs > USAGE_SNAPSHOT_MAX_AGE_MS
       ) {
+        return;
+      }
+      // The snapshot covers the 24 hours before it was written; skip any that reach
+      // back into time when sharing was off.
+      try {
+        if (existsSync(this.sharingResumedPath)) {
+          const resumedMs = Date.parse(readFileSync(this.sharingResumedPath, "utf8").trim());
+          if (!Number.isFinite(resumedMs) || generatedMs - USAGE_SNAPSHOT_WINDOW_MS < resumedMs)
+            return;
+        }
+      } catch {
         return;
       }
       const today = now.toISOString().slice(0, 10);
@@ -796,6 +917,7 @@ export class BetaDiagnostics {
         providers: Array.isArray(raw.providers) ? (raw.providers as BetaUsageProviderEntry[]) : [],
         projects: raw.projects as number,
         activeThreads: raw.activeThreads as number,
+        turnBreakdown: raw.turnBreakdown as UsageTurnBreakdownEntry[],
       });
       writeFileSync(this.usageLastDayPath, `${today}\n`, { encoding: "utf8", mode: 0o600 });
     } catch {
@@ -867,7 +989,7 @@ export class BetaDiagnostics {
    * cannot stall quit.
    */
   async flush(timeoutMs = 15_000): Promise<void> {
-    if (this.flushing || this.disposed) return;
+    if (this.flushing || this.disposed || !this.isEnabled()) return;
     this.flushing = true;
     // The promise resolves only after `flushing` clears, so dispose() can
     // chain a final flush on it.
@@ -950,6 +1072,40 @@ export class BetaDiagnostics {
       }
     } catch {
       // Offline / endpoint down: keep the queue for the next flush.
+    }
+  }
+
+  /**
+   * Called when sharing turns back on: usage snapshots covering the time it was off
+   * are never relayed.
+   */
+  resumeSharing(): void {
+    try {
+      mkdirSync(join(this.homeDir, "diagnostics"), { recursive: true });
+      writeFileSync(this.sharingResumedPath, `${this.now().toISOString()}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    } catch {
+      // best effort
+    }
+  }
+
+  /** Whether events are currently collected; false after an opt-out. */
+  isCollecting(): boolean {
+    return !this.disposed && this.isEnabled();
+  }
+
+  /** Drops unsent events and collected context after the user turns sharing off. */
+  discardQueue(): void {
+    this.recentActivity.length = 0;
+    this.memorySamples.length = 0;
+    for (const path of [this.queuePath, this.usageSnapshotPath]) {
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // best effort
+      }
     }
   }
 

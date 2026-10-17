@@ -55,6 +55,7 @@ export const DESKTOP_IPC_CHANNELS = {
     getState: "desktop:product-analytics-get-state",
     setEnabled: "desktop:product-analytics-set-enabled",
     track: "desktop:product-analytics-track",
+    setAccount: "desktop:product-analytics-set-account",
   },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",

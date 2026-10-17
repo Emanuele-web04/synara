@@ -14,7 +14,10 @@
 // fields are re-redacted server-side with the same rules the client applies.
 // Deploy: `cd apps/analytics && wrangler deploy`
 
-import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import {
+  redactDiagnosticText,
+  sanitizeRemoteDiagnosticError,
+} from "@synara/shared/diagnosticsRedaction";
 
 export interface Env {
   DB: D1Database;
@@ -48,7 +51,9 @@ export interface Env {
 
 const PRODUCT_EVENTS = new Set([
   "app.open",
+  "app.active",
   "feature.used",
+  "command.used",
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
@@ -70,7 +75,19 @@ const PRODUCT_FEATURES = new Set([
 ]);
 const PRODUCT_MODES = new Set(["local", "remote"]);
 const PRODUCT_PROVIDERS = new Set(["codex", "claude", "other"]);
-const PRODUCT_CHANNELS = new Set(["stable", "beta"]);
+const PRODUCT_CHANNELS = new Set(["stable", "beta", "remote"]);
+const PRODUCT_REASONS = new Set([
+  "unreachable",
+  "not_accepting",
+  "account_unavailable",
+  "host_unlinked",
+  "pairing_required",
+  "incompatible",
+  "timeout",
+  "invalid_code",
+  "rejected",
+  "other",
+]);
 const PRODUCT_SURFACES = new Set(["desktop", "ios", "ipados"]);
 const PRODUCT_PLATFORMS = new Set(["darwin", "win32", "linux", "ios", "ipados", "other"]);
 const PRODUCT_MAX_EVENTS_PER_POST = 50;
@@ -83,6 +100,9 @@ const PRODUCT_RETENTION_MAX_BATCHES = 10;
 const PRODUCT_MAX_DURATION_MS = 86_400_000;
 const PRODUCT_MAX_TOKEN_COUNT = 1_000_000_000_000;
 const PRODUCT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRODUCT_ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
+// Built-in shortcut or slash command names only; clients report others as `custom`.
+const PRODUCT_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
 const PRODUCT_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PRODUCT_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -90,6 +110,7 @@ interface NormalizedProductEvent {
   id: string;
   ts: string;
   installId: string;
+  accountHash: string | null;
   channel: string;
   surface: string;
   platform: string;
@@ -99,6 +120,8 @@ interface NormalizedProductEvent {
   feature: string | null;
   mode: string | null;
   provider: string | null;
+  reason: string | null;
+  command: string | null;
   durationMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -106,10 +129,10 @@ interface NormalizedProductEvent {
 }
 
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
-  event_id, ts, received_at, install_id, channel, surface, platform, app_version,
-  event, outcome, feature, mode, provider, duration_ms,
+  event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
+  event, outcome, feature, mode, provider, reason, command, duration_ms,
   input_tokens, output_tokens, cached_input_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function productEventStatement(
   env: Env,
@@ -121,6 +144,7 @@ function productEventStatement(
     event.ts,
     receivedAt,
     event.installId,
+    event.accountHash,
     event.channel,
     event.surface,
     event.platform,
@@ -130,6 +154,8 @@ function productEventStatement(
     event.feature,
     event.mode,
     event.provider,
+    event.reason,
+    event.command,
     event.durationMs,
     event.inputTokens,
     event.outputTokens,
@@ -146,6 +172,9 @@ interface ProductFilters {
   surface: string | null;
   clause: string;
   binds: (string | number)[];
+  /** Channel + surface only, leading " AND ..."; for windows independent of the range. */
+  scopeClause: string;
+  scopeBinds: (string | number)[];
 }
 
 function validCalendarDate(value: string): boolean {
@@ -170,19 +199,22 @@ function parseProductFilters(url: URL, now = Date.now()): ProductFilters | null 
   if (rawSurface && !PRODUCT_SURFACES.has(rawSurface)) return null;
   const channel = rawChannel || null;
   const surface = rawSurface || null;
-  const clauses = ["ts >= ?", "ts < ?"];
+  const scopeClauses: string[] = [];
+  const scopeBinds: (string | number)[] = [];
+  if (channel) {
+    scopeClauses.push("channel = ?");
+    scopeBinds.push(channel);
+  }
+  if (surface) {
+    scopeClauses.push("surface = ?");
+    scopeBinds.push(surface);
+  }
+  const clauses = ["ts >= ?", "ts < ?", ...scopeClauses];
   const binds: (string | number)[] = [
     new Date(fromMs).toISOString(),
     new Date(toExclusiveMs).toISOString(),
+    ...scopeBinds,
   ];
-  if (channel) {
-    clauses.push("channel = ?");
-    binds.push(channel);
-  }
-  if (surface) {
-    clauses.push("surface = ?");
-    binds.push(surface);
-  }
   return {
     from,
     to,
@@ -192,6 +224,8 @@ function parseProductFilters(url: URL, now = Date.now()): ProductFilters | null 
     surface,
     clause: clauses.join(" AND "),
     binds,
+    scopeClause: scopeClauses.map((clause) => ` AND ${clause}`).join(""),
+    scopeBinds,
   };
 }
 
@@ -203,7 +237,13 @@ export function normalizeProductEvent(
   if (!isRecord(raw) || raw.v !== 1) return null;
   if (typeof raw.id !== "string" || !PRODUCT_UUID_PATTERN.test(raw.id)) return null;
   if (typeof raw.installId !== "string" || !PRODUCT_UUID_PATTERN.test(raw.installId)) return null;
-  if (raw.channel !== "stable" && raw.channel !== "beta") return null;
+  if (
+    raw.accountHash !== undefined &&
+    (typeof raw.accountHash !== "string" || !PRODUCT_ACCOUNT_HASH_PATTERN.test(raw.accountHash))
+  ) {
+    return null;
+  }
+  if (typeof raw.channel !== "string" || !PRODUCT_CHANNELS.has(raw.channel)) return null;
   if (!PRODUCT_SURFACES.has(String(raw.surface)) || !PRODUCT_PLATFORMS.has(String(raw.platform))) {
     return null;
   }
@@ -227,7 +267,7 @@ export function normalizeProductEvent(
     return null;
   }
 
-  const optionalEnum = (key: "feature" | "mode" | "provider", allowed: Set<string>) => {
+  const optionalEnum = (key: "feature" | "mode" | "provider" | "reason", allowed: Set<string>) => {
     const value = raw[key];
     if (value === undefined) return null;
     return typeof value === "string" && allowed.has(value) ? value : undefined;
@@ -235,7 +275,24 @@ export function normalizeProductEvent(
   const feature = optionalEnum("feature", PRODUCT_FEATURES);
   const mode = optionalEnum("mode", PRODUCT_MODES);
   const provider = optionalEnum("provider", PRODUCT_PROVIDERS);
-  if (feature === undefined || mode === undefined || provider === undefined) return null;
+  const reason = optionalEnum("reason", PRODUCT_REASONS);
+  if (
+    feature === undefined ||
+    mode === undefined ||
+    provider === undefined ||
+    reason === undefined ||
+    // Only a failure has a cause.
+    (reason !== null && raw.outcome !== "failed")
+  ) {
+    return null;
+  }
+  const command =
+    raw.command === undefined
+      ? null
+      : typeof raw.command === "string" && PRODUCT_COMMAND_PATTERN.test(raw.command)
+        ? raw.command
+        : undefined;
+  if (command === undefined || (command === null) === (raw.event === "command.used")) return null;
 
   const optionalCount = (
     key: "durationMs" | "inputTokens" | "outputTokens" | "cachedInputTokens",
@@ -265,6 +322,7 @@ export function normalizeProductEvent(
     id: raw.id,
     ts: raw.ts,
     installId: raw.installId,
+    accountHash: typeof raw.accountHash === "string" ? raw.accountHash : null,
     channel: raw.channel,
     surface: raw.surface as string,
     platform: raw.platform as string,
@@ -274,6 +332,8 @@ export function normalizeProductEvent(
     feature,
     mode,
     provider,
+    reason,
+    command,
     durationMs,
     inputTokens,
     outputTokens,
@@ -349,11 +409,81 @@ interface UsageProviderRow {
   turnsFailed: number;
 }
 
+/** Finished turns of one usage.daily window sharing the same fixed categories. */
+interface UsageTurnRow {
+  provider: string;
+  model: string;
+  effort: string;
+  interactionMode: string;
+  runtimeMode: string;
+  origin: string;
+  outcome: string;
+  turns: number;
+  durationMs: number;
+  durationSamples: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  tokenSamples: number;
+}
+
+const MAX_USAGE_TURN_ROWS = 200;
+// usage_turns binds 21 params per row; 4 rows stay under D1's 100-parameter cap.
+const USAGE_TURN_ROWS_PER_STATEMENT = 4;
+const USAGE_TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
+const USAGE_TURN_OUTCOMES = new Set(["succeeded", "failed", "cancelled"]);
+const USAGE_TURN_TOTAL_MAX = 1_000_000_000_000;
+
+function normalizeUsageTurns(value: unknown): UsageTurnRow[] {
+  if (!Array.isArray(value)) return [];
+  const total = (raw: unknown) =>
+    isFiniteNumber(raw) && raw >= 0 ? Math.min(Math.floor(raw), USAGE_TURN_TOTAL_MAX) : 0;
+  const rows: UsageTurnRow[] = [];
+  for (const entry of value.slice(0, MAX_USAGE_TURN_ROWS)) {
+    if (!isRecord(entry)) continue;
+    const categories = [
+      entry.provider,
+      entry.model,
+      entry.effort,
+      entry.interactionMode,
+      entry.runtimeMode,
+      entry.origin,
+    ];
+    if (
+      !categories.every(
+        (item) => typeof item === "string" && USAGE_TURN_CATEGORY_PATTERN.test(item),
+      ) ||
+      typeof entry.outcome !== "string" ||
+      !USAGE_TURN_OUTCOMES.has(entry.outcome)
+    ) {
+      continue;
+    }
+    rows.push({
+      provider: entry.provider as string,
+      model: entry.model as string,
+      effort: entry.effort as string,
+      interactionMode: entry.interactionMode as string,
+      runtimeMode: entry.runtimeMode as string,
+      origin: entry.origin as string,
+      outcome: entry.outcome,
+      turns: clampUsageCount(entry.turns),
+      durationMs: total(entry.durationMs),
+      durationSamples: clampUsageCount(entry.durationSamples),
+      inputTokens: total(entry.inputTokens),
+      outputTokens: total(entry.outputTokens),
+      cachedInputTokens: total(entry.cachedInputTokens),
+      tokenSamples: clampUsageCount(entry.tokenSamples),
+    });
+  }
+  return rows;
+}
+
 interface NormalizedEvent {
   /** Client-generated event id; unique in the events table for idempotency. */
   clientId: string | null;
   ts: string;
   installId: string;
+  flavor: "beta" | "remote";
   appVersion: string;
   platform: string;
   arch: string;
@@ -376,6 +506,8 @@ interface NormalizedEvent {
   activeThreads: number | null;
   /** usage.daily only: per-provider rows, merged and capped. */
   providers: UsageProviderRow[] | null;
+  /** usage.daily only: finished turns by model, effort, mode, origin and outcome. */
+  turns: UsageTurnRow[] | null;
 }
 
 /** Returns a normalized row for the `events` table, or null to drop. */
@@ -385,7 +517,8 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     return null;
   }
   if (typeof raw.installId !== "string" || !UUID_PATTERN.test(raw.installId)) return null;
-  if (raw.flavor !== "beta") return null;
+  if (raw.flavor !== "beta" && raw.flavor !== "remote") return null;
+  const flavor: "beta" | "remote" = raw.flavor;
   if (typeof raw.platform !== "string" || raw.platform.length > 16) return null;
   if (typeof raw.arch !== "string" || raw.arch.length > 16) return null;
   if (
@@ -432,18 +565,31 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
       : "";
   // Defense in depth: the client redacts before queueing; the worker does it
   // again so stored text is safe even from hand-crafted or old clients.
-  const message =
+  let message =
     typeof payload.message === "string"
       ? redactDiagnosticText(payload.message, { maxLength: MESSAGE_MAX })
       : null;
-  const stack =
+  let stack =
     typeof payload.stack === "string"
       ? redactDiagnosticText(payload.stack, { maxLength: STACK_MAX })
       : null;
   const logTail =
-    typeof payload.logTail === "string"
+    flavor !== "remote" && typeof payload.logTail === "string"
       ? redactDiagnosticText(payload.logTail, { maxLength: LOG_TAIL_MAX })
       : null;
+
+  if (flavor === "remote" && kind === "error") {
+    const technical = sanitizeRemoteDiagnosticError({
+      source: source === "renderer" ? "renderer" : "main",
+      message: message ?? "",
+      stack: stack ?? undefined,
+    });
+    message = technical.message;
+    stack = technical.stack ?? null;
+  } else if (flavor === "remote") {
+    message = null;
+    stack = null;
+  }
 
   // lifecycle (app.start): OS major.minor and UI language only.
   const osVersion =
@@ -462,9 +608,11 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
   // usage.daily: the event is dropped unless providers is an array; each entry
   // keeps only a provider token and clamped counts, merged per provider.
   let providers: UsageProviderRow[] | null = null;
+  let turns: UsageTurnRow[] | null = null;
   let projects: number | null = null;
   let activeThreads: number | null = null;
   if (raw.event === "usage.daily") {
+    turns = normalizeUsageTurns(payload.turnBreakdown);
     if (!Array.isArray(payload.providers)) return null;
     const merged = new Map<string, UsageProviderRow>();
     for (const entry of payload.providers.slice(0, MAX_USAGE_PROVIDERS)) {
@@ -496,6 +644,7 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     clientId,
     ts: raw.ts,
     installId: raw.installId,
+    flavor,
     appVersion: raw.appVersion,
     platform: raw.platform,
     arch: raw.arch,
@@ -518,6 +667,7 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
     projects,
     activeThreads,
     providers,
+    turns,
   };
 }
 
@@ -527,8 +677,8 @@ const INSERT_EVENT_SQL = `INSERT OR IGNORE INTO events (
   client_id, ts, received_at, install_id, app_version, platform, arch, event,
   kind, outcome, process_type, reason, error_context, target_version,
   duration_ms, source, fingerprint, message, stack, log_tail,
-  os_version, locale, projects, active_threads
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  os_version, locale, projects, active_threads, flavor
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function eventStatement(env: Env, event: NormalizedEvent, receivedAt: string): D1PreparedStatement {
   return env.DB.prepare(INSERT_EVENT_SQL).bind(
@@ -556,6 +706,7 @@ function eventStatement(env: Env, event: NormalizedEvent, receivedAt: string): D
     event.locale,
     event.projects,
     event.activeThreads,
+    event.flavor,
   );
 }
 
@@ -589,6 +740,53 @@ function usageProviderStatement(
     `INSERT INTO usage_providers (
       event_id, install_id, day, app_version, platform,
       provider, threads, turns, turns_failed, received_at
+    ) VALUES ${values}`,
+  ).bind(...binds);
+}
+
+/** Multi-row usage_turns INSERT; rows stay under D1's bind cap. */
+function usageTurnStatement(
+  env: Env,
+  eventId: number,
+  event: NormalizedEvent,
+  rows: UsageTurnRow[],
+  receivedAt: string,
+): D1PreparedStatement {
+  const binds: (string | number)[] = [];
+  const values = rows
+    .map((row) => {
+      binds.push(
+        eventId,
+        event.installId,
+        event.ts.slice(0, 10),
+        event.appVersion,
+        event.platform,
+        event.flavor,
+        row.provider,
+        row.model,
+        row.effort,
+        row.interactionMode,
+        row.runtimeMode,
+        row.origin,
+        row.outcome,
+        row.turns,
+        row.durationMs,
+        row.durationSamples,
+        row.inputTokens,
+        row.outputTokens,
+        row.cachedInputTokens,
+        row.tokenSamples,
+        receivedAt,
+      );
+      return "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    })
+    .join(", ");
+  return env.DB.prepare(
+    `INSERT INTO usage_turns (
+      event_id, install_id, day, app_version, platform, flavor,
+      provider, model, effort, interaction_mode, runtime_mode, origin, outcome,
+      turns, duration_ms, duration_samples, input_tokens, output_tokens,
+      cached_input_tokens, token_samples, received_at
     ) VALUES ${values}`,
   ).bind(...binds);
 }
@@ -831,6 +1029,8 @@ async function hasSession(request: Request, env: Env): Promise<boolean> {
 // after the prefix is fine (crash reasons like `code=1` are real keys).
 const ISSUE_KEY_PATTERN = /^(err|crash|update):[^\x00-\x1f\x7f]{0,160}$/;
 const PLATFORM_OPTIONS = new Set(["darwin", "win32", "linux"]);
+/** Desktop build lanes that send diagnostics. */
+const DIAGNOSTICS_FLAVORS = new Set(["beta", "remote"]);
 const KIND_OPTIONS = new Set(["error", "crash", "update"]);
 const SOURCE_OPTIONS = new Set(["main", "renderer"]);
 const ISSUE_STATUSES = new Set(["resolved", "ignored"]);
@@ -849,6 +1049,7 @@ interface ApiFilters {
   now: number;
   version: string | null;
   platform: string | null;
+  flavor: "beta" | "remote" | null;
   kind: "error" | "crash" | "update" | null;
   source: "main" | "renderer" | null;
   q: string | null;
@@ -861,7 +1062,9 @@ interface ApiFilters {
    */
   scopeClause: string;
   scopeBinds: string[];
-  /** Platform only — for the per-version releases table. */
+  /** scopeClause qualified with the `e.` events alias, for joins with usage tables. */
+  eventScopeClause: string;
+  /** Flavor + platform — for the per-version releases table. */
   platformClause: string;
   platformBinds: string[];
 }
@@ -890,6 +1093,10 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
   const platformParam = url.searchParams.get("platform");
   const platform = platformParam && PLATFORM_OPTIONS.has(platformParam) ? platformParam : null;
 
+  const flavorParam = url.searchParams.get("flavor");
+  const flavor =
+    flavorParam && DIAGNOSTICS_FLAVORS.has(flavorParam) ? (flavorParam as "beta" | "remote") : null;
+
   const kindParam = url.searchParams.get("kind");
   const kind = kindParam && KIND_OPTIONS.has(kindParam) ? (kindParam as ApiFilters["kind"]) : null;
 
@@ -909,6 +1116,10 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
   if (platform) {
     scopeParts.push("platform = ?");
     scopeBinds.push(platform);
+  }
+  if (flavor) {
+    scopeParts.push("flavor = ?");
+    scopeBinds.push(flavor);
   }
   const parts = [...scopeParts];
   const binds = [...scopeBinds];
@@ -934,6 +1145,7 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
     now,
     version,
     platform,
+    flavor,
     kind,
     source,
     q,
@@ -941,8 +1153,10 @@ export function parseApiFilters(url: URL, now = Date.now()): ApiFilters {
     binds,
     scopeClause: scopeParts.length > 0 ? ` AND ${scopeParts.join(" AND ")}` : "",
     scopeBinds,
-    platformClause: platform ? " AND platform = ?" : "",
-    platformBinds: platform ? [platform] : [],
+    eventScopeClause:
+      scopeParts.length > 0 ? ` AND ${scopeParts.map((part) => `e.${part}`).join(" AND ")}` : "",
+    platformClause: `${platform ? " AND platform = ?" : ""}${flavor ? " AND flavor = ?" : ""}`,
+    platformBinds: [...(platform ? [platform] : []), ...(flavor ? [flavor] : [])],
   };
 }
 
@@ -1300,7 +1514,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (url.pathname === "/api/filters" && request.method === "GET") {
     const rangeSince = new Date(Date.now() - MAX_RANGE_DAYS * DAY_MS).toISOString();
-    const [versions, platforms] = await Promise.all([
+    const [versions, platforms, flavors] = await Promise.all([
       env.DB.prepare(`SELECT DISTINCT app_version AS version FROM events WHERE received_at >= ?`)
         .bind(rangeSince)
         .all<{ version: string }>(),
@@ -1309,10 +1523,14 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       )
         .bind(rangeSince)
         .all<{ platform: string }>(),
+      env.DB.prepare(`SELECT DISTINCT flavor FROM events WHERE received_at >= ?`)
+        .bind(rangeSince)
+        .all<{ flavor: string }>(),
     ]);
     return jsonResponse({
       versions: versions.results.map((r) => r.version).sort(compareVersionsDesc),
       platforms: platforms.results.map((r) => r.platform).sort(),
+      flavors: flavors.results.map((r) => r.flavor).sort(),
     });
   }
 
@@ -1685,57 +1903,65 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (url.pathname === "/api/usage" && request.method === "GET") {
     // Install-level metrics use scopeClause (version + platform) only.
-    const [active, installsByDay, turnStats, newInstallRows, leftRows, providerRows, localeRows] =
-      await Promise.all([
-        env.DB.prepare(
-          `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .first<{ n: number }>(),
-        env.DB.prepare(
-          `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT install_id) AS n
+    const [
+      active,
+      installsByDay,
+      turnStats,
+      newInstallRows,
+      leftRows,
+      providerRows,
+      localeRows,
+      turnBreakdownRows,
+    ] = await Promise.all([
+      env.DB.prepare(
+        `SELECT COUNT(DISTINCT install_id) AS n FROM events WHERE ts >= ?${f.scopeClause}`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .first<{ n: number }>(),
+      env.DB.prepare(
+        `SELECT substr(ts, 1, 10) AS day, COUNT(DISTINCT install_id) AS n
            FROM events WHERE ts >= ?${f.scopeClause} GROUP BY day ORDER BY day`,
-        )
-          .bind(f.bucketSince, ...f.scopeBinds)
-          .all<{ day: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT COALESCE(SUM(up.turns), 0) AS turns,
+      )
+        .bind(f.bucketSince, ...f.scopeBinds)
+        .all<{ day: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(up.turns), 0) AS turns,
                   COALESCE(SUM(up.turns_failed), 0) AS failed
            FROM usage_providers up JOIN events e ON e.id = up.event_id
-           WHERE e.ts >= ?${f.scopeClause}`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .first<{ turns: number; failed: number }>(),
-        env.DB.prepare(
-          `SELECT outcome, COUNT(*) AS n FROM events
+           WHERE e.ts >= ?${f.eventScopeClause}`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .first<{ turns: number; failed: number }>(),
+      env.DB.prepare(
+        `SELECT outcome, COUNT(*) AS n FROM events
            WHERE event = 'beta.installed' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ outcome: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT outcome, COUNT(*) AS n FROM events
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ outcome: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT outcome, COUNT(*) AS n FROM events
            WHERE event = 'beta.left' AND ts >= ?${f.scopeClause} GROUP BY outcome`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ outcome: string; n: number }>(),
-        env.DB.prepare(
-          `SELECT up.provider AS provider, COUNT(DISTINCT up.install_id) AS installs,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ outcome: string; n: number }>(),
+      env.DB.prepare(
+        `SELECT up.provider AS provider, COUNT(DISTINCT up.install_id) AS installs,
                   SUM(up.threads) AS threads, SUM(up.turns) AS turns,
                   SUM(up.turns_failed) AS failed
            FROM usage_providers up JOIN events e ON e.id = up.event_id
-           WHERE e.ts >= ?${f.scopeClause} GROUP BY up.provider ORDER BY installs DESC`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{
-            provider: string;
-            installs: number;
-            threads: number;
-            turns: number;
-            failed: number;
-          }>(),
-        // Each install's latest app.start in range carries its OS and locale.
-        env.DB.prepare(
-          `SELECT e.platform AS platform, e.os_version AS osVersion, e.locale AS locale,
+           WHERE e.ts >= ?${f.eventScopeClause} GROUP BY up.provider ORDER BY installs DESC`,
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{
+          provider: string;
+          installs: number;
+          threads: number;
+          turns: number;
+          failed: number;
+        }>(),
+      // Each install's latest app.start in range carries its OS and locale.
+      env.DB.prepare(
+        `SELECT e.platform AS platform, e.os_version AS osVersion, e.locale AS locale,
                   COUNT(DISTINCT e.install_id) AS installs
            FROM events e
            INNER JOIN (
@@ -1744,10 +1970,45 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
            ) m ON m.install_id = e.install_id AND e.ts = m.mts
            WHERE e.event = 'app.start'
            GROUP BY e.platform, e.os_version, e.locale`,
-        )
-          .bind(f.since, ...f.scopeBinds)
-          .all<{ platform: string; osVersion: string; locale: string; installs: number }>(),
-      ]);
+      )
+        .bind(f.since, ...f.scopeBinds)
+        .all<{ platform: string; osVersion: string; locale: string; installs: number }>(),
+      // usage_turns carries its own version, platform and flavor columns.
+      env.DB.prepare(
+        `SELECT provider, model, effort, interaction_mode AS interactionMode,
+                  runtime_mode AS runtimeMode, origin,
+                  COUNT(DISTINCT install_id) AS installs, SUM(turns) AS turns,
+                  SUM(CASE WHEN outcome = 'succeeded' THEN turns ELSE 0 END) AS succeeded,
+                  SUM(CASE WHEN outcome = 'failed' THEN turns ELSE 0 END) AS failed,
+                  SUM(CASE WHEN outcome = 'cancelled' THEN turns ELSE 0 END) AS cancelled,
+                  SUM(duration_ms) AS durationMs, SUM(duration_samples) AS durationSamples,
+                  SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+                  SUM(cached_input_tokens) AS cachedInputTokens, SUM(token_samples) AS tokenSamples
+           FROM usage_turns WHERE day >= ?${f.scopeClause}
+           GROUP BY provider, model, effort, interaction_mode, runtime_mode, origin
+           ORDER BY turns DESC LIMIT 100`,
+      )
+        .bind(f.bucketSince.slice(0, 10), ...f.scopeBinds)
+        .all<{
+          provider: string;
+          model: string;
+          effort: string;
+          interactionMode: string;
+          runtimeMode: string;
+          origin: string;
+          installs: number;
+          turns: number;
+          succeeded: number;
+          failed: number;
+          cancelled: number;
+          durationMs: number;
+          durationSamples: number;
+          inputTokens: number;
+          outputTokens: number;
+          cachedInputTokens: number;
+          tokenSamples: number;
+        }>(),
+    ]);
     const activeInstalls = active?.n ?? 0;
     const turns = turnStats?.turns ?? 0;
     const turnsFailed = turnStats?.failed ?? 0;
@@ -1792,6 +2053,26 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         turns: r.turns,
         failedPct: r.turns > 0 ? Math.round((r.failed / r.turns) * 1000) / 10 : 0,
       })),
+      turnBreakdown: turnBreakdownRows.results.map((row) => ({
+        provider: row.provider,
+        model: row.model,
+        effort: row.effort,
+        interactionMode: row.interactionMode,
+        runtimeMode: row.runtimeMode,
+        origin: row.origin,
+        installs: row.installs,
+        turns: row.turns,
+        succeeded: row.succeeded,
+        failed: row.failed,
+        cancelled: row.cancelled,
+        meanDurationMs:
+          row.durationSamples > 0 ? Math.round(row.durationMs / row.durationSamples) : null,
+        meanInputTokens:
+          row.tokenSamples > 0 ? Math.round(row.inputTokens / row.tokenSamples) : null,
+        meanOutputTokens:
+          row.tokenSamples > 0 ? Math.round(row.outputTokens / row.tokenSamples) : null,
+        cachedInputTokens: row.cachedInputTokens,
+      })),
       osVersions: [...osMap.values()].sort((a, b) => b.installs - a.installs),
       locales: [...localeMap.entries()]
         .map(([locale, installs]) => ({ locale, installs }))
@@ -1829,6 +2110,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       providerRows,
       providerDailyRows,
       previousRows,
+      activeRows,
+      peopleRows,
+      commandRows,
+      platformRows,
+      reasonRows,
     ] = await Promise.all([
       env.DB.prepare(
         `SELECT COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
@@ -1931,6 +2217,117 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
             .bind(...previousBinds)
             .all<{ provider: string; turns: number }>()
         : Promise.resolve(null),
+      // Rolling windows ending now, independent of the selected range. An
+      // installation is active on any event; engaged when it sent a chat request.
+      env.DB.prepare(
+        `SELECT
+           COUNT(DISTINCT CASE WHEN ts >= ? THEN install_id END) AS day,
+           COUNT(DISTINCT CASE WHEN ts >= ? THEN install_id END) AS week,
+           COUNT(DISTINCT install_id) AS month,
+           COUNT(DISTINCT CASE WHEN ts >= ? AND event = 'chat.request' THEN install_id END) AS engagedDay,
+           COUNT(DISTINCT CASE WHEN ts >= ? AND event = 'chat.request' THEN install_id END) AS engagedWeek,
+           COUNT(DISTINCT CASE WHEN event = 'chat.request' THEN install_id END) AS engagedMonth
+         FROM product_events WHERE ts >= ?${productFilters.scopeClause}`,
+      )
+        .bind(
+          new Date(Date.now() - DAY_MS).toISOString(),
+          new Date(Date.now() - 7 * DAY_MS).toISOString(),
+          new Date(Date.now() - DAY_MS).toISOString(),
+          new Date(Date.now() - 7 * DAY_MS).toISOString(),
+          new Date(Date.now() - PRODUCT_RETENTION_DAYS * DAY_MS).toISOString(),
+          ...productFilters.scopeBinds,
+        )
+        .first<{
+          day: number;
+          week: number;
+          month: number;
+          engagedDay: number;
+          engagedWeek: number;
+          engagedMonth: number;
+        }>(),
+      // An installation takes the account it reported most recently in the window,
+      // so events sent before sign-in, or before switching accounts, do not count the
+      // same person twice.
+      env.DB.prepare(
+        `WITH scoped AS (
+           SELECT install_id, account_hash, ts FROM product_events
+           WHERE ts >= ?${productFilters.scopeClause}
+         ),
+         installs AS (
+           SELECT install_id, MAX(ts) AS last_seen FROM scoped GROUP BY install_id
+         ),
+         latest_account AS (
+           SELECT s.install_id, MAX(s.account_hash) AS account_hash
+           FROM scoped s
+           JOIN (
+             SELECT install_id, MAX(ts) AS ts FROM scoped
+             WHERE account_hash IS NOT NULL GROUP BY install_id
+           ) l ON l.install_id = s.install_id AND l.ts = s.ts
+           WHERE s.account_hash IS NOT NULL
+           GROUP BY s.install_id
+         ),
+         people AS (
+           SELECT COALESCE(a.account_hash, i.install_id) AS person, i.last_seen,
+                  a.account_hash AS account_hash
+           FROM installs i LEFT JOIN latest_account a ON a.install_id = i.install_id
+         )
+         SELECT
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleDay,
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleWeek,
+           COUNT(DISTINCT person) AS peopleMonth,
+           COUNT(DISTINCT account_hash) AS signedInMonth
+         FROM people`,
+      )
+        .bind(
+          new Date(Date.now() - PRODUCT_RETENTION_DAYS * DAY_MS).toISOString(),
+          ...productFilters.scopeBinds,
+          new Date(Date.now() - DAY_MS).toISOString(),
+          new Date(Date.now() - 7 * DAY_MS).toISOString(),
+        )
+        .first<{
+          peopleDay: number;
+          peopleWeek: number;
+          peopleMonth: number;
+          signedInMonth: number;
+        }>(),
+      env.DB.prepare(
+        `SELECT command, COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
+           FROM product_events WHERE ${where} AND event = 'command.used' AND command IS NOT NULL
+           GROUP BY command ORDER BY events DESC, command LIMIT 60`,
+      )
+        .bind(...binds)
+        .all<{ command: string; events: number; installations: number }>(),
+      env.DB.prepare(
+        `SELECT surface, platform, COUNT(DISTINCT install_id) AS installations, COUNT(*) AS events,
+                  SUM(event = 'chat.request' AND outcome = 'failed') AS failedRequests,
+                  SUM(event IN ('connection.connect', 'connection.reconnect') AND outcome = 'failed')
+                    AS failedConnections
+           FROM product_events WHERE ${where}
+           GROUP BY surface, platform ORDER BY installations DESC, surface, platform`,
+      )
+        .bind(...binds)
+        .all<{
+          surface: string;
+          platform: string;
+          installations: number;
+          events: number;
+          failedRequests: number;
+          failedConnections: number;
+        }>(),
+      env.DB.prepare(
+        `SELECT event, reason, surface, COUNT(*) AS events,
+                  COUNT(DISTINCT install_id) AS installations
+           FROM product_events WHERE ${where} AND outcome = 'failed' AND reason IS NOT NULL
+           GROUP BY event, reason, surface ORDER BY events DESC, event, reason`,
+      )
+        .bind(...binds)
+        .all<{
+          event: string;
+          reason: string;
+          surface: string;
+          events: number;
+          installations: number;
+        }>(),
     ]);
 
     const dayCount = Math.floor(
@@ -1951,6 +2348,22 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       surface: productFilters.surface,
       events: totals?.events ?? 0,
       activeInstallations: totals?.installations ?? 0,
+      activeUsers: {
+        day: activeRows?.day ?? 0,
+        week: activeRows?.week ?? 0,
+        month: activeRows?.month ?? 0,
+        engagedDay: activeRows?.engagedDay ?? 0,
+        engagedWeek: activeRows?.engagedWeek ?? 0,
+        engagedMonth: activeRows?.engagedMonth ?? 0,
+        // A signed-in person counts once across devices; others count per installation.
+        peopleDay: peopleRows?.peopleDay ?? 0,
+        peopleWeek: peopleRows?.peopleWeek ?? 0,
+        peopleMonth: peopleRows?.peopleMonth ?? 0,
+        signedInMonth: peopleRows?.signedInMonth ?? 0,
+      },
+      platforms: platformRows.results,
+      failureReasons: reasonRows.results,
+      commands: commandRows.results,
       daily,
       features: featureRows.results,
       outcomes: outcomeRows.results,
@@ -2126,10 +2539,22 @@ export default {
         const providerStatements: D1PreparedStatement[] = [];
         results.forEach((result, index) => {
           const event = normalizedEvents[index]!;
-          if (!event.providers || event.providers.length === 0) return;
           const changes = result.meta?.changes ?? 0;
           const eventId = result.meta?.last_row_id;
           if (changes <= 0 || typeof eventId !== "number") return;
+          const turns = event.turns ?? [];
+          for (let i = 0; i < turns.length; i += USAGE_TURN_ROWS_PER_STATEMENT) {
+            providerStatements.push(
+              usageTurnStatement(
+                env,
+                eventId,
+                event,
+                turns.slice(i, i + USAGE_TURN_ROWS_PER_STATEMENT),
+                receivedAt,
+              ),
+            );
+          }
+          if (!event.providers || event.providers.length === 0) return;
           for (let i = 0; i < event.providers.length; i += USAGE_PROVIDER_ROWS_PER_STATEMENT) {
             providerStatements.push(
               usageProviderStatement(

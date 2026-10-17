@@ -6,6 +6,17 @@ authoritative description of what leaves your computer.
 
 **Stable builds never send Beta diagnostics.** Separate, default-off product analytics
 are available in both channels; see [Product analytics](#product-analytics).
+
+**Synara Remote** constructs the same diagnostics module with `flavor: "remote"`.
+It follows the **Share usage and diagnostics** switch in Settings → General → Privacy,
+which is on by default: turning it off stops new events and deletes the unsent
+diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
+memory is not sent, and it sends no free text: an error keeps only its type and stack
+locations (`TypeError at main:10:5`), never function names, file names or its message; a crash keeps its
+process type and reason without the log tail; an update failure keeps its step without
+the message. Handled issues keep their fixed code and reason. While sharing is off,
+no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
+usage snapshot is relayed only once its 24-hour window starts after that moment.
 The Beta diagnostics module is only constructed
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
@@ -129,14 +140,21 @@ the same failure do not emit another event; a new failed attempt does.
 
 `usage.daily` works differently from the other events: the main process cannot
 read the projection database, so the server writes
-`~/.synara-beta/diagnostics/usage-snapshot.json` every 6 hours (counts only —
+`<app home>/diagnostics/usage-snapshot.json` every 6 hours (counts only —
 provider names, thread and turn counts, project count) and the main process
-relays it once per UTC day. `beta.installed` is emitted once, on the first
+relays it once per UTC day. Its optional `turnBreakdown` groups finished turns
+of the last 24 hours — including turns started from a phone, an automation or
+an agent — by provider, model, effort, interaction mode, permission mode, origin
+and outcome, with turn counts, summed durations and main-turn token totals. A
+model name is kept only when it is in the bundled catalog or is a versioned Claude
+release (`claude-<family>-<major>[-<minor>]`); anything else is reported as `other`.
+Turns count by when they finished. Usage keys that name models are
+never copied. `beta.installed` is emitted once, on the first
 backend start after a fresh install, and says whether stable data was imported.
 `beta.left` fires when you switch back to stable and says only whether the beta
 app was moved to the Trash.
 
-Every event also carries: a random per-install UUID, `flavor: "beta"`,
+Every event also carries: a random per-install UUID, `flavor` (`"beta"` or `"remote"`),
 `platform`, `arch`, the app version, and a timestamp; `app.start` additionally
 carries the OS version (major.minor) and UI language. The install UUID is
 generated locally on first launch (`crypto.randomUUID`) — it is not derived
@@ -229,9 +247,10 @@ history and native completion events are not included. They are not billing data
 
 Each envelope contains a random per-installation UUID, event UUID, timestamp,
 app version, channel, surface and platform. Additional fields are restricted to
-fixed enums and bounded durations/token counts. No account/provider identifiers,
-model names, task/project names, routes, URLs, prompts, files or error text enter
-this path. The UUID is independent of the Beta diagnostics identity.
+fixed enums and bounded durations/token counts. No account ids (Remote adds only the
+hashed account described below), provider identifiers, model names, task/project names,
+routes, URLs, prompts, files or error text enter this path. The UUID is independent of
+the Beta diagnostics identity.
 
 Events go to the Cloudflare Worker `/v1/product-events` and a separate D1
 `product_events` table, viewed through its authenticated Product dashboard.
@@ -248,5 +267,29 @@ link the new installation identity to earlier events. Turning off cannot
 retract a request already received by Cloudflare; retention applies there.
 
 Release dependency: deploy the product D1 migration and receiving Worker before
-shipping these clients. The existing `/v1/events` and `/v1/crash` routes remain
-Beta-only and are not controlled by this new switch.
+shipping these clients. `/v1/crash` remains Beta-only. `/v1/events` accepts Beta and
+Remote diagnostics; Remote events follow the sharing switch.
+
+### Synara Remote
+
+Remote product events use the `remote` channel and are **on by default** until the
+user turns sharing off; the choice persists per installation. Besides the events
+above, Remote records `app.active` once per UTC day while the app runs, so long
+sessions count as active days. Failed connections, pairings and chat requests can
+carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
+`host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. The
+dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
+installations that sent a chat request in those windows.
+
+Remote and the other desktop lanes also record `command.used` for built-in keyboard
+shortcuts (`shortcut:terminal.toggle`) and slash commands (`slash:plan`), once per key
+press or command. Numbered jumps share one name; anything a person defined, such as a
+custom shortcut, script or skill, is reported as `custom`. The receiver accepts only
+that fixed `shortcut:` or `slash:` shape.
+
+To count people rather than installations, Remote events from a signed-in app carry
+`accountHash`: the first 32 hex characters of SHA-256 of `synara-usage-v1:` plus the
+account's user id. The account id itself is never sent, and the same hash on a Mac and a
+phone counts one person. It is a pseudonymous identifier: whoever holds the account
+list could recompute it, so it is linked to the account for privacy-label purposes.
+Signing out stops tagging new events; turning sharing off deletes it locally.

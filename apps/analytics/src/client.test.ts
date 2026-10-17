@@ -46,12 +46,13 @@ describe("pickFilters", () => {
     days: 30,
     version: "0.9.4-beta.1",
     platform: "darwin",
+    flavor: "remote",
     kind: "crash",
     q: "quota",
   };
 
   it("keeps only the view's exposed params plus days", () => {
-    expect(pickFilters(full, ["version", "platform", "kind", "q"])).toEqual(full);
+    expect(pickFilters(full, ["flavor", "version", "platform", "kind", "q"])).toEqual(full);
     expect(pickFilters(full, ["version", "platform"])).toEqual({
       ...EMPTY_FILTERS,
       days: 30,

@@ -57,6 +57,7 @@ import {
 } from "./config";
 import {
   SYNARA_BETA_BUNDLE_ID,
+  SYNARA_REMOTE_BUNDLE_ID,
   SYNARA_DESKTOP_BUNDLE_ID_ENV,
 } from "@synara/shared/desktopIdentity";
 import { runBetaImportIfRequested } from "./betaImport";
@@ -596,9 +597,10 @@ const makeServerProgram = (input: CliInput) =>
         ),
       );
     }
-    // Beta only: anonymous 24h usage snapshot for diagnostics. Same gate as the
-    // stable→beta import; failures are logged inside and never break startup.
-    if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+    // Beta and Remote: anonymous 24h usage counts for diagnostics. The desktop
+    // relays them only while sharing is on; failures never break startup.
+    const desktopBundleId = process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV];
+    if (desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID) {
       yield* startBetaUsageSnapshotJob(config.baseDir);
     }
     // Optional Claude OAuth keepalive. Disabled by default because it touches

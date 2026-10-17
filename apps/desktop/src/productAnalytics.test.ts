@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -300,4 +308,87 @@ it("does not schedule a retry after disposal aborts a pending send", async () =>
   await vi.advanceTimersByTimeAsync(10_000);
   expect(fetcher).toHaveBeenCalledOnce();
   vi.useRealTimers();
+});
+
+it("shares Remote usage by default until the user opts out, and reports daily activity", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-17T10:00:00.000Z"));
+  const homeDir = makeRoot();
+  const queued = () =>
+    JSON.parse(readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8")) as Array<
+      Record<string, unknown>
+    >;
+  const make = () =>
+    new ProductAnalytics({
+      homeDir,
+      channel: "remote",
+      appVersion: "1.0.6-remote.17",
+      platform: "win32",
+      defaultEnabled: true,
+      fetcher: vi.fn(async () => new Response(null, { status: 503 })),
+    });
+  const analytics = make();
+  const changes: boolean[] = [];
+  analytics.onChange((enabled) => changes.push(enabled));
+  expect(analytics.getState()).toEqual({ enabled: true });
+
+  analytics.start();
+  analytics.track({ event: "connection.connect", outcome: "failed", reason: "not_accepting" });
+  // A cause belongs to a failure only.
+  analytics.track({ event: "chat.request", outcome: "succeeded", reason: "timeout" });
+  expect(queued().map((event) => [event.event, event.channel, event.reason])).toEqual([
+    ["app.active", "remote", undefined],
+    ["connection.connect", "remote", "not_accepting"],
+  ]);
+
+  // Same UTC day: no second heartbeat. Next day: one more.
+  vi.advanceTimersByTime(60_000);
+  expect(queued().filter((event) => event.event === "app.active")).toHaveLength(1);
+  vi.setSystemTime(new Date("2026-10-18T00:00:30.000Z"));
+  vi.advanceTimersByTime(30_000);
+  expect(queued().filter((event) => event.event === "app.active")).toHaveLength(2);
+
+  analytics.setEnabled(false);
+  analytics.dispose();
+  expect(changes).toEqual([false]);
+  expect(make().getState()).toEqual({ enabled: false });
+});
+
+it("tags events with a hash of the signed-in account and never the account id", () => {
+  const homeDir = makeRoot();
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.0.6-remote.17",
+    platform: "darwin",
+    defaultEnabled: true,
+    fetcher: vi.fn(async () => new Response(null, { status: 503 })),
+  });
+  analytics.setAccount("user_01HZTESTACCOUNT");
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  analytics.setAccount(null);
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  const raw = readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8");
+  const queued = JSON.parse(raw) as Array<Record<string, unknown>>;
+  // The same vector is asserted by the native client, so devices agree on one person.
+  expect(queued.map((event) => event.accountHash)).toEqual([
+    "aabeca326019f52e2e13cbab8574fcac",
+    undefined,
+  ]);
+  expect(raw).not.toContain("user_01HZTESTACCOUNT");
+  expect(existsSync(join(homeDir, "product-analytics", "account-hash"))).toBe(false);
+});
+
+it("keeps an unreadable recorded choice off instead of falling back to the default", () => {
+  const homeDir = makeRoot();
+  // A directory in place of the consent file makes the read fail without ENOENT.
+  mkdirSync(join(homeDir, "product-analytics", "consent.json"), { recursive: true });
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.0.6-remote.17",
+    platform: "darwin",
+    defaultEnabled: true,
+  });
+  expect(analytics.getState()).toEqual({ enabled: false });
 });
