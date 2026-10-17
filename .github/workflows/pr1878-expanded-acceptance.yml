@@ -1,0 +1,262 @@
+name: PR 1878 expanded exact-source acceptance
+on:
+  push:
+    branches: [qa/pr1878-expanded-acceptance-20261017]
+permissions:
+  contents: read
+concurrency:
+  group: pr1878-expanded-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  QA_SOURCE: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+  QA_TREE: 5484335d09c1334234a01c0ad935d5cb2ed03189
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  source:
+    name: Immutable source review export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Verify and export tracked source without credentials or build outputs
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$RUNNER_TEMP/pr1878-source"
+          python - <<'PY'
+          import hashlib, io, json, os, subprocess, tarfile
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'pr1878-source'
+          entries=subprocess.check_output(['git','ls-tree','-rz','HEAD']).split(b'\0')
+          suffixes={'.ts','.tsx','.js','.jsx','.mjs','.cjs','.json','.lock','.toml','.yaml','.yml','.md','.mdx','.css','.html','.sh','.py','.txt','.patch'}
+          records=[]
+          with tarfile.open(out/'source-text.tar.gz','w:gz') as archive:
+              for entry in entries:
+                  if not entry: continue
+                  metadata, raw_path=entry.split(b'\t',1)
+                  mode,kind,sha=metadata.decode().split()
+                  path=raw_path.decode()
+                  if kind!='blob' or mode not in {'100644','100755'}: continue
+                  if Path(path).suffix not in suffixes and Path(path).name not in {'AGENTS.md','REVIEW.md','bun.lock','LICENSE'}: continue
+                  if any(part in {'pr-assets','pr-screenshots','pr-ui-evidence'} for part in Path(path).parts): continue
+                  data=Path(path).read_bytes()
+                  actual=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+                  assert actual==sha,(path,actual,sha)
+                  info=tarfile.TarInfo(path);info.size=len(data);info.mode=int(mode[-3:],8)
+                  archive.addfile(info,io.BytesIO(data))
+                  records.append({'path':path,'sha':sha,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'mode':mode})
+          (out/'source-manifest.json').write_text(json.dumps({'source':os.environ['QA_SOURCE'],'tree':os.environ['QA_TREE'],'files':records},indent=2)+'\n')
+          (out/'archive-sha256.txt').write_text(hashlib.sha256((out/'source-text.tar.gz').read_bytes()).hexdigest()+'\n')
+          print('Verified source files:',len(records))
+          PY
+          git diff --exit-code
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-exact-source-review
+          path: ${{ runner.temp }}/pr1878-source/
+          if-no-files-found: error
+          retention-days: 14
+  unit:
+    name: Exact-source units (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: core
+            packages: packages/contracts packages/shared scripts apps/desktop
+            shard: ''
+          - lane: web
+            packages: apps/web
+            shard: ''
+          - lane: server-1
+            packages: apps/server
+            shard: --shard=1/3
+          - lane: server-2
+            packages: apps/server
+            shard: --shard=2/3
+          - lane: server-3
+            packages: apps/server
+            shard: --shard=3/3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Pin tested source
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$RUNNER_TEMP/pr1878-${{ matrix.lane }}"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-${{ matrix.lane }}/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Execute complete original package suites with actual exits
+        env:
+          PACKAGES: ${{ matrix.packages }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          status=0
+          out="$RUNNER_TEMP/pr1878-${{ matrix.lane }}"
+          for package in $PACKAGES; do
+            label="${package//\//-}"
+            if bun run --cwd "$package" test $SHARD --reporter=default --reporter=json --outputFile.json="$out/$label.json" > "$out/$label.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+            tail -100 "$out/$label.log"
+            printf '%s\t%s\n' "$package" "$rc" >> "$out/exits.tsv"
+          done
+          git diff --exit-code > "$out/source-clean.diff" || status=1
+          exit "$status"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-expanded-${{ matrix.lane }}
+          path: ${{ runner.temp }}/pr1878-${{ matrix.lane }}/
+          if-no-files-found: error
+          retention-days: 14
+  browser:
+    name: Full browser coverage (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Pin tested source
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$RUNNER_TEMP/pr1878-browser-${{ matrix.shard }}"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-browser-${{ matrix.shard }}/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Install real Chromium and recording dependencies
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Run full browser configuration without stable-CI exclusions
+        run: |
+          out="$RUNNER_TEMP/pr1878-browser-${{ matrix.shard }}"
+          if bun run --cwd apps/web test:browser --shard=${{ matrix.shard }}/3 --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          tail -180 "$out/browser.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-expanded-browser-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/pr1878-browser-${{ matrix.shard }}/
+            apps/web/src/**/__screenshots__/
+            apps/web/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  native:
+    name: Actual Electron lifecycle and full browser E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Pin tested source
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$RUNNER_TEMP/pr1878-native"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-native/source.txt"
+      - uses: ./.github/actions/setup-workspace
+        with:
+          electron: 'true'
+      - name: Build production desktop pipeline
+        run: |
+          if bun run build:desktop > "$RUNNER_TEMP/pr1878-native/build.log" 2>&1; then rc=0; else rc=$?; fi
+          tail -100 "$RUNNER_TEMP/pr1878-native/build.log"
+          printf '%s\n' "$rc" > "$RUNNER_TEMP/pr1878-native/build-exit.txt"
+          exit "$rc"
+      - name: Configure existing Electron sandbox helper on disposable runner
+        run: |
+          helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          test -f "$helper"
+          sudo chown root:root "$helper"
+          sudo chmod 4755 "$helper"
+          cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Run native lifecycle and every existing Electron E2E case
+        run: |
+          status=0
+          out="$RUNNER_TEMP/pr1878-native"
+          if xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle > "$out/lifecycle.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          cat "$out/lifecycle.log"
+          printf 'lifecycle\t%s\n' "$rc" >> "$out/exits.tsv"
+          if PLAYWRIGHT_JSON_OUTPUT_NAME="$out/electron.json" xvfb-run -a bun run --cwd apps/web test:electron:e2e --reporter=line,json > "$out/electron.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          tail -150 "$out/electron.log"
+          printf 'electron-e2e\t%s\n' "$rc" >> "$out/exits.tsv"
+          git diff --exit-code > "$out/source-clean.diff" || status=1
+          exit "$status"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-expanded-native
+          path: |
+            ${{ runner.temp }}/pr1878-native/
+            apps/web/test-results/
+            apps/web/playwright-report/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    name: Native Windows runtime and recovery
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Pin Git source identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$RUNNER_TEMP/pr1878-windows"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-windows/source.txt"
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+      - name: Real Windows runtime tests without credentials
+        run: |
+          out="$RUNNER_TEMP/pr1878-windows"
+          status=0
+          if bun scripts/node-pty-smoke.mjs > "$out/pty.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          printf 'pty\t%s\n' "$rc" >> "$out/exits.tsv"
+          if bun run --cwd packages/shared test src/windowsProcess.test.ts src/platformProcess.test.ts src/processRuntime.test.ts src/filesystemPlatform.test.ts src/platformEnvironment.test.ts src/migrationRecovery.test.ts --reporter=default --reporter=json --outputFile.json="$out/shared.json" > "$out/shared.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          printf 'shared\t%s\n' "$rc" >> "$out/exits.tsv"
+          if bun run --cwd apps/server test src/platform/processTreeController.test.ts src/platform/effectProcessSignals.test.ts src/provider/supervisedProcessTeardown.test.ts src/provider/providerStartupLifecycle.test.ts src/provider/Layers/AntigravityAdapter.test.ts src/processRunner.test.ts src/orchestration/projectImportPaths.test.ts src/orchestration/projectImportCatalog.test.ts src/windowsProcessEffect.test.ts src/persistence/MigrationBackup.test.ts src/persistence/Migrations/MigrationReplay.test.ts --reporter=default --reporter=json --outputFile.json="$out/server.json" > "$out/server.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          printf 'server\t%s\n' "$rc" >> "$out/exits.tsv"
+          if bun run --cwd apps/desktop test src/backendShutdown.windows.integration.test.ts src/desktopMigrationRecovery.test.ts --reporter=default --reporter=json --outputFile.json="$out/desktop.json" > "$out/desktop.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          printf 'desktop\t%s\n' "$rc" >> "$out/exits.tsv"
+          for log in "$out"/*.log; do tail -90 "$log"; done
+          git diff --exit-code > "$out/source-clean.diff" || status=1
+          exit "$status"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-expanded-windows
+          path: ${{ runner.temp }}/pr1878-windows/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
