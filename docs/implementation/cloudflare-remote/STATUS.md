@@ -1,15 +1,46 @@
 # Cloudflare Remote — execution state
 
-## Remote .20 / companion 141 candidate — 2026-10-17
+## Remote .20 and companion 141 delivered — 2026-10-17
 
-Desktop fix `37542f8` accepts colon-separated thread identifiers in the existing
-resource manifest for uploads, exports and voice. Companion native source
-`5ed8321` aligns validation and bounded transfer errors; the release also includes
-wide-table scrolling, worktree selection and RemodexTextKit 0.4.6 since build 140.
-Both the execution computer and phone/tablet require this update for Remote
-transfers. No backend deployment, migration, identity, pairing or privacy change
-is required. Release packaging, delivery and live checks remain pending until
-recorded below. Stable and Beta releases are outside this scope.
+[Synara Remote 1.0.6-remote.20](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.20)
+is public for macOS ARM64, Windows x64 and Linux x64. Immutable tag source
+`de050d78ac88fadb13a8963d660c8b14935039ee` includes desktop fix `37542f8`:
+attachment uploads, thread exports and voice accept the colon-separated thread
+IDs created by iPhone/iPad, subagents and automations. Attachment ID restrictions,
+body limits and existing authorization remain in place.
+
+- **Qualification:** pinned Node 24.13.1/Bun 1.4.2 local format, lint, typecheck,
+  identity, release smoke, shared resource regressions and authenticated remote
+  resource-pool tests pass. The single
+  [exact-tag publication run](https://github.com/Emanuele-web04/synara/actions/runs/39066174138)
+  passes all configured quality tests, all three server shards, three-platform
+  packaged startup, macOS signing/notarization and Windows Defender. Temporary
+  Apple ticket-delivery disconnects recover through the existing bounded retries
+  inside the same job; no second publication or source change was needed.
+- **Public artifacts:** all 11 hashes, updater sizes/SHA-512 and exact-source
+  lockfile provenance match. The pristine Mac updater app passes strict signature,
+  Gatekeeper and staple validation. The real electron-updater provider discovers
+  .20 from .19 on all three systems without foreign feeds. Stable Latest v1.0.7
+  and historical v0.4.2 remain unchanged; the temporary Windows unsigned exception
+  is restored to its previous `1.0.7` value. SmartScreen may still appear.
+- **iPhone/iPad:** universal TestFlight **0.1 (141)**, archive source `ae529fb`,
+  includes native fix `5ed8321`, horizontally scrolling tables, opening an existing
+  worktree when selecting its branch, and RemodexTextKit 0.4.6. All 323 Core tests,
+  86 shared Swift/desktop fixtures, universal archive and ARM64 simulator build
+  pass. Both simulators launch. An initial generic simulator link tried unsupported
+  x86_64 GhosttyKit; the documented ARM64 retry passes without source edits.
+- **Delivery:** actual uploaded app/widget build 141, signatures, iPhone/iPad
+  families, disabled debugging, Production APNs and Apple sign-in are verified.
+  The existing certificate, team and app profile from 140 are reused. Both existing
+  groups show Test in corso (one internal tester, 24 external observed), with notes
+  saved and notifications enabled; group membership and older builds are retained.
+- **Compatibility and limits:** update both the phone/tablet and the execution
+  computer for Remote transfers. No service deployment, migration, new credential,
+  identity/pairing reset, privacy change or production-site update is required.
+  Visible changes are the user's pushed native fixes and the curated release
+  entry. A new live attachment/microphone/transcription-provider session and
+  physical-device APNs delivery were not performed; automated tests do not prove
+  those. Installed upgrades are tracked separately from pristine artifact checks.
 
 ## Remote .19 and companion 140 delivered — 2026-10-17
 
