@@ -1,5 +1,5 @@
-// FILE: 138_CapabilityEvidence.test.ts
-// Purpose: Proves migration 138 creates an append-only capability observations
+// FILE: 144_CapabilityEvidence.test.ts
+// Purpose: Proves migration 144 creates an append-only capability observations
 // store and is idempotent across replays (MigrationReplay re-runs every
 // migration at or after id 54 over its own post-state).
 // Layer: SQLite migration test
@@ -12,14 +12,14 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("138_CapabilityEvidence", () => {
+describe("144_CapabilityEvidence", () => {
   it.effect("creates the capability_observations table and its index", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 137 });
+      yield* runMigrations({ toMigrationInclusive: 143 });
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 138 }), [
-        [138, "CapabilityEvidence"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 144 }), [
+        [144, "CapabilityEvidence"],
       ]);
 
       const [table] = yield* sql<{ readonly exists: number }>`
@@ -71,9 +71,9 @@ describe("138_CapabilityEvidence", () => {
   it.effect("is idempotent when re-run over its own post-state", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 138 });
+      yield* runMigrations({ toMigrationInclusive: 144 });
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 138 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 144 }), []);
 
       const [table] = yield* sql<{ readonly exists: number }>`
         SELECT EXISTS(

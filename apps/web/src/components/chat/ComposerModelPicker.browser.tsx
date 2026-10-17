@@ -232,7 +232,7 @@ describe("Devin Fusion pairing picker", () => {
       await expect
         .element(page.getByRole("menuitem", { name: /^Lead Claude Fable 5.1$/u }))
         .toBeVisible();
-      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/before.png" });
+      await page.screenshot({ path: "__screenshots__/fusion-picker/before.png" });
     } finally {
       await initialScreen.unmount();
     }
@@ -260,7 +260,7 @@ describe("Devin Fusion pairing picker", () => {
       await page.getByRole("menuitem", { name: /^Speed Standard$/u }).click();
       await expect.element(page.getByRole("menuitemradio", { name: "Fast" })).toBeVisible();
       await page.screenshot({
-        path: "../../../../../.github/pr-assets/fusion-picker/speed-menu.png",
+        path: "__screenshots__/fusion-picker/speed-menu.png",
       });
       await page.getByRole("menuitemradio", { name: "Fast" }).click();
 
@@ -273,7 +273,7 @@ describe("Devin Fusion pairing picker", () => {
       await expect
         .element(trigger)
         .toHaveTextContent(/Claude Fable 5.1 High Fast \+ SWE-2 Medium/u);
-      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/after.png" });
+      await page.screenshot({ path: "__screenshots__/fusion-picker/after.png" });
       await page.mark("Fast pairing selected");
       await page
         .getByRole("button", { name: "Star Fusion with its current effort and speed" })
@@ -286,7 +286,7 @@ describe("Devin Fusion pairing picker", () => {
           variantLabel: "Claude Fable 5.1 High Fast + SWE-2 Medium",
         }),
       ]);
-      await page.screenshot({ path: "../../../../../.github/pr-assets/fusion-picker/starred.png" });
+      await page.screenshot({ path: "__screenshots__/fusion-picker/starred.png" });
       await page.mark("Fast pairing selected and saved as a distinct pairing preset");
     } finally {
       await screen.unmount();

@@ -1,0 +1,62 @@
+import "../index.css";
+
+import { page, userEvent } from "vitest/browser";
+import { expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+
+import { AddPlusIcon } from "~/lib/icons";
+import { SidebarIconButton } from "./SidebarIconButton";
+import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
+
+async function renderToolbar() {
+  const onAdd = vi.fn();
+  await render(
+    <div className="p-4">
+      <button type="button">Outside toolbar</button>
+      <div className="group/project-header relative my-4 w-64" data-testid="project-header">
+        <div className="flex h-7 items-center px-2 text-ui">Projects</div>
+        <SidebarSectionToolbar placement="overlay" revealOnHover>
+          <SidebarIconButton icon={AddPlusIcon} label="Add project" onClick={onAdd} />
+        </SidebarSectionToolbar>
+      </div>
+    </div>,
+  );
+  await page.getByRole("button", { name: "Outside toolbar" }).click();
+  return { onAdd, button: page.getByRole("button", { name: "Add project" }) };
+}
+
+it.each([390, 767])(
+  "allows the visible toolbar action to receive a real click at %ipx",
+  async (width) => {
+    await page.viewport(width, 600);
+    const { onAdd, button } = await renderToolbar();
+    const toolbar = button.element().parentElement!;
+    await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("1");
+    if (import.meta.env.VITE_PR1878_CAPTURE === "1") {
+      await page.screenshot({ path: `__screenshots__/pr1878-toolbar-${width}.png` });
+    }
+    await expect.poll(() => getComputedStyle(toolbar).pointerEvents).toBe("auto");
+    await button.click();
+    expect(onAdd).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("keeps desktop hover and keyboard focus as independent reveal paths", async () => {
+  await page.viewport(1000, 600);
+  const { onAdd, button } = await renderToolbar();
+  const toolbar = button.element().parentElement!;
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("0");
+  expect(getComputedStyle(toolbar).pointerEvents).toBe("none");
+  await page.getByTestId("project-header").hover();
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("1");
+  await button.click();
+  expect(onAdd).toHaveBeenCalledTimes(1);
+  await page.getByRole("button", { name: "Outside toolbar" }).click();
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("0");
+  await userEvent.tab();
+  await expect.element(button).toHaveFocus();
+  await expect.poll(() => getComputedStyle(toolbar).opacity).toBe("1");
+  expect(getComputedStyle(toolbar).pointerEvents).toBe("auto");
+  await userEvent.keyboard("{Enter}");
+  expect(onAdd).toHaveBeenCalledTimes(2);
+});

@@ -979,7 +979,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown p:has(> strong:first-child) > strong:first-child {
-  color: var(--chat-text-strong);
+  color: var(--chat-bold-color, var(--chat-text-strong));
   font-weight: 650;
 }
 
@@ -1004,7 +1004,7 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown li > p:has(> strong:first-child) > strong:first-child,
 .chat-markdown li:has(> strong:first-child) > strong:first-child {
-  color: var(--chat-text-strong);
+  color: var(--chat-bold-color, var(--chat-text-strong));
   font-weight: 650;
 }
 
