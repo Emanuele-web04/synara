@@ -22,6 +22,18 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.20",
+    date: "Oct 17",
+    features: [
+      {
+        id: "phone-chat-transfers",
+        title: "Attachments and voice in chats started on your phone",
+        description:
+          "Remote accepts the thread IDs created by iPhone and iPad when sending attachments or voice audio and exporting conversations. Update the execution computer and install TestFlight 141 on your phone or tablet.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.19",
     date: "Oct 17",
     features: [

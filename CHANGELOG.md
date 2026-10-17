@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.6-remote.20 — 2026-10-17
+
+### Fixed
+
+- Remote accepts the actual thread identifiers used by iPhone/iPad, subagents and automations when uploading attachments, exporting a thread or sending voice audio. Colon-separated identifiers no longer fail resource validation; attachment identifiers, body limits and authorization remain restricted.
+
+### Verification
+
+- Companion universal iOS/iPadOS 0.1 (141) fixes attachment and voice requests from phone-created chats, keeps wide tables horizontally scrollable, opens the existing worktree when selecting a branch held there, and updates the native text renderer to 0.4.6. Both the phone and the execution computer must be updated for Remote transfers.
+- No account-service deployment, migration, pairing reset or privacy change is needed. Existing homes and credentials remain separate from Stable and Beta.
+- Local quality and resource regressions, followed by one exact-tag publication workflow, qualify the candidate. Public notes record packaging, startup, macOS signing/notarization, Windows Defender and provenance only after they pass. Windows retains the exact-version unsigned policy and may show SmartScreen. Synthetic voice checks do not establish live microphone or transcription-provider success.
+
 ## 1.0.6-remote.19 — 2026-10-17
 
 ### Changed

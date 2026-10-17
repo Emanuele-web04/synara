@@ -1,5 +1,16 @@
 # Cloudflare Remote — execution state
 
+## Remote .20 / companion 141 candidate — 2026-10-17
+
+Desktop fix `37542f8` accepts colon-separated thread identifiers in the existing
+resource manifest for uploads, exports and voice. Companion native source
+`5ed8321` aligns validation and bounded transfer errors; the release also includes
+wide-table scrolling, worktree selection and RemodexTextKit 0.4.6 since build 140.
+Both the execution computer and phone/tablet require this update for Remote
+transfers. No backend deployment, migration, identity, pairing or privacy change
+is required. Release packaging, delivery and live checks remain pending until
+recorded below. Stable and Beta releases are outside this scope.
+
 ## Remote .19 and companion 140 delivered — 2026-10-17
 
 [Synara Remote 1.0.6-remote.19](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.19)

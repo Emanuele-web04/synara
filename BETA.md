@@ -6,6 +6,8 @@ shares stable's data directory or update feed.
 
 ## Synara Remote early access
 
+Remote .20 and universal iOS/iPadOS build 141 align resource validation with phone-created thread identifiers. Update both ends for attachment and voice transfers; old hosts reject those identifiers. Existing pairing, authorization and upload-size limits remain in force.
+
 **Synara Remote** is a separate tester app, not a rename of Synara Beta.
 Its `remote` flavor uses `com.emanueledipietro.synara.remote`, the
 `synara-remote://app` renderer, `~/.synara-remote` data and the `synara-remote`
