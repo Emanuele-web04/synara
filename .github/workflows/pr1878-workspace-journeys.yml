@@ -1,0 +1,64 @@
+name: PR 1878 real workspace file journeys
+on:
+  push:
+    branches: [qa/pr1878-workspace-journeys-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+  QA_TREE: 5484335d09c1334234a01c0ad935d5cb2ed03189
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/qa
+      - name: Retain isolated journey driver
+        run: |
+          cp .github/qa/pr1878-workspace-journeys.mjs "$RUNNER_TEMP/pr1878-workspace-journeys.mjs"
+          node --check "$RUNNER_TEMP/pr1878-workspace-journeys.mjs"
+          echo "QA_OUT=$RUNNER_TEMP/pr1878-workspace-results" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Verify exact untouched application source
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = "$QA_TREE"
+          mkdir -p "$QA_OUT"
+          git rev-parse HEAD HEAD^{tree} > "$QA_OUT/source.txt"
+          sha256sum "$RUNNER_TEMP/pr1878-workspace-journeys.mjs" > "$QA_OUT/driver-sha256.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Install real Chromium
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Build actual application
+        run: |
+          if bun run build --filter=@synara/cli > "$QA_OUT/build.log" 2>&1; then rc=0; else rc=$?; fi
+          tail -80 "$QA_OUT/build.log"
+          printf '%s\n' "$rc" > "$QA_OUT/build-exit.txt"
+          exit "$rc"
+      - name: Test actual search, preview, find, editor, files and conflicts
+        run: |
+          if QA_REPO="$PWD" node "$RUNNER_TEMP/pr1878-workspace-journeys.mjs" > "$QA_OUT/journey.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$QA_OUT/journey.log"
+          printf '%s\n' "$rc" > "$QA_OUT/journey-exit.txt"
+          exit "$rc"
+      - name: Preserve unchanged-source guard
+        if: always()
+        run: |
+          git diff --exit-code > "$QA_OUT/source-clean.diff"
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-real-workspace-journeys
+          path: ${{ runner.temp }}/pr1878-workspace-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
