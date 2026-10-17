@@ -1,5 +1,60 @@
 # Cloudflare Remote — execution state
 
+## Remote .19 and companion 140 delivered — 2026-10-17
+
+[Synara Remote 1.0.6-remote.19](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.19)
+is public for macOS ARM64, Windows x64 and Linux x64. Immutable tag source
+`7b303029a4c0cf82e1af4d67bff2a3c0811fe45f` includes main through
+`4cd66c35d897a98aa61ffd075607e08a6c46e4cf`: #1962, #1963, #1770, #1797,
+#1848, #1964 and #1965. PR #1966 was open at integration and is excluded.
+The source branch merge is `2febfa9`; the candidate version stays off main.
+
+- **Main integration:** narrower/bounded long-turn work and incremental Markdown,
+  Devin/Grok model-switch recovery, durable workspace rescue before edit replay,
+  OpenCode stopped-session recovery and installation status, rotated connector
+  token reuse, Windows teardown observers and missing-working-directory errors.
+  The only conflict was an obsolete ASCII composer-mask browser test; the
+  existing requested background and its current tests are preserved. The visible
+  release changes are the merged fixes and curated What's new/history entry.
+- **Checks:** format, lint, typecheck, identity, release smoke, Windows runtime
+  and migration lineage checks pass. Focused suites pass: 1,816 server, 329 web,
+  59 desktop, 72 shared and 12 browser tests. The single
+  [exact-tag publication run](https://github.com/Emanuele-web04/synara/actions/runs/39059832632)
+  succeeds, including all configured quality/server suites, three-platform
+  packaged startup, macOS signing/notarization and Windows Defender.
+- **Public distribution:** all 11 asset hashes, updater sizes/SHA-512 and
+  exact-source/lockfile provenance match. The pristine Mac updater app passes
+  strict signature, Gatekeeper and stapled-ticket validation. The real
+  electron-updater provider discovers .19 from .18 on all three platforms without
+  consulting foreign channels. Stable Latest v1.0.6 and historical v0.4.2 remain
+  unchanged. The temporary Windows unsigned exception is restored to its previous
+  `1.0.6` value; Windows may still show SmartScreen.
+- **iPhone and iPad:** TestFlight **0.1 (140)**, archive source `88537a5`, includes
+  the three native fixes through `5bc848b`: Terminal back navigation, accepted
+  keyboard suggestions and reading position on rotation. All 198 focused
+  simulator tests and the universal archive pass. App/widget signatures, device
+  families, disabled debugging, production APNs and Apple sign-in are independently
+  verified. The upload reuses the same certificate, team and app profile as 139.
+  Both existing tester groups show **Test in corso** with notes saved and automatic
+  notifications enabled; membership and older builds are preserved.
+- **Configuration and documentation:** no contract/API schema, backend deployment
+  or database migration is needed. Existing accounts, pairing and analytics
+  choices remain compatible. Main's MCP/Windows guides and release notes are
+  included. The production website has no Remote-specific installer/changelog
+  snapshot to update; Stable/Beta downloads stay unchanged, and the policy's
+  existing "from .18/build 139" wording remains accurate.
+- **Limits:** this run does not establish a new live-provider turn, physical
+  TestFlight push delivery or manual desktop installation/upgrade. Build 140
+  launches on the iPhone/iPad simulators, but their saved live pairings are offline
+  or need renewal; the three native interactions were not manually retested during
+  a live remote conversation. No physical phone, account change, new pairing,
+  API key, certificate creation/revocation or paid service was used.
+
+Install Remote **.19** and TestFlight **0.1 (140)**. Private proofs are retained in
+`/private/tmp/synara-remote19-checkpoint.json`,
+`/private/tmp/synara-public-1.0.6-remote.19/verified.json` and
+`/private/tmp/synara-ios140-distribution-proof.json`.
+
 ## Remote .18 and companion 139 delivered — 2026-10-17
 
 [Synara Remote 1.0.6-remote.18](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.18)
