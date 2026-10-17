@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_SHA: a03e8fdc28d802b21380286d5d7fe7d49e29e3d1
+  SOURCE_SHA: edbfeb4062ceb525bba1b6b37fd773097c061c0b
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -20,7 +20,7 @@ jobs:
         with:
           scope: full
       - name: Verify exact source formatting without modification
-        run: ./node_modules/.bin/oxfmt --check scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts scripts/build-desktop-artifact.ts scripts/lib/release-artifact-provenance.ts docs/release.md
+        run: ./node_modules/.bin/oxfmt --check scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts scripts/build-desktop-artifact.ts scripts/lib/release-artifact-provenance.ts apps/web/src/components/SidebarSectionToolbar.tsx apps/web/src/components/SidebarSectionToolbar.browser.tsx docs/release.md
       - name: Focused Linux updater and provenance tests
         run: bun run --cwd scripts test lib/linux-appimage-update-feed.test.ts build-desktop-artifact.test.ts lib/release-artifact-provenance.test.ts lib/mac-notarization.test.ts release-linux-packaging.test.ts
       - name: Scripts typecheck
@@ -49,6 +49,8 @@ jobs:
         shell: bash
         run: |
           bun run --cwd apps/web test:browser src/components/ChatView.browser.tsx --testNamePattern='preserves the .* picker on first window activation|keeps close-button pointer travel|steps through horizontal tabs with the previous/next tab shortcuts|reveals an opened transcript once its end scroll lands|uses the settled turn model and instance while preserving a different composer draft'
+      - name: Test real desktop Sidebar first-click, hover, and keyboard affordances
+        run: bun run --cwd apps/web test:browser src/components/SidebarSectionToolbar.browser.tsx
       - name: Preserve browser failure screenshots
         if: always()
         uses: actions/upload-artifact@v6
