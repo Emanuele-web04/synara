@@ -374,6 +374,7 @@ import { ThreadDetailHydrationState } from "./chat/ThreadDetailHydrationState";
 import { ChatThreadFindHost } from "./chat/ThreadFindBar";
 import { resolveTraitsTriggerSummary } from "./chat/TraitsPicker";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
+import { AssistantSelectionInlineMarkers } from "./chat/AssistantSelectionInlineMarkers";
 import { WorkflowRunCapsule } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import {
@@ -741,6 +742,8 @@ export default function ChatView({
     addComposerFileCommentToDraft,
     removeComposerImageFromDraft,
     clearComposerAssistantSelectionsFromDraft,
+    removeComposerAssistantSelectionFromDraft,
+    updateComposerAssistantSelectionCommentInDraft,
     clearComposerFileCommentsFromDraft,
     removeComposerTerminalContextFromDraft,
     removeComposerPastedTextFromDraft,
@@ -749,6 +752,7 @@ export default function ChatView({
     removeComposerBrowserAnnotationFromDraft,
     showComposerPastedTextInField,
   } = useChatComposerDraft({ threadId });
+  const [transcriptPaneElement, setTranscriptPaneElement] = useState<HTMLDivElement | null>(null);
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
@@ -3443,6 +3447,7 @@ export default function ChatView({
   );
   const {
     pendingTranscriptSelectionAction,
+    canAddTranscriptAssistantSelection,
     commitTranscriptAssistantSelection,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,
@@ -6424,6 +6429,7 @@ export default function ChatView({
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                       onExpandImage={setExpandedImage}
                       onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                      onRemoveAssistantSelection={removeComposerAssistantSelectionFromDraft}
                       onRemoveBrowserAnnotation={removeComposerBrowserAnnotationFromDraft}
                       onRemoveFileComments={clearComposerFileCommentsFromDraft}
                       onRemovePastedText={removeComposerPastedTextFromDraft}
@@ -6837,7 +6843,18 @@ export default function ChatView({
 
             {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div
+                  ref={setTranscriptPaneElement}
+                  className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+                >
+                  {!isInactiveSplitPane && !isSidechatExpired ? (
+                    <AssistantSelectionInlineMarkers
+                      container={transcriptPaneElement}
+                      selections={composerAssistantSelections}
+                      onUpdateComment={updateComposerAssistantSelectionCommentInDraft}
+                      onRemove={removeComposerAssistantSelectionFromDraft}
+                    />
+                  ) : null}
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
@@ -7198,6 +7215,7 @@ export default function ChatView({
           canUseWorktree={isGitRepo && !isContainerLandingProject}
           canAddToSide={isServerThread && !isSidechatThread(activeThread)}
           onDismiss={dismissTranscriptSelectionAction}
+          canAddToChat={canAddTranscriptAssistantSelection}
           onAddToChat={commitTranscriptAssistantSelection}
           onAddToSide={(selection) =>
             addSelectionToSide({

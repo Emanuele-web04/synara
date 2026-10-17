@@ -32,6 +32,7 @@ interface ComposerReferenceAttachmentsProps {
   nonPersistedImageIdSet: ReadonlySet<string>;
   onExpandImage: (preview: ExpandedImagePreview) => void;
   onRemoveAssistantSelections: () => void;
+  onRemoveAssistantSelection?: (selectionId: string) => void;
   onRemoveBrowserAnnotation?: (annotationId: string) => void;
   onRemoveFileComments: () => void;
   onRemovePastedText?: (pastedTextId: string) => void;
@@ -52,6 +53,7 @@ export function ComposerReferenceAttachments({
   nonPersistedImageIdSet,
   onExpandImage,
   onRemoveAssistantSelections,
+  onRemoveAssistantSelection,
   onRemoveBrowserAnnotation,
   onRemoveFileComments,
   onRemovePastedText,
@@ -79,6 +81,7 @@ export function ComposerReferenceAttachments({
       <AssistantSelectionsSummaryChip
         selections={assistantSelections}
         onRemove={assistantSelections.length > 0 ? onRemoveAssistantSelections : undefined}
+        onRemoveSelection={onRemoveAssistantSelection}
       />
       <BrowserAnnotationStrip
         annotations={browserAnnotations}

@@ -178,19 +178,10 @@ export function useTranscriptAssistantSelectionAction(
     });
   };
 
-  const commitTranscriptAssistantSelection = () => {
-    const pendingSelection = pendingTranscriptSelectionAction;
-    if (!pendingSelection) {
-      return;
-    }
-
-    if (
-      canReferenceAssistantSelection &&
-      !canReferenceAssistantSelection(pendingSelection.selection)
-    ) {
-      setPendingTranscriptSelectionAction(null);
-      window.getSelection()?.removeAllRanges();
-      return;
+  // Checked before the comment field opens, so a rejected quote never costs the user a typed comment.
+  const canAddTranscriptAssistantSelection = (selection: TranscriptAssistantSelection) => {
+    if (canReferenceAssistantSelection && !canReferenceAssistantSelection(selection)) {
+      return false;
     }
 
     if (
@@ -199,30 +190,36 @@ export function useTranscriptAssistantSelectionAction(
         composerAssistantSelectionsRef.current.length >=
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS
     ) {
-      setPendingTranscriptSelectionAction(null);
       toastManager.add({
         type: "warning",
         title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
       });
-      return;
+      return false;
     }
 
-    const nextSelection = createAssistantSelectionAttachment(pendingSelection.selection);
-    if (!nextSelection) {
-      setPendingTranscriptSelectionAction(null);
-      if (getAssistantSelectionValidationError(pendingSelection.selection) === "too-long") {
+    const validationError = getAssistantSelectionValidationError(selection);
+    if (validationError) {
+      if (validationError === "too-long") {
         toastManager.add({
           type: "warning",
           title: "Selections can be up to 4,000 characters.",
         });
       }
+      return false;
+    }
+    return true;
+  };
+
+  const commitTranscriptAssistantSelection = (
+    selection: TranscriptAssistantSelection,
+    comment: string,
+  ) => {
+    // Re-check: the composer may have filled up while the comment field was open.
+    if (!canAddTranscriptAssistantSelection(selection)) {
       return;
     }
-
-    const inserted = addComposerAssistantSelectionToDraft(nextSelection);
-    setPendingTranscriptSelectionAction(null);
-    if (inserted) {
-      window.getSelection()?.removeAllRanges();
+    const nextSelection = createAssistantSelectionAttachment({ ...selection, comment });
+    if (nextSelection && addComposerAssistantSelectionToDraft(nextSelection)) {
       scheduleComposerFocus();
     }
   };
@@ -270,6 +267,7 @@ export function useTranscriptAssistantSelectionAction(
 
   return {
     pendingTranscriptSelectionAction,
+    canAddTranscriptAssistantSelection,
     commitTranscriptAssistantSelection,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,
