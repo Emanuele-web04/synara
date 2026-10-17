@@ -177,7 +177,11 @@ import {
   listImportedForkMessages,
   listPriorTranscriptMessages,
 } from "../handoff.ts";
-import { OrchestrationCommandInvariantError, type OrchestrationDispatchError } from "../Errors.ts";
+import {
+  OrchestrationCommandInternalError,
+  OrchestrationCommandInvariantError,
+  type OrchestrationDispatchError,
+} from "../Errors.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -272,6 +276,26 @@ type BoundedProviderCallResult<E> =
       readonly cause: Cause.Cause<E>;
     };
 
+const reduceProviderCallExit = <E>(
+  exit: Exit.Exit<unknown, E>,
+): Effect.Effect<BoundedProviderCallResult<E>, E> =>
+  Exit.isSuccess(exit)
+    ? Effect.succeed({ _tag: "ok" })
+    : Cause.hasInterruptsOnly(exit.cause)
+      ? Effect.failCause(exit.cause)
+      : Effect.sync((): BoundedProviderCallResult<E> => {
+          const outcome = classifyProviderAttemptOutcome(exit);
+          return {
+            _tag: "failed",
+            // Only a success exit can classify as accepted.
+            outcome:
+              outcome._tag === "accepted"
+                ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
+                : outcome,
+            cause: exit.cause,
+          };
+        });
+
 /**
  * Runs a provider call under a hard deadline and reduces it to a decision.
  * A call that never returns cannot simply be awaited here: the caller holds the
@@ -295,30 +319,12 @@ const runBoundedProviderCall = <E, R>(input: {
       Effect.exit,
       Effect.flatMap(
         (exit): Effect.Effect<BoundedProviderCallResult<E>, E> =>
-          Exit.isSuccess(exit)
-            ? Effect.succeed(
-                timedOut
-                  ? {
-                      _tag: "timeout",
-                      detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
-                    }
-                  : { _tag: "ok" },
-              )
-            : Cause.hasInterruptsOnly(exit.cause)
-              ? Effect.failCause(exit.cause)
-              : Effect.sync((): BoundedProviderCallResult<E> => {
-                  const outcome = classifyProviderAttemptOutcome(exit);
-                  return {
-                    _tag: "failed",
-                    // classify only reports "accepted" for success exits, which
-                    // cannot reach this branch; normalize to keep the type honest.
-                    outcome:
-                      outcome._tag === "accepted"
-                        ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
-                        : outcome,
-                    cause: exit.cause,
-                  };
-                }),
+          Exit.isSuccess(exit) && timedOut
+            ? Effect.succeed({
+                _tag: "timeout",
+                detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
+              })
+            : reduceProviderCallExit(exit),
       ),
     );
   });
@@ -6964,9 +6970,9 @@ const make = Effect.gen(function* () {
     let blockedByBackgroundTasks = false;
     const startOutcome = yield* runBoundedProviderCall({
       label: "The provider handoff",
-      // Reserve the remaining command budget for the durable source restore
-      // and outcome. The generic outer deadline otherwise interrupts those
-      // writes and advances past a handoff that the client can never settle.
+      // Keep the existing native-phase budget. The durable source restore and
+      // outcome below run outside the generic provider deadline, so database
+      // contention cannot erase this known result or quarantine the thread.
       timeout: Duration.millis(Duration.toMillis(commandEventTimeout) * 0.9),
       call: Effect.gen(function* () {
         if (
@@ -7008,6 +7014,21 @@ const make = Effect.gen(function* () {
         });
       }),
     });
+    // Native stop/start has already run. A persistence failure now cannot
+    // safely replay that external work, even when its underlying SQL error
+    // would be retryable before a provider call. Retain the original cause.
+    const persistHandoffOutcome = (command: Parameters<typeof orchestrationEngine.dispatch>[0]) =>
+      orchestrationEngine.dispatch(command).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationCommandInternalError({
+              commandId: command.commandId,
+              commandType: command.type,
+              detail: `Provider handoff outcome could not be persisted after its native phase: ${cause.message}`,
+              cause,
+            }),
+        ),
+      );
     const startFailure =
       startOutcome._tag === "ok"
         ? null
@@ -7038,7 +7059,7 @@ const make = Effect.gen(function* () {
       // Same metadata a new-thread handoff carries, so surfaces that already
       // show "handed off from <provider>" (the sidebar avatar pair) show it here.
       // "completed": the context travels through the prior-transcript bootstrap.
-      yield* orchestrationEngine.dispatch({
+      yield* persistHandoffOutcome({
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe(`server:provider-handoff-meta:${input.handoffKey}`),
         threadId: input.threadId,
@@ -7049,7 +7070,7 @@ const make = Effect.gen(function* () {
           bootstrapStatus: "completed",
         },
       });
-      yield* orchestrationEngine.dispatch({
+      yield* persistHandoffOutcome({
         type: "thread.activity.append",
         commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.handoffKey}`),
         threadId: input.threadId,
@@ -7079,13 +7100,13 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       cause: Cause.pretty(startFailure),
     });
-    yield* orchestrationEngine.dispatch({
+    yield* persistHandoffOutcome({
       type: "thread.meta.update",
       commandId: CommandId.makeUnsafe(`server:provider-handoff-revert:${input.handoffKey}`),
       threadId: input.threadId,
       modelSelection: input.sourceModelSelection,
     });
-    yield* orchestrationEngine.dispatch({
+    yield* persistHandoffOutcome({
       type: "thread.activity.append",
       commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.handoffKey}`),
       threadId: input.threadId,
@@ -8124,57 +8145,69 @@ const make = Effect.gen(function* () {
 
         const cacheResponse = pendingClaudeCacheResponses.get(event.sequence);
         if (cacheResponse) yield* Deferred.succeed(cacheResponse.admitted, undefined);
-        const workerResult = yield* runBoundedProviderCall({
-          label: `The provider command '${event.type}'`,
-          // A cache choice owns a durable delivery outside the ordered source.
-          // Native compaction and its follow-up get a longer finite deadline;
-          // a provider that never answers must still release its durable claim.
-          timeout: cacheResponse ? cacheResponseTimeout : commandEventTimeout,
-          call:
-            cacheResponse &&
-            event.type === "thread.claude-cache-response-requested" &&
-            event.payload.decision === "continue"
-              ? Effect.gen(function* () {
-                  yield* cancelClaudeCompactionFromJournal(
-                    event.payload.threadId,
-                    event.sequence,
-                    cacheResponse.cancelled,
-                  );
-                  if (yield* Deferred.isDone(cacheResponse.cancelled)) {
-                    yield* setClaudeCacheReview(
-                      event.payload.threadId,
-                      {
-                        ...event.payload.review,
-                        status: "failed",
-                        error: "The saved send was cancelled before delivery.",
-                      },
-                      event.payload.review.reviewId,
-                    );
-                    return yield* new ProviderAdapterValidationError({
-                      provider: "claudeAgent",
-                      operation: "thread.turn.start",
-                      issue: "The saved send was cancelled before delivery.",
-                    });
-                  }
-                  return yield* processDomainEvent(event).pipe(
-                    Effect.raceFirst(
-                      Deferred.await(cacheResponse.cancelled).pipe(
-                        // Controls or prompt enqueue may already have reached the
-                        // provider. Cancellation releases the lease for Stop, but
-                        // must not manufacture proof that the send was rejected.
-                        Effect.andThen(
-                          Effect.die(
-                            new Error(
-                              "The saved send was interrupted before acceptance could be confirmed.",
+        // Handoff alone bounds every native call inside applyProviderHandoff.
+        // Its following metadata/activity writes must settle before this claim
+        // is acknowledged, just like deliveryRepository.complete below. They
+        // remain interruptible and retain ordinary persistence-failure handling.
+        // Other model updates can start a provider without that inner deadline
+        // and must continue through the generic bounded path.
+        const isProviderHandoff =
+          event.type === "thread.meta-updated" &&
+          event.payload.modelSelection !== undefined &&
+          event.payload.providerHandoff !== undefined;
+        const workerResult = yield* isProviderHandoff
+          ? processDomainEvent(event).pipe(Effect.exit, Effect.flatMap(reduceProviderCallExit))
+          : runBoundedProviderCall({
+              label: `The provider command '${event.type}'`,
+              // A cache choice owns a durable delivery outside the ordered source.
+              // Native compaction and its follow-up get a longer finite deadline;
+              // a provider that never answers must still release its durable claim.
+              timeout: cacheResponse ? cacheResponseTimeout : commandEventTimeout,
+              call:
+                cacheResponse &&
+                event.type === "thread.claude-cache-response-requested" &&
+                event.payload.decision === "continue"
+                  ? Effect.gen(function* () {
+                      yield* cancelClaudeCompactionFromJournal(
+                        event.payload.threadId,
+                        event.sequence,
+                        cacheResponse.cancelled,
+                      );
+                      if (yield* Deferred.isDone(cacheResponse.cancelled)) {
+                        yield* setClaudeCacheReview(
+                          event.payload.threadId,
+                          {
+                            ...event.payload.review,
+                            status: "failed",
+                            error: "The saved send was cancelled before delivery.",
+                          },
+                          event.payload.review.reviewId,
+                        );
+                        return yield* new ProviderAdapterValidationError({
+                          provider: "claudeAgent",
+                          operation: "thread.turn.start",
+                          issue: "The saved send was cancelled before delivery.",
+                        });
+                      }
+                      return yield* processDomainEvent(event).pipe(
+                        Effect.raceFirst(
+                          Deferred.await(cacheResponse.cancelled).pipe(
+                            // Controls or prompt enqueue may already have reached the
+                            // provider. Cancellation releases the lease for Stop, but
+                            // must not manufacture proof that the send was rejected.
+                            Effect.andThen(
+                              Effect.die(
+                                new Error(
+                                  "The saved send was interrupted before acceptance could be confirmed.",
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                })
-              : processDomainEvent(event),
-        });
+                      );
+                    })
+                  : processDomainEvent(event),
+            });
         if (workerResult._tag === "timeout") {
           // The delivery lock is single-permit and process-wide, so an attempt
           // that never returns is a total outage. Settle it as uncertain and

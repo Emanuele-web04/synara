@@ -1,5 +1,220 @@
 # Cloudflare Remote — execution state
 
+## Remote .15 candidate — 2026-10-17
+
+Prepared **1.0.6-remote.15** in the existing separate release worktree, merging
+source `31cae11` without changing main or any published tag. The candidate keeps
+all earlier Remote release entries and changes only release workspace versions
+in the lockfile; dependency resolution is unchanged and frozen install passes.
+
+The candidate includes the enrollment recovery and remote-home fixes, the
+integrated main Codex reliability work, and the restored configured GitHub sign-in.
+Local checks pass brand, formatting, lint (0 errors / 1,011 existing warnings),
+12-package typecheck, release smoke, Windows boundary and Remote migration lineage.
+Focused release tests pass 55 cases, updater tests 54, What's New logic 6 and the
+actual Chromium sign-in UI suite 7. The combined source's 18-case built E2E pass
+is recorded below; exact-tag release CI still owns native packaging, signing,
+startup/Defender and publication gates.
+
+Publication is held for the final real GitHub consent/callback check, required
+by the existing release condition in BETA.md. Its production test uses a fresh
+temporary home and the same production account-session implementation, with no
+installed app credentials or data. Provider configuration and the UI test alone
+do not establish callback success. No release tag or installer is published yet;
+the Windows signing exception remains unchanged while this prerequisite is open.
+Remote distribution stays on its own GitHub release/feed, not the Stable website
+installer links. No API redeployment or new mobile binary is required here.
+
+## Enrollment refusal recovery — 2026-10-17
+
+The hosted API still has public Remote access enabled for every authenticated
+account, without an account allowlist or paid plan. A fresh live probe with the
+separate account outside the old test list succeeds both on owner grant and the
+exact pairing-code publication route shown in the tester screenshot. The host
+authorization snapshot also succeeds; the temporary invitation was cancelled
+without approving a device. The previous Remote account endpoint still proxies
+to the current API. Remote .14 can use these backend changes without a download.
+
+A separate desktop recovery defect was reproduced: its authorization poll treated
+the old enrollment refusal (403 `not_host_owner` with the specific enrollment
+message) as permanent host revocation. That disabled the local scope, revoked
+approved device trust and stopped polling, so later server enrollment alone could
+not revive that host. The repair refuses admission immediately but keeps polling
+without destroying trust for this one enrollment response. Proof refusal, owner
+removal and every other 401/403/404 retain their permanent fence. Re-admission
+still requires a fresh successful snapshot and durable revocation application.
+This runtime repair is source work until included in a new desktop release;
+it does not retroactively restore trust already revoked by an older app.
+
+The built-browser E2E run also reproduced a Remote .14 workspace crash: opening
+the remote home (`/`) with existing threads passed an empty string to the branded
+thread-ID constructor. The sidebar now treats that route as having no selected
+thread. The existing E2E scenarios cover both that home route and subsequent
+chat navigation; no new controls, layout or styling were added.
+
+The pairing E2E was still waiting for controls from the previous Connections UI
+and a manual approval step. It now uses the shipped Add dialogs and verifies that
+the owner's grant records exactly the requesting device key with `enrolledVia:
+"qr"` before connecting. Manual-approval fallback remains covered by the gateway
+and control-plane tests; no authentication or approval policy changed.
+
+For a .14 client left on the old enrollment error, fully quit the application
+and reopen it before requesting a fresh code. Closing only its window may leave
+the old host process alive. If the previous denial already revoked local device
+trust, use normal pairing again. Reinstalling the same .14 neither repairs the
+workspace bug nor restores revoked trust; do not erase the app's data directory.
+
+Verification on the combined candidate (macOS arm64, Node 24.21.0 / Bun 1.4.2):
+
+| Check                                                                                 | Result                                                                                                                            |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Final built E2E, disposable PostgreSQL and separate host/controller homes             | 18/18 passed in 133.07 seconds, including QR retry, exact-device enrollment, chat/automation recovery and remote-home navigation. |
+| Final authorization/ingress/connectivity tests                                        | 16/16 passed. The enrollment regression fails on the old implementation for the permanent-revocation callback.                    |
+| Final web suite                                                                       | 5,669 passed / 3 skipped.                                                                                                         |
+| Formatting, lint, typecheck and desktop build                                         | Passed; lint has 0 errors / 1,011 existing warnings, typecheck 12/12 tasks.                                                       |
+| Repository suite after the enrollment repair, before the additional remote-home guard | 18,278 passed / 278 skipped, 11/11 tasks. The final E2E run separately enables its database/build opt-ins.                        |
+
+Both failures were reproduced before correction. The final E2E uses a local
+Cloudflare-boundary proxy and fixture WorkOS/provider processes, with production
+inner TLS, account coordinator, persistence, RPC and reconnect paths. The public
+API grant/QR/authorization probe above is separate live evidence; this does not
+claim a new signed release or a test on every tester's physical computer. The
+new production diff is two files, +14/-2 lines; three test files are +89/-18.
+No migrations, dependencies, credentials or production deployment changed in
+this recovery batch. No changes were made to installed app data.
+
+## Public beta enrollment — 2026-10-16
+
+The operator authorized remote beta enrollment for every authenticated account.
+`REMOTE_BETA_ACCESS_ENABLED=true` now admits accounts outside the internal test
+list at all five enrollment gates. The deployment setting defaults to closed and
+rejects malformed values. Host ownership, fresh membership, device proof, pairing
+consent, revocation and rate limits remain authoritative; no identity mappings,
+existing lists or subscription checks were changed.
+
+All 374 API tests pass against disposable PostgreSQL, including the new unlisted
+owner's tunnel, pairing publication/redemption and grant, with foreign-account,
+unregistered-device and membership-revocation controls. The full workspace suite
+passes 18,276 tests (278 skipped; the 222 PostgreSQL cases skipped by that command
+are covered in the separate API run). Formatting, lint and typecheck pass.
+
+Worker `c47de4c3-12dc-470a-9cae-147c0d89b04a` and Container image
+`4767b8d17cb21018fc92907cea5f34c63a6f7dfc9d4a11c62911f492b2beef16` are deployed,
+with existing Worker secrets preserved. Supabase already matches migration 0022;
+no new migration was required. The first live grant still returned the old
+enrollment refusal because the running Container had not loaded the new startup
+environment. Managed rollout `53328200-c9e9-4b42-9a9c-f44dd102e792` subsequently
+completed, moving container version 22 to 23 with the same image and resource
+limits. It applied only `REMOTE_BETA_ACCESS_ENABLED=true`; the Worker idle policy
+remained 30 minutes. No temporary short-timeout Worker or administrative endpoint
+was deployed.
+
+The separate real account outside the old allowlist now receives a signed grant
+(HTTP 200). The same route rejects anonymous requests (401) and an unregistered
+device key (403 `device_not_registered`). This qualifies the live enrollment
+repair; it does not replace full tester pairing/chat or physical TestFlight push
+verification. A downloaded desktop update or new mobile binary is not required
+for this backend change. Remote .14 users can retry their connection. Existing
+Mac identities, account mappings and user databases were not changed.
+
+## Main Codex reliability sync — 2026-10-16
+
+Also integrated the subsequent main `7cfd65d` commit preparing Stable 1.0.6:
+package/lockfile versions, release notes and provider/runtime documentation.
+Identity, migration lineage, What's New logic, marketing documentation, formatting,
+lint and workspace typecheck checks pass after that metadata update. This operation
+does not publish Stable or create a new Remote release.
+
+Integrated the six commits through main `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`
+without rewriting the shared branch. Live adapter-owned turns survive runtime
+reconciliation; stale work is paged fairly; handoff outcomes settle durably without
+replaying native work; internal Codex moderation metadata stays out of activity.
+Also included canonical Git diff prefixes, temporary degraded model catalogs and
+separate Remote migration-lineage validation. The only conflict appended tests in
+AgentGateway; both remote authorization coverage and new lifecycle coverage remain.
+
+The eight focused server files qualify 740 cases: 738 passed in the first run;
+the two process integration cases could not prove child exit inside the sandbox
+and both passed when rerun with process inspection available. Workspace typecheck,
+formatting, lint, Windows boundary and migration lineage checks pass. This is a
+source integration, not an installed desktop update or a new TestFlight build.
+The optional provider-discovery field is compatible with the current native
+decoder; server-owned turn and activity fixes apply to remote mobile clients.
+
+## GitHub Production sign-in follow-up — 2026-10-16
+
+GitHub OAuth is enabled and validated in WorkOS Production. The existing Synara
+GitHub OAuth app now includes the exact WorkOS callback alongside its existing
+Supabase callback; both use exact matching. An additional client secret is stored
+only in WorkOS. The old secret and callback remain intact. The flow requests
+`user:email`, without repository scopes or provider-token return to Synara.
+
+The source restores the existing GitHub button for Remote through the same SSO
+handler as Google and Apple. The common provider/cancellation/recovery browser
+suite passes (7 tests), as do formatting, lint, twelve-package typecheck and the
+desktop source build. Existing lint warnings remain. The hosted instance and
+GitHub authorize API respond successfully. The live source app reaches GitHub's
+consent page; final consent and callback verification are still pending. No new
+release or tag has been published.
+
+The live probe uses a disposable Synara home and Electron profile. GitHub's own
+account email differs from the existing Mac login, so the test must remain a
+separate identity: do not relink or merge the existing Mac account to make it
+pass. No existing account, chat history or cloud identity mapping was modified.
+
+## Remote .14 delivery — 2026-10-16
+
+Version **1.0.6-remote.14**, source
+`55ded6c1543a98679f8ac503c447d19cfb3906e9`, is
+[public](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14).
+[Exact-tag CI](https://github.com/Emanuele-web04/synara/actions/runs/38939586124)
+passes every required quality, server shard, Mac ARM64, Windows x64 and Linux x64
+packaging/startup gate, including Windows Defender. The release contains eleven
+assets and three separate Remote updater feeds. Stable Latest remains v1.0.5;
+v0.4.2 asset identities, hashes and sizes are unchanged.
+
+The fresh-install sign-in failure came from Remote inheriting the generic account
+API default. Operator environment overrides on the test Macs hid the missing
+packaged default. Remote now supplies the working hosted API itself; explicit
+overrides and saved account issuers still win. The packaged smoke drops inherited
+account URL configuration. Remote's existing account/profile sync also works
+without a shell opt-in, while explicit opt-out and Stable/Beta policy remain.
+Hosted Remote offers only the configured Google, Apple and email flows.
+
+The first unpublished .14 candidate failed Windows TLS smoke because `stat.mode`
+reports DOS attributes rather than POSIX permissions. The correction limits that
+POSIX assertion to POSIX platforms; the Windows TLS/SDK smoke, key persistence,
+Defender and packaged-startup gates remain required and now pass. NTFS ACLs and
+live provider execution on testers' Windows/Linux machines are not qualified by
+that smoke. Windows uses the exact-version unsigned release policy and may show
+SmartScreen. macOS still requires Developer ID signing and Apple notarization.
+
+App Store Connect now shows universal **0.1 (136)** waiting for external Beta
+Review, superseding the earlier Ready to Submit checkpoint below. Its tester
+instructions now link to .14. The compiled account URL and iPhone/iPad device
+families were checked; this desktop fix does not require another mobile binary.
+Account enrollment for remote access is still separate from downloading or a
+TestFlight invitation. Physical-device TestFlight APNs delivery remains open.
+
+The [analytics audit](PRODUCT-ANALYTICS-AUDIT.md) distinguishes account usage from
+default-off product telemetry. The live Cloudflare receiver and authenticated
+aggregate reads work. Native provider/token/terminal-turn coverage is still
+incomplete; client observations are not globally unique execution counts. No
+private metrics, credentials or new paid services are included in this release.
+
+All eleven public assets match their published sizes and SHA-256 digests. Each
+platform receipt matches the exact tag, commit and lockfile; Remote feed aliases
+match the packaged manifests. The downloaded Mac app/DMG pass Developer ID
+signature, Gatekeeper and stapled notarization checks. A verified .14 copy was
+launched with a disposable home, database and Electron profile and no account URL
+override. After the Mini was unlocked, its real sign-in dialog displayed Google,
+Apple and email and successfully sent an email code through the default service,
+reaching **Check your email** without the obsolete-service error. The code was
+not redeemed: this proves the packaged request path, not a completed fresh login.
+The temporary app was closed; installed apps and their account data were not
+replaced for this isolated probe. Final handoff checks pass formatting and brand
+identity; code qualification remains the exact-tag CI above.
+
 ## Pairing follow-up — 2026-10-15, evening
 
 - A concurrent token refresh could make an older successful `/me` response report

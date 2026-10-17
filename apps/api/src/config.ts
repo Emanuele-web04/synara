@@ -95,6 +95,8 @@ export type ApiConfigBase = {
   cloudflareTunnel?: CloudflareTunnelConfig;
   /** Explicit test enrollment only; this is not a paid-subscription entitlement. */
   remoteTestUserIds?: readonly string[];
+  /** Open beta enrollment; authentication and host/device authorization still apply. */
+  remoteBetaAccessEnabled?: boolean;
   databaseUrl: string;
   baseUrl: string;
   /** Exact JWT issuer and public origin for API-facing host auth. */
@@ -343,6 +345,11 @@ export function loadApiConfig(env: Env): ApiConfig {
   const remoteTestUserIds = env.REMOTE_TEST_USER_IDS?.split(",")
     .map((id) => id.trim())
     .filter(Boolean);
+  const betaAccess = env.REMOTE_BETA_ACCESS_ENABLED;
+  if (betaAccess !== undefined && betaAccess !== "true" && betaAccess !== "false") {
+    throw new ApiConfigError("REMOTE_BETA_ACCESS_ENABLED must be true or false");
+  }
+  const remoteBetaAccessEnabled = betaAccess === "true";
 
   if (identityProvider === "dev") {
     assertDevIdentityAllowed(env);
@@ -357,6 +364,7 @@ export function loadApiConfig(env: Env): ApiConfig {
       identityProvider,
       ...(cloudflareTunnel ? { cloudflareTunnel } : {}),
       ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
+      remoteBetaAccessEnabled,
       databaseUrl: env.DATABASE_URL as string,
       baseUrl: env.ACCOUNT_BASE_URL as string,
       apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),
@@ -385,6 +393,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     identityProvider,
     ...(cloudflareTunnel ? { cloudflareTunnel } : {}),
     ...(remoteTestUserIds ? { remoteTestUserIds } : {}),
+    remoteBetaAccessEnabled,
     databaseUrl: env.DATABASE_URL as string,
     baseUrl: env.ACCOUNT_BASE_URL as string,
     apiPublicUrl: (env.API_PUBLIC_URL as string).replace(/\/+$/, ""),

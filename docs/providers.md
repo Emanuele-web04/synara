@@ -48,6 +48,10 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
+when logging is enabled and do not create conversation activity rows. Actual provider
+errors still appear. Previously stored activity rows are preserved.
+
 Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
 contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
 32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
@@ -223,6 +227,10 @@ manual retries for at least one minute, and backs off failures. Checks for the v
 priority over queued background catalog loads.
 Failed refreshes retain the last successful catalog. Refreshing does not change the
 selected model or restart running sessions, and availability still comes from the provider runtime.
+Partial or fallback catalogs are retried on demand after a thirty-second cooldown and are never
+persisted or substituted for the last complete catalog. The first upgrade to this cache format
+discards the old catalog snapshot once, then rediscovers models on demand with the same shared
+request and failure limits; accounts, saved models, and sessions are unaffected.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or

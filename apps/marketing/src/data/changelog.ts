@@ -26,6 +26,59 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
   {
+    version: "1.0.6",
+    date: "Oct 16",
+    features: [
+      {
+        id: "long-chats",
+        title: "Less waiting in long conversations",
+        description:
+          "Long chats avoid repeated history scans during streaming, task updates and checkpoint work.",
+        details:
+          "Full conversation history remains available. The server reads only the context each operation needs and resolves outstanding requests and task snapshots in one pass.",
+      },
+      {
+        id: "parallel-work",
+        title: "Smoother parallel agent work",
+        description:
+          "Live streams avoid redundant replay polls, and bursts of repository and file updates share bounded refreshes.",
+        details:
+          "Refreshes retain a final trailing read. Requests wait in bounded queues before consuming server capacity; cancellation and uncertain-delivery recovery keep their existing safeguards. The misleading server-busy popup has been removed; real reconnect notices remain.",
+      },
+      {
+        id: "session-recovery",
+        title: "Keep live work attached to the right turn",
+        description:
+          "Runtime reconciliation preserves the active native turn and reaches older waiting sessions through paged scans.",
+        details:
+          "Provider handoffs allow their durable outcome to settle without replaying native stop or start operations. Inspect the resulting chat and workspace before assuming an interrupted action failed.",
+      },
+      {
+        id: "provider-models",
+        title: "More reliable provider model controls",
+        description:
+          "Claude effort, thinking and fast-mode capabilities follow metadata from your installed CLI when available.",
+        details:
+          "Unset effort keeps Claude Code’s own default. Partial model discovery no longer replaces or persists over the last complete catalog; fallback results are retried on demand after a short cooldown. Existing models, accounts and sessions remain yours.",
+      },
+      {
+        id: "antigravity-usage",
+        title: "Correct Antigravity quota pools",
+        description:
+          "Antigravity usage reads the matching OAuth client and quota summary, with a legacy fallback.",
+        details: "Quota availability still depends on the provider account and endpoint response.",
+      },
+      {
+        id: "workspace-polish",
+        title: "Clearer input and dependable diffs",
+        description:
+          "The ASCII background stays clear of the composer, command menus stay opaque, and Git diffs respect their required path prefixes.",
+        details:
+          "Custom Git prefix settings no longer break patch parsing or worktree transfers. Internal Codex moderation metadata no longer appears as conversation activity; actual provider errors still appear and older activity rows are preserved.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-beta.1",
     date: "Oct 15",
     features: [

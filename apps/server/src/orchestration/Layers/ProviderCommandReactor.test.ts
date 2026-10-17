@@ -18977,6 +18977,129 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
     });
 
+    it.each(["successful", "timed-out"] as const)(
+      "settles a %s handoff after its durable write exceeds the provider deadline",
+      async (result) => {
+        const harness = await createHarness({
+          threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+          commandEventTimeout: Duration.millis(300),
+        });
+        await runFirstGrokTurn(harness);
+        if (result === "timed-out") {
+          harness.startSession.mockImplementationOnce(() => Effect.never);
+        }
+        const settlementEntered = Deferred.makeUnsafe<void>();
+        const releaseSettlement = Deferred.makeUnsafe<void>();
+        const dispatch = harness.engine.dispatch;
+        const settlementCommandId =
+          result === "successful"
+            ? "server:provider-handoff-meta:cmd-handoff-to-claude"
+            : "server:provider-handoff-revert:cmd-handoff-to-claude";
+        harness.interceptEngineDispatch((command) => {
+          if (command.commandId !== settlementCommandId) return undefined;
+          // Hold the real engine write after the bounded native phase. The
+          // claim cannot be acknowledged or quarantined while this known
+          // handoff outcome is still waiting for durable settlement.
+          return Deferred.succeed(settlementEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSettlement)),
+            Effect.andThen(Effect.suspend(() => dispatch(command))),
+          );
+        });
+        const handoff = await dispatchHandoff(harness);
+        const deliveryKey = {
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: handoff.sequence,
+        };
+        try {
+          await waitFor(() => Effect.runPromise(Deferred.isDone(settlementEntered)));
+          // Cross the configured 300ms provider deadline after the settlement
+          // has begun; this does not grant more time to provider startup.
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          const pending = Option.getOrThrow(
+            await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+          );
+          expect(pending).toMatchObject({ state: "inflight", attemptCount: 1 });
+          const cursor = Option.getOrThrow(
+            await Effect.runPromise(
+              harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+            ),
+          );
+          expect(cursor.lastAckedSequence).toBeLessThan(handoff.sequence);
+        } finally {
+          await Effect.runPromise(Deferred.succeed(releaseSettlement, undefined));
+        }
+        await waitFor(async () => {
+          const delivery = Option.getOrThrow(
+            await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+          );
+          return delivery.state === "succeeded";
+        });
+        const thread = await readHarnessThread(harness);
+        const expectedProvider = result === "successful" ? "claudeAgent" : "grok";
+        expect(thread?.modelSelection.provider).toBe(expectedProvider);
+        expect(
+          thread?.activities.filter((activity) => activity.kind.startsWith("provider.handoff")),
+        ).toMatchObject([
+          {
+            kind: result === "successful" ? "provider.handoff" : "provider.handoff.failed",
+          },
+        ]);
+        await sendSecondTurn(harness);
+        await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+        expect(harness.sendTurn.mock.calls[1]?.[0].modelSelection?.provider).toBe(expectedProvider);
+        expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+      },
+    );
+
+    it("does not replay a handoff when its durable outcome cannot be persisted", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      let settlementAttempts = 0;
+      harness.interceptEngineDispatch((command) => {
+        if (command.commandId !== "server:provider-handoff-meta:cmd-handoff-to-claude") {
+          return undefined;
+        }
+        settlementAttempts += 1;
+        return Effect.fail(
+          new PersistenceSqlError({
+            operation: "provider-handoff-outcome",
+            detail: "Injected durable outcome write failure.",
+          }),
+        );
+      });
+      const handoff = await dispatchHandoff(harness);
+      const deliveryKey = {
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        eventSequence: handoff.sequence,
+      };
+      await waitFor(async () => {
+        const delivery = Option.getOrUndefined(
+          await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+        );
+        return (
+          delivery?.state === "uncertain" ||
+          delivery?.state === "dead" ||
+          delivery?.state === "succeeded"
+        );
+      });
+      await harness.drain();
+      expect(
+        Option.getOrThrow(
+          await Effect.runPromise(harness.deliveryRepository.getDelivery(deliveryKey)),
+        ),
+      ).toMatchObject({ state: "uncertain", attemptCount: 1 });
+      expect(settlementAttempts).toBe(1);
+      expect(harness.startSession).toHaveBeenCalledTimes(2);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledTimes(1);
+      expect(
+        (await readHarnessThread(harness))?.activities.some((activity) =>
+          activity.kind.startsWith("provider.handoff"),
+        ),
+      ).toBe(false);
+    });
+
     it("keeps the source runtime while background tasks are still active", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },

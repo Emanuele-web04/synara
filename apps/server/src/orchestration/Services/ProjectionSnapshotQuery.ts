@@ -59,6 +59,12 @@ export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
 }
 
+/** Stable ordering key returned by the bounded runtime-reconciliation query. */
+export interface ProjectionStaleInFlightThreadCursor {
+  readonly observedAt: string;
+  readonly threadId: ThreadId;
+}
+
 export interface ProjectionThreadCheckpointContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
@@ -153,6 +159,22 @@ export interface ProjectionSnapshotQueryShape {
     readonly updatedBefore: string;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  /**
+   * Read the next bounded candidate page in (observedAt, threadId) order.
+   * Carry the returned key even when the planner finds no repair on this page.
+   */
+  readonly listStaleInFlightThreadPage: (input: {
+    readonly updatedBefore: string;
+    readonly limit: number;
+    readonly after?: ProjectionStaleInFlightThreadCursor;
+  }) => Effect.Effect<
+    {
+      readonly threadIds: ReadonlyArray<ThreadId>;
+      readonly nextCursor: ProjectionStaleInFlightThreadCursor | null;
+    },
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read only the columns managed-worktree retention needs, for every thread that

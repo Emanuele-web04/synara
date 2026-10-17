@@ -8,13 +8,14 @@ For the ordered service setup and first two-Mac test, follow [Configure the remo
 
 Keep the existing API variables described in [apps/api/README.md](../apps/api/README.md), including its exact issuer/JWKS and persistent signing key. Add all four values below together. A partial Cloudflare configuration fails boot; absent configuration answers provisioning with an explicit unavailable error.
 
-| Variable                   | Scope                                                                                                                                     |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID`    | Cloudflare account, 32 hexadecimal characters                                                                                             |
-| `CLOUDFLARE_ZONE_ID`       | Dedicated test DNS zone, 32 hexadecimal characters                                                                                        |
-| `CLOUDFLARE_API_TOKEN`     | Secret in API hosting configuration only; account tunnel write and zone DNS write permissions                                             |
-| `CLOUDFLARE_TUNNEL_DOMAIN` | DNS zone hostname, without scheme or path                                                                                                 |
-| `REMOTE_TEST_USER_IDS`     | Comma-separated explicitly authorized test WorkOS user IDs; empty denies remote provisioning, code pairing, grants and host authorization |
+| Variable                     | Scope                                                                                                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID`      | Cloudflare account, 32 hexadecimal characters                                                                                                                     |
+| `CLOUDFLARE_ZONE_ID`         | Dedicated test DNS zone, 32 hexadecimal characters                                                                                                                |
+| `CLOUDFLARE_API_TOKEN`       | Secret in API hosting configuration only; account tunnel write and zone DNS write permissions                                                                     |
+| `CLOUDFLARE_TUNNEL_DOMAIN`   | DNS zone hostname, without scheme or path                                                                                                                         |
+| `REMOTE_BETA_ACCESS_ENABLED` | `true` opens hosted beta enrollment to every authenticated account; unset/`false` keeps private deployments restricted. Ownership and pairing checks still apply. |
+| `REMOTE_TEST_USER_IDS`       | Comma-separated selected WorkOS user IDs when public beta enrollment is off; an empty list then denies remote provisioning, pairing, grants and authorization.    |
 
 Use a single generated hostname label directly beneath the configured zone. Multi-level names may require a different certificate product. Public DNS is a proxied CNAME to the allocated tunnel's `cfargotunnel.com` target. Each configuration ends in a 404 catch-all. Never point the tunnel at the normal local app/admin port.
 
@@ -32,17 +33,19 @@ The dedicated listener binds IPv4 loopback on an unused port and requires the ex
 
 ## Pairing and revocation
 
-Sign in to the same account/workspace on both computers. In Hosts & devices, create a code on the execution host, enter it on the controller, compare all root fingerprint groups across both screens, then request access. A controller signed in as the host owner is approved automatically with its account grant; otherwise the host displays the exact requesting device fingerprint; approve only after comparing it with the controller. Subsequent connections use the durable device key and pinned root. Code lookup alone does not establish trust.
+Sign in to the same account/workspace on both computers. On the execution host, open **Settings → Connections → Control this computer → Add** (the tab says **Control this Mac** on macOS). Use **Phone or iPad** for the QR or **Computer** for its short code. On the controller, open **Control other devices → Add**, enter the code, compare all root fingerprint groups across both screens, then request access. A controller signed in as the host owner is approved automatically with its account grant; otherwise the host displays the exact requesting device fingerprint; approve only after comparing it with the controller. Subsequent connections use the durable device key and pinned root. Code lookup alone does not establish trust.
 
 Codes expire after nine minutes (leaving one minute of clock-skew headroom below the API publication limit) and are claimed once, transactionally, by a registered nonrevoked device key. Per-IP, per-account and per-code attempt budgets use PostgreSQL so multiple API instances share limits. Renewal cancels older rendezvous and pending local invitations. Cancellation revokes locally even if the API is temporarily unreachable. Invitation bundles remain only on the trusted servers and are removed from rendezvous storage on redemption/cancellation/expiry. The normal UI does not copy JSON. A redeemed bundle remains on the controller server until successful pairing, explicit cancellation/forgetting, account change or expiry. A temporary directory/dial failure can therefore retry the reviewed identity without redeeming the public code again. Cancellation waits for the in-flight setup before forgetting local trust. Existing [headless private-file pairing](remote-connections-v2.md#headless-owner-pairing) remains supported.
 
 Authorization polls have ±10% jitter around ten seconds and account requests have fifteen-second deadlines. Successful snapshots renew a sixty-second lease only after local application; the expiry check closes remote streams within approximately one additional second. Online revocation normally arrives on the next poll, with request/application latency added. Do not promise a strict wall-clock bound if the operating system or event loop is suspended. During outages the last lease expires; a failed refresh never extends it. Local provider tasks remain execution-host work when controllers disconnect.
 
+Remote .15 treats the legacy temporary enrollment refusal as unavailable access and keeps polling without revoking device trust. Admission still requires a fresh successful snapshot. Opening a populated remote workspace on its home route also no longer treats the home as an empty chat identifier. If an older build already revoked a pairing, updating does not restore it automatically: create a fresh code and pair normally. Do not erase local app data or restore revoked devices through database edits.
+
 Device revocation closes RPC/resources before durable tombstone/ACK. Missing ACK is retried by later snapshots. Host unlink, replaced keys, owner removal and hard proof denial fence old admission. Ordinary network loss retains the allocation. Explicit remote disable retires it, and the account sweeper removes DNS/tunnel resources in bounded batches. Failed cleanup retains resource ownership evidence. Retired names are revisited hourly to catch a provider create that completes after a timeout; cleanup never uses a newer generation's name.
 
 ## Automations on another computer
 
-In builds with remote connections enabled (Beta/Dev), open
+In builds with remote connections enabled (Remote/Beta/Dev), open
 **Automations → New automation → Run on** and select a connected computer,
 then choose its project, provider/model and schedule. Switching computers carries
 only the title, prompt and scheduling/options draft; project, target chat and model
@@ -138,7 +141,7 @@ Run affected PostgreSQL API tests against one disposable database, then the E2E 
 
 The authoritative execution ledger is [STATUS.md](implementation/cloudflare-remote/STATUS.md). Record the final checks and limitations there. Root checks alone skip database/build-dependent cases when their explicit environment variables are absent.
 
-Live qualification is a separate final step: secure API/Cloudflare/WorkOS configuration, a dedicated test domain and database, the build installed on both Macs, and approved real-provider use. Test different networks, connector/network interruption, app restart, sleep/wake, revocation and a declared-duration soak covering a real credential renewal. Measure connection/recovery/transfer behavior before making performance claims. No customer rollout is authorized until a real paid-entitlement authority replaces the test allowlist.
+Live qualification is a separate final step: secure API/Cloudflare/WorkOS configuration, a dedicated test domain and database, the build installed on both Macs, and approved real-provider use. Test different networks, connector/network interruption, app restart, sleep/wake, revocation and a declared-duration soak covering a real credential renewal. Measure connection/recovery/transfer behavior before making performance claims. The hosted early-access beta is open to authenticated accounts under `REMOTE_BETA_ACCESS_ENABLED=true`; the operator has authorized that tester rollout. This enrollment policy is not a billing authority. Any future paid rollout needs its own authoritative entitlement policy; do not infer a subscription from this flag or from a test allowlist.
 
 ## Live Activity push delivery (development)
 

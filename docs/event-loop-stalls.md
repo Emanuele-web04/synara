@@ -75,6 +75,14 @@ Mutations are never retried automatically. Existing cancellation and receipt
 settlement remain in charge. Timeout copy asks users to check mutation results
 before retrying; reads can be retried once the server responds.
 
+During parallel work, live events suppress redundant replay polls until the stream goes quiet;
+pending dispatches still poll. Activity-driven Git and workspace-file refreshes share a
+2-second leading/trailing throttle per checkout. Turn-end invalidation remains immediate.
+Unary requests wait in FIFO client queues using the server's existing per-class limits.
+The capacity wait budget is 3 seconds after the transport has been open for a full window;
+cancellation removes waiters, disposal rejects them, and stream-backed actions bypass the queue.
+A request whose deadline expires before sending reports capacity rather than uncertain delivery.
+
 ## Attribution: measured limitation
 
 A temporary worker probe connected with `inspector.Session.connectToMainThread`,

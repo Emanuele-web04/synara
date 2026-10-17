@@ -1,5 +1,90 @@
 # Remote connections — punto di ripartenza
 
+## Recupero dopo il vecchio rifiuto — 17 ottobre 2026
+
+- Remote .14 ha accesso pubblico alle funzionalità Remote, senza pagamento o
+  abilitazione manuale degli account. Verifica live ripetuta con un account fuori
+  dalla vecchia lista: grant, creazione codice QR e autorizzazione host riusciti;
+  invito temporaneo annullato senza abbinare dispositivi.
+- Riprodotto un ulteriore bug desktop: il rifiuto di enrollment veniva trattato
+  come revoca permanente dell'host, fermando i controlli e revocando i device
+  locali. Il sorgente ora sospende subito l'accesso e continua i controlli per
+  quella risposta specifica, conservando la fiducia. Revoche vere e account
+  diversi restano bloccati. Questo fix richiede una futura release desktop;
+  non ripristina automaticamente fiducia già revocata dalle vecchie versioni.
+- L'E2E ha trovato anche un crash presente nella .14: entrando nella home remota
+  con chat già esistenti, `/` diventava un ID chat vuoto. Corretto il controllo
+  della selezione, senza cambiare layout o controlli. Aggiornato l'E2E del QR ai
+  dialog attuali e all'approvazione tramite grant del proprietario, verificando
+  la chiave esatta del dispositivo registrato.
+- Per chi è rimasto sul vecchio rifiuto nella .14: uscita completa dall'app e
+  riapertura, poi codice nuovo. Se la fiducia era già stata revocata, normale
+  nuovo abbinamento. Reinstallare la stessa .14 non corregge il crash né ripara
+  la fiducia revocata; non cancellare i dati locali. I due fix desktop restano
+  da includere in una release successiva; nessuna nuova build iOS necessaria.
+- Verifica finale: E2E completo 18/18 sulla build corretta, con PostgreSQL
+  temporaneo e due home isolate; 16/16 test autorizzazione/ingress/connectivity;
+  web 5.669 passati / 3 saltati. Build, formatting, lint e typecheck passano.
+  Suite repository dopo il fix enrollment: 18.278 passati / 278 saltati; il
+  successivo controllo della home remota è coperto dalla web suite e dall'E2E
+  finali. API live verificata separatamente; Cloudflare/WorkOS/provider nell'E2E
+  sono fixture. Nessun dato delle app installate modificato.
+
+## Accesso beta pubblico e aggiornamento main — 16 ottobre 2026
+
+- Integrati i 7 commit di main fino a `7cfd65d`, inclusa la preparazione Stable
+  1.0.6. Fix Codex: turni vivi e recupero,
+  handoff senza replay, metadati moderazione fuori dalla chat, cache modelli
+  degradata temporanea. Entrambi i gruppi del conflitto nei test sono conservati.
+- Autorizzata la beta per tutti gli account: aggiunta l'impostazione backend
+  `REMOTE_BETA_ACCESS_ENABLED`, senza togliere ownership, prova device e pairing.
+  Passano 18.276 test workspace e tutti i 374 test API su PostgreSQL temporaneo.
+- **Accesso beta verificato live:** il rollout gestito Cloudflare
+  `53328200-c9e9-4b42-9a9c-f44dd102e792` ha aggiornato il container alla versione
+  23 mantenendo immagine e risorse. L'account di test esterno alla vecchia lista
+  ora ottiene un grant reale (200); richieste anonime (401) e device non registrati
+  (403) restano rifiutati. Nessuna migrazione o modifica agli account dei Mac.
+  Chi ha già Remote .14 non deve riscaricare l'app: riprovare la connessione.
+  Nessuna nuova build iOS/iPadOS necessaria per questo cambio backend.
+
+## Login GitHub Production — 16 ottobre 2026
+
+- Provider GitHub configurato, abilitato e validato in WorkOS Production. Callback
+  Supabase e segreto precedenti conservati; aggiunto il callback esatto WorkOS e
+  salvato il nuovo segreto solo in WorkOS. Nessun permesso repository o pagamento.
+- Ripristinato nel sorgente il pulsante GitHub esistente, sul percorso SSO comune
+  a Google e Apple. Passano 7 test browser, formattazione, lint, typecheck e build
+  desktop. Le warning lint preesistenti restano.
+- La copia con dati temporanei arriva al consenso GitHub; consenso finale e
+  ritorno nell'app ancora da verificare. Account dei Mac e dati esistenti intatti.
+  Nessuna nuova release: la .14 pubblicata continua a mostrare Google/Apple/email.
+
+## Remote .14 e stato TestFlight — 16 ottobre 2026
+
+- Pubblicata [Remote 1.0.6-remote.14](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14),
+  commit `55ded6c1543a98679f8ac503c447d19cfb3906e9`: Mac Apple Silicon,
+  Windows x64 e Linux x64. CI completa verde, hash/provenienza dei download e
+  firma/notarizzazione Mac verificati. Windows usa la policy unsigned della sola
+  versione .14. Stable Latest e feed storici invariati.
+- Corretti il default API mancante nelle installazioni pulite e l'opt-in shell
+  superfluo della sincronizzazione profilo Remote. Restano validi gli override
+  espliciti, l'opt-out e l'issuer degli account salvati. Nel login Remote compaiono
+  Google, Apple ed email; GitHub resta disponibile nei build generici configurati.
+- TestFlight universale **0.1 (136)** compatibile: ora **in attesa di revisione
+  Apple** per gli esterni. Aggiornato il link desktop nelle istruzioni dei tester.
+  Invito TestFlight e abilitazione dell'account alle connessioni restano distinti.
+- Analytics Cloudflare verificati senza leggere contenuti: default off;
+  copertura nativa provider/token/turni completati ancora incompleta. Non usare
+  gli eventi client come conteggio globale univoco o contatore di fatturazione.
+- Prova visiva della .14 scaricata, con dati temporanei e senza override API:
+  Google/Apple/email corretti; invio reale del codice riuscito e schermata
+  **Check your email** raggiunta. Codice non consumato e copia temporanea chiusa.
+  Nessun nuovo login completato, aggiornamento delle app installate, intervento
+  sul telefono fisico o servizio a pagamento in questa consegna.
+
+Dettagli e limiti: [checkpoint di consegna](STATUS.md#remote-14-delivery--2026-10-16)
+e [audit analytics](PRODUCT-ANALYTICS-AUDIT.md).
+
 ## Main 1.0.5 / 1.0.6 Beta — 15 ottobre 2026
 
 Integrato main `34a6aef` nel branch pubblico con un merge, senza riscrivere i

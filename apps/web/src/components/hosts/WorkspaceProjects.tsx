@@ -175,7 +175,8 @@ function selectedThreadPath(href: string, session: WorkspaceSession, threadId: s
   const path = params.get("path")?.split("?")[0];
   if (
     params.get("environment") !== session.host.executionScope.environmentId ||
-    !path?.startsWith("/")
+    !path?.startsWith("/") ||
+    path.length <= 1
   )
     return false;
   return (
