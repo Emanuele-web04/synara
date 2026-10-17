@@ -13,7 +13,11 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { BETA_USAGE_SNAPSHOT_FILE_NAME, writeBetaUsageSnapshot } from "./betaUsageSnapshot";
+import {
+  BETA_USAGE_SNAPSHOT_FILE_NAME,
+  usageModelCategory,
+  writeBetaUsageSnapshot,
+} from "./betaUsageSnapshot";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
 const roots: string[] = [];
@@ -183,5 +187,38 @@ describe("bundle gate", () => {
     expect(gate).toContain(
       "desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID",
     );
+  });
+});
+
+describe("usage model categories", () => {
+  it("keeps catalogued models and Claude releases, never custom names", () => {
+    expect(usageModelCategory("claudeAgent", "claude-fable-5-1")).toBe("claude-fable-5-1");
+    expect(usageModelCategory("claudeAgent", "claude-opus-7-2")).toBe("claude-opus-7-2");
+    expect(usageModelCategory("codex", "gpt-acme-secret-project")).toBe("other");
+    expect(usageModelCategory("claudeAgent", "claude-acme-secret")).toBe("other");
+    expect(usageModelCategory("opencode", "my-company/internal-model")).toBe("other");
+  });
+});
+
+describe("finished turn window", () => {
+  it("counts a long turn by when it finished, not when it was requested", async () => {
+    const root = makeRoot();
+    await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
+                  VALUES ('w1', 'idle', 'codex', ${nowIso()})`;
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json)
+                  VALUES ('w1', 'long', 'completed', ${hoursAgoIso(25)}, ${hoursAgoIso(25)}, ${hoursAgoIso(1)}, '[]'),
+                         ('w1', 'old', 'completed', ${hoursAgoIso(30)}, ${hoursAgoIso(30)}, ${hoursAgoIso(29)}, '[]')`;
+        yield* writeBetaUsageSnapshot(root);
+      }),
+    );
+    const snapshot = JSON.parse(
+      readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
+    );
+    expect(snapshot.turnBreakdown).toEqual([
+      expect.objectContaining({ provider: "codex", outcome: "succeeded", turns: 1 }),
+    ]);
   });
 });

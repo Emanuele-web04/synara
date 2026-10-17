@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -369,4 +377,18 @@ it("tags events with a hash of the signed-in account and never the account id", 
   ]);
   expect(raw).not.toContain("user_01HZTESTACCOUNT");
   expect(existsSync(join(homeDir, "product-analytics", "account-hash"))).toBe(false);
+});
+
+it("keeps an unreadable recorded choice off instead of falling back to the default", () => {
+  const homeDir = makeRoot();
+  // A directory in place of the consent file makes the read fail without ENOENT.
+  mkdirSync(join(homeDir, "product-analytics", "consent.json"), { recursive: true });
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.0.6-remote.17",
+    platform: "darwin",
+    defaultEnabled: true,
+  });
+  expect(analytics.getState()).toEqual({ enabled: false });
 });

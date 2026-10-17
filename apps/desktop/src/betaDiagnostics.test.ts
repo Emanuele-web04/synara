@@ -1103,3 +1103,77 @@ describe("Remote diagnostics", () => {
     expect(existsSync(queuePath)).toBe(false);
   });
 });
+
+describe("Remote keeps free text on the device", () => {
+  const remote = (root: string, isEnabled: () => boolean = () => true) =>
+    new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      flavor: "remote",
+      isEnabled,
+    });
+  const queued = (root: string) => {
+    const path = join(root, "diagnostics", "events.jsonl");
+    return existsSync(path)
+      ? readFileSync(path, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+  };
+
+  it("sends an error's type and frames, never its message, and no crash log", () => {
+    const root = makeRoot();
+    const diagnostics = remote(root);
+    const error = new TypeError(
+      "Failed to read /Volumes/Work/AcmeSecret/strategy.txt: customer renewal draft",
+    );
+    error.stack = `TypeError: ${error.message}\n    at readPlan (main.js:10:5)\n    at run (main.js:20:3)`;
+    diagnostics.trackError("main", error);
+    diagnostics.track("app.child-process-crash", {
+      kind: "crash",
+      processType: "backend",
+      reason: "crashed",
+      logTail: "customer renewal draft",
+    });
+    diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout" });
+    const raw = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8");
+    expect(raw).not.toContain("AcmeSecret");
+    expect(raw).not.toContain("renewal");
+    const [errorEvent, crashEvent, issueEvent] = queued(root);
+    expect(errorEvent.payload).toMatchObject({
+      message: "TypeError at readPlan (main.js:10:5)",
+      stack: "at readPlan (main.js:10:5)\nat run (main.js:20:3)",
+    });
+    expect(crashEvent.payload.logTail).toBeUndefined();
+    expect(issueEvent.payload.message).toBe("Handled issue: git.push.failed (timeout)");
+  });
+
+  it("collects no context while sharing is off and skips snapshots reaching into that time", () => {
+    const root = makeRoot();
+    let sharing = false;
+    const diagnostics = remote(root, () => sharing);
+    diagnostics.recordActivity({ activity: "git.push", phase: "started" });
+    sharing = true;
+    diagnostics.resumeSharing();
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date().toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+      }),
+    );
+    diagnostics.maybeTrackDailyUsage();
+    diagnostics.trackError("main", new Error("boom"));
+    const events = queued(root);
+    expect(events.some((event) => event.event === "usage.daily")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("git.push");
+  });
+});

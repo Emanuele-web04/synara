@@ -339,6 +339,40 @@ describe("product event route and D1 storage", () => {
     );
   });
 
+  it("counts a person once after an installation switches accounts", async () => {
+    const desktop = "00000000-0000-4000-8000-0000000000d1";
+    const phone = "00000000-0000-4000-8000-0000000000d2";
+    const before = "f".repeat(32);
+    const after = "1".repeat(32);
+    const at = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString();
+    const event = (installId, accountHash, minutesAgo) =>
+      envelope({
+        id: crypto.randomUUID(),
+        ts: at(minutesAgo),
+        installId,
+        accountHash,
+        channel: "remote",
+        event: "app.active",
+        feature: undefined,
+        durationMs: undefined,
+      });
+    await postEvents([
+      event(desktop, before, 30),
+      event(desktop, after, 10),
+      event(phone, after, 5),
+    ]);
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const body = await worker
+      .fetch(
+        new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=remote`, {
+          headers: { cookie: `synara_beta_dash=${token}` },
+        }),
+        env,
+      )
+      .then((response) => response.json());
+    expect(body.activeUsers).toMatchObject({ day: 2, peopleDay: 1, signedInMonth: 1 });
+  });
+
   it("accepts Remote diagnostics and filters them apart from Beta", async () => {
     const diagnostic = (flavor, installId) => ({
       v: 1,

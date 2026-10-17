@@ -500,7 +500,8 @@ const betaDiagnostics =
       })
     : null;
 productAnalytics.onChange((enabled) => {
-  if (!enabled) betaDiagnostics?.discardQueue();
+  if (enabled) betaDiagnostics?.resumeSharing();
+  else betaDiagnostics?.discardQueue();
 });
 if (betaDiagnostics && desktopFlavor === "beta") {
   crashReporter.start({

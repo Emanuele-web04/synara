@@ -65,6 +65,8 @@ const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
 const USAGE_SNAPSHOT_FIRST_DELAY_MS = 2 * 60 * 1000;
 const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// The server snapshot counts the 24 hours before it was written.
+const USAGE_SNAPSHOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const USAGE_COUNT_MAX = 100_000;
 
 export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH;
@@ -213,6 +215,40 @@ const sanitizeLocale = (value: unknown): string | undefined => {
   const primary = value.split("-")[0]?.toLowerCase();
   return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 };
+
+const HANDLED_ISSUE_MESSAGE = /^Handled issue: [a-z0-9.-]+ \([A-Za-z0-9._-]+\)$/;
+const ERROR_TYPE = /^([A-Z][A-Za-z0-9_]*(?:Error|Exception))\b/;
+
+/**
+ * Remote shares no free text: an error keeps its type and stack frames, a crash
+ * its process and reason without the log tail, an update failure its step only.
+ */
+function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayload {
+  if (payload.kind === "error") {
+    if (HANDLED_ISSUE_MESSAGE.test(payload.message) && payload.stack === undefined) return payload;
+    const frames = (payload.stack ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^at\s/.test(line))
+      .slice(0, 30);
+    const type = ERROR_TYPE.exec(payload.stack ?? payload.message)?.[1] ?? "Error";
+    return {
+      kind: "error",
+      source: payload.source,
+      fingerprint: payload.fingerprint,
+      message: frames[0] ? `${type} ${frames[0]}` : type,
+      ...(frames.length > 0 ? { stack: frames.join("\n") } : {}),
+    };
+  }
+  if (payload.kind === "crash") {
+    return { kind: "crash", processType: payload.processType, reason: payload.reason };
+  }
+  if (payload.kind === "update") {
+    const { message: _message, ...rest } = payload;
+    return rest;
+  }
+  return payload;
+}
 
 const TURN_BREAKDOWN_MAX_ROWS = 200;
 const TURN_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]{0,47}$/;
@@ -461,6 +497,7 @@ export class BetaDiagnostics {
   private readonly usageSnapshotPath: string;
   private readonly usageLastDayPath: string;
   private readonly installPendingPath: string;
+  private readonly sharingResumedPath: string;
   private readonly endpoint: string;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private usageTimers: ReturnType<typeof setTimeout>[] = [];
@@ -488,6 +525,7 @@ export class BetaDiagnostics {
     this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
     this.usageLastDayPath = join(input.homeDir, "diagnostics", "usage-last-day");
     this.installPendingPath = join(input.homeDir, "diagnostics", "install-pending");
+    this.sharingResumedPath = join(input.homeDir, "diagnostics", "sharing-resumed-at");
     this.endpoint = resolveBetaDiagnosticsEndpoint(input.env ?? process.env);
     this.installId = this.loadInstallId(input.homeDir);
     this.now = input.now ?? (() => new Date());
@@ -582,9 +620,10 @@ export class BetaDiagnostics {
     this.usageTimers.push(first);
   }
 
-  track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): string | undefined {
+  track(event: BetaDiagnosticsEventName, input: BetaDiagnosticsPayload): string | undefined {
     if (this.disposed || !this.isEnabled()) return;
-    if (payload.kind === "crash" && payload.reason === "clean-exit") return;
+    if (input.kind === "crash" && input.reason === "clean-exit") return;
+    const payload = this.flavor === "remote" ? withoutFreeText(input) : input;
     const withContext =
       payload.kind === "crash"
         ? {
@@ -674,7 +713,7 @@ export class BetaDiagnostics {
 
   /** Reconstruct from the allowlist so unknown IPC properties never enter the ring. */
   recordActivity(input: unknown): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       if (!Schema.is(DesktopDiagnosticBreadcrumb)(input)) return;
       const at = this.now().getTime();
@@ -693,7 +732,7 @@ export class BetaDiagnostics {
   }
 
   private captureMemorySample(): void {
-    if (this.disposed || !this.sampleMemory) return;
+    if (this.disposed || !this.sampleMemory || !this.isEnabled()) return;
     try {
       const input = this.sampleMemory();
       const counters = {
@@ -856,6 +895,17 @@ export class BetaDiagnostics {
         generatedMs > nowMs ||
         nowMs - generatedMs > USAGE_SNAPSHOT_MAX_AGE_MS
       ) {
+        return;
+      }
+      // The snapshot covers the 24 hours before it was written; skip any that reach
+      // back into time when sharing was off.
+      try {
+        if (existsSync(this.sharingResumedPath)) {
+          const resumedMs = Date.parse(readFileSync(this.sharingResumedPath, "utf8").trim());
+          if (!Number.isFinite(resumedMs) || generatedMs - USAGE_SNAPSHOT_WINDOW_MS < resumedMs)
+            return;
+        }
+      } catch {
         return;
       }
       const today = now.toISOString().slice(0, 10);
@@ -1033,17 +1083,37 @@ export class BetaDiagnostics {
     }
   }
 
+  /**
+   * Called when sharing turns back on: usage snapshots covering the time it was off
+   * are never relayed.
+   */
+  resumeSharing(): void {
+    try {
+      mkdirSync(join(this.homeDir, "diagnostics"), { recursive: true });
+      writeFileSync(this.sharingResumedPath, `${this.now().toISOString()}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    } catch {
+      // best effort
+    }
+  }
+
   /** Whether events are currently collected; false after an opt-out. */
   isCollecting(): boolean {
     return !this.disposed && this.isEnabled();
   }
 
-  /** Drops unsent events after the user turns sharing off. */
+  /** Drops unsent events and collected context after the user turns sharing off. */
   discardQueue(): void {
-    try {
-      rmSync(this.queuePath, { force: true });
-    } catch {
-      // best effort
+    this.recentActivity.length = 0;
+    this.memorySamples.length = 0;
+    for (const path of [this.queuePath, this.usageSnapshotPath]) {
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // best effort
+      }
     }
   }
 

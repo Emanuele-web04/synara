@@ -11,9 +11,12 @@ are available in both channels; see [Product analytics](#product-analytics).
 It follows the **Share usage and diagnostics** switch in Settings → General → Privacy,
 which is on by default: turning it off stops new events and deletes the unsent
 diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
-memory is not sent; crash events still carry the process type, reason and redacted log
-tail described below. Server usage snapshots run for Remote too and are relayed only
-while sharing is on.
+memory is not sent, and it sends no free text: an error keeps only its type and stack
+frames (`TypeError at readPlan (main.js:10:5)`), never its message; a crash keeps its
+process type and reason without the log tail; an update failure keeps its step without
+the message. Handled issues keep their fixed code and reason. While sharing is off,
+no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
+usage snapshot is relayed only once its 24-hour window starts after that moment.
 The Beta diagnostics module is only constructed
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
@@ -143,8 +146,9 @@ relays it once per UTC day. Its optional `turnBreakdown` groups finished turns
 of the last 24 hours — including turns started from a phone, an automation or
 an agent — by provider, model, effort, interaction mode, permission mode, origin
 and outcome, with turn counts, summed durations and main-turn token totals. A
-model name is kept only when it is in the bundled catalog or a public model
-family; anything else is reported as `other`. Usage keys that name models are
+model name is kept only when it is in the bundled catalog or is a versioned Claude
+release (`claude-<family>-<major>[-<minor>]`); anything else is reported as `other`.
+Turns count by when they finished. Usage keys that name models are
 never copied. `beta.installed` is emitted once, on the first
 backend start after a fresh install, and says whether stable data was imported.
 `beta.left` fires when you switch back to stable and says only whether the beta

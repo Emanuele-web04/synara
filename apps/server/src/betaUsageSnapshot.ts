@@ -83,17 +83,17 @@ const INTERACTION_MODES = new Set(["default", "plan", "debug"]);
 const RUNTIME_MODES = new Set(["approval-required", "auto", "full-access"]);
 const ORIGINS = new Set(["user", "automation", "agent"]);
 const PROVIDERS = new Set<string>(ProviderKind.literals);
-// Public model families keep their name when newer than the bundled catalog.
-const PUBLIC_MODEL_PATTERN =
-  /^(claude|gpt|o[0-9]|gemini|grok|kimi|qwen|deepseek|glm|codex|devin|composer)[a-z0-9.-]{0,40}$/;
+// Claude releases newer than the bundled catalog keep their versioned name; a
+// family prefix alone is not enough, since people can name custom models freely.
+const CLAUDE_RELEASE_PATTERN = /^claude-(fable|opus|sonnet|haiku)-\d{1,2}(-\d{1,2})?(-\d{8})?$/;
 
-/** A catalogued or public model name; anything a user could have named stays "other". */
+/** A catalogued model name; anything a user could have named stays "other". */
 export function usageModelCategory(provider: string, model: string | null): string {
   if (!model || !PROVIDERS.has(provider)) return "other";
   const slug = normalizeModelSlug(model, provider as ProviderKind) ?? model.trim();
   const base = stripClaudeContextWindowSuffix(slug).toLowerCase();
   if (MODEL_CAPABILITIES_INDEX[provider as ProviderKind]?.[base]) return base;
-  return PUBLIC_MODEL_PATTERN.test(base) ? base : "other";
+  return provider === "claudeAgent" && CLAUDE_RELEASE_PATTERN.test(base) ? base : "other";
 }
 
 const OUTCOME_BY_STATE: Record<string, TurnBreakdownRow["outcome"]> = {
@@ -126,7 +126,7 @@ function usageTokens(raw: string | null) {
   }
 }
 
-/** Finished turns of the last 24h, grouped by their fixed categories. */
+/** Turns finished in the last 24h, grouped by their fixed categories. */
 export function aggregateTurnBreakdown(rows: ReadonlyArray<TurnRow>): TurnBreakdownRow[] {
   const groups = new Map<string, TurnBreakdownRow>();
   for (const row of rows) {
@@ -223,7 +223,8 @@ export const writeBetaUsageSnapshot = (betaHomeDir: string) =>
       LEFT JOIN orchestration_events e
         ON e.event_type = 'thread.turn-start-requested' AND e.stream_id = t.thread_id
        AND json_extract(e.payload_json, '$.messageId') = t.pending_message_id
-      WHERE t.requested_at >= ${since}
+      WHERE t.state IN ('completed', 'error', 'interrupted')
+        AND COALESCE(t.completed_at, t.requested_at) >= ${since}
       LIMIT ${TURN_BREAKDOWN_MAX_TURNS}
     `;
 

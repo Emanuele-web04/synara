@@ -1099,7 +1099,12 @@ export function useComposerSlashCommands(input: {
         return;
       }
       // Commands that insert `/name ` are counted when that text is sent.
-      if (!SLASH_COMMANDS_COUNTED_ON_SEND.has(item.command)) trackSlashCommand(item.command);
+      const countedOnSend =
+        SLASH_COMMANDS_COUNTED_ON_SEND.has(item.command) ||
+        (item.command === "review" &&
+          selectedProvider !== "codex" &&
+          supportsTextNativeReviewCommand);
+      if (!countedOnSend) trackSlashCommand(item.command);
 
       if (
         item.command === "model" ||

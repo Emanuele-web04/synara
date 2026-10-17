@@ -2229,22 +2229,38 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           engagedWeek: number;
           engagedMonth: number;
         }>(),
-      // An installation takes the account it reported anywhere in the window, so
-      // events sent before sign-in do not count the same person twice.
+      // An installation takes the account it reported most recently in the window,
+      // so events sent before sign-in, or before switching accounts, do not count the
+      // same person twice.
       env.DB.prepare(
-        `WITH installs AS (
-           SELECT install_id, MAX(account_hash) AS account_hash, MAX(ts) AS last_seen
-           FROM product_events WHERE ts >= ?${productFilters.scopeClause}
-           GROUP BY install_id
+        `WITH scoped AS (
+           SELECT install_id, account_hash, ts FROM product_events
+           WHERE ts >= ?${productFilters.scopeClause}
+         ),
+         installs AS (
+           SELECT install_id, MAX(ts) AS last_seen FROM scoped GROUP BY install_id
+         ),
+         latest_account AS (
+           SELECT s.install_id, MAX(s.account_hash) AS account_hash
+           FROM scoped s
+           JOIN (
+             SELECT install_id, MAX(ts) AS ts FROM scoped
+             WHERE account_hash IS NOT NULL GROUP BY install_id
+           ) l ON l.install_id = s.install_id AND l.ts = s.ts
+           WHERE s.account_hash IS NOT NULL
+           GROUP BY s.install_id
+         ),
+         people AS (
+           SELECT COALESCE(a.account_hash, i.install_id) AS person, i.last_seen,
+                  a.account_hash AS account_hash
+           FROM installs i LEFT JOIN latest_account a ON a.install_id = i.install_id
          )
          SELECT
-           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN COALESCE(account_hash, install_id) END)
-             AS peopleDay,
-           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN COALESCE(account_hash, install_id) END)
-             AS peopleWeek,
-           COUNT(DISTINCT COALESCE(account_hash, install_id)) AS peopleMonth,
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleDay,
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN person END) AS peopleWeek,
+           COUNT(DISTINCT person) AS peopleMonth,
            COUNT(DISTINCT account_hash) AS signedInMonth
-         FROM installs`,
+         FROM people`,
       )
         .bind(
           new Date(Date.now() - PRODUCT_RETENTION_DAYS * DAY_MS).toISOString(),

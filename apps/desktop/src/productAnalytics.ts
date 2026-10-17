@@ -454,8 +454,9 @@ export class ProductAnalytics {
     let raw: string;
     try {
       raw = readFileSync(this.consentPath, "utf8");
-    } catch {
-      return this.defaultEnabled;
+    } catch (error) {
+      // Only a choice never made falls back to the default; an unreadable one stays off.
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? this.defaultEnabled : false;
     }
     try {
       const value = JSON.parse(raw) as { enabled?: unknown };
