@@ -1,0 +1,54 @@
+name: PR 1878 targeted geometry and menu-overlay attribution
+on:
+  push:
+    branches: [qa/pr1878-geometry-controls-20261017]
+permissions:
+  contents: read
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 19
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: main
+            repo: Emanuele-web04/synara
+            source: df87a48b9f2d403e3d2785ef11502f2ce2922f5b
+          - label: checker
+            repo: cmdr-chara/synara
+            source: e6c8014794d70314eeb460d327f79443d12afb1f
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ matrix.source }}"
+          mkdir -p "$RUNNER_TEMP/pr1878-geometry"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-geometry/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Run same original UI geometry and overlay assertions
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/pr1878-geometry"
+          if bun run --cwd apps/web test:browser src/components/ChatView.browser.tsx \
+              --testNamePattern="clamps long user messages to twelve rendered lines|keeps the row under the composer aligned|keeps attachment composer ownership when selecting a follow-up" \
+              --reporter=default --reporter=json --outputFile.json="$out/tests.json" > "$out/tests.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/tests.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          exit "$rc"
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-geometry-${{ matrix.label }}
+          path: |
+            ${{ runner.temp }}/pr1878-geometry/
+            apps/web/src/**/__screenshots__/
+          if-no-files-found: warn
+          retention-days: 14
