@@ -343,10 +343,14 @@ async function prepareEditorEdits(source: EditorModelEntry, files: readonly Edit
           throw new Error("Language service returned duplicate edit targets.");
         paths.add(file.relativePath);
         // Re-read every target so a changed symlink, encoding, or disk version cannot bypass native conflict checks.
-        const data = await source.client.fetchQuery({
-          ...projectReadFileQueryOptions({ cwd: source.cwd, relativePath: file.relativePath }),
-          staleTime: 0,
+        // Cancel a read already in flight for the pane first, as the session's own reload does,
+        // so this fetch is never deduplicated onto an older request.
+        const readOptions = projectReadFileQueryOptions({
+          cwd: source.cwd,
+          relativePath: file.relativePath,
         });
+        await source.client.cancelQueries({ queryKey: readOptions.queryKey, exact: true });
+        const data = await source.client.fetchQuery({ ...readOptions, staleTime: 0 });
         const reason = resolveWorkspaceFileEditorReadOnlyReason(data);
         if (reason || data.relativePath !== file.relativePath)
           throw new Error(reason ?? "Edit target resolved to a different file.");

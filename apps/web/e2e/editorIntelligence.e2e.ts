@@ -8,6 +8,8 @@ import path from "node:path";
 // and real debugger. No service worker, response interception, or mocked native API.
 let workspace: string;
 let threadId: string;
+// One project per workspace: the server rejects a second registration of the same root.
+let projectId: string | undefined;
 const source = `import { greet } from "./greeting";
 
 interface Person {
@@ -54,6 +56,23 @@ test.afterAll(async () => {
   if (workspace) await rm(workspace, { recursive: true, force: true });
 });
 
+// The import announcement, feature tour and update toasts can appear on any
+// route change; clear whichever is up so no modal blocks the journey.
+async function dismissStartupSurfaces(page: Page) {
+  for (let round = 0; round < 6; round++) {
+    let dismissed = false;
+    for (const label of ["Not now", "Skip tour", "Dismiss toast"]) {
+      for (const button of await page.getByRole("button", { name: label, exact: true }).all()) {
+        if (await button.isVisible().catch(() => false)) {
+          await button.click({ timeout: 2_000 }).catch(() => undefined);
+          dismissed = true;
+        }
+      }
+    }
+    if (!dismissed) break;
+    await page.waitForTimeout(400);
+  }
+}
 async function seed(page: Page) {
   await page.goto("/");
   // Fail at bootstrap rather than sending a command into a disconnected transport.
@@ -80,36 +99,25 @@ async function seed(page: Page) {
     .waitFor({ state: "visible", timeout: 10_000 })
     .then(() => skipTour.click())
     .catch(() => undefined);
-  for (let round = 0; round < 6; round++) {
-    let dismissed = false;
-    for (const label of ["Not now", "Skip tour", "Dismiss toast"]) {
-      for (const button of await page.getByRole("button", { name: label, exact: true }).all()) {
-        if (await button.isVisible().catch(() => false)) {
-          await button.click({ timeout: 2_000 }).catch(() => undefined);
-          dismissed = true;
-        }
-      }
-    }
-    if (!dismissed) break;
-    await page.waitForTimeout(400);
-  }
+  await dismissStartupSurfaces(page);
   await expect(welcome).toHaveCount(0);
-  await page
-    .evaluate(async (cwd) => {
+  const seeded = await page.evaluate(
+    async ({ cwd, existingProjectId }) => {
       const modulePath = "/src/nativeApi.ts";
       const { ensureNativeApi } = await import(/* @vite-ignore */ modulePath);
       const api = ensureNativeApi();
       const now = new Date().toISOString();
-      const projectId = crypto.randomUUID();
+      const projectId = existingProjectId ?? crypto.randomUUID();
       const threadId = crypto.randomUUID();
-      await api.orchestration.dispatchCommand({
-        type: "project.create",
-        commandId: crypto.randomUUID(),
-        projectId,
-        title: "Editor acceptance",
-        workspaceRoot: cwd,
-        createdAt: now,
-      });
+      if (!existingProjectId)
+        await api.orchestration.dispatchCommand({
+          type: "project.create",
+          commandId: crypto.randomUUID(),
+          projectId,
+          title: "Editor acceptance",
+          workspaceRoot: cwd,
+          createdAt: now,
+        });
       await api.orchestration.dispatchCommand({
         type: "thread.create",
         commandId: crypto.randomUUID(),
@@ -124,11 +132,12 @@ async function seed(page: Page) {
         createdAt: now,
       });
       // No turn is submitted: model metadata does not start a provider or send project data.
-      return threadId;
-    }, workspace)
-    .then((id) => {
-      threadId = id;
-    });
+      return { projectId, threadId };
+    },
+    { cwd: workspace, existingProjectId: projectId },
+  );
+  projectId = seeded.projectId;
+  threadId = seeded.threadId;
 }
 async function editorVisible(page: Page, relativePath: string) {
   // Monaco's native EditContext input has no width until it receives focus.
@@ -139,8 +148,16 @@ async function editorVisible(page: Page, relativePath: string) {
 }
 async function open(page: Page, relativePath = "main.ts") {
   await page.goto(`/${threadId}?view=editor&editorFilePath=${encodeURIComponent(relativePath)}`);
+  // A startup surface (feature tour) can open over the route; role queries skip
+  // the page behind a modal, so clear it before looking for the preview control.
+  const editFile = page.getByRole("button", { name: "Edit file", exact: true });
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await dismissStartupSurfaces(page);
+    if (await editFile.isVisible().catch(() => false)) break;
+    await page.waitForTimeout(500);
+  }
   // File navigation opens Synara's read-only preview; enter editing via its native control.
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile.click();
   await editorVisible(page, relativePath);
 }
 async function position(page: Page, text: string, delta = 0) {
@@ -250,7 +267,10 @@ test("renames an exported symbol after editing the dialog name", async ({ page }
   await page.keyboard.press("F2");
   const name = page.getByRole("textbox", { name: "Rename symbol", exact: true });
   await expect(name).toHaveValue("greet");
-  await page.keyboard.press("End");
+  // The dialog focuses and selects its field on the next frame; type after that.
+  // ArrowRight collapses the selection to the end on every platform (End does not on macOS).
+  await expect(name).toBeFocused();
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Backspace");
   await page.keyboard.press("Backspace");
   await expect(name).toHaveValue("gre");

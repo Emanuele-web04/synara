@@ -132,9 +132,17 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
   const [controller, setController] = useState<Controller | null>(null);
   const [serviceNotice, setServiceNotice] = useState<string | null>(null);
   const [problems, setProblems] = useState({ errors: 0, warnings: 0 });
-  const [picker, setPicker] = useState<PickerState | null>(null);
+  const [picker, setPickerState] = useState<PickerState | null>(null);
+  // Mirrors `picker` synchronously so a running command can tell whether it
+  // replaced the picker before React has rendered the replacement.
+  const pickerRef = useRef<PickerState | null>(null);
+  const setPicker = (next: PickerState | null) => {
+    pickerRef.current = next;
+    setPickerState(next);
+  };
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [running, setRunning] = useState(false);
   const [rename, setRename] = useState<{ word: string; offset: number; version: number } | null>(
     null,
   );
@@ -811,19 +819,17 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       })
         .then((result) => {
           if (abort.signal.aborted) return;
-          setPicker((value) =>
-            value?.mode === "workspaceSymbols"
-              ? {
-                  ...value,
-                  rows: (result?.symbols ?? []).slice(0, 200).map((symbol, index) => ({
-                    id: `symbol:${index}`,
-                    label: symbol.name,
-                    detail: `${symbol.location.relativePath}:${symbol.location.line + 1}`,
-                    run: () => reveal(symbol.location),
-                  })),
-                }
-              : value,
-          );
+          const value = pickerRef.current;
+          if (value?.mode === "workspaceSymbols")
+            setPicker({
+              ...value,
+              rows: (result?.symbols ?? []).slice(0, 200).map((symbol, index) => ({
+                id: `symbol:${index}`,
+                label: symbol.name,
+                detail: `${symbol.location.relativePath}:${symbol.location.line + 1}`,
+                run: () => reveal(symbol.location),
+              })),
+            });
         })
         .catch(report)
         .finally(() => {
@@ -836,6 +842,23 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     };
   }, [picker?.mode, query, controller]);
 
+  // A chosen row runs with the picker still open: closing it first and letting
+  // the command reopen it with results made the first close's transition end
+  // dismiss the results list. The picker closes only when the command did not
+  // replace it.
+  const choose = (row: EditorActionRow) => {
+    const chosen = pickerRef.current;
+    setRunning(true);
+    void Promise.resolve()
+      .then(row.run)
+      .catch(report)
+      .finally(() => {
+        setRunning(false);
+        if (pickerRef.current !== chosen) return;
+        setPicker(null);
+        focusEditor();
+      });
+  };
   const handleShortcut = (event: KeyboardEvent<HTMLDivElement>) => {
     const command = resolveEditorShortcutCommand(event, keybindings);
     if (!command) return;
@@ -940,15 +963,13 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         query={query}
         rows={rows}
         busy={picker?.mode === "workspaceSymbols" && searching}
+        message={running ? "Running…" : null}
         onQueryChange={setQuery}
         onClose={() => {
           setPicker(null);
           focusEditor();
         }}
-        onChoose={(row) => {
-          setPicker(null);
-          void Promise.resolve().then(row.run).catch(report);
-        }}
+        onChoose={choose}
       />
       <RenameDialog
         open={rename !== null}
