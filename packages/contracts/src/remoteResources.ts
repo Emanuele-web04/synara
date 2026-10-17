@@ -2,13 +2,16 @@ import { Schema } from "effect";
 import { EnvironmentId, boundedTrimmedNonEmptyString } from "./baseSchemas";
 
 const ResourceId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,256}$/));
+// Thread ids are any trimmed non-empty string: iOS creates `ios:<uuid>:thread`,
+// and subagent and automation threads use `:`-separated ids as well.
+const ResourceThreadId = boundedTrimmedNonEmptyString(1024);
 const ResourcePath = boundedTrimmedNonEmptyString(4096);
 const ResourceText = boundedTrimmedNonEmptyString(256);
 export const RemoteResource = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("attachment"), attachmentId: ResourceId }),
   Schema.Struct({
     kind: Schema.Literal("attachment-upload"),
-    threadId: ResourceId,
+    threadId: ResourceThreadId,
     type: Schema.Literals(["image", "file"]),
     name: ResourceText,
     mimeType: ResourceText,
@@ -22,7 +25,7 @@ export const RemoteResource = Schema.Union([
     grant: Schema.optional(boundedTrimmedNonEmptyString(4096)),
     download: Schema.optional(Schema.Boolean),
   }),
-  Schema.Struct({ kind: Schema.Literal("thread-export"), threadId: ResourceId }),
+  Schema.Struct({ kind: Schema.Literal("thread-export"), threadId: ResourceThreadId }),
   Schema.Struct({ kind: Schema.Literal("project-favicon"), cwd: ResourcePath }),
   Schema.Struct({
     kind: Schema.Literal("site-favicon"),
@@ -34,7 +37,7 @@ export const RemoteResource = Schema.Union([
     provider: ResourceId,
     providerInstanceId: Schema.optional(ResourceText),
     cwd: ResourcePath,
-    threadId: Schema.optional(ResourceId),
+    threadId: Schema.optional(ResourceThreadId),
     mimeType: ResourceText,
     sampleRateHz: Schema.Number.check(
       Schema.isInt(),
