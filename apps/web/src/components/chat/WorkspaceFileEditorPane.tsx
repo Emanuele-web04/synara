@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "~/lib/chatReferences";
 import { useRef, useState } from "react";
 
 import { useWorkspaceFileEditorSession } from "~/hooks/useWorkspaceFileEditorSession";
@@ -17,6 +18,7 @@ import {
 export interface WorkspaceFileEditorPaneProps {
   workspaceRoot: string | null;
   filePath: string;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   resolvedTheme: "light" | "dark";
   onClose: () => void;
   onDirtyChange?: ((dirty: boolean) => void) | undefined;
@@ -82,7 +84,9 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
         <CodeEditorPane
           value={session.state.value}
           valueVersion={session.state.version}
-          fileName={props.filePath}
+          fileName={session.relativePath ?? props.filePath}
+          workspaceRoot={props.workspaceRoot}
+          onReferenceInChat={props.onReferenceInChat}
           resolvedTheme={props.resolvedTheme}
           onChange={session.handleChange}
           onSave={session.save}

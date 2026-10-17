@@ -1,0 +1,55 @@
+/* The editor engine has no application chrome; all surrounding controls are Synara's. */
+.synara-code-editor .monaco-editor,
+.synara-code-editor .monaco-editor-background,
+.synara-code-editor .monaco-editor .margin {
+  background: var(--app-code-viewer-surface, var(--background));
+}
+.synara-code-editor .monaco-editor .glyph-margin {
+  background: transparent;
+}
+.synara-code-editor .monaco-editor[data-horizontal-scroll] .margin {
+  background: var(--app-code-viewer-sticky-surface, var(--background));
+}
+.synara-code-editor .monaco-diff-editor .line-insert,
+.synara-code-editor .monaco-diff-editor .line-insert-margin {
+  background: var(--app-code-viewer-addition-row, var(--vscode-diffEditor-insertedLineBackground));
+}
+.synara-code-editor .monaco-diff-editor .line-delete,
+.synara-code-editor .monaco-diff-editor .line-delete-margin {
+  background: var(--app-code-viewer-deletion-row, var(--vscode-diffEditor-removedLineBackground));
+}
+.synara-code-editor .monaco-editor .suggest-widget,
+.synara-code-editor .monaco-editor .monaco-hover,
+.synara-code-editor .monaco-editor .parameter-hints-widget,
+.synara-code-editor .monaco-editor .find-widget {
+  border-radius: var(--radius-lg, 10px);
+  font-family: var(--font-system-ui, system-ui);
+  font-size: var(--app-font-size-ui, 12px);
+}
+.synara-code-editor .monaco-editor .suggest-widget .monaco-list-row {
+  border-radius: var(--radius-sm, 4px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .synara-code-editor .monaco-editor * {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
+
+.synara-code-editor .synara-debug-breakpoint::after {
+  content: "";
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 4px auto;
+  border-radius: 50%;
+  background: var(--color-destructive);
+}
+.synara-code-editor .synara-debug-stopped-line {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+}
+.synara-code-editor .synara-debug-stopped-arrow::before {
+  content: "→";
+  color: var(--color-primary);
+  font-weight: bold;
+}

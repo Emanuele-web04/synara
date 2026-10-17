@@ -1,11 +1,11 @@
-// Opt-in Chromium component benchmark for Pierre input work and React state churn.
-// Run with VITE_PIERRE_BENCHMARK=1 and test:browser; writes node_modules/.cache/pierre-performance.json.
+// Opt-in Chromium component benchmark for editor commands, paint latency and React state churn.
+// Run with VITE_EDITOR_BENCHMARK=1 and test:browser; writes node_modules/.cache/editor-performance.json.
 import "../../index.css";
-import { File, FileDiff } from "@pierre/diffs";
+import { monaco } from "./editorRuntime";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Profiler, createRef, useState } from "react";
-import { expect, it, vi } from "vitest";
-import { page, server, userEvent } from "vitest/browser";
+import { expect, it } from "vitest";
+import { server } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { CodeEditorPane } from "./CodeEditorPane";
 import { CodeDiffEditorPane } from "./CodeDiffEditorPane";
@@ -68,134 +68,103 @@ const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => r
 const percentile = (values: number[], fraction: number) =>
   values.toSorted((a, b) => a - b)[Math.ceil(values.length * fraction) - 1] ?? 0;
 
-it.runIf(import.meta.env.VITE_PIERRE_BENCHMARK === "1")("measures warm editor input", async () => {
-  const reports = [];
-  document.documentElement.classList.add("dark");
-  const fileRender = vi.spyOn(File.prototype, "render");
-  const diffRender = vi.spyOn(FileDiff.prototype, "render");
-  try {
-    for (const lines of [200, 1000]) {
-      const initialValue =
-        Array.from({ length: lines }, (_, index) => `const value${index} = 1;`).join("\n") + "\n";
-      for (const mode of ["file", "split", "unified"] as const) {
-        for (let sample = 0; sample < 3; sample++) {
-          let historyEvents = 0;
-          const commits: number[] = [];
-          const client = new QueryClient({
-            defaultOptions: { queries: { enabled: false, retry: false } },
-          });
-          const view = await render(
-            <QueryClientProvider client={client}>
-              <Profiler
-                id="editor"
-                onRender={(_id, phase, duration) => {
-                  if (phase !== "mount") commits.push(duration);
-                }}
-              >
-                <Fixture
-                  mode={mode}
-                  initialValue={initialValue}
-                  historyChanged={() => {
-                    historyEvents++;
+it.runIf(import.meta.env.VITE_EDITOR_BENCHMARK === "1")(
+  "measures warm editor commands without conflating them with keyboard transport",
+  async () => {
+    const reports = [];
+    document.documentElement.classList.add("dark");
+    try {
+      for (const lines of [200, 1000]) {
+        const initialValue =
+          Array.from({ length: lines }, (_, index) => `const value${index} = 1;`).join("\n") + "\n";
+        for (const mode of ["file", "split", "unified"] as const) {
+          for (let sample = 0; sample < 3; sample++) {
+            let historyEvents = 0;
+            const commits: number[] = [];
+            const client = new QueryClient({
+              defaultOptions: { queries: { enabled: false, retry: false } },
+            });
+            const view = await render(
+              <QueryClientProvider client={client}>
+                <Profiler
+                  id="editor"
+                  onRender={(_id, phase, duration) => {
+                    if (phase !== "mount") commits.push(duration);
                   }}
-                />
-              </Profiler>
-            </QueryClientProvider>,
-          );
-          try {
-            await expect.element(page.getByRole("textbox")).toBeVisible();
-            if (mode === "unified") {
-              const content = page.getByRole("textbox").element();
-              const root = content.getRootNode() as ShadowRoot;
-              for (let node = root.host.parentElement; node; node = node.parentElement) {
-                if (getComputedStyle(node).overflowY === "auto") {
-                  node.scrollTop =
-                    lines * content.querySelector("[data-line]")!.getBoundingClientRect().height;
-                  break;
-                }
-              }
+                >
+                  <Fixture
+                    mode={mode}
+                    initialValue={initialValue}
+                    historyChanged={() => {
+                      historyEvents++;
+                    }}
+                  />
+                </Profiler>
+              </QueryClientProvider>,
+            );
+            try {
               await expect
                 .poll(() =>
-                  page
-                    .getByRole("textbox")
-                    .element()
-                    .querySelector('[data-line="1"][data-line-type="change-addition"]'),
+                  monaco.editor
+                    .getEditors()
+                    .some((item) => item.getModel()?.uri.scheme === "synara-standalone"),
                 )
-                .not.toBeNull();
-            }
-            const firstEditableLine = page
-              .getByRole("textbox")
-              .element()
-              .querySelector('[data-line]:not([data-line-type="change-deletion"])')!;
-            await userEvent.click(firstEditableLine.querySelector("span") ?? firstEditableLine);
-            await userEvent.keyboard("{Home}");
-            await frame();
-            await frame();
-            for (const inputType of ["insertText", "insertParagraph"] as const) {
-              const times: number[] = [];
-              const frameTimes: number[] = [];
-              historyEvents = 0;
-              commits.length = 0;
-              fileRender.mockClear();
-              diffRender.mockClear();
-              const count = inputType === "insertText" ? 20 : 5;
-              for (let index = 0; index < count; index++) {
-                const editor = page.getByRole("textbox").element();
-                const started = performance.now();
-                editor.dispatchEvent(
-                  new InputEvent("beforeinput", {
-                    bubbles: true,
-                    composed: true,
-                    cancelable: true,
-                    inputType,
-                    data: inputType === "insertText" ? "x" : null,
-                  }),
-                );
-                times.push(performance.now() - started);
-                await frame();
-                await frame();
-                frameTimes.push(performance.now() - started);
+                .toBe(true);
+              const editor = monaco.editor
+                .getEditors()
+                .find((item) => item.getModel()?.uri.scheme === "synara-standalone")!;
+              editor.setPosition({ lineNumber: 1, column: 1 });
+              editor.focus();
+              await frame();
+              await frame();
+              for (const text of ["x", "\n"]) {
+                const times: number[] = [];
+                const frameTimes: number[] = [];
+                historyEvents = 0;
+                commits.length = 0;
+                const count = text === "x" ? 20 : 5;
+                for (let index = 0; index < count; index++) {
+                  const started = performance.now();
+                  editor.trigger("benchmark", "type", { text });
+                  times.push(performance.now() - started);
+                  await frame();
+                  await frame();
+                  frameTimes.push(performance.now() - started);
+                }
+                reports.push({
+                  mode,
+                  lines,
+                  sample,
+                  command: text === "x" ? "type" : "newline",
+                  count,
+                  commandMedianMs: percentile(times, 0.5),
+                  commandP95Ms: percentile(times, 0.95),
+                  twoFrameMedianMs: percentile(frameTimes, 0.5),
+                  twoFrameP95Ms: percentile(frameTimes, 0.95),
+                  renderedRows: editor.getDomNode()?.querySelectorAll(".view-line").length ?? 0,
+                  reactMs: commits.reduce((sum, duration) => sum + duration, 0),
+                  commits: commits.length,
+                  historyEvents,
+                });
               }
-              reports.push({
-                mode,
-                lines,
-                sample,
-                inputType,
-                count,
-                inputMedianMs: percentile(times, 0.5),
-                inputP95Ms: percentile(times, 0.95),
-                twoFrameMedianMs: percentile(frameTimes, 0.5),
-                twoFrameP95Ms: percentile(frameTimes, 0.95),
-                renderedRows: page.getByRole("textbox").element().querySelectorAll("[data-line]")
-                  .length,
-                reactMs: commits.reduce((sum, duration) => sum + duration, 0),
-                commits: commits.length,
-                historyEvents,
-                renderCalls: fileRender.mock.calls.length + diffRender.mock.calls.length,
-              });
+              expect(editor.getModel()?.getValue(), JSON.stringify(reports)).toContain(
+                "x".repeat(20),
+              );
+              expect(editor.getModel()?.getValue()).toContain(`const value${lines - 1} = 1;`);
+              expect(editor.getDomNode()?.querySelectorAll(".view-line").length).toBeLessThan(250);
+            } finally {
+              await view.unmount();
+              client.clear();
             }
-            expect(
-              page.getByTestId("benchmark-buffer").element().textContent,
-              JSON.stringify(reports),
-            ).toContain("x".repeat(20));
-            expect(page.getByTestId("benchmark-buffer").element().textContent).toContain(
-              `const value${lines - 1} = 1;`,
-            );
-            await expect.element(page.getByRole("textbox")).toHaveTextContent("const value0 = 1;");
-          } finally {
-            await view.unmount();
-            client.clear();
           }
         }
       }
+      await server.commands.writeFile(
+        "./node_modules/.cache/editor-performance.json",
+        JSON.stringify(reports, null, 2),
+      );
+    } finally {
+      document.documentElement.classList.remove("dark");
     }
-    await server.commands.writeFile(
-      "./node_modules/.cache/pierre-performance.json",
-      JSON.stringify(reports, null, 2),
-    );
-  } finally {
-    fileRender.mockRestore();
-    diffRender.mockRestore();
-    document.documentElement.classList.remove("dark");
-  }
-});
+  },
+);

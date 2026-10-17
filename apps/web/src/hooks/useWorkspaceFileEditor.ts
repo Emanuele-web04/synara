@@ -57,6 +57,7 @@ export function useWorkspaceFileEditorBuffer(
   const pauseAutosave = useCallback(() => session?.pause(), [session]);
   const resumeAutosave = useCallback(() => session?.resume(), [session]);
   return {
+    relativePath,
     state,
     dirty: isWorkspaceFileEditorDirty(state),
     readOnlyReason,

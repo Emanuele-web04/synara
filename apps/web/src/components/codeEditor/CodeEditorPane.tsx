@@ -1,81 +1,38 @@
-import type { EditorOptions } from "@pierre/diffs/edit";
-import { File } from "@pierre/diffs/react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useCallback,
+  useRef,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, type KeyboardEvent, type RefObject } from "react";
-
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
+import type { ChatFileReference } from "~/lib/chatReferences";
 import { isBrowserSaveChord } from "~/hooks/useWorkspaceFileEditorShortcuts";
-import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRendering";
 import { isEditorFileSaveShortcut } from "~/keybindings";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
-import { CodeEditBoundary } from "./CodeEditBoundary";
-import {
-  createCodeEditHistoryControls,
-  readCodeEditHistoryState,
-  type CodeEditHistoryControls,
-  type CodeEditHistoryState,
-  type PierreEditor,
-} from "./pierreEdit";
+import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit";
 
+const MonacoEditorSurface = lazy(() => import("./MonacoEditorSurface"));
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
   fileName: string;
+  workspaceRoot?: string | null | undefined;
   resolvedTheme: "light" | "dark";
   onChange: (value: string) => void;
   onSave: () => void;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
-}
-
-export function useCodeEditorSessionOptions(input: {
-  onChange: (value: string) => void;
-  onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
-  historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
-}): EditorOptions<undefined> {
-  const onChangeRef = useRef(input.onChange);
-  onChangeRef.current = input.onChange;
-  const onHistoryChangeRef = useRef(input.onHistoryChange);
-  onHistoryChangeRef.current = input.onHistoryChange;
-  const historyControlsRef = input.historyControlsRef;
-  const editorRef = useRef<PierreEditor | null>(null);
-
-  return useMemo(() => {
-    let previousHistory: CodeEditHistoryState | undefined;
-    const publishHistory = (editor: PierreEditor) => {
-      const history = readCodeEditHistoryState(editor);
-      // Most keystrokes change the buffer without changing toolbar availability.
-      if (
-        history.canUndo === previousHistory?.canUndo &&
-        history.canRedo === previousHistory?.canRedo
-      ) {
-        return;
-      }
-      previousHistory = history;
-      onHistoryChangeRef.current?.(history);
-    };
-    return {
-      onAttach: (editor: PierreEditor) => {
-        editorRef.current = editor;
-        if (historyControlsRef) {
-          historyControlsRef.current = createCodeEditHistoryControls(editor);
-        }
-        publishHistory(editor);
-      },
-      onChange: (file: { contents: string }) => {
-        onChangeRef.current(file.contents);
-        const editor = editorRef.current;
-        if (editor) {
-          publishHistory(editor);
-        }
-      },
-    };
-  }, [historyControlsRef]);
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-// Capture-phase save handling for the pierre editor: the editor hosts its own
+// Capture-phase save handling for the editor: the editor hosts its own
 // key handling, so saves are dispatched from the container. The chord is
 // matched against the configured `editor.file.save` binding (not hard-coded
 // Mod+S) so rebinds are honored, while the browser save dialog stays
@@ -101,46 +58,52 @@ export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
   );
 }
 
+export class EditorSurfaceBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  override render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 export function CodeEditorPane(props: CodeEditorPaneProps) {
-  const valueRef = useRef(props.value);
-  valueRef.current = props.value;
-  const file = useMemo(
-    () => ({
-      name: props.fileName,
-      contents: valueRef.current,
-      cacheKey: `edit:${props.fileName}:${props.valueVersion}`,
-    }),
-    [props.fileName, props.valueVersion],
-  );
-  const editorOptions = useCodeEditorSessionOptions({
-    onChange: props.onChange,
-    onHistoryChange: props.onHistoryChange,
-    historyControlsRef: props.historyControlsRef,
-  });
-  const options = useMemo(
-    () => ({
-      theme: resolveDiffThemeName(props.resolvedTheme),
-      themeType: props.resolvedTheme,
-      unsafeCSS: buildDiffPanelUnsafeCSS(props.resolvedTheme),
-      disableFileHeader: true,
-      overflow: "scroll" as const,
-    }),
-    [props.resolvedTheme],
-  );
-
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
-  // Pierre owns live edits; only a reload or display change needs a React update.
-  const content = useMemo(
-    () => <File file={file} options={options} edit editorOptions={editorOptions} />,
-    [file, options, editorOptions],
-  );
-
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onKeyDownCapture={saveKeyDownHandler}
     >
-      <CodeEditBoundary>{content}</CodeEditBoundary>
+      <EditorSurfaceBoundary
+        fallback={
+          <>
+            <p role="status" className="p-3 text-ui-sm">
+              The editor engine could not load. Your draft is preserved; plain-text editing is
+              available.
+            </p>
+            <textarea
+              aria-label={`Edit ${props.fileName}`}
+              className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-chat-code"
+              value={props.value}
+              onChange={(event) => props.onChange(event.currentTarget.value)}
+            />
+          </>
+        }
+      >
+        <Suspense
+          fallback={
+            <p role="status" className="p-3 text-ui-sm text-muted-foreground">
+              Loading editor…
+            </p>
+          }
+        >
+          <MonacoEditorSurface {...props} />
+        </Suspense>
+      </EditorSurfaceBoundary>
     </div>
   );
 }

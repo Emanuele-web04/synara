@@ -1,3 +1,5 @@
+import { EditorDebugService } from "./editor/debugService";
+import { EditorLanguageService } from "./editor/languageService.ts";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -502,6 +504,10 @@ const makeWsRpcHandlersLayer = () =>
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
+      const editorLanguages = new EditorLanguageService();
+      const editorDebug = new EditorDebugService(config.stateDir);
+      yield* Effect.addFinalizer(() => Effect.promise(() => editorDebug.dispose()));
+      yield* Effect.addFinalizer(() => Effect.sync(() => editorLanguages.dispose()));
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
@@ -1776,6 +1782,54 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
             "Failed to create local file preview grant",
+          ),
+        [WS_METHODS.editorDebugStart]: (input, { clientId }) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: (signal) => editorDebug.start(String(clientId), input, signal),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug launch failed."),
+                }),
+                "Debug launch failed",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorDebugAction]: (input, { clientId }) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                Effect.tryPromise({
+                  try: () => editorDebug.action(String(clientId), input),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug command failed."),
+                }),
+                "Debug command failed",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorDebugPoll]: (input, { clientId }) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(() =>
+              rpcEffect(
+                Effect.try({
+                  try: () => editorDebug.poll(String(clientId), input.sessionId, input.after),
+                  catch: (cause) =>
+                    cause instanceof Error ? cause : new Error("Debug session is unavailable."),
+                }),
+                "Debug session is unavailable",
+              ),
+            ),
+          ),
+        [WS_METHODS.editorIntelligence]: (input, { clientId }) =>
+          rpcEffect(
+            Effect.tryPromise({
+              try: (signal) => editorLanguages.request(String(clientId), input, signal),
+              catch: (cause) =>
+                cause instanceof Error ? cause : new Error("Language service failed."),
+            }),
+            "Language service failed",
           ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           workspaceFileSystem.writeFile(input).pipe(

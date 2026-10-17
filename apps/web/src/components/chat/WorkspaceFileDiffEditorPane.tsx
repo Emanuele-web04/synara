@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "~/lib/chatReferences";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
@@ -22,6 +23,7 @@ import {
 export interface WorkspaceFileDiffEditorPaneProps {
   workspaceRoot: string | null;
   filePath: string;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Pre-change path for renamed files: the base revision read uses it. */
   basePath?: string | null | undefined;
   baseRev: DiffEditBaseRev;
@@ -141,7 +143,9 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
           originalVersion={originalVersionRef.current.version}
           modified={session.state.value}
           modifiedVersion={session.state.version}
-          fileName={props.filePath}
+          fileName={session.relativePath ?? props.filePath}
+          workspaceRoot={props.workspaceRoot}
+          onReferenceInChat={props.onReferenceInChat}
           resolvedTheme={props.resolvedTheme}
           renderSideBySide={renderSideBySide}
           readOnly={!editable}

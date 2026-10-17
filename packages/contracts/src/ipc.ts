@@ -1,3 +1,11 @@
+import type {
+  EditorDebugStartInput,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
+import type { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -1166,6 +1174,19 @@ export interface NativeApi {
     restart: (input: TerminalRestartInput) => Promise<TerminalSessionSnapshot>;
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
+  };
+  /** Absent on older servers. Core editing remains available without language services. */
+  editor?: {
+    debugStart?: (
+      input: EditorDebugStartInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<{ sessionId: string }>;
+    debugAction?: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+    debugPoll?: (input: EditorDebugPollInput) => Promise<EditorDebugSnapshot>;
+    intelligence: (
+      input: EditorIntelligenceInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<EditorIntelligenceResult>;
   };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;

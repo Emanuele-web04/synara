@@ -1,4 +1,6 @@
+import { EditorDebugStartInput, EditorDebugActionInput, EditorDebugPollInput } from "./editorDebug";
 import { Schema, Struct } from "effect";
+import { EditorIntelligenceInput } from "./editorIntelligence";
 import {
   LoadProjectImportHistoryInput,
   ImportProjectInput,
@@ -233,6 +235,10 @@ export const WS_METHODS = {
   projectsSearchLocalEntries: "projects.searchLocalEntries",
   projectsSearchContent: "projects.searchContent",
   projectsPrewarmSearchIndex: "projects.prewarmSearchIndex",
+  editorIntelligence: "editor.intelligence",
+  editorDebugStart: "editor.debug.start",
+  editorDebugAction: "editor.debug.action",
+  editorDebugPoll: "editor.debug.poll",
   projectsReadFile: "projects.readFile",
   projectsSubscribeFileChange: "projects.subscribeFileChange",
   projectsResolveWorkspaceFileReferences: "projects.resolveWorkspaceFileReferences",
@@ -487,6 +493,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchContent, ProjectSearchContentInput),
   tagRequestBody(WS_METHODS.projectsPrewarmSearchIndex, ProjectPrewarmSearchIndexInput),
+  tagRequestBody(WS_METHODS.editorIntelligence, EditorIntelligenceInput),
+  tagRequestBody(WS_METHODS.editorDebugStart, EditorDebugStartInput),
+  tagRequestBody(WS_METHODS.editorDebugAction, EditorDebugActionInput),
+  tagRequestBody(WS_METHODS.editorDebugPoll, EditorDebugPollInput),
   tagRequestBody(WS_METHODS.projectsReadFile, ProjectReadFileInput),
   tagRequestBody(WS_METHODS.projectsSubscribeFileChange, ProjectWatchFileInput),
   tagRequestBody(
