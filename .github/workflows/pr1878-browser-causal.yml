@@ -1,0 +1,80 @@
+name: PR 1878 browser failure attribution
+on:
+  push:
+    branches: [qa/pr1878-browser-causal-20261017]
+permissions:
+  contents: read
+concurrency:
+  group: pr1878-causal-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  browser:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main-chat
+            source_repository: Emanuele-web04/synara
+            source_ref: df87a48b9f2d403e3d2785ef11502f2ce2922f5b
+            file: src/components/ChatView.browser.tsx
+            pattern: keeps close-button pointer travel|steps through horizontal tabs|reveals an opened transcript
+          - variant: checker-chat
+            source_repository: cmdr-chara/synara
+            source_ref: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+            file: src/components/ChatView.browser.tsx
+            pattern: keeps close-button pointer travel|steps through horizontal tabs|reveals an opened transcript
+          - variant: checker-effort
+            source_repository: cmdr-chara/synara
+            source_ref: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+            file: src/components/ChatView.browser.tsx
+            pattern: uses the settled turn model and instance while preserving a different composer draft
+          - variant: checker-explorer
+            source_repository: cmdr-chara/synara
+            source_ref: 6bd7e77d2b5e2f7bcebd18262fd0fa9bb7b3ef1b
+            file: src/components/chat/workspaceExplorer.browser.tsx
+            pattern: splits a compact row when a cached intermediate listing gains a sibling
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.source_repository }}
+          ref: ${{ matrix.source_ref }}
+          persist-credentials: false
+      - name: Confirm immutable source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ matrix.source_ref }}"
+          mkdir -p "$RUNNER_TEMP/pr1878-causal"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-causal/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Install real Chromium and FFmpeg
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Execute existing tests in isolated Chromium
+        shell: bash
+        env:
+          TEST_FILE: ${{ matrix.file }}
+          TEST_PATTERN: ${{ matrix.pattern }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/pr1878-causal"
+          if bun run --cwd apps/web test:browser "$TEST_FILE" --testNamePattern="$TEST_PATTERN" --reporter=default --reporter=json --outputFile.json="$out/tests.json" > "$out/tests.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/tests.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          printf 'revision=%s\nvariant=%s\nrc=%s\n' "$(git rev-parse HEAD)" "${{ matrix.variant }}" "$rc" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: Archive original assertions and screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-causal-${{ matrix.variant }}
+          path: |
+            ${{ runner.temp }}/pr1878-causal/
+            apps/web/src/**/__screenshots__/
+            apps/web/test-results/
+          if-no-files-found: warn
+          retention-days: 14
