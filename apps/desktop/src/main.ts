@@ -84,6 +84,7 @@ import {
   canOverrideDesktopSmokeUserData,
   resolveSynaraDesktopRuntimeFlavor,
   synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
@@ -408,7 +409,9 @@ const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
   allowDevelopmentOverride: isSourceDesktopBuild,
 });
-const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const desktopIdentity = isSourceDesktopBuild
+  ? synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor))
+  : synaraDesktopIdentity(desktopFlavor);
 // Beta and Remote ignore SYNARA_HOME so a globally exported Stable home
 // cannot make a parallel app open (and migrate) Stable's database.
 const BASE_DIR =
@@ -4639,6 +4642,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     env: {
       ...backendEnv(),
+      // A file read stuck behind a macOS privacy prompt holds a libuv worker. More
+      // workers keep DNS and crypto, and so remote authorization, moving meanwhile.
+      UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || "16",
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",

@@ -57,6 +57,8 @@ export async function mintHostProof(input: {
   readonly keyGeneration: number;
   readonly nowSeconds?: number;
 }): Promise<string> {
+  // The clock is read after the key import, which can queue behind a busy thread pool.
+  const key = await signingKey(input.identity);
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1_000);
   return new SignJWT({ keyGeneration: input.keyGeneration })
     .setProtectedHeader({ alg: "EdDSA", typ: HOST_PROOF_JWT_TYP })
@@ -66,5 +68,5 @@ export async function mintHostProof(input: {
     .setIssuedAt(now)
     .setExpirationTime(now + HOST_PROOF_MAX_AGE_SECONDS)
     .setJti(randomUUID())
-    .sign(await signingKey(input.identity));
+    .sign(key);
 }

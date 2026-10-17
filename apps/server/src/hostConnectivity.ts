@@ -306,6 +306,7 @@ export async function startHostConnectivity(
             options.remoteTrust.disable(trustScope, new Date().toISOString()),
           );
       },
+      log: (message) => console.warn(`[synara] ${message}`),
     });
     admissionAvailable = authorizationPoll.available;
     stops.push(() => authorizationPoll.done);
