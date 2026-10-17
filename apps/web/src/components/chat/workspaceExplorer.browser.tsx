@@ -218,18 +218,23 @@ it("shows loading and directory failures rather than an empty placeholder listin
 });
 
 it("splits a compact row when a cached intermediate listing gains a sibling", async () => {
+  // Hold the source-directory listing until the real pointer click commits.
+  // Otherwise pointer-enter prefetch can compact "src" to "src/ui" mid-click.
+  let resolveSrc!: (value: { entries: ProjectFileSystemEntry[] }) => void;
+  const srcListing = new Promise<{ entries: ProjectFileSystemEntry[] }>((resolve) => {
+    resolveSrc = resolve;
+  });
   const listDirectories = vi
     .fn<NativeApi["projects"]["listDirectories"]>()
-    .mockImplementation(async ({ relativePath }) => ({
-      entries:
-        relativePath === "src"
-          ? [entry("src/ui")]
-          : relativePath === "src/ui"
-            ? [entry("src/ui/button.tsx", "file")]
-            : [entry("src")],
-    }));
+    .mockImplementation(async ({ relativePath }) => {
+      if (relativePath === "src") return srcListing;
+      return {
+        entries: relativePath === "src/ui" ? [entry("src/ui/button.tsx", "file")] : [entry("src")],
+      };
+    });
   await renderExplorer(listDirectories);
   await page.getByTitle("src", { exact: true }).click();
+  resolveSrc({ entries: [entry("src/ui")] });
   await expect.element(page.getByTitle("src/ui", { exact: true })).toHaveTextContent("src/ui");
   queryClient.setQueryData(
     projectListDirectoriesQueryOptions({ cwd: CWD, relativePath: "src" }).queryKey,
