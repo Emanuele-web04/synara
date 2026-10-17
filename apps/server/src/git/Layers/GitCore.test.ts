@@ -2,6 +2,7 @@
 // Purpose: Exercises GitCore repository operations, branch/worktree flows, and status summaries.
 // Layer: Server Git service tests
 // Depends on: Effect test layers plus real temporary Git repositories.
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +10,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -26,6 +28,17 @@ import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
+import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    symlink: vi.fn(actual.symlink),
+    lstat: vi.fn(actual.lstat),
+    open: vi.fn(actual.open),
+  };
+});
 
 // ── Helpers ──
 
@@ -101,6 +114,7 @@ function initRepoWithCommit(
   return Effect.gen(function* () {
     const core = yield* GitCore;
     yield* core.initRepo({ cwd });
+    yield* git(cwd, ["config", "core.autocrlf", "false"]);
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
     yield* writeTextFile(path.join(cwd, "README.md"), "# test\n");
@@ -115,6 +129,7 @@ function initRepoWithoutCommit(cwd: string): Effect.Effect<void, GitCommandError
   return Effect.gen(function* () {
     const core = yield* GitCore;
     yield* core.initRepo({ cwd });
+    yield* git(cwd, ["config", "core.autocrlf", "false"]);
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
   });
@@ -645,12 +660,14 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
         yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o755));
         yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "old.sh"]);
         yield* git(tmp, ["commit", "-m", "base"]);
         yield* Effect.promise(() =>
           fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
         );
         yield* git(tmp, ["add", "-u"]);
         yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "renamed.sh"]);
         const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
         expect(patch).toContain("b/renamed.sh");
         expect(patch).toContain("new file mode 100755");
@@ -659,6 +676,73 @@ it.layer(TestLayer)("git integration", (it) => {
           deletions: 5,
           fileCount: 2,
         });
+      }),
+    );
+
+    it.effect("preserves renamed executable mode on a filemode-insensitive filesystem", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.filemode", "false"]);
+        yield* writeTextFile(path.join(tmp, ".gitignore"), "renamed.sh\n");
+        yield* writeTextFile(path.join(tmp, "old.sh"), "echo unchanged\n".repeat(5));
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "old.sh"), 0o644));
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "old.sh"]);
+        yield* git(tmp, ["commit", "-m", "explicit executable mode"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.sh"), path.join(tmp, "renamed.sh")),
+        );
+        yield* git(tmp, ["add", "-u"]);
+        yield* git(tmp, ["add", "-f", "renamed.sh"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "renamed.sh"]);
+        expect(
+          (yield* Effect.promise(() => fs.stat(path.join(tmp, "renamed.sh")))).mode & 0o111,
+        ).toBe(0);
+        expect(yield* git(tmp, ["ls-files", "--stage", "--", "renamed.sh"])).toMatch(/^100755 /);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("b/renamed.sh");
+        expect(patch).toContain("new file mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 5,
+          deletions: 5,
+          fileCount: 2,
+        });
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")))).toEqual(
+          indexBefore,
+        );
+      }),
+    );
+
+    it.effect("preserves staged mode-only changes on a filemode-insensitive filesystem", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.filemode", "false"]);
+        yield* writeTextFile(path.join(tmp, "script.sh"), "echo unchanged\n");
+        yield* Effect.promise(() => fs.chmod(path.join(tmp, "script.sh"), 0o644));
+        yield* git(tmp, ["add", "script.sh"]);
+        yield* git(tmp, ["commit", "-m", "non-executable source"]);
+        yield* git(tmp, ["update-index", "--chmod=+x", "--", "script.sh"]);
+        expect(
+          (yield* Effect.promise(() => fs.stat(path.join(tmp, "script.sh")))).mode & 0o111,
+        ).toBe(0);
+        expect(yield* git(tmp, ["ls-files", "--stage", "--", "script.sh"])).toMatch(/^100755 /);
+        const indexBefore = yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")));
+        const patch = (yield* core.readRefPatch(tmp, "HEAD")).patch;
+        expect(patch).toContain("old mode 100644");
+        expect(patch).toContain("new mode 100755");
+        expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+          additions: 0,
+          deletions: 0,
+          fileCount: 1,
+        });
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git/index")))).toEqual(
+          indexBefore,
+        );
       }),
     );
 
@@ -708,8 +792,30 @@ it.layer(TestLayer)("git integration", (it) => {
         const core = yield* GitCore;
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
-        yield* writeTextFile(path.join(tmp, "1:foo.txt"), "literal filename\n");
-        yield* git(tmp, ["add", "--", "1:foo.txt"]);
+        yield* writeTextFile(path.join(tmp, "fixture-content.txt"), "literal filename\n");
+        const object = yield* git(tmp, ["hash-object", "-w", "fixture-content.txt"]);
+        expect(object).toMatch(/^[a-f0-9]{40}$/);
+        // Import a valid stage-zero index entry: Windows rejects this drive-shaped
+        // working-tree path, but GitCore must still read an existing literal entry.
+        const name = Buffer.from("1:foo.txt", "utf8");
+        const header = Buffer.alloc(12);
+        header.write("DIRC", 0, "ascii");
+        header.writeUInt32BE(2, 4);
+        header.writeUInt32BE(1, 8);
+        const padding = 8 - ((62 + name.length) % 8);
+        const entry = Buffer.alloc(62 + name.length + padding);
+        entry.writeUInt32BE(0o100644, 24);
+        entry.writeUInt32BE(Buffer.byteLength("literal filename\n"), 36);
+        Buffer.from(object, "hex").copy(entry, 40);
+        entry.writeUInt16BE(name.length, 60);
+        name.copy(entry, 62);
+        const body = Buffer.concat([header, entry]);
+        yield* Effect.promise(() =>
+          fs.writeFile(
+            path.join(tmp, ".git", "index"),
+            Buffer.concat([body, createHash("sha1").update(body).digest()]),
+          ),
+        );
         expect(
           yield* core.readFileAtRev({
             cwd: tmp,
@@ -1980,6 +2086,479 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    /** A repo whose `.env` is copied and whose `vendor/` is linked into new worktrees. */
+    const initRepoWithLinkedVendor = (tmp: string, includePatterns = ".env\n") =>
+      Effect.gen(function* () {
+        yield* initRepoWithCommit(tmp);
+        // Patterns for a linked directory carry no trailing slash: on POSIX the
+        // link is a symlink, which a `vendor/` pattern would not match.
+        yield* writeTextFile(path.join(tmp, ".gitignore"), ".env\nvendor\n");
+        yield* writeTextFile(path.join(tmp, ".worktreeinclude"), includePatterns);
+        yield* writeTextFile(path.join(tmp, ".worktreelink"), "vendor\n");
+        yield* git(tmp, ["add", ".gitignore", ".worktreeinclude", ".worktreelink"]);
+        yield* git(tmp, ["commit", "-m", "configure worktree files"]);
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp, "vendor")));
+        yield* writeTextFile(path.join(tmp, "vendor", "sdk.txt"), "sdk\n");
+        yield* writeTextFile(path.join(tmp, ".env"), "LOCAL_ONLY=yes\n");
+      });
+
+    const lstatIsLink = (target: string) =>
+      Effect.promise(() => fs.lstat(target).then((entry) => entry.isSymbolicLink()));
+
+    it.effect(
+      "links .worktreelink directories into a detached worktree and keeps .worktreeinclude copies",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-linked");
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+
+          expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+          expect(yield* lstatIsLink(path.join(wtPath, ".env"))).toBe(false);
+          expect(yield* readTextFile(path.join(wtPath, ".env"))).toBe("LOCAL_ONLY=yes\n");
+          const [linkTarget, sourceVendor] = yield* Effect.promise(() =>
+            Promise.all([
+              fs.realpath(path.join(wtPath, "vendor")),
+              fs.realpath(path.join(tmp, "vendor")),
+            ]),
+          );
+          expect(linkTarget).toBe(sourceVendor);
+          expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+
+          yield* writeTextFile(path.join(tmp, "vendor", "later.txt"), "later\n");
+          expect(yield* readTextFile(path.join(wtPath, "vendor", "later.txt"))).toBe("later\n");
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect("copies a path listed in both .worktreeinclude and .worktreelink", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp, ".env\nvendor\n");
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-both");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(false);
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor", "sdk.txt"))).toBe(false);
+        expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("snapshots linked paths by name without copying through them", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-snapshot-links");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        const snapshotRoot = yield* makeTmpDir("linked-worktree-snapshot-test-");
+        const outputPath = path.join(snapshotRoot, "snapshot");
+        yield* core.snapshotWorktree({ cwd: wtPath, outputPath });
+        const manifest = JSON.parse(
+          yield* readTextFile(path.join(outputPath, "snapshot.json")),
+        ) as {
+          copiedPaths: string[];
+          linkedPaths: string[];
+        };
+        expect(manifest.linkedPaths).toEqual(["vendor"]);
+        expect(manifest.copiedPaths).toEqual([".env"]);
+        expect(existsSync(path.join(outputPath, "files", ".env"))).toBe(true);
+        expect(existsSync(path.join(outputPath, "files", "vendor"))).toBe(false);
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("removing a worktree with a linked directory leaves the link target intact", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-remove-linked");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+      }),
+    );
+
+    it.effect("ownership verification fails when a linked path is retargeted", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-retarget-link");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const proof = yield* core.recordWorktreeOwnership({
+          path: wtPath,
+          branch: null,
+          token: "linked-state-token",
+        });
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: true,
+          reason: null,
+        });
+
+        const otherVendor = path.join(tmp, "other-vendor");
+        yield* Effect.promise(async () => {
+          await fs.mkdir(otherVendor);
+          await fs.rm(path.join(wtPath, "vendor"), { recursive: true, force: true });
+          await fs.symlink(
+            otherVendor,
+            path.join(wtPath, "vendor"),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        });
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+          verified: false,
+          reason: "worktree state changed",
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("worktree link safety: detaches shared paths after the declaration is removed", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-removed-link-declaration");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        yield* Effect.promise(() => fs.unlink(path.join(wtPath, ".worktreelink")));
+        let observedRemoval = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation !== "GitCore.removeWorktree") return realCore.execute(input);
+          return Effect.promise(async () => {
+            observedRemoval = true;
+            // Windows Git may descend into a junction. Check the actual barrier
+            // before delegating to real Git on every platform.
+            expect(existsSync(path.join(wtPath, "vendor"))).toBe(false);
+            expect(await fs.readFile(path.join(tmp, "vendor", "sdk.txt"), "utf8")).toBe("sdk\n");
+          }).pipe(Effect.andThen(realCore.execute(input)));
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        expect(observedRemoval).toBe(true);
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+      }),
+    );
+
+    it.effect("worktree link safety: preserves links when non-force removal is rejected", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-rejected-link-removal");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        yield* writeTextFile(path.join(wtPath, "README.md"), "preserve this working copy\n");
+        const result = yield* core
+          .removeWorktree({ cwd: tmp, path: wtPath, force: false })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(existsSync(wtPath)).toBe(true);
+        expect(
+          yield* Effect.promise(() =>
+            fs.lstat(path.join(wtPath, "vendor")).then(
+              (entry) => entry.isSymbolicLink(),
+              () => false,
+            ),
+          ),
+        ).toBe(true);
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe(
+          "preserve this working copy\n",
+        );
+        expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("worktree link safety: rejects an unsafe record before any removal", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-invalid-link-record");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const gitDir = yield* git(wtPath, ["rev-parse", "--absolute-git-dir"]);
+        const markerPath = path.join(gitDir, "synara-worktree-links.json");
+        const originalRecord = yield* readTextFile(markerPath);
+        yield* writeTextFile(
+          markerPath,
+          JSON.stringify({ version: 1, links: [{ path: "../vendor", kind: "dir" }] }),
+        );
+        let removalAttempted = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.removeWorktree") removalAttempted = true;
+          return realCore.execute(input);
+        });
+        const result = yield* core
+          .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(removalAttempted).toBe(false);
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* writeTextFile(markerPath, originalRecord);
+        yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect(
+      "worktree link lifecycle: restores links when the removal caller is interrupted",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const realCore = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-interrupted-link-removal");
+          yield* realCore.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+          const vendor = path.join(wtPath, "vendor");
+          const originalTarget = yield* Effect.promise(() => fs.readlink(vendor));
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let gitRemovalExecuted = false;
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.operation !== "GitCore.removeWorktree") return realCore.execute(input);
+            return Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              gitRemovalExecuted = true;
+              return yield* realCore.execute(input);
+            });
+          });
+          const removal = yield* core
+            .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+            .pipe(Effect.forkChild);
+          try {
+            yield* Deferred.await(entered);
+            expect(existsSync(vendor)).toBe(false);
+            const cancellation = yield* Fiber.interrupt(removal).pipe(Effect.forkChild);
+            // Keep the command boundary interruptible. A broad uninterruptible
+            // removal must fail this bound instead of waiting for our release.
+            yield* Effect.promise(() =>
+              vi.waitFor(() => expect(removal.pollUnsafe()).toBeDefined(), { timeout: 2_000 }),
+            );
+            yield* Fiber.join(cancellation);
+            expect(Exit.hasInterrupts(yield* Fiber.await(removal))).toBe(true);
+            expect(gitRemovalExecuted).toBe(false);
+            expect(existsSync(wtPath)).toBe(true);
+            expect(existsSync(vendor)).toBe(true);
+            expect(yield* lstatIsLink(vendor)).toBe(true);
+            expect(yield* Effect.promise(() => fs.readlink(vendor))).toBe(originalTarget);
+            expect(yield* readTextFile(path.join(vendor, "sdk.txt"))).toBe("sdk\n");
+            expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+          } finally {
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.interrupt(removal);
+          }
+          yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect(
+      "worktree link lifecycle: fingerprints managed links after deleting their declaration",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-owned-removed-declaration");
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+          yield* Effect.promise(() => fs.unlink(path.join(wtPath, ".worktreelink")));
+          const proof = yield* core.recordWorktreeOwnership({
+            path: wtPath,
+            branch: null,
+            token: "removed-declaration-link-token",
+          });
+          expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+            verified: true,
+            reason: null,
+          });
+          const otherVendor = path.join(tmp, "other-vendor");
+          yield* Effect.promise(async () => {
+            await fs.mkdir(otherVendor);
+            await fs.unlink(path.join(wtPath, "vendor"));
+            await fs.symlink(
+              otherVendor,
+              path.join(wtPath, "vendor"),
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          });
+          expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+            verified: false,
+            reason: "worktree state changed",
+          });
+          expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect("worktree link lifecycle: rejects a drive-relative managed path before removal", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-drive-relative-record");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const gitDir = yield* git(wtPath, ["rev-parse", "--absolute-git-dir"]);
+        const markerPath = path.join(gitDir, "synara-worktree-links.json");
+        const originalRecord = yield* readTextFile(markerPath);
+        expect(path.win32.isAbsolute("C:../vendor")).toBe(false);
+        yield* writeTextFile(
+          markerPath,
+          JSON.stringify({ version: 1, links: [{ path: "C:../vendor", kind: "dir" }] }),
+        );
+        let removalAttempted = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.removeWorktree") removalAttempted = true;
+          return realCore.execute(input);
+        });
+        try {
+          const result = yield* core
+            .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(result)).toBe(true);
+          expect(removalAttempted).toBe(false);
+          expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+          expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        } finally {
+          if (existsSync(wtPath)) {
+            yield* writeTextFile(markerPath, originalRecord);
+            yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+          }
+        }
+      }),
+    );
+
+    for (const sourceIsLink of [false, true]) {
+      it.effect(
+        `worktree link safety: snapshots the file fallback from a ${sourceIsLink ? "symlink" : "regular file"}`,
+        () =>
+          Effect.gen(function* () {
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* writeTextFile(path.join(tmp, ".gitignore"), "shared.txt\nshared-source.txt\n");
+            yield* writeTextFile(path.join(tmp, ".worktreelink"), "shared.txt\n");
+            yield* git(tmp, ["add", ".gitignore", ".worktreelink"]);
+            yield* git(tmp, ["commit", "-m", "configure shared file"]);
+            if (sourceIsLink) {
+              yield* writeTextFile(path.join(tmp, "shared-source.txt"), "shared input\n");
+              yield* Effect.promise(() =>
+                fs.symlink("shared-source.txt", path.join(tmp, "shared.txt"), "file"),
+              );
+            } else {
+              yield* writeTextFile(path.join(tmp, "shared.txt"), "shared input\n");
+            }
+            const core = yield* GitCore;
+            const wtPath = path.join(tmp, "wt-file-fallback");
+            const targetFile = path.join(wtPath, "shared.txt");
+            const originalSymlink = yield* Effect.promise(() =>
+              vi
+                .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+                .then((actual) => actual.symlink),
+            );
+            const refusedSymlink = vi
+              .mocked(fs.symlink)
+              .mockImplementation((target, destination, type) =>
+                destination === targetFile
+                  ? Promise.reject(
+                      Object.assign(new Error("controlled file symlink denial"), { code: "EPERM" }),
+                    )
+                  : originalSymlink(target, destination, type),
+              );
+            try {
+              yield* core.createDetachedWorktree({
+                cwd: tmp,
+                ref: "HEAD",
+                path: wtPath,
+                copyChangesFrom: tmp,
+              });
+            } finally {
+              refusedSymlink.mockImplementation(originalSymlink);
+            }
+            expect(yield* lstatIsLink(targetFile)).toBe(false);
+            expect(yield* readTextFile(targetFile)).toBe("shared input\n");
+            yield* writeTextFile(targetFile, "local fallback edit\n");
+            expect(yield* readTextFile(path.join(tmp, "shared.txt"))).toBe("shared input\n");
+            const snapshotRoot = yield* makeTmpDir("fallback-worktree-snapshot-test-");
+            const outputPath = path.join(snapshotRoot, "snapshot");
+            yield* core.snapshotWorktree({ cwd: wtPath, outputPath });
+            const manifest = JSON.parse(
+              yield* readTextFile(path.join(outputPath, "snapshot.json")),
+            ) as { copiedPaths: string[]; linkedPaths: string[] };
+            expect(manifest.copiedPaths).toEqual(["shared.txt"]);
+            expect(manifest.linkedPaths).toEqual([]);
+            expect(yield* readTextFile(path.join(outputPath, "files", "shared.txt"))).toBe(
+              "local fallback edit\n",
+            );
+            yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+            expect(yield* readTextFile(path.join(tmp, "shared.txt"))).toBe("shared input\n");
+          }),
+      );
+    }
+
     it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -2753,6 +3332,273 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("keeps untracked fallback patches and stats in an isolated content index", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const realGitCore = yield* GitCore;
+        const ownedDirectories = new Set<string>();
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.env?.GIT_OBJECT_DIRECTORY) {
+            ownedDirectories.add(path.dirname(input.env.GIT_OBJECT_DIRECTORY));
+          }
+          if (
+            input.operation.endsWith(".untrackedPatch") ||
+            input.operation.endsWith(".untrackedNumstat")
+          ) {
+            // Model the observed native Git path-open failure; all fallback commands are real.
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access literal path",
+            });
+          }
+          return realGitCore.execute(input);
+        });
+        const snapshotObjects = async () => {
+          const objects = path.join(tmp, ".git", "objects");
+          const files: Array<{ path: string; sha256: string }> = [];
+          const visit = async (relative: string): Promise<void> => {
+            for (const entry of await fs.readdir(path.join(objects, relative), {
+              withFileTypes: true,
+            })) {
+              const name = path.join(relative, entry.name);
+              if (entry.isDirectory()) await visit(name);
+              else {
+                expect(entry.isFile()).toBe(true);
+                files.push({
+                  path: name,
+                  sha256: createHash("sha256")
+                    .update(await fs.readFile(path.join(objects, name)))
+                    .digest("hex"),
+                });
+              }
+            }
+          };
+          await visit("");
+          return files.sort((left, right) => left.path.localeCompare(right.path));
+        };
+        yield* writeTextFile(path.join(tmp, "literal file.txt "), "alpha\nbeta\n");
+        yield* Effect.promise(() =>
+          fs.writeFile(path.join(tmp, "literal.bin "), new Uint8Array([0, 1, 2, 3])),
+        );
+        const originalIndex = yield* Effect.promise(() =>
+          fs.readFile(path.join(tmp, ".git", "index")),
+        );
+        const originalObjects = yield* Effect.promise(snapshotObjects);
+
+        const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(patch).toContain("diff --git a/literal file.txt  b/literal file.txt ");
+        expect(patch).toContain("+alpha\n+beta\n");
+        expect(patch).toContain("Binary files /dev/null and b/literal.bin  differ");
+        expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
+          additions: 2,
+          deletions: 0,
+          fileCount: 2,
+        });
+
+        const executablePath = path.join(tmp, "literal-script.sh ");
+        yield* writeTextFile(executablePath, "#!/bin/sh\ntrue\n");
+        if (supportsPosixPermissions())
+          yield* Effect.promise(() => fs.chmod(executablePath, 0o755));
+        const executable = yield* core.readWorkingTreePatch(tmp, "literal-script.sh ");
+        expect(executable.patch).toContain(
+          supportsPosixPermissions() ? "new file mode 100755" : "new file mode 100644",
+        );
+        expect(executable.patch).toContain("+++ b/literal-script.sh \t\n");
+
+        const large = "large literal content\n".repeat(60_000);
+        expect(Buffer.byteLength(large)).toBeGreaterThan(1_000_000);
+        yield* writeTextFile(path.join(tmp, "large literal.txt "), large);
+        const bounded = yield* core.readWorkingTreePatch(tmp, "large literal.txt ");
+        expect(bounded.patch).toContain("diff --git a/large literal.txt  b/large literal.txt ");
+        expect(bounded.patch).toContain("+large literal content");
+        expect(bounded.truncated).toBe(true);
+        expect(Buffer.byteLength(bounded.patch)).toBeLessThanOrEqual(1_000_000);
+        expect(yield* readTextFile(path.join(tmp, "large literal.txt "))).toBe(large);
+        expect(yield* readTextFile(path.join(tmp, "literal file.txt "))).toBe("alpha\nbeta\n");
+        expect(yield* Effect.promise(() => fs.readFile(path.join(tmp, ".git", "index")))).toEqual(
+          originalIndex,
+        );
+        expect(yield* Effect.promise(snapshotObjects)).toEqual(originalObjects);
+        expect(ownedDirectories.size).toBeGreaterThan(0);
+        for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
+      }),
+    );
+
+    it.effect("preserves isolated content-index failures and releases the owned files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "literal.txt "), "untracked\n");
+        const realGitCore = yield* GitCore;
+        const ownedDirectories = new Set<string>();
+        const failure = new GitCommandError({
+          operation: "GitCore.readWorkingTreePatch.untrackedPatch.literalIndexDiff",
+          command: "git diff --cached",
+          cwd: tmp,
+          detail: "controlled content-index diff failure",
+        });
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.env?.GIT_OBJECT_DIRECTORY) {
+            ownedDirectories.add(path.dirname(input.env.GIT_OBJECT_DIRECTORY));
+          }
+          if (input.operation.endsWith(".untrackedPatch")) {
+            return Effect.succeed({
+              code: 1,
+              stdout: "",
+              stderr: "error: Could not access literal path",
+            });
+          }
+          if (input.operation.endsWith(".literalIndexDiff")) return Effect.fail(failure);
+          return realGitCore.execute(input);
+        });
+
+        const result = yield* Effect.result(core.readWorkingTreePatch(tmp));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure).toBe(failure);
+        expect(ownedDirectories.size).toBeGreaterThan(0);
+        for (const directory of ownedDirectories) expect(existsSync(directory)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "literal.txt "))).toBe("untracked\n");
+      }),
+    );
+
+    for (const replacement of ["regular file", "symbolic link"] as const) {
+      it.effect("refuses a trailing-space fallback replaced by a " + replacement, () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const target = path.join(tmp, "literal.txt ");
+          const preserved = path.join(tmp, "original.txt");
+          const foreign = path.join(tmp, "foreign.txt");
+          yield* writeTextFile(target, "original contents\n");
+          yield* writeTextFile(foreign, "different file contents\n");
+          const actual = yield* Effect.promise(() =>
+            vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+          );
+          const handles: Array<Awaited<ReturnType<typeof fs.open>>> = [];
+          let armed = false;
+          let swapped = false;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              vi.mocked(fs.lstat).mockImplementation(actual.lstat);
+              vi.mocked(fs.open).mockImplementation(actual.open);
+            }),
+          );
+          vi.mocked(fs.lstat).mockImplementation(async (file, options) => {
+            const result = await actual.lstat(file, options);
+            if (file === target && armed && !swapped) {
+              swapped = true;
+              await actual.rename(target, preserved);
+              if (replacement === "regular file") await actual.rename(foreign, target);
+              else await actual.symlink(foreign, target, "file");
+            }
+            return result;
+          });
+          vi.mocked(fs.open).mockImplementation(async (file, flags, mode) => {
+            const handle = await actual.open(file, flags, mode);
+            if (file === target) {
+              vi.spyOn(handle, "read");
+              handles.push(handle);
+            }
+            return handle;
+          });
+          const realGitCore = yield* GitCore;
+          const fallbackCommands: string[] = [];
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
+            if (input.operation.endsWith(".untrackedPatch")) {
+              armed = true;
+              return Effect.succeed({
+                code: 1,
+                stdout: "",
+                stderr: "error: Could not access literal path",
+              });
+            }
+            return realGitCore.execute(input);
+          });
+
+          const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "literal.txt "));
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") {
+            expect(result.failure).toMatchObject({
+              operation: "GitCore.readWorkingTreePatch.untrackedPatch",
+              detail: "error: Could not access literal path",
+            });
+          }
+          expect(swapped).toBe(true);
+          expect(fallbackCommands).toEqual([]);
+          for (const handle of handles) {
+            expect(handle.read).not.toHaveBeenCalled();
+            yield* Effect.promise(async () => {
+              await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+            });
+          }
+          expect(yield* readTextFile(preserved)).toBe("original contents\n");
+          expect(yield* readTextFile(target)).toBe("different file contents\n");
+          if (replacement === "symbolic link") {
+            expect(
+              yield* Effect.promise(() =>
+                actual.lstat(target).then((entry) => entry.isSymbolicLink()),
+              ),
+            ).toBe(true);
+          }
+        }),
+      );
+    }
+
+    it.effect(
+      "keeps an over-cap trailing-space read failure without opening or indexing the file",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const target = path.join(tmp, "oversize.txt ");
+          yield* writeTextFile(target, "oversized snapshot\n");
+          const bytes = 8 * 1024 * 1024 + 1;
+          yield* Effect.promise(() => fs.truncate(target, bytes));
+          const actual = yield* Effect.promise(() =>
+            vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+          );
+          let opens = 0;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              vi.mocked(fs.open).mockImplementation(actual.open);
+            }),
+          );
+          vi.mocked(fs.open).mockImplementation((file, flags, mode) => {
+            if (file === target) opens += 1;
+            return actual.open(file, flags, mode);
+          });
+          const realGitCore = yield* GitCore;
+          const fallbackCommands: string[] = [];
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.env?.GIT_OBJECT_DIRECTORY) fallbackCommands.push(input.operation);
+            if (input.operation.endsWith(".untrackedPatch")) {
+              return Effect.succeed({
+                code: 1,
+                stdout: "",
+                stderr: "error: Could not access literal path",
+              });
+            }
+            return realGitCore.execute(input);
+          });
+          const result = yield* Effect.result(core.readWorkingTreePatch(tmp, "oversize.txt "));
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") {
+            expect(result.failure).toMatchObject({
+              operation: "GitCore.readWorkingTreePatch.untrackedPatch",
+              detail: "error: Could not access literal path",
+            });
+          }
+          expect(opens).toBe(0);
+          expect(fallbackCommands).toEqual([]);
+          expect(yield* Effect.promise(() => actual.stat(target).then((entry) => entry.size))).toBe(
+            bytes,
+          );
+        }),
+    );
+
     it.effect("reads branch as the aggregate diff while preserving focused scopes", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -3524,7 +4370,11 @@ it.layer(TestLayer)("git integration", (it) => {
             "#!/bin/sh\ntouch .git/fsmonitor-started\nwhile :; do sleep 0.05; done\n",
           );
           yield* Effect.promise(() => fs.chmod(hook, 0o755));
-          yield* git(tmp, ["config", "core.fsmonitor", hook]);
+          yield* git(tmp, [
+            "config",
+            "core.fsmonitor",
+            quoteGitShellArgument(hook.replaceAll("\\", "/")),
+          ]);
           const core = yield* GitCore;
           const query = yield* core[method](tmp).pipe(
             Effect.result,
@@ -3624,14 +4474,16 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* git(remote, ["init", "--bare"]);
         yield* git(tmp, ["remote", "add", "origin", remote]);
-        yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "feature/core-push" });
-        yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "feature/core-push" });
+        // Close the owned background-refresh scope before either repository directory.
+        const realGitCore = yield* GitCore;
+        const core = yield* makeIsolatedGitCore((input) => realGitCore.execute(input));
+        yield* core.createBranch({ cwd: tmp, branch: "feature/core-push" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/core-push" });
 
         const contents = `${"large change ".repeat(8)}\n`.repeat(12_000);
         expect(Buffer.byteLength(contents)).toBeGreaterThan(1_000_000);
         yield* writeTextFile(path.join(tmp, "feature.txt"), contents);
         const expectedBlob = yield* git(tmp, ["hash-object", "feature.txt"]);
-        const core = yield* GitCore;
         const context = yield* core.prepareCommitContext(tmp);
         expect(context).not.toBeNull();
         expect(context!.stagedSummary).toContain("feature.txt");
