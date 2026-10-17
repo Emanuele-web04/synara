@@ -1,0 +1,56 @@
+name: PR 1878 explorer prefetch race qualification
+on:
+  push:
+    branches: [qa/pr1878-explorer-prefetch-proof-20261017]
+permissions:
+  contents: read
+env:
+  SOURCE_SHA: e6c8014794d70314eeb460d327f79443d12afb1f
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  explorer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Pin original candidate bytes
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/pr1878-explorer"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-explorer/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Check changed fixture formatting
+        run: ./node_modules/.bin/oxfmt --check apps/web/src/components/chat/workspaceExplorer.browser.tsx
+      - name: Install browser
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Test entire original Explorer browser suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-explorer"
+          bun run --cwd apps/web test:browser src/components/chat/workspaceExplorer.browser.tsx --reporter=default --reporter=json --outputFile.json="$out/explorer-all.json" | tee "$out/explorer-all.log"
+      - name: Repeat pointer prefetch regression in clean browser processes
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-explorer"
+          for n in 1 2 3 4; do
+            bun run --cwd apps/web test:browser src/components/chat/workspaceExplorer.browser.tsx --testNamePattern="splits a compact row when a cached intermediate listing gains a sibling" --reporter=default --reporter=json --outputFile.json="$out/explorer-repeat-$n.json" > "$out/explorer-repeat-$n.log" 2>&1
+            tail -20 "$out/explorer-repeat-$n.log"
+          done
+          git diff --exit-code
+      - name: Retain complete evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-explorer-prefetch-proof
+          path: |
+            ${{ runner.temp }}/pr1878-explorer/
+            apps/web/src/**/__screenshots__/
+            apps/web/test-results/
+          if-no-files-found: warn
+          retention-days: 14
