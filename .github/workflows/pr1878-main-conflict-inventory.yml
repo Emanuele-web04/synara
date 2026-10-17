@@ -28,8 +28,8 @@ jobs:
           assert digest=='459590a0f963920c4fb6e66db45f70cf94e226b8cb873f15a1b096aaaa36af99',digest
           with zipfile.ZipFile(p) as f:
               assert f.testzip() is None
-              a=[n for n in f.namelist() if n.endswith('/conflicts.json')]
-              b=[n for n in f.namelist() if n.endswith('/identities.json')]
+              a=[n for n in f.namelist() if n.endswith('conflicts.json')]
+              b=[n for n in f.namelist() if n.endswith('identities.json')]
               assert len(a)==len(b)==1,(a,b)
               conflicts=json.loads(f.read(a[0]))
               identity=json.loads(f.read(b[0]))
