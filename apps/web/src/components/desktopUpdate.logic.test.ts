@@ -84,6 +84,22 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
   });
 
+  it("shows a failed native handoff's required relaunch without offering another install", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "error",
+      downloadedVersion: "1.1.0",
+      availableVersion: "1.1.0",
+      errorContext: "install",
+      canRetry: false,
+      message: "Fully quit and reopen Synara before retrying the update.",
+    };
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(state.message);
+  });
+
   it("rebuilds updater state after a failed install restart", () => {
     const state: DesktopUpdateState = {
       ...baseState,

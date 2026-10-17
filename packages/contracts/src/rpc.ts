@@ -1,4 +1,9 @@
 import {
+  ServerDesktopUpdateInput,
+  ServerDesktopUpdateResult,
+  ServerDesktopUpdateStatus,
+} from "./desktopUpdate";
+import {
   AccountSaveInboxRecapInput,
   SavedInboxRecap,
   ListSavedInboxRecapsInput,
@@ -1405,6 +1410,18 @@ export const WsServerGetEnvironmentRpc = Rpc.make(WS_METHODS.serverGetEnvironmen
   error: WsRpcError,
 });
 
+export const WsServerDesktopUpdateStatusRpc = Rpc.make(WS_METHODS.serverDesktopUpdateStatus, {
+  payload: Schema.Struct({}),
+  success: ServerDesktopUpdateStatus,
+  error: WsRpcError,
+});
+
+export const WsServerDesktopUpdateRpc = Rpc.make(WS_METHODS.serverDesktopUpdate, {
+  payload: ServerDesktopUpdateInput,
+  success: ServerDesktopUpdateResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerGetSettingsResult,
@@ -2328,6 +2345,8 @@ export type WsFeatureRpc =
   | typeof WsServerGetRuntimeStatusRpc
   | typeof WsServerGetConfigRpc
   | typeof WsServerGetEnvironmentRpc
+  | typeof WsServerDesktopUpdateStatusRpc
+  | typeof WsServerDesktopUpdateRpc
   | typeof WsServerGetSettingsRpc
   | typeof WsServerUpdateSettingsRpc
   | typeof WsServerRefreshProvidersRpc
@@ -2518,6 +2537,8 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsServerGetRuntimeStatusRpc,
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
+  WsServerDesktopUpdateStatusRpc,
+  WsServerDesktopUpdateRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,

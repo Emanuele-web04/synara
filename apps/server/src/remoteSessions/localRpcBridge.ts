@@ -1,4 +1,5 @@
 import { bindRemoteAttachmentSession } from "../managedAttachmentPrincipal";
+import { authorizeRemoteDesktopUpdateSession } from "../desktopUpdateRpc";
 import {
   type AuthSessionId,
   WS_FEATURE_PATH,
@@ -59,10 +60,12 @@ export async function bridgeRemoteSocketToLocalRpc(
   let rejectSetup: ((error: Error) => void) | undefined;
   let revoked = false;
   let unbindAttachments: (() => void) | undefined;
+  let revokeDesktopUpdateAuthority: (() => void) | undefined;
   const revokeIssuedSession = async () => {
     if (!issuedSessionId || revoked) return;
     revoked = true;
     unbindAttachments?.();
+    revokeDesktopUpdateAuthority?.();
     await Effect.runPromise(options.sessions.revoke(issuedSessionId));
   };
   const remoteClosed = (code: number, reason: Buffer) => {
@@ -117,8 +120,10 @@ export async function bridgeRemoteSocketToLocalRpc(
       }),
     );
     issuedSessionId = issued.sessionId;
-    if (options.attachmentScope)
+    if (options.attachmentScope) {
       unbindAttachments = bindRemoteAttachmentSession(issued.sessionId, options.attachmentScope);
+      revokeDesktopUpdateAuthority = authorizeRemoteDesktopUpdateSession(issued.sessionId);
+    }
     if (externalClosed) throw externalClosed;
     const websocketToken = await Effect.runPromise(
       options.sessions.issueWebSocketToken(issued.sessionId, { ttl: Duration.millis(ttlMs) }),

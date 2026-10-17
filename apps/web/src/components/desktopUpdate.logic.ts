@@ -10,6 +10,9 @@ export type DesktopUpdateButtonAction = "check" | "download" | "install" | "none
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
 ): DesktopUpdateButtonAction {
+  if (state.status === "error" && state.errorContext === "install" && !state.canRetry) {
+    return "none";
+  }
   if (
     state.status === "idle" ||
     state.status === "checking" ||
@@ -54,7 +57,9 @@ export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null):
     state.status === "available" ||
     state.status === "downloading" ||
     state.status === "downloaded" ||
-    (state.status === "error" && state.errorContext !== "check" && action !== "none")
+    (state.status === "error" &&
+      state.errorContext !== "check" &&
+      (action !== "none" || (state.errorContext === "install" && Boolean(state.downloadedVersion))))
   );
 }
 
@@ -64,6 +69,7 @@ export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | nul
 
 export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null): boolean {
   return (
+    (state?.status === "error" && state.errorContext === "install" && !state.canRetry) ||
     state?.status === "downloading" ||
     state?.status === "checking" ||
     (state?.status === "available" && state.errorContext !== "download")
@@ -103,6 +109,9 @@ export function getDesktopUpdateButtonTooltip(
 ): string {
   if (options?.installing) {
     return "Applying update...";
+  }
+  if (state.status === "error" && state.errorContext === "install" && !state.canRetry) {
+    return state.message ?? "Fully quit and reopen Synara before retrying the update.";
   }
   if (state.status === "idle") {
     return "Check for updates";

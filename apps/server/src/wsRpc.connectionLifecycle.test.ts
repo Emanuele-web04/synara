@@ -10,6 +10,7 @@ import {
   WS_BOOTSTRAP_METHOD,
   WS_METHODS,
   WsGitRunStackedActionRpc,
+  WsServerDesktopUpdateStatusRpc,
   WS_BOOTSTRAP_PATH,
   WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
@@ -23,7 +24,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { Headers, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
@@ -47,7 +48,13 @@ import {
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   type WsConnectionSessionsShape,
+  provideWsConnectionSession,
 } from "./wsConnectionSessions";
+import {
+  authorizeRemoteDesktopUpdateSession,
+  makeDesktopUpdateRpcHandlers,
+} from "./desktopUpdateRpc";
+import { bindRemoteAttachmentSession } from "./managedAttachmentPrincipal";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
 import { bufferLiveUiStream } from "./wsStreamBackpressure";
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
@@ -69,7 +76,13 @@ const BudgetStreamRpc = Rpc.make("test.budget-stream", {
   error: WsRpcError,
   stream: true,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
+const PingRpcGroup = RpcGroup.make(
+  PingRpc,
+  SlowRpc,
+  WsGitRunStackedActionRpc,
+  BudgetStreamRpc,
+  WsServerDesktopUpdateStatusRpc,
+);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -96,10 +109,13 @@ afterEach(() => {
 
 function connect(
   url: string,
-  options?: { readonly perMessageDeflate?: boolean },
+  options?: { readonly perMessageDeflate?: boolean; readonly headers?: Record<string, string> },
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { perMessageDeflate: options?.perMessageDeflate ?? false });
+    const socket = new WebSocket(url, {
+      ...options,
+      perMessageDeflate: options?.perMessageDeflate ?? false,
+    });
     openSockets.add(socket);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -304,6 +320,11 @@ async function startTestServer(
         ),
       );
       return {
+        [WS_METHODS.serverDesktopUpdateStatus]: (_, context) =>
+          provideWsConnectionSession(
+            makeDesktopUpdateRpcHandlers(Effect.succeed(false)).status,
+            connectionSessions.lookup(Headers.get(context.headers, WS_CONNECTION_SESSION_HEADER)),
+          ),
         [WS_METHODS.gitRunStackedAction]: runGitAction,
         "test.budget-stream": ({
           mode,
@@ -501,9 +522,10 @@ async function connectSession(
 async function connectExistingSession(
   server: RunningTestServer,
   sessionId: AuthSessionId,
+  options?: Parameters<typeof connect>[1],
 ): Promise<{ readonly token: string; readonly socket: WebSocket }> {
   const websocket = await Effect.runPromise(server.sessions.issueWebSocketToken(sessionId));
-  const socket = await connect(featureSocketUrl(server, websocket.token));
+  const socket = await connect(featureSocketUrl(server, websocket.token), options);
   return { token: websocket.token, socket };
 }
 
@@ -1042,6 +1064,71 @@ describe("websocket permessage-deflate negotiation", () => {
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
+  it("admits updater status only for an authenticated owner or approved remote RPC lease", async () => {
+    const server = await startTestServer();
+    const release: Array<() => void> = [];
+    let nextId = 700;
+    const updaterStatus = (socket: WebSocket, headers: Array<[string, string]> = []) => {
+      const frame = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Updater RPC did not respond")), 2_000);
+        socket.once("message", (data: RawData) => {
+          clearTimeout(timeout);
+          resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+        });
+      });
+      socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: String(nextId++),
+          tag: WS_METHODS.serverDesktopUpdateStatus,
+          payload: {},
+          headers,
+        }),
+      );
+      return frame;
+    };
+    try {
+      for (const kind of ["owner", "client", "resource", "approved-remote"] as const) {
+        const issued = await Effect.runPromise(
+          server.sessions.issue({ role: kind === "owner" ? "owner" : "client" }),
+        );
+        if (kind === "approved-remote")
+          release.push(authorizeRemoteDesktopUpdateSession(issued.sessionId));
+        if (kind === "resource")
+          release.push(
+            bindRemoteAttachmentSession(issued.sessionId, {
+              environmentId: "environment",
+              rootFingerprint: "root",
+              userId: "user",
+              deviceJkt: "device",
+              trustGeneration: 1,
+            }),
+          );
+        const { socket } = await connectExistingSession(server, issued.sessionId, {
+          // The authenticated upgrade must overwrite a client-supplied connection-session key.
+          headers: { [WS_CONNECTION_SESSION_HEADER]: "owner:forged" },
+        });
+        const response = await updaterStatus(socket);
+        expect(response._tag).toBe("Exit");
+        expect(response.exit).toMatchObject({
+          _tag: kind === "owner" || kind === "approved-remote" ? "Success" : "Failure",
+        });
+        if (kind === "owner") {
+          // Per-RPC headers can replace the upgrade key; an unknown key must fail closed.
+          const forged = await updaterStatus(socket, [
+            [WS_CONNECTION_SESSION_HEADER, "owner:forged"],
+          ]);
+          expect(forged.exit).toMatchObject({ _tag: "Failure" });
+        }
+        socket.close();
+        await waitForClose(socket);
+      }
+    } finally {
+      release.forEach((dispose) => dispose());
+      await server.close();
+    }
+  });
+
   it("exposes the authenticated session to RPC handlers for the connection lifetime", async () => {
     const server = await startTestServer();
     try {
@@ -1060,6 +1147,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       expect(server.connectionSessions.lookup(sessionKey)).toEqual({
         role: "owner",
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+        desktopUpdateAuthority: `owner:${issued.sessionId}`,
       });
 
       // A client may read Computer state without ever subscribing to its

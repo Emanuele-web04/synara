@@ -12,6 +12,7 @@ import { createFileStringExclusively } from "../../atomicWrite";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment";
 import { readMachineId } from "../machineId";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel";
+import { desktopUpdateBridgeAvailable } from "../../desktopUpdateBridge";
 
 function platformOs(): ExecutionEnvironmentDescriptor["platform"]["os"] {
   switch (process.platform) {
@@ -97,6 +98,7 @@ export const makeServerEnvironment = Effect.fn(function* () {
     },
     serverVersion: packageJson.version,
     capabilities: {
+      desktopUpdates: desktopUpdateBridgeAvailable(),
       repositoryIdentity: true,
       accountProfileSync: accountProfileSyncUnavailableReason() === undefined,
       remoteConnections: remoteUnavailableReason === undefined,

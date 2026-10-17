@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DesktopUpdateState } from "@synara/contracts";
 
 import {
+  canCheckForDesktopUpdates,
   getCanRetryAfterDownloadFailure,
   getAutoUpdateDisabledReason,
   getDownloadStallTimeoutMessage,
@@ -33,6 +34,17 @@ const baseState: DesktopUpdateState = {
   flavor: "production",
   releaseUrl: null,
 };
+
+describe("update check admission", () => {
+  it.each([
+    ["downloaded", true],
+    ["available", true],
+    ["checking", false],
+    ["downloading", false],
+  ] as const)("checks while %s only when no operation owns the updater", (status, allowed) => {
+    expect(canCheckForDesktopUpdates({ ...baseState, status })).toBe(allowed);
+  });
+});
 
 describe("getDownloadStallTimeoutMessage", () => {
   it("formats the no-progress timeout in seconds", () => {

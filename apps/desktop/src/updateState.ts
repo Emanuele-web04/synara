@@ -7,6 +7,11 @@ export type DownloadProgressSample = {
   readonly transferred?: number | null;
 };
 
+// Admission for periodic, foreground, and explicit checks shares the same busy states.
+export function canCheckForDesktopUpdates(state: DesktopUpdateState): boolean {
+  return state.status !== "checking" && state.status !== "downloading";
+}
+
 export function getDownloadStallTimeoutMessage(timeoutMs: number): string {
   const timeoutSeconds = Math.max(1, Math.round(timeoutMs / 1000));
   return `Download stalled after ${timeoutSeconds} seconds without progress. Try again.`;
