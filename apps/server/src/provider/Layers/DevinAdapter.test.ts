@@ -25,6 +25,7 @@ import { ProviderAdapterProcessError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import * as AcpErrors from "../acp/AcpErrors.ts";
 import type { AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { makeFakeAcpSessionRuntime } from "../acp/testing/fakeAcpSessionRuntime.ts";
 import type { DevinAcpRuntimeInput } from "../acp/DevinAcpSupport.ts";
 import type { AcpParsedSessionEvent, AcpToolCallState } from "../acp/AcpRuntimeModel.ts";
 import {
@@ -85,55 +86,12 @@ function makeFakeAcpRuntime(initialModeState?: {
 }
 
 function makeLifecycleAcpRuntime(
-  prompt: AcpSessionRuntimeShape["prompt"] = () =>
-    Effect.succeed({ stopReason: "end_turn" } as Acp.PromptResponse),
+  prompt?: AcpSessionRuntimeShape["prompt"],
 ): AcpSessionRuntimeShape {
-  const registerHandler = () => Effect.void;
-  return {
-    handleRequestPermission: registerHandler,
-    handleElicitation: registerHandler,
-    handleReadTextFile: registerHandler,
-    handleWriteTextFile: registerHandler,
-    handleCreateTerminal: registerHandler,
-    handleTerminalOutput: registerHandler,
-    handleTerminalWaitForExit: registerHandler,
-    handleTerminalKill: registerHandler,
-    handleTerminalRelease: registerHandler,
-    handleSessionUpdate: registerHandler,
-    handleElicitationComplete: registerHandler,
-    handleExtRequest: registerHandler,
-    handleExtNotification: registerHandler,
-    start: () =>
-      Effect.succeed({
-        sessionId: "devin-test-session",
-        initializeResult: {} as Acp.InitializeResponse,
-        sessionSetupResult: {} as Acp.NewSessionResponse,
-        modelConfigId: undefined,
-        sessionSetupMethod: "new",
-      }),
-    awaitExit: Effect.never,
-    getEvents: () => Stream.never,
-    sessionUpdatesEnqueuedCount: Effect.succeed(0),
-    supportsSessionFork: Effect.succeed(false),
-    supportsSessionRecovery: Effect.succeed(true),
-    getModeState: Effect.succeed({
-      currentModeId: "bypass",
-      availableModes: [{ id: "bypass", name: "Full Access" }],
-    }),
-    getSessionEpoch: () => Effect.succeed(0 as never),
-    getPendingSessionNotificationCount: () => Effect.succeed(0),
-    getConfigOptions: Effect.succeed([]),
-    getAvailableCommands: Effect.succeed([]),
-    awaitLoadReplayReady: Effect.void,
-    prompt,
-    cancel: Effect.void,
-    setMode: () => Effect.succeed({} as Acp.SetSessionModeResponse),
-    setConfigOption: () => Effect.succeed({} as Acp.SetSessionConfigOptionResponse),
-    setModel: () => Effect.void,
-    forkSession: () => Effect.succeed({} as Acp.ForkSessionResponse),
-    request: () => Effect.succeed({}),
-    notify: () => Effect.void,
-  } as AcpSessionRuntimeShape;
+  return makeFakeAcpSessionRuntime({
+    sessionId: "devin-test-session",
+    ...(prompt ? { prompt } : {}),
+  });
 }
 
 function makeEventAcpRuntime(prompt: AcpSessionRuntimeShape["prompt"]) {
@@ -1947,6 +1905,106 @@ describe("Devin stale resume classification", () => {
         expect(yield* adapter.hasSession(threadId)).toBe(false);
       }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime))),
     );
+  });
+});
+
+describe("Devin resume model pinning", () => {
+  const sessionId = "devin-test-session";
+  const startWith = (input: { resumeCursor?: unknown; modelVariant?: string }) => {
+    const spawns: Array<Pick<DevinAcpRuntimeInput, "devinSettings" | "resumeSessionId">> = [];
+    const layer = makeDevinAdapterLive(
+      {},
+      {
+        makeAcpRuntime: (runtimeInput) =>
+          Effect.sync(() => {
+            spawns.push(runtimeInput);
+            return makeLifecycleAcpRuntime();
+          }),
+        timeouts: { turnIdleMs: 30, toolIdleMs: 60 },
+      },
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-resume-model-" })),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-resume-model");
+        const result = yield* adapter
+          .startSession({
+            provider: "devin",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: process.cwd(),
+            ...(input.modelVariant
+              ? {
+                  modelSelection: {
+                    provider: "devin",
+                    model: "gpt-6-astra",
+                    options: { modelVariant: input.modelVariant },
+                  },
+                }
+              : {}),
+            ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          })
+          .pipe(Effect.result);
+        const live = yield* adapter.hasSession(threadId);
+        yield* adapter.stopAll();
+        return { result, live, spawns };
+      }).pipe(Effect.provide(layer)),
+    );
+  };
+
+  it("records the concrete model and reloads only a session created for it", async () => {
+    const fresh = await startWith({ modelVariant: "gpt-6-astra-xhigh-priority" });
+    expect(fresh.result._tag).toBe("Success");
+    const cursor = fresh.result._tag === "Success" ? fresh.result.success.resumeCursor : undefined;
+    expect(cursor).toEqual({
+      schemaVersion: 1,
+      sessionId,
+      model: "gpt-6-astra-xhigh-priority",
+    });
+
+    const reloaded = await startWith({
+      modelVariant: "gpt-6-astra-xhigh-priority",
+      resumeCursor: cursor,
+    });
+    expect(reloaded.result._tag).toBe("Success");
+    expect(reloaded.spawns.map((spawn) => spawn.resumeSessionId)).toEqual([sessionId]);
+    expect(reloaded.result._tag === "Success" && reloaded.result.success.resumeCursor).toEqual(
+      cursor,
+    );
+  });
+
+  it.each([
+    {
+      name: "a session created for another variant (Fast turned off)",
+      resumeCursor: { schemaVersion: 1, sessionId, model: "gpt-6-astra-xhigh-priority" },
+    },
+    {
+      name: "a legacy cursor that never recorded its model",
+      resumeCursor: { schemaVersion: 1, sessionId },
+    },
+  ])("refuses to reload $name before spawning Devin", async ({ resumeCursor }) => {
+    const { result, live, spawns } = await startWith({
+      modelVariant: "gpt-6-astra-xhigh",
+      resumeCursor,
+    });
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure).toBeInstanceOf(ProviderAdapterProcessError);
+      expect(result.failure).toMatchObject({ reason: "resume-state-unavailable" });
+    }
+    expect(spawns).toEqual([]);
+    expect(live).toBe(false);
+  });
+
+  it("keeps reloading a legacy cursor when no model is requested", async () => {
+    const { result, spawns } = await startWith({
+      resumeCursor: { schemaVersion: 1, sessionId },
+    });
+    expect(result._tag).toBe("Success");
+    expect(spawns.map((spawn) => spawn.resumeSessionId)).toEqual([sessionId]);
   });
 });
 

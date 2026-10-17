@@ -2,7 +2,7 @@
 // Purpose: Keep a value's referential identity stable across renders while its
 //          contents stay equal, so downstream memoization is spared rebuilds.
 // Layer: Web hook
-// Exports: useStableValue
+// Exports: useStableValue, setsEqual, mapsEqual
 
 import { useRef } from "react";
 
@@ -21,4 +21,22 @@ export function useStableValue<T>(value: T, isEqual: (previous: T, next: T) => b
     cacheRef.current = value;
   }
   return cacheRef.current;
+}
+
+/** Same members, compared by identity. Pairs with useStableValue for derived Sets. */
+export function setsEqual<T>(previous: ReadonlySet<T>, next: ReadonlySet<T>): boolean {
+  if (previous.size !== next.size) return false;
+  for (const value of next) {
+    if (!previous.has(value)) return false;
+  }
+  return true;
+}
+
+/** Same keys mapped to identical values. Pairs with useStableValue for derived Maps. */
+export function mapsEqual<K, V>(previous: ReadonlyMap<K, V>, next: ReadonlyMap<K, V>): boolean {
+  if (previous.size !== next.size) return false;
+  for (const [key, value] of next) {
+    if (previous.get(key) !== value || (value === undefined && !previous.has(key))) return false;
+  }
+  return true;
 }

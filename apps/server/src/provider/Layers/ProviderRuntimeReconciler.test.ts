@@ -107,6 +107,23 @@ function staleStartingShellSnapshot(): OrchestrationShellSnapshot {
   };
 }
 
+/**
+ * Directory fake for reconciliation: it serves per-thread binding reads and
+ * fails the test if a tick lists every binding row instead.
+ */
+function pointReadBindings(
+  bindings: () => ReadonlyArray<{ readonly threadId: ThreadId } & Record<string, unknown>>,
+) {
+  return {
+    getBinding: (threadId: ThreadId) =>
+      Effect.sync(() => {
+        const binding = bindings().find((entry) => entry.threadId === threadId);
+        return binding === undefined ? Option.none() : Option.some(binding);
+      }),
+    listBindings: () => Effect.die("reconciliation must not list every runtime binding"),
+  };
+}
+
 function makePagingLayer(input: {
   readonly snapshot: OrchestrationShellSnapshot;
   readonly commands: OrchestrationCommand[];
@@ -137,20 +154,19 @@ function makePagingLayer(input: {
       }),
   });
   const directory = {
-    listBindings: () =>
-      Effect.succeed(
-        input.snapshot.threads.map((thread) => {
-          const live = input.liveSessions.find((session) => session.threadId === thread.id);
-          return {
-            threadId: thread.id,
-            provider: "codex" as const,
-            providerInstanceId: "codex",
-            status: live?.activeTurnId === undefined ? "stopped" : "running",
-            lastSeenAt: thread.updatedAt,
-            runtimePayload: { activeTurnId: live?.activeTurnId ?? null },
-          };
-        }),
-      ),
+    ...pointReadBindings(() =>
+      input.snapshot.threads.map((thread) => {
+        const live = input.liveSessions.find((session) => session.threadId === thread.id);
+        return {
+          threadId: thread.id,
+          provider: "codex" as const,
+          providerInstanceId: "codex",
+          status: live?.activeTurnId === undefined ? "stopped" : "running",
+          lastSeenAt: thread.updatedAt,
+          runtimePayload: { activeTurnId: live?.activeTurnId ?? null },
+        };
+      }),
+    ),
     upsert: () => Effect.die("paging must not rewrite healthy runtime bindings"),
   } as unknown as ProviderSessionDirectoryShape;
   const provider = {
@@ -316,16 +332,15 @@ describe("ProviderRuntimeReconcilerLive", () => {
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
-      listBindings: () =>
-        Effect.succeed([
-          {
-            threadId: THREAD_ID,
-            provider: "codex" as const,
-            providerInstanceId: "codex" as const,
-            status: "starting" as const,
-            runtimePayload: { activeTurnId: null },
-          },
-        ]),
+      ...pointReadBindings(() => [
+        {
+          threadId: THREAD_ID,
+          provider: "codex" as const,
+          providerInstanceId: "codex" as const,
+          status: "starting" as const,
+          runtimePayload: { activeTurnId: null },
+        },
+      ]),
     } as unknown as ProviderSessionDirectoryShape;
     const provider = {
       listSessions: () => Effect.succeed([]),
@@ -407,16 +422,15 @@ describe("ProviderRuntimeReconcilerLive", () => {
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
-      listBindings: () =>
-        Effect.succeed([
-          {
-            threadId: THREAD_ID,
-            provider: "codex" as const,
-            providerInstanceId: "codex" as const,
-            status: "starting" as const,
-            runtimePayload: { activeTurnId: null },
-          },
-        ]),
+      ...pointReadBindings(() => [
+        {
+          threadId: THREAD_ID,
+          provider: "codex" as const,
+          providerInstanceId: "codex" as const,
+          status: "starting" as const,
+          runtimePayload: { activeTurnId: null },
+        },
+      ]),
     } as unknown as ProviderSessionDirectoryShape;
     const provider = {
       listSessions: () => Effect.succeed([]),
@@ -489,16 +503,15 @@ describe("ProviderRuntimeReconcilerLive", () => {
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
-      listBindings: () =>
-        Effect.succeed([
-          {
-            threadId: THREAD_ID,
-            provider: "codex" as const,
-            providerInstanceId: "codex" as const,
-            status: bindingStatus,
-            runtimePayload: { activeTurnId: null },
-          },
-        ]),
+      ...pointReadBindings(() => [
+        {
+          threadId: THREAD_ID,
+          provider: "codex" as const,
+          providerInstanceId: "codex" as const,
+          status: bindingStatus,
+          runtimePayload: { activeTurnId: null },
+        },
+      ]),
     } as unknown as ProviderSessionDirectoryShape;
     const provider = {
       listSessions: () => Effect.succeed([providerSession]),

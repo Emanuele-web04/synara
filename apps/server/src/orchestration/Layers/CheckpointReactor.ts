@@ -101,8 +101,15 @@ type ReactorInput =
 const CHECKPOINT_REACTOR_CAPACITY = 256;
 // Background ACKs coalesce for this window; drain still flushes synchronously.
 const CHECKPOINT_ACK_INTERVAL_MS = 50;
+// Rows the reactor ignores (text deltas, telemetry) never wake a scan directly;
+// a burst of them moves the durable cursor once per this window. drain still
+// wakes the scan itself, so its fence does not wait for this window.
+const CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS = 1_000;
 
 const REVERT_LEASE_ACQUIRE_TIMEOUT_MS = 15_000;
+// Live git turn diffs (providers without a streamed patch) cost a full worktree
+// snapshot plus a diff, so each thread captures at most once per this window.
+const LIVE_TURN_DIFF_THROTTLE_WINDOW_MS = 3_000;
 
 function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
@@ -152,7 +159,18 @@ const revertRescueCheckpointRef = (threadId: ThreadId): CheckpointRef =>
 // engine's committed command-model thread both provide them.
 type CheckpointThread = OrchestrationThreadShell | OrchestrationThread;
 
-const make = Effect.gen(function* () {
+export interface CheckpointReactorLiveOptions {
+  /** Defaults to LIVE_TURN_DIFF_THROTTLE_WINDOW_MS. */
+  readonly liveTurnDiffThrottleWindowMs?: number;
+  /** Defaults to CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS. */
+  readonly irrelevantScanIntervalMs?: number;
+}
+
+const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions) {
+  const liveTurnDiffThrottleWindowMs =
+    options?.liveTurnDiffThrottleWindowMs ?? LIVE_TURN_DIFF_THROTTLE_WINDOW_MS;
+  const irrelevantScanIntervalMs =
+    options?.irrelevantScanIntervalMs ?? CHECKPOINT_IRRELEVANT_SCAN_INTERVAL_MS;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
@@ -992,6 +1010,9 @@ const make = Effect.gen(function* () {
   // let a later "missing" placeholder overwrite.
   const captureLiveTurnDiff = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
+    // A deferred (throttled) capture runs after its event: skip it once the
+    // provider session has stopped instead of reviving a settled turn.
+    deferred = false,
   ) {
     const turnId = toTurnId(event.turnId);
     if (!turnId) {
@@ -1010,6 +1031,14 @@ const make = Effect.gen(function* () {
 
     // Only the active primary turn may emit live diffs.
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
+      return;
+    }
+    if (
+      deferred &&
+      (thread.session?.status === "stopped" ||
+        thread.session?.status === "interrupted" ||
+        thread.session?.status === "error")
+    ) {
       return;
     }
 
@@ -1884,6 +1913,89 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // Per-thread trailing throttle for live turn diffs. The first file change after
+  // a quiet window captures inline in its workspace lane; changes inside the
+  // window only replace the pending event, and one reactor-scoped fiber captures
+  // that newest event when the window closes, so a burst always ends with a
+  // capture of its last edit. turn.completed drops the pending capture (see
+  // processLane) and stays the authoritative checkpoint.
+  type LiveTurnDiffThrottle = {
+    lastCaptureAt: number;
+    pending:
+      | {
+          readonly event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>;
+          readonly workspace: Option.Option<PinnedCheckpointWorkspace["Service"]>;
+        }
+      | undefined;
+  };
+  const liveTurnDiffThrottles = new Map<ThreadId, LiveTurnDiffThrottle>();
+  const reactorScope = yield* Effect.scope;
+  const cancelLiveTurnDiff = (threadId: ThreadId) => {
+    liveTurnDiffThrottles.delete(threadId);
+  };
+  const captureTrailingLiveTurnDiff = (threadId: ThreadId, throttle: LiveTurnDiffThrottle) =>
+    Effect.suspend(() => {
+      const pending = throttle.pending;
+      // A completed turn or a newer throttle entry for the thread owns the capture now.
+      if (pending === undefined || liveTurnDiffThrottles.get(threadId) !== throttle || stopping) {
+        return Effect.void;
+      }
+      throttle.pending = undefined;
+      throttle.lastCaptureAt = Date.now();
+      const capture = withPinnedWorkspaceLease(captureLiveTurnDiff(pending.event, true));
+      return (
+        Option.isSome(pending.workspace)
+          ? capture.pipe(Effect.provideService(PinnedCheckpointWorkspace, pending.workspace.value))
+          : capture
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("checkpoint reactor failed to capture a trailing live diff", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      );
+    });
+  const throttleLiveTurnDiff = Effect.fnUntraced(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
+  ) {
+    const now = Date.now();
+    const throttle = liveTurnDiffThrottles.get(event.threadId);
+    if (
+      throttle === undefined ||
+      (throttle.pending === undefined &&
+        now - throttle.lastCaptureAt >= liveTurnDiffThrottleWindowMs)
+    ) {
+      // Entries whose window closed with nothing pending carry no state.
+      for (const [threadId, entry] of liveTurnDiffThrottles) {
+        if (
+          entry.pending === undefined &&
+          now - entry.lastCaptureAt >= liveTurnDiffThrottleWindowMs
+        ) {
+          liveTurnDiffThrottles.delete(threadId);
+        }
+      }
+      liveTurnDiffThrottles.set(event.threadId, { lastCaptureAt: now, pending: undefined });
+      yield* captureLiveTurnDiff(event);
+      return;
+    }
+    const scheduled = throttle.pending !== undefined;
+    throttle.pending = {
+      event,
+      workspace: yield* Effect.serviceOption(PinnedCheckpointWorkspace),
+    };
+    if (scheduled) return;
+    yield* Effect.sleep(
+      Math.max(0, throttle.lastCaptureAt + liveTurnDiffThrottleWindowMs - now),
+    ).pipe(
+      Effect.andThen(captureTrailingLiveTurnDiff(event.threadId, throttle)),
+      Effect.raceFirst(Deferred.await(stopped)),
+      Effect.forkIn(reactorScope),
+    );
+  });
+
   const processRuntimeEvent = Effect.fnUntraced(function* (event: ProviderRuntimeEvent) {
     if (event.type === "turn.started") {
       yield* ensurePreTurnBaselineFromTurnStart(event);
@@ -1891,7 +2003,7 @@ const make = Effect.gen(function* () {
     }
 
     if (event.type === "item.completed") {
-      yield* captureLiveTurnDiff(event);
+      yield* throttleLiveTurnDiff(event);
       return;
     }
 
@@ -1947,6 +2059,8 @@ const make = Effect.gen(function* () {
   const lanes = new Map<string, WorkspaceLane>();
   // Payloads stay in their durable journals. These pulses carry no event identity.
   const wake = yield* Queue.sliding<void>(1);
+  // Pulses for rows the reactor ignores; coalesced into one delayed wake.
+  const lazyWake = yield* Queue.sliding<void>(1);
   const acknowledge = yield* Queue.sliding<void>(1);
   let runtimeScanned = 0;
   let domainScanned = 0;
@@ -2848,7 +2962,11 @@ const make = Effect.gen(function* () {
             if (!supersededLiveDiff) {
               const work =
                 nextRuntime.event.type === "turn.completed"
-                  ? processNativeCompletion(nextRuntime.sequence, nextRuntime.event)
+                  ? Effect.sync(() => cancelLiveTurnDiff(nextRuntime.event.threadId)).pipe(
+                      Effect.andThen(
+                        processNativeCompletion(nextRuntime.sequence, nextRuntime.event),
+                      ),
+                    )
                   : nextRuntime.sequence <= Math.max(runtimeAdoptionFence, startupRuntimeFence)
                     ? Effect.void
                     : deliveries
@@ -3183,6 +3301,14 @@ const make = Effect.gen(function* () {
         Effect.catchCause(failSource),
       ),
     );
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Queue.take(lazyWake).pipe(
+          Effect.andThen(Effect.sleep(irrelevantScanIntervalMs)),
+          Effect.andThen(Effect.sync(() => Queue.offerUnsafe(wake, undefined))),
+        ),
+      ).pipe(Effect.catchCause(failSource)),
+    );
     // Register eager subscriptions before capturing the replay fence.
     const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
     yield* Effect.forkScoped(
@@ -3190,7 +3316,7 @@ const make = Effect.gen(function* () {
         Effect.sync(() => {
           observeWorkspaceConfiguration(event);
           domainFence = Math.max(domainFence, event.sequence);
-          Queue.offerUnsafe(wake, undefined);
+          Queue.offerUnsafe(domainRelevant(event) ? wake : lazyWake, undefined);
         }),
       ).pipe(Effect.catchCause(failSource)),
     );
@@ -3201,7 +3327,7 @@ const make = Effect.gen(function* () {
           Effect.sync(() => {
             invalidateNonGitCompletion(row.event);
             runtimeFence = Math.max(runtimeFence, row.sequence);
-            Queue.offerUnsafe(wake, undefined);
+            Queue.offerUnsafe(runtimeRelevant(row.event) ? wake : lazyWake, undefined);
           }),
         ).pipe(Effect.catchCause(failSource)),
       );
@@ -3235,10 +3361,13 @@ const make = Effect.gen(function* () {
   return { start, drain } satisfies CheckpointReactorShape;
 });
 
-export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make).pipe(
-  Layer.provide(OrchestrationEventStoreLive),
-  Layer.provide(ProjectionTurnRepositoryLive),
-  Layer.provide(ProjectionThreadMessageRepositoryLive),
-  Layer.provide(ProviderRuntimeEventRepositoryLive),
-  Layer.provide(OrchestrationEventDeliveryRepositoryLive),
-);
+export const makeCheckpointReactorLive = (options?: CheckpointReactorLiveOptions) =>
+  Layer.effect(CheckpointReactor, make(options)).pipe(
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(ProjectionTurnRepositoryLive),
+    Layer.provide(ProjectionThreadMessageRepositoryLive),
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
+    Layer.provide(OrchestrationEventDeliveryRepositoryLive),
+  );
+
+export const CheckpointReactorLive = makeCheckpointReactorLive();

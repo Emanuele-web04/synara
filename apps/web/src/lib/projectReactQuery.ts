@@ -134,6 +134,27 @@ export const invalidateProjectFileQueriesForCwdsAfterActivity = createActivityRe
   },
 );
 
+/**
+ * Once a turn's diff is finalized, the workspace's other cwd-keyed project caches
+ * (script discovery, content and local searches) may be stale too. File queries are
+ * left to invalidateProjectFileQueriesForCwdsAfterActivity, which the same event feeds.
+ */
+export function invalidateSettledTurnProjectQueriesForCwds(
+  queryClient: QueryClient,
+  cwds: Iterable<string>,
+) {
+  const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
+  return Promise.all(
+    uniqueCwds.flatMap((cwd) => [
+      queryClient.invalidateQueries({ queryKey: ["projects", "discover-scripts", cwd] as const }),
+      queryClient.invalidateQueries({ queryKey: ["projects", "search-content", cwd] as const }),
+      queryClient.invalidateQueries({
+        queryKey: ["projects", "search-local-entries", cwd] as const,
+      }),
+    ]),
+  );
+}
+
 const DEFAULT_SEARCH_ENTRIES_LIMIT = 80;
 const DEFAULT_LIST_DIRECTORIES_STALE_TIME = 15_000;
 const DEFAULT_SEARCH_ENTRIES_STALE_TIME = 15_000;

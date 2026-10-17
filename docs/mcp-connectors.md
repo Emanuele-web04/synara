@@ -5,6 +5,12 @@ The user signs in once in **Settings → Connectors**, and new chats get the ser
 Connectors are Beta-only (`MCP_CONNECTORS_BETA_FEATURE`): Stable refuses the RPCs, the OAuth
 callback, and the proxy routes, and never reads saved connectors.
 
+One sign-in covers every provider account configured in Synara on this machine, such as all
+Claude accounts, Codex, and OpenCode, because the tokens live in Synara's own store rather than
+in any provider's configuration. This is separate from Claude Code's own claude.ai connectors and
+per-account MCP configuration, which stay per account. Each machine signs in separately, because
+the store belongs to one Synara home.
+
 This is the opposite direction of [External MCP](./external-mcp.md), which lets outside agents
 call into Synara.
 
