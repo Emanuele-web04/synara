@@ -11,6 +11,7 @@ describe("wsRequestClass", () => {
   it("keeps the per-connection budgets the server and client both enforce", () => {
     expect(WS_REQUEST_CLASS_LIMITS).toEqual({ control: 16, standard: 12, "expensive-read": 2 });
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.dispatchCommand)).toBe("control");
+    expect(classifyWsRequest(WS_METHODS.providerStopIdleRuntimeSession)).toBe("control");
     expect(classifyWsRequest(ORCHESTRATION_WS_METHODS.replayEvents)).toBe("expensive-read");
     expect(classifyWsRequest(WS_METHODS.gitListBranches)).toBe("standard");
   });

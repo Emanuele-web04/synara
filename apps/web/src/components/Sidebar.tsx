@@ -455,6 +455,10 @@ import {
   resolveThreadHandoffBadgeLabel,
   type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
+import {
+  getStopAgentProcessMenuItem,
+  stopIdleRuntimeSessionFromClient,
+} from "../lib/threadRuntimeStop";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -3477,6 +3481,7 @@ export default function Sidebar() {
             ],
           )
         : [];
+      const stopAgentProcessItem = getStopAgentProcessMenuItem(thread);
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
@@ -3531,6 +3536,7 @@ export default function Sidebar() {
             : []),
           ...handoffItems,
           ...forkItems,
+          ...(stopAgentProcessItem ? [stopAgentProcessItem] : []),
           ...contextMenuGroup(
             {
               id: "copy",
@@ -3594,6 +3600,28 @@ export default function Sidebar() {
       }
       if (clicked === "rename") {
         openRenameThreadDialog(threadId);
+        return;
+      }
+      if (clicked === "stop-agent-process") {
+        const currentThread = getThreadFromState(useStore.getState(), threadId);
+        if (!currentThread) return;
+        try {
+          await stopIdleRuntimeSessionFromClient(api.provider, currentThread);
+          toastManager.add({
+            type: "success",
+            title: "Agent session stopped",
+            description: "This thread can resume with its next message.",
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to stop agent process",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while stopping the agent process.",
+          });
+        }
         return;
       }
       if (clicked === "toggle-pin") {
