@@ -443,7 +443,8 @@ describe("ProviderCommandReactor", () => {
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
         (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
-          (sessionInput.provider === "devin" && nativeResumeAttempted)) &&
+          ((sessionInput.provider === "devin" || sessionInput.provider === "grok") &&
+            nativeResumeAttempted)) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -11865,6 +11866,71 @@ describe("ProviderCommandReactor", () => {
     ).toBe(storagePath);
   });
 
+  it.each([
+    { name: "reloads its native session", nativeResume: true, bootstraps: false },
+    { name: "cannot reload its native session", nativeResume: false, bootstraps: true },
+  ])("bootstraps a Droid model switch only when it $name", async ({ nativeResume, bootstraps }) => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "droid", model: "model-a" },
+      sessionModelSwitch: "restart-session",
+      confirmNativeResume: () => nativeResume,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-droid-model-switch"),
+        threadId,
+        messages: [
+          {
+            messageId: asMessageId("droid-switch-earlier-user"),
+            role: "user",
+            text: "Earlier question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("droid-switch-earlier-assistant"),
+            role: "assistant",
+            text: "Earlier answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    for (const [index, model] of ["model-a", "model-b"].entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-droid-model-switch-${index}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`droid-model-switch-user-${index}`),
+            role: "user",
+            text: `turn on ${model}`,
+            attachments: [],
+          },
+          modelSelection: { provider: "droid", model },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+    }
+
+    expect(harness.startSessionWithOutcome.mock.calls).toHaveLength(2);
+    expect(harness.startSessionWithOutcome.mock.calls[1]?.[1]).toMatchObject({
+      modelSelection: { provider: "droid", model: "model-b" },
+    });
+    const switched = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(switched?.input?.includes("<thread_context>")).toBe(bootstraps);
+    expect(switched?.input).toContain("turn on model-b");
+  });
+
   it("restarts Droid edits and bootstraps only the retained transcript", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "droid", model: "claude-opus-4-8" },
@@ -20953,7 +21019,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode", "devin"] as const)(
+  it.each(["opencode", "devin", "grok"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
       const harness = await createHarness({

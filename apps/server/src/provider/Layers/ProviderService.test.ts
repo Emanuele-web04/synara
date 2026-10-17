@@ -4717,93 +4717,95 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("retries a stale Devin cursor once as a fresh start", () =>
-    Effect.gen(function* () {
-      const threadId = asThreadId("thread-devin-stale-cursor");
-      const staleCursor = { sessionId: "stale-devin-session" };
-      const freshCursor = { sessionId: "fresh-devin-session" };
-      const devin = makeFakeCodexAdapter("devin");
-      let live = false;
-      devin.hasSession.mockImplementation(() => Effect.succeed(live));
-      devin.startSession.mockImplementation((input) => {
-        if (input.resumeCursor !== undefined) {
-          return Effect.fail(
-            new ProviderAdapterProcessError({
-              provider: "devin",
-              threadId,
-              detail: "Failed to load session data",
-              reason: "resume-state-unavailable",
-            }),
-          );
-        }
-        live = true;
-        const now = new Date().toISOString();
-        return Effect.succeed({
-          provider: "devin",
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          threadId,
-          resumeCursor: freshCursor,
-          cwd: input.cwd ?? process.cwd(),
-          createdAt: now,
-          updatedAt: now,
+  it.effect.each(["devin", "grok"] as const)(
+    "retries a stale %s cursor once as a fresh start",
+    (provider) =>
+      Effect.gen(function* () {
+        const threadId = asThreadId(`thread-${provider}-stale-cursor`);
+        const staleCursor = { sessionId: `stale-${provider}-session` };
+        const freshCursor = { sessionId: `fresh-${provider}-session` };
+        const fake = makeFakeCodexAdapter(provider);
+        let live = false;
+        fake.hasSession.mockImplementation(() => Effect.succeed(live));
+        fake.startSession.mockImplementation((input) => {
+          if (input.resumeCursor !== undefined) {
+            return Effect.fail(
+              new ProviderAdapterProcessError({
+                provider,
+                threadId,
+                detail: "Failed to load session data",
+                reason: "resume-state-unavailable",
+              }),
+            );
+          }
+          live = true;
+          const now = new Date().toISOString();
+          return Effect.succeed({
+            provider,
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            threadId,
+            resumeCursor: freshCursor,
+            cwd: input.cwd ?? process.cwd(),
+            createdAt: now,
+            updatedAt: now,
+          });
         });
-      });
-      const registry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "devin"
-            ? Effect.succeed(devin.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["devin"]),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const layer = Layer.merge(
-        makeProviderServiceLive().pipe(
-          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-          Layer.provide(directoryLayer),
-          Layer.provide(ServerSettingsService.layerTest()),
-          Layer.provide(NodeServices.layer),
-        ),
-        directoryLayer,
-      );
+        const registry: typeof ProviderAdapterRegistry.Service = {
+          getByProvider: (requested) =>
+            requested === provider
+              ? Effect.succeed(fake.adapter)
+              : Effect.fail(new ProviderUnsupportedError({ provider: requested })),
+          listProviders: () => Effect.succeed([provider]),
+        };
+        const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+          Layer.provide(SqlitePersistenceMemory),
+        );
+        const directoryLayer = ProviderSessionDirectoryLive.pipe(
+          Layer.provide(runtimeRepositoryLayer),
+        );
+        const layer = Layer.merge(
+          makeProviderServiceLive().pipe(
+            Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+            Layer.provide(directoryLayer),
+            Layer.provide(ServerSettingsService.layerTest()),
+            Layer.provide(NodeServices.layer),
+          ),
+          directoryLayer,
+        );
 
-      const { outcome, binding } = yield* Effect.gen(function* () {
-        const provider = yield* ProviderService;
-        const outcome = yield* provider.startSessionWithOutcome!(threadId, {
-          provider: "devin",
-          threadId,
-          resumeCursor: staleCursor,
-          cwd: "/tmp/devin-stale-project",
-          runtimeMode: "full-access",
-        });
-        const directory = yield* ProviderSessionDirectory;
-        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        return { outcome, binding };
-      }).pipe(Effect.provide(layer));
+        const { outcome, binding } = yield* Effect.gen(function* () {
+          const service = yield* ProviderService;
+          const outcome = yield* service.startSessionWithOutcome!(threadId, {
+            provider,
+            threadId,
+            resumeCursor: staleCursor,
+            cwd: `/tmp/${provider}-stale-project`,
+            runtimeMode: "full-access",
+          });
+          const directory = yield* ProviderSessionDirectory;
+          const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+          return { outcome, binding };
+        }).pipe(Effect.provide(layer));
 
-      assert.equal(devin.startSession.mock.calls.length, 2);
-      assert.deepEqual(devin.startSession.mock.calls[0]?.[0].resumeCursor, staleCursor);
-      assert.equal(devin.startSession.mock.calls[1]?.[0].resumeCursor, undefined);
-      assert.equal(devin.hasSession.mock.calls.length, 1);
-      assert.equal(devin.sendTurn.mock.calls.length, 0);
-      assert.deepEqual(outcome.session.resumeCursor, freshCursor);
-      assert.deepEqual(binding?.resumeCursor, freshCursor);
-      assert.equal(outcome.nativeResumeAttempted, true);
-      assert.equal(outcome.nativeResumeSucceeded, false);
-      assert.equal(outcome.priorTranscriptBootstrapPending, true);
-      assert.equal(
-        (binding?.runtimePayload as Record<string, unknown> | undefined)
-          ?.priorTranscriptBootstrapPending,
-        true,
-      );
-      const { resumeCursor: _cursor, ...resumedInput } = devin.startSession.mock.calls[0]![0];
-      assert.deepEqual(devin.startSession.mock.calls[1]![0], resumedInput);
-    }),
+        assert.equal(fake.startSession.mock.calls.length, 2);
+        assert.deepEqual(fake.startSession.mock.calls[0]?.[0].resumeCursor, staleCursor);
+        assert.equal(fake.startSession.mock.calls[1]?.[0].resumeCursor, undefined);
+        assert.equal(fake.hasSession.mock.calls.length, 1);
+        assert.equal(fake.sendTurn.mock.calls.length, 0);
+        assert.deepEqual(outcome.session.resumeCursor, freshCursor);
+        assert.deepEqual(binding?.resumeCursor, freshCursor);
+        assert.equal(outcome.nativeResumeAttempted, true);
+        assert.equal(outcome.nativeResumeSucceeded, false);
+        assert.equal(outcome.priorTranscriptBootstrapPending, true);
+        assert.equal(
+          (binding?.runtimePayload as Record<string, unknown> | undefined)
+            ?.priorTranscriptBootstrapPending,
+          true,
+        );
+        const { resumeCursor: _cursor, ...resumedInput } = fake.startSession.mock.calls[0]![0];
+        assert.deepEqual(fake.startSession.mock.calls[1]![0], resumedInput);
+      }),
   );
 
   it.effect("leaves stale binding unchanged when Devin fresh retry fails", () =>

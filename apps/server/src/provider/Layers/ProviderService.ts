@@ -123,11 +123,13 @@ import {
   providerContinuationIdentity,
 } from "../continuationIdentity.ts";
 
-const isStaleDevinSessionLoadError = (
+// Devin and Grok report a cursor they cannot reload faithfully (missing native
+// state, or created for other process-start model flags) as resume-state-unavailable.
+const isStaleNativeSessionLoadError = (
   provider: ProviderKind,
   error: ProviderAdapterError,
 ): error is ProviderAdapterProcessError =>
-  provider === "devin" &&
+  (provider === "devin" || provider === "grok") &&
   error instanceof ProviderAdapterProcessError &&
   error.reason === "resume-state-unavailable";
 
@@ -977,17 +979,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     type ResolvedProviderSessionStartInput = ProviderSessionStartInput & {
       readonly provider: ProviderKind;
     };
-    const startAdapterWithStaleDevinFallback = (
+    const startAdapterWithStaleSessionFallback = (
       adapter: ProviderAdapterShape<ProviderAdapterError>,
       startInput: ResolvedProviderSessionStartInput,
       startSession = adapter.startSession,
     ) =>
       startSession(startInput).pipe(
-        Effect.map((session) => ({ session, staleDevinFallbackOccurred: false })),
+        Effect.map((session) => ({ session, staleSessionFallbackOccurred: false })),
         Effect.catchIf(
           (error) =>
             hasResumeCursor(startInput.resumeCursor) &&
-            isStaleDevinSessionLoadError(startInput.provider, error),
+            isStaleNativeSessionLoadError(startInput.provider, error),
           (error) =>
             adapter.hasSession(startInput.threadId).pipe(
               Effect.flatMap((hasLiveSession) => {
@@ -997,7 +999,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const { resumeCursor: _staleResumeCursor, ...freshStartInput } = startInput;
                 return adapter
                   .startSession(freshStartInput)
-                  .pipe(Effect.map((session) => ({ session, staleDevinFallbackOccurred: true })));
+                  .pipe(Effect.map((session) => ({ session, staleSessionFallbackOccurred: true })));
               }),
             ),
         ),
@@ -3187,7 +3189,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 // The lifecycle is updated inside observeProviderStartup; these taps
                 // only log the already-recorded outcome.
                 const started = yield* observeProviderStartup(
-                  startAdapterWithStaleDevinFallback(
+                  startAdapterWithStaleSessionFallback(
                     adapter,
                     resolvedAdapterStartInput,
                     preparedStart,
@@ -3234,17 +3236,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     )}ms for thread '${threadId}'.`,
                   );
                 }
-                const { session, staleDevinFallbackOccurred } = started.value;
+                const { session, staleSessionFallbackOccurred } = started.value;
                 startupLifecycle.transition("ready");
                 replacementStarted = true;
                 const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
                 const nativeResumeSucceeded =
-                  nativeResumeAttempted && !staleDevinFallbackOccurred
+                  nativeResumeAttempted && !staleSessionFallbackOccurred
                     ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
                     : false;
                 const priorTranscriptBootstrapPending =
                   persistedPriorTranscriptBootstrapPending ||
-                  staleDevinFallbackOccurred ||
+                  staleSessionFallbackOccurred ||
                   (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
                     !nativeResumeSucceeded);
 
