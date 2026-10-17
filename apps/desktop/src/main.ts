@@ -12,6 +12,7 @@ import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
+import { spawnProcessSync } from "@synara/shared/processRuntime";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -184,9 +185,17 @@ import {
 } from "./macIconCacheRefresh";
 import { persistMacAppIcon } from "./macAppIcon";
 import {
+  LINUX_APP_DESKTOP_FILE_NAMES,
+  linuxDataHome,
+  persistLinuxAppIcon,
+  resolveLinuxDesktopIconName,
+} from "./linuxAppIcon";
+import {
   MAC_WINDOW_VIBRANCY,
   createWindowMaterialApplier,
   parseDesktopWindowMaterial,
+  parseHyprlandBlurEnabled,
+  resolveDesktopWindowTranslucency,
   type WindowMaterialAddon,
 } from "./windowMaterial";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
@@ -2069,6 +2078,21 @@ function loadWindowMaterialAddon(): WindowMaterialAddon | null {
 
 const applyWindowMaterial = createWindowMaterialApplier(loadWindowMaterialAddon);
 
+// Fixed for the process: `transparent` cannot change after a BrowserWindow is created. On
+// Hyprland this asks the compositor once — before any window exists — whether it blurs, and
+// an unreadable answer keeps the window opaque (see windowMaterial.ts).
+const desktopWindowTranslucency = resolveDesktopWindowTranslucency({
+  platform: process.platform,
+  env: process.env,
+  readHyprlandBlurEnabled: () => {
+    const result = spawnProcessSync("hyprctl", ["-j", "getoption", "decoration:blur:enabled"], {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    return result.status === 0 ? parseHyprlandBlurEnabled(result.stdout) : null;
+  },
+});
+
 function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
     return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
@@ -2546,6 +2570,32 @@ function queueWindowsShellAppUserModelStamp(
   });
 }
 
+// Wayland gives a window no icon of its own: docks and launchers match the window's app_id to
+// the desktop entry and draw that entry's `Icon=` name from the XDG icon theme, so the chosen
+// artwork is installed under that name in the user's data home (see linuxAppIcon.ts). Only a
+// packaged run owns an installed entry; a source run must not repaint one.
+function syncLinuxIconThemeArtwork(image: Electron.NativeImage): void {
+  if (!app.isPackaged) return;
+  const homeDir = app.getPath("home");
+  const iconName = resolveLinuxDesktopIconName({
+    env: process.env,
+    homeDir,
+    desktopFileNames: LINUX_APP_DESKTOP_FILE_NAMES[desktopFlavor === "beta" ? "beta" : "stable"],
+  });
+  if (iconName === null) return;
+  try {
+    persistLinuxAppIcon({
+      dataHome: linuxDataHome(process.env, homeDir),
+      iconName,
+      renderPng: (size) => image.resize({ width: size, height: size, quality: "best" }).toPNG(),
+    });
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to update the Linux icon theme artwork: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
 async function applyDesktopAppIcon(
   icon: DesktopAppIcon,
   window: BrowserWindow | null = mainWindow,
@@ -2681,6 +2731,8 @@ async function applyDesktopAppIconUnlocked(
     return;
   }
   window?.setIcon(image);
+  // X11 keeps the window icon; the icon theme covers docks and launchers on every session.
+  syncLinuxIconThemeArtwork(image);
 }
 
 function applyInitialMacDockIcon(): void {
@@ -5026,6 +5078,11 @@ function registerIpcHandlers(): void {
     event.returnValue = event.sender.getZoomFactor();
   });
 
+  ipcMain.removeAllListeners(IPC.windowTranslucency);
+  ipcMain.on(IPC.windowTranslucency, (event: IpcMainEvent) => {
+    event.returnValue = desktopWindowTranslucency;
+  });
+
   ipcMain.removeHandler(IPC.pickFolder);
   ipcMain.handle(IPC.pickFolder, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -5567,13 +5624,17 @@ function getIconOption(): { icon: string } | Record<string, never> {
 
 // macOS backs the shell with window vibrancy, so the window is created transparent
 // (`#00000000`) over the vibrancy material. The renderer's translucency settings then swap
-// vibrancy for an adjustable desktop blur (see windowMaterial.ts). Windows/Linux have no vibrancy:
-// a transparent window there leaves backdrop-filter surfaces bleeding through and, on
-// fractional DPI, rendering blurry. So off macOS we create an opaque window and skip the
-// macOS-only options. The background tracks the OS light/dark appearance purely to avoid
-// a bright flash before the renderer paints — the window is shown only after first paint
+// vibrancy for an adjustable desktop blur (see windowMaterial.ts). On Hyprland the window is
+// created transparent too and the compositor blurs what is behind it. Windows and other Linux
+// sessions have no blur behind the window: a transparent window there leaves backdrop-filter
+// surfaces bleeding through and, on fractional DPI, rendering blurry. So there we create an
+// opaque window. The background tracks the OS light/dark appearance purely to avoid a bright
+// flash before the renderer paints — the window is shown only after first paint
 // (`show: false`), so this color is not expected to match a custom in-app theme exactly.
 function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
+  if (desktopWindowTranslucency === "compositor") {
+    return { transparent: true, backgroundColor: "#00000000" };
+  }
   if (process.platform !== "darwin") {
     return { backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff" };
   }
@@ -5634,6 +5695,8 @@ function createWindow(): BrowserWindow {
         minimumHeight: 620,
       })
     : { width: 1100, height: 780 };
+  // One line per window so a support log shows whether glass was expected on this session.
+  writeDesktopLogHeader(`window translucency=${desktopWindowTranslucency ?? "opaque"}`);
   const window = new BrowserWindow({
     ...restoredBounds,
     minWidth: 840,

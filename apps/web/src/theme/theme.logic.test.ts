@@ -344,7 +344,7 @@ describe("code theme seeds", () => {
 });
 
 describe("buildThemeCssVariables", () => {
-  it.each([{ electron: true, isMac: true }])(
+  it.each([{ windowTranslucency: "native" as const }])(
     "projects distinct Vercel and Codex light colors on %j",
     (platform) => {
       const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
@@ -404,7 +404,7 @@ describe("buildThemeCssVariables", () => {
 });
 
 describe("window translucency", () => {
-  const macDesktop = { electron: true, isMac: true };
+  const macDesktop = { windowTranslucency: "native" as const };
 
   const sidebarOnly = (opacity: number) => ({
     ...macDesktop,
@@ -456,8 +456,7 @@ describe("window translucency", () => {
 
   it("keeps the content opaque and the shell clear for opaque windows", () => {
     const opaque = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "dark"), "dark", {
-      electron: true,
-      isMac: false,
+      windowTranslucency: null,
     });
     expect(opaque.material).toBe("opaque");
     expect(opaque.translucencyScope).toBe("none");
@@ -467,6 +466,26 @@ describe("window translucency", () => {
     expect(opaque.variables["--app-window-background"]).toBe(
       opaque.variables["--app-shell-background"],
     );
+  });
+
+  it("projects the same glass on a compositor-blurred window as on macOS vibrancy", () => {
+    const pack = resolveThemePack(DEFAULT_THEME_STATE, "dark");
+    const translucency = { opacity: 72, blur: null, sidebarOnly: false };
+    const compositor = buildThemeCssVariables(pack, "dark", {
+      windowTranslucency: "compositor",
+      translucency,
+    });
+    expect(compositor).toEqual(
+      buildThemeCssVariables(pack, "dark", { windowTranslucency: "native", translucency }),
+    );
+    expect(compositor.material).toBe("translucent");
+    // A theme that asks for solid windows stays opaque on either backing.
+    expect(
+      buildThemeCssVariables({ ...pack, theme: { ...pack.theme, opaqueWindows: true } }, "dark", {
+        windowTranslucency: "compositor",
+        translucency,
+      }).material,
+    ).toBe("opaque");
   });
 
   it("keeps the long-standing sidebar fills when limited to the sidebar", () => {

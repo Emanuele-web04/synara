@@ -44,6 +44,7 @@ import type {
 } from "@synara/contracts";
 
 import { installBetaFromFeed, type BetaInstallDeps, type ExpectedTeamId } from "./betaInstaller";
+import { LINUX_APP_DESKTOP_FILE_NAMES } from "./linuxAppIcon";
 
 // electron-builder registers the uninstall key under the raw NSIS guid (no
 // braces); the value itself lives in @synara/shared/betaChannel.
@@ -51,7 +52,7 @@ export const BETA_WINDOWS_UNINSTALL_GUID = SYNARA_BETA_WINDOWS_INSTALLER_GUID;
 const BETA_MAC_APP_NAME = "Synara Beta.app";
 const BETA_MAC_EXECUTABLE_NAME = "Synara Beta";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
-const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
+const BETA_LINUX_DESKTOP_FILE = LINUX_APP_DESKTOP_FILE_NAMES.beta[0];
 const STABLE_MAC_APP_NAME = "Synara.app";
 const STABLE_MAC_EXECUTABLE_NAME = "Synara";
 const STABLE_WINDOWS_EXE_NAME = "Synara.exe";
