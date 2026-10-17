@@ -73,6 +73,22 @@ describe("Sidebar.uiState", () => {
     });
   });
 
+  it("remembers Chats without changing older/default sidebar state", () => {
+    expect(readSidebarUiState().threadSection ?? "projects").toBe("projects");
+    persistSidebarUiState({ ...readSidebarUiState(), threadSection: "chats" });
+    expect(readSidebarUiState().threadSection).toBe("chats");
+    persistSidebarUiState({ ...readSidebarUiState(), threadSection: "projects" });
+    expect(readSidebarUiState().threadSection ?? "projects").toBe("projects");
+  });
+
+  it.each(["unknown", null, 42, {}])(
+    "ignores invalid thread-list selection: %j",
+    (threadSection) => {
+      storage.set("synara:sidebar-ui:v1", JSON.stringify({ threadSection }));
+      expect(readSidebarUiState().threadSection ?? "projects").toBe("projects");
+    },
+  );
+
   it("persists project thread list paging by normalized cwd", () => {
     persistSidebarUiState({
       chatSectionExpanded: true,

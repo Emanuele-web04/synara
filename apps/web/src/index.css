@@ -3499,6 +3499,26 @@ diffs-container {
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+/* List navigation shares sidebar row styling, not a segmented track or moving thumb. */
+@media (prefers-contrast: more) {
+  .sidebar-list-destination[aria-checked="true"] {
+    outline: 1px solid currentColor;
+    outline-offset: -1px;
+  }
+}
+
+@media (forced-colors: active) {
+  .sidebar-list-destination[aria-checked="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .sidebar-list-destination:focus-visible {
+    outline: 2px solid ButtonText;
+    outline-offset: -4px;
+  }
+}
+
 /* Frosted translucent shell shared by floating menus & pickers (dropdown menus,
    selects, popovers, comboboxes) and composer pickers. Background + blur are
    theme-aware via the tokens set in theme.logic (control-opaque @70% + blur). */

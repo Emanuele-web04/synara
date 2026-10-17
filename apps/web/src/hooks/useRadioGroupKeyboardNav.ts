@@ -30,10 +30,12 @@ export function useRadioGroupKeyboardNav<T extends string>({
   onValueChange,
 }: {
   values: readonly T[];
-  value: T;
+  value: T | null;
   onValueChange: (value: T) => void;
 }): (itemValue: T) => RadioGroupItemProps {
   const itemNodesRef = useRef(new Map<T, HTMLButtonElement>());
+  // An unselected group still needs an entry point in the keyboard tab order.
+  const tabbableValue = value !== null && values.includes(value) ? value : values[0];
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, itemValue: T) => {
     const delta = ARROW_KEY_DELTAS[event.key];
@@ -55,7 +57,7 @@ export function useRadioGroupKeyboardNav<T extends string>({
         itemNodesRef.current.delete(itemValue);
       }
     },
-    tabIndex: itemValue === value ? 0 : -1,
+    tabIndex: itemValue === tabbableValue ? 0 : -1,
     onKeyDown: (event) => handleKeyDown(event, itemValue),
   });
 }

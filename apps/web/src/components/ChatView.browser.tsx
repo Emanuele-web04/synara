@@ -21,7 +21,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   OrchestrationProposedPlanId,
   type OrchestrationReadModel,
-  type ProjectId,
+  ProjectId,
   type ProjectAgentOverview,
   type ServerConfig,
   SpaceId,
@@ -2288,6 +2288,68 @@ async function mountChatView(options: {
   };
 }
 
+function createSidebarListSnapshot(): OrchestrationReadModel {
+  const base = createSnapshotForTargetUser({
+    targetMessageId: MessageId.makeUnsafe("sidebar-access-user"),
+    targetText: "Review the workspace navigation",
+  });
+  const chatProjectId = ProjectId.makeUnsafe("sidebar-access-home");
+  const threads = Array.from({ length: 30 }, (_, index) => {
+    const chat = index >= 18;
+    const number = String(chat ? index - 17 : index + 1).padStart(2, "0");
+    const id = index === 0 ? THREAD_ID : ThreadId.makeUnsafe(`sidebar-access-${index}`);
+    return {
+      ...base.threads[0]!,
+      id,
+      projectId: chat ? chatProjectId : PROJECT_ID,
+      title: `${chat ? "Chat" : "Project session"} ${number}`,
+      createdAt: new Date(Date.parse(NOW_ISO) - index * 60_000).toISOString(),
+      latestUserMessageAt: new Date(Date.parse(NOW_ISO) - index * 60_000).toISOString(),
+      messages:
+        index === 0
+          ? [
+              createUserMessage({
+                id: MessageId.makeUnsafe("sidebar-access-question"),
+                text: "Check our workspace navigation with several sessions open.",
+                offsetSeconds: 0,
+              }),
+              createAssistantMessage({
+                id: MessageId.makeUnsafe("sidebar-access-answer"),
+                text: "The workspace contains 18 project sessions and 12 chats. Use the sidebar to switch between them.",
+                offsetSeconds: 1,
+              }),
+            ]
+          : [],
+      latestTurn:
+        index === 29
+          ? {
+              turnId: TurnId.makeUnsafe("sidebar-access-completed"),
+              state: "completed" as const,
+              requestedAt: NOW_ISO,
+              startedAt: NOW_ISO,
+              completedAt: NOW_ISO,
+              assistantMessageId: null,
+            }
+          : null,
+      session: { ...base.threads[0]!.session!, threadId: id },
+    };
+  });
+  return {
+    ...base,
+    projects: [
+      { ...base.projects[0]!, title: "Workspace" },
+      {
+        ...base.projects[0]!,
+        id: chatProjectId,
+        kind: "chat",
+        title: "Home",
+        workspaceRoot: "/repo/home-chats",
+      },
+    ],
+    threads,
+  };
+}
+
 describe("ChatView transcript geometry (full app)", () => {
   it("keeps the active chat explicitly unread until the next visit", async () => {
     const snapshot = createSnapshotWithInlineToolOverflow({ active: false });
@@ -2423,6 +2485,155 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("keeps thread-list navigation reachable and shortcuts scoped to visible chats", async () => {
+    const snapshot = createSidebarListSnapshot();
+    localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({
+        chatSectionExpanded: true,
+        projectThreadListExtraPagesByCwd: { "/repo/project": 5 },
+      }),
+    );
+    localStorage.setItem(
+      "synara:app-settings:v1",
+      JSON.stringify({
+        sidebarThreadSortOrder: "created_at",
+        sidebarThreadAttentionFirst: false,
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 1280, height: 700 },
+      snapshot,
+    });
+    try {
+      await waitForServerConfigToApply();
+      // Restored historical completions start read; explicitly model an unread one.
+      useStore.getState().markThreadUnread(snapshot.threads[29]!.id);
+      const projects = page.getByRole("radio", { name: "Projects", exact: true });
+      const chats = page.getByRole("radio", { name: "Chats — needs attention", exact: true });
+      await expect.element(projects).toHaveAttribute("aria-checked", "true");
+      await expect.element(chats).toBeVisible();
+      const beforeTop = chats.element().getBoundingClientRect().top;
+      const content = document.querySelector<HTMLElement>('[data-slot="sidebar-content"]')!;
+      const viewport = content.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+      expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
+      viewport.scrollTop = viewport.scrollHeight;
+      await waitForLayout();
+      expect(chats.element().getBoundingClientRect().top).toBeCloseTo(beforeTop, 0);
+      await expect.element(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+      await chats.click();
+      await expect.element(chats).toHaveAttribute("aria-checked", "true");
+      await expect
+        .element(page.getByRole("button", { name: "Open Chat 01", exact: true }))
+        .toBeVisible();
+      expect(document.querySelector('[aria-label="Open Project session 01"]')).toBeNull();
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+      expect(JSON.parse(localStorage.getItem("synara:sidebar-ui:v1")!).threadSection).toBe("chats");
+      // The unread completion is beyond the five-row preview; selecting Chats must not read it.
+      await expect.element(chats).toHaveAttribute("aria-label", "Chats — needs attention");
+      const rows = [...document.querySelectorAll<HTMLElement>("[data-thread-entry-point]")];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBeLessThan(12);
+      const firstTitle = rows[0]!.getAttribute("aria-label")!.replace(/^Open /, "");
+      const firstId = snapshot.threads.find((thread) => thread.title === firstTitle)!.id;
+      const form = document.querySelector('[data-chat-composer-form="true"]')!;
+      form.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "1",
+          code: "Digit1",
+          metaKey: isMacNavigatorPlatform(),
+          ctrlKey: !isMacNavigatorPlatform(),
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${firstId}`,
+        "The first visible chat shortcut did not open its chat.",
+      );
+      // Arrow keys move focus and selection without navigating the open conversation.
+      await chats.click();
+      await userEvent.keyboard("{ArrowLeft}");
+      await expect.element(projects).toHaveAttribute("aria-checked", "true");
+      expect(document.activeElement).toBe(projects.element());
+      expect(mounted.router.state.location.pathname).toBe(`/${firstId}`);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("restores the chat list and updates its off-screen attention without reading it", async () => {
+    localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({ threadSection: "chats", chatSectionExpanded: true }),
+    );
+    const snapshot = createSidebarListSnapshot();
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const chats = page.getByRole("radio", { name: /^Chats/ });
+      await expect.element(chats).toHaveAttribute("aria-checked", "true");
+      const completed = snapshot.threads[29]!;
+      useStore.getState().markThreadUnread(completed.id);
+      await expect.element(chats).toHaveAttribute("aria-label", "Chats — needs attention");
+      useStore.getState().markThreadVisited(completed.id, NOW_ISO);
+      await expect.element(chats).toHaveAttribute("aria-label", "Chats");
+      // A new pending approval uses the existing summary lifecycle, even in a hidden row.
+      useStore.setState((state) => ({
+        sidebarThreadSummaryById: {
+          ...state.sidebarThreadSummaryById,
+          [completed.id]: {
+            ...state.sidebarThreadSummaryById[completed.id]!,
+            hasPendingApprovals: true,
+          },
+        },
+      }));
+      await expect.element(chats).toHaveAttribute("aria-label", "Chats — needs attention");
+      useStore.setState((state) => ({
+        sidebarThreadSummaryById: {
+          ...state.sidebarThreadSummaryById,
+          [completed.id]: {
+            ...state.sidebarThreadSummaryById[completed.id]!,
+            hasPendingApprovals: false,
+          },
+        },
+      }));
+      await expect.element(chats).toHaveAttribute("aria-label", "Chats");
+      await page.getByRole("button", { name: "Switch to activity view", exact: true }).click();
+      const projects = page.getByRole("radio", { name: "Projects", exact: true });
+      await expect.element(projects).toHaveAttribute("aria-checked", "false");
+      await expect.element(chats).toHaveAttribute("aria-checked", "false");
+      await expect.element(projects).toHaveAttribute("tabindex", "0");
+      await chats.click();
+      await expect.element(chats).toHaveAttribute("aria-checked", "true");
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("falls back to Projects when the saved Chats section is hidden", async () => {
+    localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({ threadSection: "chats", chatSectionExpanded: true }),
+    );
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showChatsSection: false }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSidebarListSnapshot(),
+    });
+    try {
+      expect(document.querySelector('[role="radiogroup"][aria-label="Thread lists"]')).toBeNull();
+      await expect
+        .element(page.getByRole("button", { name: "Open Project session 01", exact: true }))
+        .toBeVisible();
+      expect(document.querySelector('[aria-label="Open Chat 01"]')).toBeNull();
+      expect(JSON.parse(localStorage.getItem("synara:sidebar-ui:v1")!).threadSection).toBe("chats");
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it("keeps persistent turn failure visible after reopening and admits one manual continuation", async () => {
@@ -13432,7 +13643,8 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // Start a brand-new home chat (draft thread)
+      // Start a brand-new home chat (draft thread) from its dedicated list.
+      await page.getByRole("radio", { name: /^Chats/ }).click();
       const newChatButton = page.getByLabelText("Open new chat home");
       await expect.element(newChatButton).toBeInTheDocument();
       await newChatButton.click();
