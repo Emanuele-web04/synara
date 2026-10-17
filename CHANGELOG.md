@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.6-remote.19 — 2026-10-17
+
+### Changed
+
+- Long agent turns avoid retaining duplicate Claude transcripts, repeated full-thread reads, redundant repository refreshes and unnecessary Markdown work. Browser diagnostics, cookie synchronization and screen-frame delivery keep bounded work while preserving streaming and recovery.
+
+### Fixed
+
+- Devin and Grok model changes survive session reloads. OpenCode recovers stopped sessions and reports installation status instead of appearing ready too early.
+- Editing and replaying an earlier message retains a durable workspace recovery snapshot before restoring the checkpoint.
+- Connector retries use a token already renewed by a concurrent request. Windows prepares process-teardown observers before the runtime exits; missing workspace folders are reported before provider launch.
+
+### Verification
+
+- Includes the seven merged main changes through `4cd66c35d897a98aa61ffd075607e08a6c46e4cf` (#1962, #1963, #1770, #1797, #1848, #1964 and #1965). Open PR #1966 is excluded.
+- Universal iOS/iPadOS 0.1 (140) separately fixes returning from Terminal, accepted keyboard suggestions and reading position after rotation. The remote protocol and existing account, pairing, privacy and analytics configuration remain compatible; no new backend migration is required.
+- Local quality and focused regression checks, followed by one exact-tag publication workflow, qualify this candidate. Public notes record actual packaging, startup, macOS signing/notarization, Windows Defender and provenance results after they complete. These checks are not a new live-provider, physical-push or installed-upgrade test. Windows retains its exact-version unsigned policy and may show SmartScreen.
+
 ## 1.0.6-remote.18 — 2026-10-17
 
 ### Added

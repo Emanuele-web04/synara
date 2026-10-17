@@ -22,6 +22,30 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.19",
+    date: "Oct 17",
+    features: [
+      {
+        id: "long-turn-work",
+        title: "Less repeated work during long turns",
+        description:
+          "Long conversations avoid duplicate transcript storage, repeated repository refreshes and unnecessary Markdown updates while keeping your conversation and live activity available.",
+      },
+      {
+        id: "provider-session-recovery",
+        title: "More reliable provider recovery",
+        description:
+          "Devin and Grok keep model switches after reloading. OpenCode recovers stopped sessions, and replaying an edited message keeps a workspace recovery snapshot first.",
+      },
+      {
+        id: "connector-and-launch-recovery",
+        title: "Smoother connector retries and agent startup",
+        description:
+          "Connector retries use renewed credentials correctly. Windows process cleanup is more reliable, and missing project folders produce a clear startup error.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.18",
     date: "Oct 17",
     features: [
