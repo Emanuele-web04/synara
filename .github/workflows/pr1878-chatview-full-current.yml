@@ -1,0 +1,40 @@
+name: PR 1878 exact-head full ChatView Chromium qualification
+on:
+  push:
+    branches: [qa/pr1878-full-chatview-final-20261017]
+permissions:
+  contents: read
+env:
+  SOURCE_SHA: c6312c042ddab5e1f2ae9587d50264511dfecb13
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  full-chatview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: full
+      - name: Install Chromium and ffmpeg
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Full unfiltered ChatView Chromium tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr1878-full-chatview"
+          bun run --cwd apps/web test:browser src/components/ChatView.browser.tsx --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/pr1878-full-chatview/results.json" 2>&1 | tee "$RUNNER_TEMP/pr1878-full-chatview/run.log"
+      - name: Attach diagnostics and screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-full-chatview-source-c6312c04
+          path: |
+            ${{ runner.temp }}/pr1878-full-chatview
+            apps/web/src/components/__screenshots__/ChatView.browser.tsx/
+          retention-days: 14
+          if-no-files-found: warn
