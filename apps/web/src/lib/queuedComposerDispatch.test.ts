@@ -188,7 +188,9 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
     >;
     const command = calls.find(([call]) => call.type === "thread.turn.start")![0];
     const { annotations } = extractTrailingBrowserAnnotations(command.message!.text, messageId);
-    expect(annotations.map(({ id, attachedImage, imageId }) => ({ id, attachedImage, imageId }))).toEqual([
+    expect(
+      annotations.map(({ id, attachedImage, imageId }) => ({ id, attachedImage, imageId })),
+    ).toEqual([
       { id: "annotation-1", attachedImage: 2, imageId: undefined },
       { id: "annotation-2", attachedImage: undefined, imageId: undefined },
     ]);
