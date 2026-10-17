@@ -2369,6 +2369,9 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentCancelBarrier = null;
     localStorage.clear();
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
+    // Clearing storage does not reset the live dock store. A prior terminal pane
+    // can otherwise steal focus or squeeze a later test's chat header.
+    useRightDockStore.setState({ dockStateByThreadId: {} });
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
     useRetryEffortVariantStore.setState({ groups: {} });
