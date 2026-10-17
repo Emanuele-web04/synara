@@ -1,0 +1,143 @@
+name: PR 1878 reviewed repairs
+on:
+  push:
+    branches: [qa/pr1878-reviewed-repairs-20261017]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: pr1878-reviewed-repairs-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  qualify:
+    name: Reviewed repair (${{ matrix.kind }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [static-persistence, browser-after, browser-before, live]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain isolated drivers
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr1878-reviewed-driver"
+          cp .github/qa/prepare-reviewed-candidate.py .github/qa/toolbar-pointer-regression.txt .github/qa/pr1878-live-final.mjs "$RUNNER_TEMP/pr1878-reviewed-driver/"
+          echo "QA_OUT=$RUNNER_TEMP/pr1878-reviewed-${{ matrix.kind }}" >> "$GITHUB_ENV"
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          p=Path(os.environ['RUNNER_TEMP'])/'pr1878-reviewed-driver/prepare-reviewed-candidate.py'
+          s=p.read_text()
+          a="'../../../.github/pr-assets/fusion-picker/'"
+          assert s.count(a)==2
+          p.write_text(s.replace(a,"'../../../../../.github/pr-assets/fusion-picker/'"))
+          p=Path(os.environ['RUNNER_TEMP'])/'pr1878-reviewed-driver/pr1878-live-final.mjs'
+          s=p.read_text()
+          a="    await page.getByRole('button', { name: 'Add project', exact: true }).first().click();"
+          assert s.count(a)==1
+          s=s.replace(a,"    await page.locator('[class~=\"group/project-header\"]').filter({ hasText: 'Projects' }).first().hover();\n"+a)
+          p.write_text(s)
+          PY
+      - name: Download immutable reviewed source export
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/Emanuele-web04/synara/actions/artifacts/12083556860/zip \
+            --output "$RUNNER_TEMP/pr1878-reviewed-input.zip"
+      - uses: actions/checkout@v6
+        if: matrix.kind == 'live'
+        with:
+          ref: 5a59e58e05bc5d5a4628d4571c78557850880bcc
+          persist-credentials: false
+          path: original-driver
+          sparse-checkout: .github/qa
+      - name: Retain original real-server driver
+        if: matrix.kind == 'live'
+        run: cp original-driver/.github/qa/pr1878-live.mjs "$RUNNER_TEMP/pr1878-reviewed-driver/"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-workspace
+      - name: Construct exact reviewed repair and export files
+        run: python "$RUNNER_TEMP/pr1878-reviewed-driver/prepare-reviewed-candidate.py" "$RUNNER_TEMP/pr1878-reviewed-input.zip" "$RUNNER_TEMP/pr1878-reviewed-driver"
+      - name: Verify static contracts and full persistence suite
+        if: matrix.kind == 'static-persistence'
+        run: |
+          status=0
+          for task in fmt:check lint typecheck windows-runtime:check migrations:check; do
+            name="${task//:/-}"
+            if bun run "$task" > "$QA_OUT/$name.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+            cat "$QA_OUT/$name.log"
+            printf '%s\t%s\n' "$task" "$rc" >> "$QA_OUT/exits.tsv"
+          done
+          if bun run --cwd apps/server test src/persistence --reporter=default --reporter=json --outputFile.json="$QA_OUT/persistence.json" > "$QA_OUT/persistence.log" 2>&1; then rc=0; else rc=$?; status=1; fi
+          cat "$QA_OUT/persistence.log"
+          printf 'persistence\t%s\n' "$rc" >> "$QA_OUT/exits.tsv"
+          exit "$status"
+      - name: Install real browser runtime
+        if: matrix.kind != 'static-persistence'
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Retain original UI for the causal Before control
+        if: matrix.kind == 'browser-before'
+        run: |
+          git show "$QA_SOURCE:apps/web/src/index.css" > apps/web/src/index.css
+          git show "$QA_SOURCE:apps/web/src/components/SidebarSectionToolbar.tsx" > apps/web/src/components/SidebarSectionToolbar.tsx
+          git diff --binary > "$QA_OUT/before-control.patch"
+      - name: Actual browser interactions and screenshots
+        if: startsWith(matrix.kind, 'browser-')
+        env:
+          VITE_PR1878_CAPTURE: '1'
+        run: |
+          files=(src/components/ThemePackEditor.browser.tsx src/components/SidebarSectionToolbar.browser.tsx)
+          args=()
+          if [ '${{ matrix.kind }}' = browser-before ]; then
+            args+=(--testNamePattern='preserves custom bold colors on paragraph and list leads|allows the visible toolbar action|keeps desktop hover and keyboard focus')
+          else
+            files+=(src/components/OnboardingProvidersStep.browser.tsx src/components/chat/ComposerModelPicker.browser.tsx)
+          fi
+          set +e
+          bun run --cwd apps/web test:browser "${files[@]}" "${args[@]}" --reporter=default --reporter=json --outputFile.json="$QA_OUT/browser.json" > "$QA_OUT/browser.log" 2>&1
+          rc=$?
+          cat "$QA_OUT/browser.log"
+          printf '%s\n' "$rc" > "$QA_OUT/browser-exit.txt"
+          exit "$rc"
+      - name: Build actual application
+        if: matrix.kind == 'live'
+        run: bun run build --filter=@synara/cli
+      - name: Exercise real server, UI, disk state and restart
+        if: matrix.kind == 'live'
+        run: |
+          set +e
+          QA_REPO="$PWD" node "$RUNNER_TEMP/pr1878-reviewed-driver/pr1878-live-final.mjs" > "$QA_OUT/journey.log" 2>&1
+          rc=$?
+          cat "$QA_OUT/journey.log"
+          printf '%s\n' "$rc" > "$QA_OUT/live-exit.txt"
+          exit "$rc"
+      - name: Preserve exact-source guard
+        if: always() && matrix.kind != 'browser-before'
+        run: |
+          test -f "$QA_OUT/final-tree.txt"
+          git diff --exit-code > "$QA_OUT/source-clean-after.diff"
+          test "$(git write-tree)" = "$(cat "$QA_OUT/final-tree.txt")"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-reviewed-${{ matrix.kind }}
+          path: |
+            ${{ runner.temp }}/pr1878-reviewed-${{ matrix.kind }}/
+            apps/web/src/**/__screenshots__/
+            apps/web/test-results/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
