@@ -1,0 +1,163 @@
+name: PR 1878 corrected candidate qualification
+on:
+  push:
+    branches: [qa/pr-1878-final-qualification-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  verify:
+    name: Candidate ${{ matrix.kind }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [static-migrations, browser-before, browser-after, live]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain explicit reviewed construction and journey drivers
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr1878-driver"
+          cp .github/qa/apply-repair.py .github/qa/theme-lead-tests.txt .github/qa/migration-compatibility.test.txt .github/qa/repair-followup.py .github/qa/pr1878-live-final.mjs "$RUNNER_TEMP/pr1878-driver/"
+      - uses: actions/checkout@v6
+        if: matrix.kind == 'live'
+        with:
+          ref: 5a59e58e05bc5d5a4628d4571c78557850880bcc
+          persist-credentials: false
+          path: original-driver
+          sparse-checkout: .github/qa
+      - name: Retain hash-pinned original real-server journey
+        if: matrix.kind == 'live'
+        run: cp original-driver/.github/qa/pr1878-live.mjs "$RUNNER_TEMP/pr1878-driver/"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Construct and verify complete candidate bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-final-${{ matrix.kind }}"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/source-parent.txt"
+          python "$RUNNER_TEMP/pr1878-driver/apply-repair.py" | tee "$out/construction.log"
+          git diff --cached --name-only --diff-filter=ACMR -z | xargs -0 ./node_modules/.bin/oxfmt
+          ./node_modules/.bin/oxfmt docs/integration/issue-driven-selection-20261016.md
+          git add apps/server/src/persistence apps/web/src/index.css apps/web/src/components/OnboardingProvidersStep.browser.tsx apps/web/src/components/ThemePackEditor.browser.tsx docs/integration/issue-driven-selection-20261016.md
+          test "$(git write-tree)" = 1e749cab8256ae3aee7b61921df845bf0898af3a
+          python "$RUNNER_TEMP/pr1878-driver/repair-followup.py" | tee "$out/followup.log"
+          ./node_modules/.bin/oxfmt apps/server/src/persistence/Migrations.test.ts apps/server/src/persistence/Migrations/IntegrationMigrationCompatibility.test.ts apps/web/src/components/ThemePackEditor.browser.tsx
+          git add apps/server/src/persistence apps/web/src/components/ThemePackEditor.browser.tsx
+          file=docs/integration/issue-driven-selection-20261016.md
+          cp "$file" "$out/formatted.md"
+          git show "$QA_SOURCE:$file" > "$file"
+          git add "$file"
+          git write-tree > "$out/code-tree.txt"
+          cp "$out/formatted.md" "$file"
+          git add "$file"
+          git write-tree > "$out/final-tree.txt"
+          git diff --cached --binary --full-index > "$out/review.patch"
+          git diff --cached --check
+          git diff --exit-code > "$out/source-clean.diff"
+      - name: Static contracts and full persistence suites
+        if: matrix.kind == 'static-migrations'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-final-${{ matrix.kind }}"
+          failed=0
+          for check in fmt:check lint typecheck windows-runtime:check migrations:check; do
+            name="${check//:/-}"
+            if bun run "$check" > "$out/$name.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+            cat "$out/$name.log"
+            printf '%s\t%s\n' "$check" "$rc" >> "$out/exits.tsv"
+          done
+          if bun run --cwd apps/server test src/persistence --reporter=default --reporter=json --outputFile.json="$out/persistence.json" > "$out/persistence.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+          cat "$out/persistence.log"
+          printf 'persistence\t%s\n' "$rc" >> "$out/exits.tsv"
+          git diff --exit-code > "$out/source-clean-after.diff" || failed=1
+          printf '%s\n' "$failed" > "$out/exit.txt"
+          exit "$failed"
+      - name: Install real browser and recording runtime
+        if: matrix.kind != 'static-migrations'
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Select original CSS for the causal Before control
+        if: matrix.kind == 'browser-before'
+        run: |
+          git show "$QA_SOURCE:apps/web/src/index.css" > apps/web/src/index.css
+          git diff -- apps/web/src/index.css > "$RUNNER_TEMP/pr1878-final-browser-before/control-css.patch"
+      - name: Exercise original and repaired color and onboarding contracts
+        if: startsWith(matrix.kind, 'browser-')
+        shell: bash
+        env:
+          VITE_PR1878_CAPTURE: '1'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-final-${{ matrix.kind }}"
+          if [ '${{ matrix.kind }}' = 'browser-before' ]; then
+            if bun run --cwd apps/web test:browser src/components/ThemePackEditor.browser.tsx --testNamePattern='preserves custom bold colors on paragraph and list leads' --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+          else
+            if bun run --cwd apps/web test:browser src/components/OnboardingProvidersStep.browser.tsx src/components/ThemePackEditor.browser.tsx --reporter=default --reporter=json --outputFile.json="$out/browser.json" > "$out/browser.log" 2>&1; then rc=0; else rc=$?; fi
+            git diff --exit-code > "$out/source-clean-after.diff" || exit 1
+          fi
+          cat "$out/browser.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          exit "$rc"
+      - name: Build actual candidate application
+        if: matrix.kind == 'live'
+        run: bun run build --filter=@synara/cli
+      - name: Real server, UI, SQLite and restart acceptance
+        if: matrix.kind == 'live'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-final-live"
+          if QA_REPO="$PWD" QA_OUT="$out" node "$RUNNER_TEMP/pr1878-driver/pr1878-live-final.mjs" > "$out/journey.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/journey.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean-after.diff" || exit 1
+          exit "$rc"
+      - name: Export precise candidate files for content-addressed publication
+        if: always()
+        shell: bash
+        env:
+          QA_KIND: ${{ matrix.kind }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess,json,hashlib,os
+          out=Path(os.environ['RUNNER_TEMP'])/('pr1878-final-'+os.environ['QA_KIND'])
+          if not (out/'final-tree.txt').exists(): raise SystemExit('Construction failed; no valid candidate')
+          tree=(out/'final-tree.txt').read_text().strip()
+          code=(out/'code-tree.txt').read_text().strip()
+          base=os.environ['QA_SOURCE']
+          rows=subprocess.check_output(['git','diff','--name-status','--no-renames',base,tree],text=True).splitlines()
+          assert len(rows)==42,len(rows)
+          files=[]
+          for row in rows:
+              status,path=row.split('\t')
+              assert path.startswith('apps/server/src/persistence/') or path in ['apps/web/src/index.css','apps/web/src/components/OnboardingProvidersStep.browser.tsx','apps/web/src/components/ThemePackEditor.browser.tsx','docs/integration/issue-driven-selection-20261016.md'],path
+              if status=='D':
+                  files.append({'path':path,'status':status,'sha':None});continue
+              data=subprocess.check_output(['git','show',tree+':'+path])
+              sha=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              dest=out/'files'/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(data)
+              files.append({'path':path,'status':status,'sha':sha,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+          (out/'candidate-manifest.json').write_text(json.dumps({'source':base,'baseTree':'4945ae38d1efa3fa387a51a00d276146132ed223','codeTree':code,'finalTree':tree,'files':files},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-final-${{ matrix.kind }}
+          path: |
+            ${{ runner.temp }}/pr1878-final-${{ matrix.kind }}
+            apps/web/src/components/__screenshots__
+          retention-days: 14
+          if-no-files-found: error
