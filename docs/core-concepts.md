@@ -49,8 +49,11 @@ input, including during ripples. The decoration pauses while its chat is hidden.
   chats stay out of message results. Every search word must match the message body;
   the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
-  across projects, ordered by its last human message (or creation time). If none remains, New
-  thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  in the active Space, ordered by its last human message (or creation time). The **Chats** list
+  and a Hub's own folder belong to no Space, so their chats count in every Space. A Hub thread in
+  a linked repository follows that repository's Space. With **Void** selected, only projects not
+  filed in any Space count. If none remains, New thread reopens an unsent draft.
+  Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))

@@ -238,6 +238,9 @@ function render(
     threadsHydrated?: boolean;
     archiveDeletesOrphanedWorktree?: boolean;
     sidebarTreeThreads?: readonly SidebarThreadSummary[];
+    filterThreadsToActiveSpace?: Parameters<
+      typeof useSidebarThreadActions
+    >[0]["filterThreadsToActiveSpace"];
   } = {},
 ) {
   reactHarness.beginRender();
@@ -251,6 +254,9 @@ function render(
       sidebarThreadSortOrder: "updated_at",
     },
     clearTerminalState: harness.clearTerminalState,
+    ...(overrides.filterThreadsToActiveSpace
+      ? { filterThreadsToActiveSpace: overrides.filterThreadsToActiveSpace }
+      : {}),
     handleNewChat: harness.handleNewChat,
     projectById: new Map([[PROJECT_ID, PROJECT]]),
     routeSplitViewId: overrides.routeSplitViewId ?? null,
@@ -779,6 +785,61 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).toHaveBeenCalledWith(
       expect.objectContaining({ params: { threadId: recentId } }),
+    );
+  });
+
+  describe("when the active Space limits the next chat", () => {
+    const otherSpaceThread = makeThread(ThreadId.makeUnsafe("thread-other-space"), {
+      projectId: ProjectId.makeUnsafe("project-other-space"),
+      latestHumanMessageAt: "2026-07-22T00:00:00.000Z",
+      latestUserMessageAt: "2026-07-22T00:00:00.000Z",
+    });
+    const SPACE_PROJECT_TWO = ProjectId.makeUnsafe("project-space-two");
+    const inActiveSpace = (threads: readonly SidebarThreadSummary[]) =>
+      threads.filter(
+        (thread) => thread.projectId === PROJECT_ID || thread.projectId === SPACE_PROJECT_TWO,
+      );
+    const closeFocusedChat = async (action: "archive" | "done") => {
+      const controller = render({
+        routeThreadId: THREAD_ID,
+        filterThreadsToActiveSpace: inActiveSpace,
+      });
+      if (action === "archive") {
+        await controller.archiveThread(THREAD_ID);
+        return;
+      }
+      deferWindowTimers();
+      controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+    };
+
+    it.each(["archive", "done"] as const)(
+      "stays in the Space when the newest chat belongs to another one (%s)",
+      async (action) => {
+        sidebarThreads = [
+          makeThread(THREAD_ID),
+          makeThread(FALLBACK_ID, { projectId: SPACE_PROJECT_TWO }),
+          otherSpaceThread,
+        ];
+
+        await closeFocusedChat(action);
+
+        expect(harness.navigate).toHaveBeenCalledWith(
+          expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+        );
+      },
+    );
+
+    it.each(["archive", "done"] as const)(
+      "opens a new chat instead of a chat in another Space (%s)",
+      async (action) => {
+        sidebarThreads = [makeThread(THREAD_ID), otherSpaceThread];
+
+        await closeFocusedChat(action);
+
+        expect(harness.navigate).not.toHaveBeenCalled();
+        expect(harness.handleNewChat).toHaveBeenCalledWith();
+      },
     );
   });
 
