@@ -884,6 +884,53 @@ export function useSidebarThreadActions(input: {
     [navigate],
   );
 
+  /**
+   * Restores an archived thread from the sidebar's Archived section. Unlike the undo
+   * toast this never navigates, and success is reported the same way Settings reports
+   * it, so both restore entry points read alike.
+   *
+   * Shaped like `restoreArchivedThreadFromToast`: a `try`/`finally` statement makes React
+   * Compiler bail out of this module, so the pending flag is cleared on the promise
+   * instead.
+   */
+  const restoreArchivedThread = useCallback((threadId: ThreadId): Promise<void> => {
+    const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
+    if (pendingThreadIds.has(threadId)) return Promise.resolve();
+    pendingThreadIds.add(threadId);
+    const runRestore = async (): Promise<void> => {
+      try {
+        const currentThread = getThreadFromState(useStore.getState(), threadId);
+        if (!currentThread) {
+          toastManager.add({
+            type: "error",
+            title: "Could not restore thread",
+            description: "The thread no longer exists.",
+          });
+          return;
+        }
+        await unarchiveThreadIgnoringAlreadyRestored(threadId);
+        // A restored thread must not be swept by a worktree cleanup still waiting on
+        // the archive. The thread owns its worktree again from here on.
+        archiveCleanupSequenceByThreadIdRef.current.delete(threadId);
+        acceptedArchiveSequenceByThreadIdRef.current.delete(threadId);
+        toastManager.add({
+          type: "success",
+          title: "Thread restored",
+          description: "The thread has been moved back to the sidebar.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not restore thread",
+          description: error instanceof Error ? error.message : "Unable to restore the thread.",
+        });
+      }
+    };
+    return runRestore().finally(() => {
+      pendingThreadIds.delete(threadId);
+    });
+  }, []);
+
   const showArchiveUndoToast = useCallback(
     (threadId: ThreadId, archiveSequence: number, options?: { returnToThreadOnUndo?: boolean }) => {
       toastManager.add({
@@ -1134,6 +1181,7 @@ export function useSidebarThreadActions(input: {
     archiveThread,
     archiveThreadWithUndo,
     confirmAndArchiveThread,
+    restoreArchivedThread,
     archiveAllThreadsInProject,
     deleteProjectThreads,
   } as const;
