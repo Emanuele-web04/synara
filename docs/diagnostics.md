@@ -12,7 +12,7 @@ It follows the **Share usage and diagnostics** switch in Settings â†’ General â†
 which is on by default: turning it off stops new events and deletes the unsent
 diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
 memory is not sent, and it sends no free text: an error keeps only its type and stack
-frames (`TypeError at readPlan (main.js:10:5)`), never its message; a crash keeps its
+locations (`TypeError at main:10:5`), never function names, file names or its message; a crash keeps its
 process type and reason without the log tail; an update failure keeps its step without
 the message. Handled issues keep their fixed code and reason. While sharing is off,
 no activity breadcrumbs or memory samples are kept, and after it is turned back on, a

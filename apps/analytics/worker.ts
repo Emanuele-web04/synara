@@ -14,7 +14,10 @@
 // fields are re-redacted server-side with the same rules the client applies.
 // Deploy: `cd apps/analytics && wrangler deploy`
 
-import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import {
+  redactDiagnosticText,
+  sanitizeRemoteDiagnosticError,
+} from "@synara/shared/diagnosticsRedaction";
 
 export interface Env {
   DB: D1Database;
@@ -562,18 +565,31 @@ export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent 
       : "";
   // Defense in depth: the client redacts before queueing; the worker does it
   // again so stored text is safe even from hand-crafted or old clients.
-  const message =
+  let message =
     typeof payload.message === "string"
       ? redactDiagnosticText(payload.message, { maxLength: MESSAGE_MAX })
       : null;
-  const stack =
+  let stack =
     typeof payload.stack === "string"
       ? redactDiagnosticText(payload.stack, { maxLength: STACK_MAX })
       : null;
   const logTail =
-    typeof payload.logTail === "string"
+    flavor !== "remote" && typeof payload.logTail === "string"
       ? redactDiagnosticText(payload.logTail, { maxLength: LOG_TAIL_MAX })
       : null;
+
+  if (flavor === "remote" && kind === "error") {
+    const technical = sanitizeRemoteDiagnosticError({
+      source: source === "renderer" ? "renderer" : "main",
+      message: message ?? "",
+      stack: stack ?? undefined,
+    });
+    message = technical.message;
+    stack = technical.stack ?? null;
+  } else if (flavor === "remote") {
+    message = null;
+    stack = null;
+  }
 
   // lifecycle (app.start): OS major.minor and UI language only.
   const osVersion =

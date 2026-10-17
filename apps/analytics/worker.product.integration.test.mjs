@@ -391,7 +391,18 @@ describe("product event route and D1 storage", () => {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body: [
-          diagnostic("remote", "00000000-0000-4000-8000-0000000000b1"),
+          {
+            ...diagnostic("remote", "00000000-0000-4000-8000-0000000000b1"),
+            event: "app.error",
+            payload: {
+              kind: "error",
+              source: "renderer",
+              message: "PrivateCustomerError: customer renewal draft",
+              stack: "at customer renewal draft\n    at PrivateCustomer (secret-project.js:10:5)",
+              logTail: "customer renewal draft",
+              fingerprint: "12345678",
+            },
+          },
           diagnostic("beta", "00000000-0000-4000-8000-0000000000b2"),
           { ...diagnostic("stable", "00000000-0000-4000-8000-0000000000b3") },
         ]
@@ -409,6 +420,11 @@ describe("product event route and D1 storage", () => {
       { flavor: "beta", n: 1 },
       { flavor: "remote", n: 1 },
     ]);
+    expect(
+      db.database
+        .prepare("SELECT message, stack, log_tail FROM events WHERE flavor = 'remote'")
+        .get(),
+    ).toEqual({ message: "Error at renderer:10:5", stack: "at renderer:10:5", log_tail: null });
 
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const filters = await worker.fetch(

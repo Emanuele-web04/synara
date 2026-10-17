@@ -1130,7 +1130,7 @@ describe("Remote keeps free text on the device", () => {
     const root = makeRoot();
     const diagnostics = remote(root);
     const error = new TypeError(
-      "Failed to read /Volumes/Work/AcmeSecret/strategy.txt: customer renewal draft",
+      "Failed to read /Volumes/Work/AcmeSecret/strategy.txt: customer renewal draft\n    at customer renewal draft",
     );
     error.stack = `TypeError: ${error.message}\n    at readPlan (main.js:10:5)\n    at run (main.js:20:3)`;
     diagnostics.trackError("main", error);
@@ -1140,14 +1140,19 @@ describe("Remote keeps free text on the device", () => {
       reason: "crashed",
       logTail: "customer renewal draft",
     });
-    diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout" });
+    diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout", durationMs: 120 });
+    diagnostics.trackError("main", "Handled issue: private-customer-secret (private_reason)");
+    const named = new Error("PrivateCustomer");
+    named.stack = "PrivateCustomerError: hidden\n    at PrivateCustomer (main.js:30:7)";
+    diagnostics.trackError("main", named);
     const raw = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8");
     expect(raw).not.toContain("AcmeSecret");
     expect(raw).not.toContain("renewal");
+    expect(raw).not.toMatch(/private-customer|private_reason|PrivateCustomer/);
     const [errorEvent, crashEvent, issueEvent] = queued(root);
     expect(errorEvent.payload).toMatchObject({
-      message: "TypeError at readPlan (main.js:10:5)",
-      stack: "at readPlan (main.js:10:5)\nat run (main.js:20:3)",
+      message: "TypeError at main:10:5",
+      stack: "at main:10:5\nat main:20:3",
     });
     expect(crashEvent.payload.logTail).toBeUndefined();
     expect(issueEvent.payload.message).toBe("Handled issue: git.push.failed (timeout)");

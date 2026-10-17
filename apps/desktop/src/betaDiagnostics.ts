@@ -46,7 +46,10 @@ import {
   LEGACY_PROVIDER_MIGRATIONS,
   ProviderKind,
 } from "@synara/contracts";
-import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+import {
+  redactDiagnosticText,
+  sanitizeRemoteDiagnosticError,
+} from "@synara/shared/diagnosticsRedaction";
 import { Schema } from "effect";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
@@ -216,28 +219,17 @@ const sanitizeLocale = (value: unknown): string | undefined => {
   return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 };
 
-const HANDLED_ISSUE_MESSAGE = /^Handled issue: [a-z0-9.-]+ \([A-Za-z0-9._-]+\)$/;
-const ERROR_TYPE = /^([A-Z][A-Za-z0-9_]*(?:Error|Exception))\b/;
-
 /**
- * Remote shares no free text: an error keeps its type and stack frames, a crash
+ * Remote shares no free text: errors keep fixed categories and numeric locations, a crash
  * its process and reason without the log tail, an update failure its step only.
  */
 function withoutFreeText(payload: BetaDiagnosticsPayload): BetaDiagnosticsPayload {
   if (payload.kind === "error") {
-    if (HANDLED_ISSUE_MESSAGE.test(payload.message) && payload.stack === undefined) return payload;
-    const frames = (payload.stack ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => /^at\s/.test(line))
-      .slice(0, 30);
-    const type = ERROR_TYPE.exec(payload.stack ?? payload.message)?.[1] ?? "Error";
     return {
       kind: "error",
       source: payload.source,
       fingerprint: payload.fingerprint,
-      message: frames[0] ? `${type} ${frames[0]}` : type,
-      ...(frames.length > 0 ? { stack: frames.join("\n") } : {}),
+      ...sanitizeRemoteDiagnosticError(payload),
     };
   }
   if (payload.kind === "crash") {
