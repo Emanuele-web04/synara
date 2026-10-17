@@ -136,6 +136,8 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
   availability, granted scopes, safe defaults, limits, and suggested next steps.
 - `synara_capabilities` — provider/model construction and safety limits for an allowed project.
 - `synara_list_allowed_projects` — only projects selected by the user.
+- `synara_get_usage` — cached usage for configured provider accounts, with the explicit
+  `usage:read` scope.
 - `synara_create_task` — one task per stable `requestId`.
 - `synara_wait_for_task` — wait for an authorized task without changing it.
 - `synara_read_task` — read tasks created by the integration. Reading other tasks requires the
@@ -144,6 +146,30 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
 Creation requires an explicit `projectId`, `provider`, `model`, `prompt`, and stable `requestId`.
 The default environment is a managed worktree and the default runtime is approval-required. Local
 checkout execution and full-access execution are independent, explicit scopes.
+
+### Read cached provider usage
+
+Enable **Read provider usage** under **Advanced permissions** when creating the connection.
+This optional grant is off by default and exposes usage for all configured provider accounts,
+including accounts used outside the selected projects. Existing connections keep their scopes.
+
+Call `synara_get_usage` before starting parallel work. With no arguments it returns `{ usage: [...] }`
+for every account; `{ "provider": "codex" }` selects that provider's accounts, and
+`{ "instanceId": "codex_work" }` selects one exact account. The filters can be combined; a missing
+account or provider mismatch returns an error instead of falling back to another account.
+
+Internal and external MCP use the same cache reader and normalized response. Each entry includes
+its provider, instance ID, redacted display name, default/enabled flags, cached snapshot, and
+explicit availability and freshness. Emails and credentials are excluded. Disabled, unsupported,
+cold-cache, and unauthenticated accounts remain visible with unavailable states. A provider whose
+current credentials cannot identify a cached account, including Droid API-key authentication,
+is unavailable rather than queried live.
+
+The tool never refreshes a provider or waits for a refresh already in progress. Only fresh,
+available `quotaWindows` provide actionable remaining percentages; stale windows, token counts,
+and spend lines must not be treated as remaining quota. Calls retain the integration's normal
+authorization, audit, and per-minute rate limits and consume no active-task slot. Without
+`usage:read`, the tool is hidden from discovery and calls return `capability_denied`.
 
 ## Security and lifecycle
 
