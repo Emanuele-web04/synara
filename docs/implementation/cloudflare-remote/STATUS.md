@@ -1,6 +1,6 @@
 # Cloudflare Remote — execution state
 
-## Remote .16 published / companion 137 uploaded — 2026-10-17
+## Remote .16 published / companion 137 on TestFlight — 2026-10-17
 
 [Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)
 is public for macOS ARM64, Windows x64 and Linux x64. Tag source
@@ -38,9 +38,11 @@ the existing cloud-managed Apple Distribution certificate. Version/build managem
 and internal-only distribution were disabled. The exported uploaded IPA passed
 strict app/widget signature checks, matching build 137 and iPhone/iPad device
 families, debugging disabled and production APNs on the app.
-**TestFlight processing and assignment to the existing groups remain unverified:**
-the owner must complete the separate web login in App Store Connect. Do not repeat
-the upload or present it as available to testers yet. No API key was created,
+**TestFlight distribution is complete:** after the owner restored the browser login,
+Apple processing was confirmed, test notes were saved and the build was assigned
+to both existing internal/external groups. Both groups show **Test in corso** for
+0.1 (137), with automatic tester notifications enabled. Existing tester membership
+and build 136 remain available. No public invitation link or API key was created,
 physical device used or new live simulator pass claimed for this source.
 
 The Mini's idle system sleep is already disabled (`sleep = 0`), its display timeout
