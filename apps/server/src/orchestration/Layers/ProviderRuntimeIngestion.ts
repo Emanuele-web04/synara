@@ -53,9 +53,11 @@ import {
 } from "@synara/shared/subagents";
 
 import {
+  CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN,
   generatedImageMarkdown,
   generatedImagePathFromRuntimeEvent,
-  isCodexGeneratedImageArtifact,
+  isTrustedCodexGeneratedImageArtifact,
+  markTrustedCodexGeneratedImageRuntimeEvent,
 } from "../../codexGeneratedImages.ts";
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
@@ -637,7 +639,11 @@ export function collectPersistedGeneratedImagePaths(
     const generatedImage = asObject(data?.generatedImage);
     const sourcePath = asString(generatedImage?.sourcePath)?.trim();
     const fullPath = asString(generatedImage?.fullPath)?.trim();
-    if (sourcePath && fullPath) {
+    if (
+      sourcePath &&
+      fullPath &&
+      generatedImage?.origin === CODEX_GENERATED_IMAGE_ARTIFACT_ORIGIN
+    ) {
       studioDisplayPathBySourcePath.set(sourcePath, fullPath);
     }
   }
@@ -660,7 +666,7 @@ export function collectPersistedGeneratedImagePaths(
     if (payload?.itemType !== "image_generation") {
       continue;
     }
-    const artifact = isCodexGeneratedImageArtifact(payload.data) ? payload.data : undefined;
+    const artifact = isTrustedCodexGeneratedImageArtifact(payload.data) ? payload.data : undefined;
     if (!artifact) {
       continue;
     }
@@ -2325,12 +2331,13 @@ const make = Effect.gen(function* () {
   const bufferedTextSpilledByMessageKey = new Set<string>();
 
   const processRuntimeEvent = (
-    event: ProviderRuntimeEvent,
+    inputEvent: ProviderRuntimeEvent,
     runtimeSequence: number,
     suppressProgressActivity = false,
     rebuildAcceptedProgress = false,
   ) =>
     Effect.gen(function* () {
+      const event = markTrustedCodexGeneratedImageRuntimeEvent(inputEvent);
       const now = event.createdAt;
       // Load the full (heavy) detail only when this event's handlers actually read
       // thread.messages / proposedPlans / checkpoints; otherwise use the cheap
