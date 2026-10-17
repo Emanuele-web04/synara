@@ -1,5 +1,54 @@
 # Cloudflare Remote — execution state
 
+## Remote .15 published — 2026-10-17
+
+[Synara Remote 1.0.6-remote.15](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.15)
+is public for macOS ARM64, Windows x64 and Linux x64. The tag names exact source
+`113bd45b0d408bae5e600bb3e887bb6cfb3f9efb`, prepared from feature source `31cae11`
+in the separate release worktree. All 11 installers, provenance documents and
+Remote updater manifests are present; Stable/Beta identities remain separate.
+The [exact-tag workflow](https://github.com/Emanuele-web04/synara/actions/runs/38990068434)
+passed quality, all three server shards, all three packaged startup gates,
+macOS signing/notarization and Windows Defender. CI recorded 18,258 passed tests
+and 298 skipped tests. These packaged checks are not manual installed upgrades
+or a real provider conversation on every operating system.
+
+Public verification downloaded and hashed all 11 assets against GitHub digests,
+exact-source provenance and updater SHA-512 metadata. The published Mac ZIP also
+passed an independent strict/deep signature check, Gatekeeper notarized Developer
+ID assessment and staple validation with the Remote bundle ID and .15 version.
+The real electron-updater GitHub provider, with a fetch HTTP adapter, discovers
+.15 from .14 for Mac, Windows and Linux without selecting Stable/Beta feeds.
+This is discovery evidence, not an installed-app upgrade test. GitHub Latest
+remains Stable `v1.0.6`; the historical `v0.4.2` compatibility release is unchanged.
+The exact-version Windows signing exception was restored to its prior value
+`1.0.6` after the successful run. No production website downloads were changed.
+
+The real production GitHub consent/callback remains unverified. Provider
+configuration and the seven-case Chromium sign-in UI suite pass; publication
+was explicitly requested without waiting for new GitHub account consent.
+No new account permissions or paid services were enabled for this publication.
+Remote distribution uses its own GitHub release/feed rather than replacing
+Stable website downloads. No new iPhone/iPad binary is needed for these host fixes.
+
+### Locked Mini investigation
+
+The installed .14 app's keep-awake blocker was active, system idle sleep was
+disabled, and the backend and Cloudflare connector stayed alive while locked.
+Local health, connector readiness and the current host's public health returned
+200, with four active Cloudflare connections. Host authorization succeeded with
+no account-level revoked devices. A Node probe opened the pinned TLS and inner
+RPC WebSocket over the public tunnel while the screen stayed locked; it did not
+approve a device or send a chat. The OS registry independently confirmed the screen-lock flag. The initial Bun
+probe was unsupported by that runtime; the Node rerun is the transport evidence.
+
+The same account also retains an older, differently identified Mini registration
+with the same display name and an offline endpoint (HTTP 530). Which identity
+the physical iPhone selected is unverified: the screenshot does not identify its
+paired root. Do not merge those trust roots, delete old records or attribute the
+failure to screen lock from the display name alone. A read-only SQLite inspection
+was blocked by the live database's exclusive lock; the database was left intact.
+
 ## Enrollment refusal recovery — 2026-10-17
 
 The hosted API still has public Remote access enabled for every authenticated
@@ -18,8 +67,8 @@ not revive that host. The repair refuses admission immediately but keeps polling
 without destroying trust for this one enrollment response. Proof refusal, owner
 removal and every other 401/403/404 retain their permanent fence. Re-admission
 still requires a fresh successful snapshot and durable revocation application.
-This runtime repair is source work until included in a new desktop release;
-it does not retroactively restore trust already revoked by an older app.
+This runtime repair ships in Remote .15; it does not retroactively restore trust
+already revoked by an older app.
 
 The built-browser E2E run also reproduced a Remote .14 workspace crash: opening
 the remote home (`/`) with existing threads passed an empty string to the branded

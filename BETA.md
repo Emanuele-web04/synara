@@ -32,14 +32,16 @@ qualifies startup without inheriting the operator's account URL. The hosted API'
 accounts, with host ownership, registered device proof and pairing consent still
 required. Private deployments leave it unset/`false` and enroll selected users.
 
-The published Remote .14 app offers Google, Apple and email sign-in. GitHub is
-now configured in the hosted WorkOS Production environment; the next desktop
-build restores its existing GitHub button. Release qualification requires a
-completed browser login and callback, not only an enabled provider. Remote also
+Remote .15 restores GitHub alongside Google, Apple and email sign-in. GitHub is
+configured in the hosted WorkOS Production environment. The provider configuration
+and Chromium sign-in UI tests pass; the real production GitHub consent/callback
+has not been verified. Remote also
 enables the profile/usage sync path without an operator flag; an explicit
 `SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
 generic/Beta builds still require their existing opt-in. Product analytics remain
 separate and off by default.
+
+Remote .15 retries temporary enrollment refusals without permanently disabling the host or revoking approved devices. Opening a populated remote home no longer constructs an empty chat ID. An update cannot distinguish a previously revoked pairing from deliberate revocation: pair that device normally again if needed; never restore trust by editing the database. The Remote updater prepares downloads in the background and installs only through its normal restart action.
 
 Signing out preserves that local database. Signing in as another account on the
 same installation does not create a separate local history: the account profile
