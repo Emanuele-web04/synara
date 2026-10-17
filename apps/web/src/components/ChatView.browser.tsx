@@ -5204,7 +5204,7 @@ describe("ChatView transcript geometry (full app)", () => {
         const clamp = row.querySelector<HTMLElement>('[data-user-message-clamp="true"]')!;
         expect(clamp).toBeTruthy();
         const text = clamp.querySelector<HTMLElement>(".chat-markdown")!;
-        expect(text, "Measure the actual rendered user text, not the outer flow-root wrapper").toBeTruthy();
+        expect(text).toBeTruthy();
         const lineHeightPx = Number.parseFloat(getComputedStyle(text).lineHeight);
         expect(lineHeightPx).toBeGreaterThan(0);
         expect(clamp.scrollHeight).toBeGreaterThan(clamp.clientHeight);
