@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./notion": {
+      "types": "./src/notion.ts",
+      "import": "./src/notion.ts"
+    },
     "./turnStopActivity": {
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"

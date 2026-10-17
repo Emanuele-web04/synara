@@ -1,3 +1,4 @@
+import { NotionTodoReference } from "./notion";
 import { Schema } from "effect";
 
 import {
@@ -47,6 +48,7 @@ const TodoTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(TODO_TITLE_MAX_
 const TodoNotes = Schema.String.check(Schema.isMaxLength(TODO_NOTES_MAX_LENGTH));
 
 export const Todo = Schema.Struct({
+  external: Schema.optional(NotionTodoReference),
   id: TodoId,
   title: TodoTitle,
   notes: TodoNotes,

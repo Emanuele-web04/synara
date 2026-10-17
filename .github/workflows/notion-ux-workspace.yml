@@ -1,0 +1,49 @@
+name: Notion Tasks evidence
+
+on:
+  push:
+    branches: [feat/notion-enterprise-oauth-integration]
+    paths:
+      - .github/workflows/notion-ux-workspace.yml
+      - apps/web/scripts/notion-tasks-*.mjs
+      - apps/web/src/components/tasks/**
+      - apps/web/src/components/notion/**
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 20
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Check pristine source formatting
+        run: bun run fmt:check
+      - name: Focused Tasks and Notion checks
+        run: |
+          bun run test:web:focused src/components/tasks/taskFilters.test.ts src/components/tasks/tasks.logic.test.ts src/components/notion/notionDrafts.test.ts src/components/notion/notionWrites.test.ts
+          bun run --cwd apps/server test src/notion/runtime.test.ts src/agentGateway/notionTools.test.ts src/agentGateway/notionApproval.test.ts
+      - name: Install the pinned browser
+        run: |
+          cd apps/web
+          ./node_modules/.bin/playwright install chromium
+      - name: Capture actual component journeys
+        env:
+          NOTION_EVIDENCE_DIR: ${{ runner.temp }}/notion-tasks-evidence
+        run: |
+          git diff --exit-code
+          node apps/web/scripts/notion-tasks-evidence.mjs
+          git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: notion-tasks-before-after
+          path: ${{ runner.temp }}/notion-tasks-evidence
+          retention-days: 14
+          if-no-files-found: error

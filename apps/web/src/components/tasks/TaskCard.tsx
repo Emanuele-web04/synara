@@ -1,3 +1,4 @@
+import { NotionTaskDetails } from "../notion/NotionTaskDetails";
 // FILE: TaskCard.tsx
 // Purpose: The floating card for the selected to-do: its editable title and note, property
 //          pills, then either the hand-off controls (a plain to-do), what its agent is doing
@@ -107,6 +108,7 @@ export function TaskCard({
         }
       />
 
+      <NotionTaskDetails todo={todo} />
       <TaskCardProperties
         todo={todo}
         projectNameById={projectNameById}

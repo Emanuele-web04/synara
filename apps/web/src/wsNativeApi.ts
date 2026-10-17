@@ -1,3 +1,4 @@
+import { NOTION_WS_METHODS } from "@synara/contracts";
 // FILE: wsNativeApi.ts
 // Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
 // Layer: Web transport adapter
@@ -552,6 +553,18 @@ export function createWsNativeApi(): NativeApi {
     threadStreamFailureListeners.emit(failure);
   });
   const api: NativeApi = {
+    notion: {
+      state: () => transport.request(NOTION_WS_METHODS.state),
+      connect: () => transport.request(NOTION_WS_METHODS.connect),
+      complete: (input) => transport.request(NOTION_WS_METHODS.complete, input),
+      disconnect: (input) => transport.request(NOTION_WS_METHODS.disconnect, input),
+      read: (input) => transport.request(NOTION_WS_METHODS.read, input),
+      write: (input) => transport.request(NOTION_WS_METHODS.write, input),
+      saveMapping: (input) => transport.request(NOTION_WS_METHODS.saveMapping, input),
+      deleteMapping: (input) => transport.request(NOTION_WS_METHODS.deleteMapping, input),
+      sync: () => transport.request(NOTION_WS_METHODS.sync),
+      resolve: (input) => transport.request(NOTION_WS_METHODS.resolve, input),
+    },
     dialogs: {
       pickFolder: async () => {
         if (!window.desktopBridge) return null;

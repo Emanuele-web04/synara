@@ -122,6 +122,9 @@ import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { makeAgentGatewayTodoTools } from "../todoTools.ts";
+import { makeAgentGatewayNotionTools } from "../notionTools.ts";
+import { makeNotionApproval } from "../notionApproval.ts";
+import { NotionIntegration } from "../../notion/Services/NotionIntegration.ts";
 import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
 import { TodoService } from "../../todo/Services/TodoService.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
@@ -181,6 +184,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const automationService = yield* AutomationService;
   const projectAgentService = yield* ProjectAgentService;
   const todoService = yield* TodoService;
+  const notionIntegration = Option.getOrUndefined(yield* Effect.serviceOption(NotionIntegration));
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -1623,6 +1627,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
+    ...makeAgentGatewayNotionTools(notionIntegration, {
+      callerProject: async (context) =>
+        (await Effect.runPromise(requireThreadShell(context.callerThreadId))).projectId,
+      approve: makeNotionApproval((command) => orchestrationEngine.dispatch(command)),
+    }),
     createThreads,
     createThread,
     sendMessage,

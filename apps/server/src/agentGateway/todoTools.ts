@@ -259,7 +259,9 @@ export function makeAgentGatewayTodoTools(input: TodoToolsInput): ReadonlyArray<
           projectId: readStringArg(args, "projectId"),
           todoId: readStringArg(args, "todoId"),
         }));
-        const all = (yield* todos.list().pipe(Effect.mapError(toToolError))).todos;
+        const all = (yield* todos.list().pipe(Effect.mapError(toToolError))).todos.filter(
+          (todo) => !todo.id.startsWith("notion:"),
+        );
         if (filter.todoId !== undefined) {
           const todo = all.find((candidate) => candidate.id === filter.todoId);
           if (todo === undefined) {
@@ -316,6 +318,12 @@ export function makeAgentGatewayTodoTools(input: TodoToolsInput): ReadonlyArray<
     handler: (args) =>
       Effect.gen(function* () {
         const todoId = yield* readArgs(() => readStringArg(args, "todoId", { required: true })!);
+        if (todoId.startsWith("notion:"))
+          return yield* Effect.fail(
+            new ToolInputError(
+              "Notion tasks require scoped provider permissions. Use the task context explicitly shared by the user instead.",
+            ),
+          );
         // Only these fields are the agent's to change: the chat link and its delegation
         // state are set by the user handing the to-do over in the Tasks view.
         const changes = pickSentArgs(

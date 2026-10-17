@@ -1,3 +1,4 @@
+import type { NotionApi } from "./notion";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -1148,6 +1149,7 @@ export interface DesktopBridge {
 }
 
 export interface NativeApi {
+  readonly notion?: NotionApi;
   dialogs: {
     pickFolder: () => Promise<string | null>;
     saveFile?: (input: {
