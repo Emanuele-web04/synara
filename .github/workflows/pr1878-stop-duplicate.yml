@@ -1,0 +1,20 @@
+name: Stop duplicate PR 1878 QA
+on:
+  push:
+    branches: [qa/pr1878-run-control-20261017]
+permissions: {}
+jobs:
+  stop-duplicate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel duplicate run 39029434666
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/Emanuele-web04/synara/actions/runs/39029434666/cancel
