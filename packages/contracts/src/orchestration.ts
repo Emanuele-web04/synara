@@ -1853,12 +1853,28 @@ const ThreadConversationRollbackCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// A settled effort retry must still refer to the turn the user confirmed when
+// the command reaches admission and, later, the provider work lease.
+export const EffortRetrySource = Schema.Struct({
+  assistantMessageId: MessageId,
+  assistantMessageUpdatedAt: IsoDateTime,
+  turnId: TurnId,
+  userMessageText: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+  ),
+  modelSelection: ModelSelection,
+  checkpointTurnCount: PositiveInt,
+  checkpointRef: CheckpointRef,
+});
+export type EffortRetrySource = typeof EffortRetrySource.Type;
+
 const ThreadMessageEditAndResendCommand = Schema.Struct({
   type: Schema.Literal("thread.message.edit-and-resend"),
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  retryFrom: Schema.optional(EffortRetrySource),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),
@@ -2543,6 +2559,7 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   rollbackTurnCount: Schema.optional(NonNegativeInt),
   removedTurnIds: Schema.optional(Schema.Array(TurnId)),
+  retryFrom: Schema.optional(EffortRetrySource),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   enableComputerControl: Schema.optional(Schema.Boolean),

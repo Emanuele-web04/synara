@@ -23,6 +23,7 @@ import {
   type OrchestrationReadModel,
   type ProjectId,
   type ProjectAgentOverview,
+  ProviderInstanceId,
   type ServerConfig,
   SpaceId,
   ThreadId,
@@ -120,6 +121,7 @@ import { trackWsTurnSettlement } from "../wsTransportEvents";
 import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
+import { useRetryEffortVariantStore } from "./chat/retryEffortVariantStore";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
@@ -2369,6 +2371,7 @@ describe("ChatView transcript geometry (full app)", () => {
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
+    useRetryEffortVariantStore.setState({ groups: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
       homeDir: null,
@@ -8924,6 +8927,59 @@ describe("ChatView transcript geometry (full app)", () => {
       });
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    { picker: "model", label: "Change model and reasoning" },
+    { picker: "permissions", label: "Full access" },
+  ])("preserves the $picker picker on first window activation", async ({ label }) => {
+    // Vitest hosts the real app in a same-origin frame. Give its parent actual
+    // focus before mounting, so the app must defer its initial composer focus.
+    // No focus result, event, requestAnimationFrame, or production callback is mocked.
+    expect(window.parent).not.toBe(window);
+    const parentBody = window.parent.document.body;
+    const originalTabIndex = parentBody.getAttribute("tabindex");
+    parentBody.tabIndex = -1;
+    parentBody.focus();
+    let mounted: MountedChatView | undefined;
+    try {
+      await expect.poll(() => document.hasFocus()).toBe(false);
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ composerEffortSlider: true }),
+      );
+      mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("first-window-picker"),
+          targetText: "Keep the picker I click when this window becomes active.",
+        }),
+      });
+      const editor = await waitForComposerEditor();
+      const trigger = page.getByRole("button", { name: label, exact: true });
+      await expect.element(trigger).toBeVisible();
+      await waitForLayout();
+      expect(document.hasFocus()).toBe(false);
+      expect(document.activeElement).not.toBe(editor);
+
+      await trigger.click();
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+      await expect.poll(() => document.hasFocus()).toBe(true);
+      // Let both the activation frame and subsequent popup work settle; a
+      // fleeting visible popup during its close transition cannot satisfy this.
+      for (let frame = 0; frame < 4; frame += 1) {
+        await waitForLayout();
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(document.activeElement).not.toBe(editor);
+      }
+      await expect.element(page.getByRole("menu")).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    } finally {
+      await mounted?.cleanup();
+      if (originalTabIndex === null) parentBody.removeAttribute("tabindex");
+      else parentBody.setAttribute("tabindex", originalTabIndex);
     }
   });
 
@@ -15612,5 +15668,331 @@ describe("ChatView transcript geometry (full app)", () => {
         }
       },
     );
+  });
+
+  describe("effort retry", () => {
+    const userId = MessageId.makeUnsafe("retry-browser-user");
+    const assistantId = MessageId.makeUnsafe("retry-browser-assistant");
+    const turnId = TurnId.makeUnsafe("retry-browser-turn");
+    const prompt = "Explain the failing assertion and suggest a focused repair.";
+    const answer = "The assertion compares a stale session with the current session.";
+    const previousAnswer = "The earlier low-effort attempt only identified the failing assertion.";
+
+    function createRetrySnapshot(options?: {
+      withArchive?: boolean;
+      withCheckpoint?: boolean;
+    }): OrchestrationReadModel {
+      const snapshot = createSnapshotForTargetUser({ targetMessageId: userId, targetText: prompt });
+      return {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => ({
+          ...thread,
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            instanceId: ProviderInstanceId.makeUnsafe("codex"),
+            options: { reasoningEffort: options?.withArchive ? "high" : "medium", fastMode: true },
+          },
+          runtimeMode: "approval-required",
+          messages: [
+            createUserMessage({ id: userId, text: prompt, offsetSeconds: 0 }),
+            {
+              ...createAssistantMessage({ id: assistantId, text: answer, offsetSeconds: 3 }),
+              turnId,
+            },
+          ],
+          latestTurn: {
+            turnId,
+            state: "completed",
+            requestedAt: isoAt(0),
+            startedAt: isoAt(1),
+            completedAt: isoAt(5),
+            assistantMessageId: assistantId,
+          },
+          session: {
+            ...thread.session!,
+            status: "ready",
+            activeTurnId: null,
+            runtimeMode: "approval-required",
+            updatedAt: isoAt(5),
+          },
+          checkpoints:
+            options?.withCheckpoint === false
+              ? []
+              : [
+                  {
+                    turnId,
+                    checkpointTurnCount: 1,
+                    checkpointRef: CheckpointRef.makeUnsafe(
+                      "refs/synara/checkpoints/retry-browser/turn-1",
+                    ),
+                    status: "ready",
+                    files: [],
+                    assistantMessageId: assistantId,
+                    startedAt: isoAt(1),
+                    completedAt: isoAt(5),
+                  },
+                ],
+          activities: options?.withArchive
+            ? [
+                {
+                  id: EventId.makeUnsafe("retry-browser-receipt"),
+                  kind: "turn.effort-retry.snapshot",
+                  summary: "Saved the previous attempt and a pre-retry workspace snapshot.",
+                  tone: "info",
+                  turnId: null,
+                  sequence: snapshot.snapshotSequence,
+                  sequenceSource: "orchestration",
+                  createdAt: isoAt(2),
+                  payload: {
+                    userMessageId: userId,
+                    sourceUserMessageText: prompt,
+                    retryUserMessageText: prompt,
+                    sourceModelSelection: {
+                      provider: "codex",
+                      model: "gpt-5.4",
+                      instanceId: "codex",
+                      options: { reasoningEffort: "low", fastMode: true },
+                    },
+                    assistantMessageId: "retry-browser-earlier-assistant",
+                    assistantMessageText: previousAnswer,
+                    assistantMessageCreatedAt: isoAt(1),
+                    sourceTurnId: "retry-browser-earlier-turn",
+                    checkpointTurnCount: 1,
+                    checkpointRef: "refs/synara/checkpoints/retry-browser/turn-1",
+                    restoreCheckpointRef: "refs/synara/checkpoints/retry-browser/turn-0",
+                    rescueCheckpointRef: "refs/synara/checkpoints/retry-browser/pre-retry",
+                  },
+                },
+              ]
+            : [],
+        })),
+      };
+    }
+
+    async function openHighEffortConfirmation(): Promise<void> {
+      await page.getByText(answer, { exact: true }).hover();
+      await page.getByRole("button", { name: "Retry with different effort", exact: true }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: /^Medium \(current\)/ }))
+        .toBeDisabled();
+      await page.getByRole("menuitem", { name: /^High(?:\s|$)/ }).click();
+      await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    }
+
+    async function cleanupRetry(
+      mounted: MountedChatView,
+      restoreNativeApi: () => void,
+    ): Promise<void> {
+      const openDialog = document.querySelector<HTMLElement>('[role="alertdialog"]');
+      const cancel = Array.from(
+        openDialog?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+      ).find((button) => button.textContent?.trim() === "Cancel");
+      cancel?.click();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+
+    it("uses the settled turn model and instance while preserving a different composer draft", async () => {
+      useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+        provider: "codex",
+        model: "gpt-5.5",
+        options: { reasoningEffort: "low" },
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const snapshot = createRetrySnapshot();
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        await waitForServerConfigToApply();
+        await openHighEffortConfirmation();
+        expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
+          "checkpoint 0",
+        );
+        expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
+          "pre-retry snapshot",
+        );
+        expect(hasDispatchedCommandType("thread.message.edit-and-resend")).toBe(false);
+        expect(hasDispatchedCommandType("thread.meta.update")).toBe(false);
+        await page.getByRole("button", { name: "Confirm", exact: true }).click();
+        await vi.waitFor(() => {
+          const edits = wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.message.edit-and-resend");
+          expect(edits).toHaveLength(1);
+          expect(edits[0]).toMatchObject({
+            messageId: userId,
+            text: prompt,
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5.4",
+              instanceId: "codex",
+              options: { reasoningEffort: "high", fastMode: true },
+            },
+            retryFrom: {
+              assistantMessageId: assistantId,
+              assistantMessageUpdatedAt: isoAt(4),
+              turnId,
+              userMessageText: prompt,
+              modelSelection: snapshot.threads[0]!.modelSelection,
+              checkpointTurnCount: 1,
+              checkpointRef: "refs/synara/checkpoints/retry-browser/turn-1",
+            },
+            runtimeMode: "approval-required",
+          });
+        });
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ model: "gpt-5.5", options: { reasoningEffort: "low" } });
+        expect(hasDispatchedCommandType("thread.meta.update")).toBe(false);
+      } finally {
+        await cleanupRetry(mounted, restoreNativeApi);
+      }
+    });
+
+    it("refuses a stale confirmation before dispatching a retry", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createRetrySnapshot(),
+      });
+      try {
+        await waitForServerConfigToApply();
+        await openHighEffortConfirmation();
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: fixture.snapshot.threads.map((thread) => ({
+            ...thread,
+            messages: thread.messages.map((message) =>
+              message.id === userId
+                ? { ...message, text: "A newer prompt from another client.", updatedAt: isoAt(20) }
+                : message,
+            ),
+          })),
+        };
+        useStore.getState().syncServerReadModel(fixture.snapshot);
+        await page.getByRole("button", { name: "Confirm", exact: true }).click();
+        await expect
+          .element(
+            page.getByText(
+              "This turn changed while confirmation was open. Review it before retrying.",
+              { exact: true },
+            ),
+          )
+          .toBeVisible();
+        expect(hasDispatchedCommandType("thread.message.edit-and-resend")).toBe(false);
+        expect(hasDispatchedCommandType("thread.meta.update")).toBe(false);
+        expect(useRetryEffortVariantStore.getState().groups).toEqual({});
+      } finally {
+        await cleanupRetry(mounted, restoreNativeApi);
+      }
+    });
+
+    it("pages and copies the durable previous answer on a client without a local archive", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createRetrySnapshot({ withArchive: true }),
+      });
+      const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+      try {
+        expect(useRetryEffortVariantStore.getState().groups).toEqual({});
+        await expect
+          .element(page.getByTestId("retry-effort-variant-pager"))
+          .toHaveTextContent("2 / 2");
+        await page.getByText(answer, { exact: true }).hover();
+        await page.getByRole("button", { name: "Previous attempt", exact: true }).click();
+        await expect.element(page.getByText(previousAnswer, { exact: true })).toBeVisible();
+        await expect
+          .element(page.getByTestId("retry-effort-variant-pager"))
+          .toHaveTextContent("1 / 2");
+        await expect.element(page.getByText(answer, { exact: true })).not.toBeInTheDocument();
+        await page.getByRole("button", { name: "Copy message", exact: true }).last().click();
+        await vi.waitFor(() => expect(copy).toHaveBeenCalledExactlyOnceWith(previousAnswer));
+        await page.getByRole("button", { name: "Next attempt", exact: true }).click();
+        await expect.element(page.getByText(answer, { exact: true })).toBeVisible();
+        expect(hasDispatchedCommandType("thread.message.edit-and-resend")).toBe(false);
+      } finally {
+        copy.mockRestore();
+        await cleanupRetry(mounted, restoreNativeApi);
+      }
+    });
+
+    it("clears local retry history after an ordinary edit and does not reattach old durable answers", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createRetrySnapshot({ withArchive: true }),
+      });
+      try {
+        await page.getByText(answer, { exact: true }).hover();
+        await page.getByRole("button", { name: "Previous attempt", exact: true }).click();
+        await expect.element(page.getByText(previousAnswer, { exact: true })).toBeVisible();
+        expect(Object.keys(useRetryEffortVariantStore.getState().groups)).toHaveLength(1);
+        await page.getByText(prompt, { exact: true }).hover();
+        await page.getByRole("button", { name: "Edit message", exact: true }).click();
+        const editor = page.getByRole("textbox", { name: "Edit message", exact: true });
+        await editor.fill("A different task with a revised prompt.");
+        const form = editor.element().closest("form");
+        expect(form).not.toBeNull();
+        await page.elementLocator(form!).getByRole("button", { name: "Send", exact: true }).click();
+        await vi.waitFor(() => {
+          expect(
+            wsRequests
+              .map(readDispatchedCommand)
+              .find((command) => command?.type === "thread.message.edit-and-resend"),
+          ).toMatchObject({
+            messageId: userId,
+            text: "A different task with a revised prompt.",
+          });
+          expect(useRetryEffortVariantStore.getState().groups).toEqual({});
+        });
+        // The controlled API above acknowledges only. Project the subsequent
+        // server read model to exercise the real transcript's revision boundary.
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: fixture.snapshot.threads.map((thread) => ({
+            ...thread,
+            messages: thread.messages.map((message) =>
+              message.id === userId
+                ? {
+                    ...message,
+                    text: "A different task with a revised prompt.",
+                    updatedAt: isoAt(20),
+                  }
+                : message,
+            ),
+          })),
+        };
+        useStore.getState().syncServerReadModel(fixture.snapshot);
+        await expect
+          .element(page.getByTestId("retry-effort-variant-pager"))
+          .not.toBeInTheDocument();
+        await expect
+          .element(page.getByText(previousAnswer, { exact: true }))
+          .not.toBeInTheDocument();
+      } finally {
+        await cleanupRetry(mounted, restoreNativeApi);
+      }
+    });
+
+    it("disables the action when the settled turn has no checkpoint", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createRetrySnapshot({ withCheckpoint: false }),
+      });
+      try {
+        await page.getByText(answer, { exact: true }).hover();
+        await expect
+          .element(page.getByRole("button", { name: "Retry with different effort", exact: true }))
+          .toBeDisabled();
+        expect(hasDispatchedCommandType("thread.message.edit-and-resend")).toBe(false);
+      } finally {
+        await cleanupRetry(mounted, restoreNativeApi);
+      }
+    });
   });
 });

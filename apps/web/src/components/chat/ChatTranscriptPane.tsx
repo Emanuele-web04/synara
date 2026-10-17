@@ -123,6 +123,7 @@ interface ChatTranscriptPaneProps {
   onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
   onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
+  retryEffortContext?: ComponentProps<typeof MessagesTimeline>["retryEffortContext"];
   editableUserMessageId?: MessageId | null;
   onScrollToBottom: () => void;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -227,6 +228,7 @@ export function ChatTranscriptPane({
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  retryEffortContext,
   onRespondToAsyncUserInput,
   editableUserMessageId,
   onScrollToBottom,
@@ -450,6 +452,7 @@ export function ChatTranscriptPane({
               onRevertUserMessage={onRevertUserMessage}
               {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
               {...(onEditUserMessage ? { onEditUserMessage } : {})}
+              {...(retryEffortContext ? { retryEffortContext } : {})}
               {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
               editableUserMessageId={editableUserMessageId ?? null}
               isRevertingCheckpoint={isRevertingCheckpoint}

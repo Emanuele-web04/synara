@@ -7,6 +7,8 @@ import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGa
 import { ComputerService } from "../../computer/Services/ComputerService";
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 import { resolveForkSourceCutoff } from "../forkSourceCutoff.ts";
+import { effortRetryPreconditionViolation } from "../effortRetry.ts";
+import { deriveRetryAttemptMetrics } from "@synara/shared/effortRetryMetrics";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -92,6 +94,7 @@ import {
 
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -206,6 +209,11 @@ import { resolveProviderSessionThread as resolveProviderSessionThreadFromProject
 class ProviderSessionOwnerUnavailable extends Schema.TaggedErrorClass<ProviderSessionOwnerUnavailable>()(
   "ProviderSessionOwnerUnavailable",
   { threadId: ThreadId },
+) {}
+
+class EffortRetryRefused extends Schema.TaggedErrorClass<EffortRetryRefused>()(
+  "EffortRetryRefused",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect) },
 ) {}
 
 const providerIntentEventTypes = OrchestrationEventType.literals.filter(isProviderIntentEventType);
@@ -1574,7 +1582,8 @@ const make = Effect.gen(function* () {
       | "provider.task.background.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
-      | "provider.session.stop.failed";
+      | "provider.session.stop.failed"
+      | "turn.effort-retry.refused";
     readonly summary: string;
     readonly detail: string;
     readonly turnId: TurnId | null;
@@ -2059,8 +2068,11 @@ const make = Effect.gen(function* () {
   });
 
   interface EditReplayWorkspaceRestorePlan {
+    readonly threadId: ThreadId;
     readonly cwd: string;
     readonly checkpointRef: CheckpointRef;
+    readonly rescueCheckpointRef: CheckpointRef;
+    readonly retainRescueCheckpoint: boolean;
     readonly targetTurnCount: number;
   }
 
@@ -2073,13 +2085,20 @@ const make = Effect.gen(function* () {
   const planWorkspaceRestoreForEditReplay = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly removedTurnIds: ReadonlyArray<TurnId>;
+    readonly requireCheckpoint?: boolean;
   }) {
     if (input.removedTurnIds.length === 0) {
+      if (input.requireCheckpoint) {
+        return yield* Effect.fail(new Error("Effort retry requires a settled checkpointed turn."));
+      }
       return null;
     }
 
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
+      if (input.requireCheckpoint) {
+        return yield* Effect.fail(new Error("Effort retry thread is no longer available."));
+      }
       return null;
     }
 
@@ -2088,6 +2107,9 @@ const make = Effect.gen(function* () {
       removedTurnIdSet.has(checkpoint.turnId),
     );
     if (removedCheckpoints.length === 0) {
+      if (input.requireCheckpoint) {
+        return yield* Effect.fail(new Error("Effort retry requires a workspace checkpoint."));
+      }
       return null;
     }
 
@@ -2098,10 +2120,16 @@ const make = Effect.gen(function* () {
     const targetTurnCount = Math.max(0, firstRemovedTurnCount - 1);
     const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     if (!cwd) {
+      if (input.requireCheckpoint) {
+        return yield* Effect.fail(new Error("Effort retry workspace is unavailable."));
+      }
       return null;
     }
 
     if (!(yield* checkpointStore.isGitRepository(cwd))) {
+      if (input.requireCheckpoint) {
+        return yield* Effect.fail(new Error("Effort retry requires a Git workspace checkpoint."));
+      }
       return null;
     }
 
@@ -2117,10 +2145,10 @@ const make = Effect.gen(function* () {
       );
     }
 
-    // Turn zero restores with `fallbackToHead`, so a missing baseline ref is
-    // tolerated there; every other turn must have its checkpoint on disk.
+    // Ordinary edits retain their HEAD fallback for turn zero. An effort retry
+    // must prove the original pre-turn checkpoint exists, including turn zero.
     if (
-      targetTurnCount !== 0 &&
+      (input.requireCheckpoint || targetTurnCount !== 0) &&
       !(yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef: targetCheckpointRef }))
     ) {
       return yield* Effect.fail(
@@ -2128,9 +2156,30 @@ const make = Effect.gen(function* () {
       );
     }
 
+    // Capture before either workspace restore or irreversible provider rollback.
+    // A failed capture must leave both sides of the settled turn intact.
+    const rescueCheckpointRef = checkpointRefForThreadRevertRescue(
+      input.threadId,
+      crypto.randomUUID(),
+    );
+    yield* checkpointStore
+      .captureCheckpoint({ cwd, checkpointRef: rescueCheckpointRef })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new Error(
+              `The pre-retry workspace snapshot could not be captured, so the restore was refused: ${error.message}`,
+              { cause: error },
+            ),
+        ),
+      );
+
     return {
+      threadId: input.threadId,
       cwd,
       checkpointRef: targetCheckpointRef,
+      rescueCheckpointRef,
+      retainRescueCheckpoint: input.requireCheckpoint === true,
       targetTurnCount,
     } satisfies EditReplayWorkspaceRestorePlan;
   });
@@ -2141,19 +2190,55 @@ const make = Effect.gen(function* () {
     if (plan === null) {
       return;
     }
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: plan.cwd,
-      checkpointRef: plan.checkpointRef,
-      fallbackToHead: plan.targetTurnCount === 0,
-    });
-    if (!restored) {
+    const { rescueCheckpointRef } = plan;
+
+    const discardRescueCheckpoint = Effect.suspend(() =>
+      checkpointStore.deleteCheckpointRefs({
+        cwd: plan.cwd,
+        checkpointRefs: [rescueCheckpointRef],
+      }),
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("edit-replay rescue ref cleanup failed", {
+          threadId: plan.threadId,
+          cwd: plan.cwd,
+          rescueCheckpointRef,
+          detail: error.message,
+        }),
+      ),
+    );
+
+    const restoreOutcome = yield* checkpointStore
+      .restoreCheckpoint({
+        cwd: plan.cwd,
+        checkpointRef: plan.checkpointRef,
+        fallbackToHead: plan.targetTurnCount === 0 && !plan.retainRescueCheckpoint,
+      })
+      .pipe(
+        Effect.map((restored) =>
+          restored ? ({ kind: "restored" } as const) : ({ kind: "unavailable" } as const),
+        ),
+        Effect.catch((error) => Effect.succeed({ kind: "failed", detail: error.message } as const)),
+      );
+
+    if (restoreOutcome.kind === "unavailable") {
+      if (!plan.retainRescueCheckpoint) yield* discardRescueCheckpoint;
       return yield* Effect.fail(
         new Error(
           `Filesystem checkpoint for edit replay turn ${plan.targetTurnCount} became unavailable during the rollback.`,
         ),
       );
     }
+    if (restoreOutcome.kind === "failed") {
+      // Keep the rescue snapshot: the worktree may be half-rewritten.
+      return yield* Effect.fail(
+        new Error(
+          `Filesystem restore for edit replay turn ${plan.targetTurnCount} failed (${restoreOutcome.detail}). The pre-retry snapshot is kept at ${rescueCheckpointRef}.`,
+        ),
+      );
+    }
 
+    if (!plan.retainRescueCheckpoint) yield* discardRescueCheckpoint;
     clearWorkspaceIndexCache(plan.cwd);
   });
 
@@ -6529,6 +6614,28 @@ const make = Effect.gen(function* () {
       processConversationRollbackRequestedWithoutLease(event),
     );
 
+  const validateEffortRetrySource = Effect.fnUntraced(function* (
+    payload: Extract<
+      ProviderIntentEvent,
+      { type: "thread.message-edit-resend-requested" }
+    >["payload"],
+  ) {
+    if (!payload.retryFrom) return;
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getThreadDetailById(payload.threadId),
+    );
+    const detail = thread
+      ? effortRetryPreconditionViolation(
+          thread,
+          { ...payload, retryFrom: payload.retryFrom },
+          payload.createdAt,
+        )
+      : "Effort retry thread is no longer available.";
+    if (detail) {
+      return yield* new EffortRetryRefused({ detail });
+    }
+  });
+
   const processMessageEditResendPayload = Effect.fnUntraced(function* (
     payload: Extract<
       ProviderIntentEvent,
@@ -6555,7 +6662,10 @@ const make = Effect.gen(function* () {
         updatedAt: new Date().toISOString(),
       });
     }
-    const originalThread = yield* resolveThread(payload.threadId);
+    const originalThreadWithActivities = payload.retryFrom
+      ? Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(payload.threadId))
+      : undefined;
+    const originalThread = originalThreadWithActivities ?? (yield* resolveThread(payload.threadId));
     const originalMessage = originalThread?.messages.find(
       (message) => message.id === payload.messageId,
     );
@@ -6598,7 +6708,58 @@ const make = Effect.gen(function* () {
     const workspaceRestorePlan = yield* planWorkspaceRestoreForEditReplay({
       threadId: payload.threadId,
       removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
-    });
+      requireCheckpoint: payload.retryFrom !== undefined,
+    }).pipe(
+      Effect.catch((error) =>
+        payload.retryFrom
+          ? Effect.fail(new EffortRetryRefused({ detail: error.message, cause: error }))
+          : Effect.fail(error),
+      ),
+    );
+    // Check again after checkpoint IO, before an irreversible provider trim.
+    yield* validateEffortRetrySource(payload);
+    if (payload.retryFrom && workspaceRestorePlan) {
+      const sourceAssistant = originalThread.messages.find(
+        (message) => message.id === payload.retryFrom?.assistantMessageId,
+      );
+      const activityId = `effort-retry-snapshot:${crypto.randomUUID()}`;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`server:${activityId}`),
+        threadId: payload.threadId,
+        activity: {
+          id: EventId.makeUnsafe(activityId),
+          tone: "info",
+          kind: "turn.effort-retry.snapshot",
+          summary: "Saved the previous attempt and a pre-retry workspace snapshot.",
+          payload: {
+            sourceTurnId: payload.retryFrom.turnId,
+            userMessageId: payload.messageId,
+            sourceUserMessageText: payload.retryFrom.userMessageText,
+            retryUserMessageText: payload.text,
+            sourceModelSelection: modelSelectionJson(payload.retryFrom.modelSelection),
+            assistantMessageId: payload.retryFrom.assistantMessageId,
+            assistantMessageText: sourceAssistant?.text ?? "",
+            assistantMessageCreatedAt: sourceAssistant?.createdAt ?? payload.createdAt,
+            sourceMetrics: {
+              ...deriveRetryAttemptMetrics(
+                originalThreadWithActivities?.activities ?? [],
+                payload.retryFrom.turnId,
+              ),
+            },
+            checkpointTurnCount: payload.retryFrom.checkpointTurnCount,
+            checkpointRef: payload.retryFrom.checkpointRef,
+            restoreCheckpointRef: workspaceRestorePlan.checkpointRef,
+            rescueCheckpointRef: workspaceRestorePlan.rescueCheckpointRef,
+          },
+          // Keep this receipt when the old turn's projection is rolled back.
+          turnId: null,
+          createdAt: payload.createdAt,
+        },
+        createdAt: payload.createdAt,
+      });
+      yield* validateEffortRetrySource(payload);
+    }
     if (options?.skipProviderRollback !== true && editTarget.rollbackTurnCount > 0) {
       yield* rollbackProviderConversationForEdit({
         threadId: payload.threadId,
@@ -6684,6 +6845,7 @@ const make = Effect.gen(function* () {
   const processMessageEditResendRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
   ) {
+    yield* validateEffortRetrySource(event.payload);
     const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     const activeTurnId =
@@ -7416,6 +7578,38 @@ const make = Effect.gen(function* () {
           return;
         case "thread.message-edit-resend-requested":
           yield* processMessageEditResendRequested(event).pipe(
+            Effect.catchCause((cause) => {
+              const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+              if (cause.reasons.length !== 1 || !(error instanceof EffortRetryRefused)) {
+                return Effect.failCause(cause);
+              }
+              // No provider rollback or workspace restore has started. Record
+              // this refusal durably, then clear only our own optimistic row.
+              // A newer active session and its delivery remain untouched.
+              return appendProviderFailureActivity({
+                threadId: event.payload.threadId,
+                kind: "turn.effort-retry.refused",
+                summary: "Effort retry was not started",
+                detail: error.detail,
+                turnId: null,
+                createdAt: event.payload.createdAt,
+              }).pipe(
+                Effect.andThen(
+                  setThreadSessionError({
+                    threadId: event.payload.threadId,
+                    detail: error.detail,
+                    expectedSession: { status: "starting", updatedAt: event.payload.createdAt },
+                    createdAt: event.payload.createdAt,
+                  }),
+                ),
+                Effect.catchTag("OrchestrationCommandInvariantError", (failure) =>
+                  failure.detail ===
+                  `Thread '${event.payload.threadId}' session changed before the conditional update.`
+                    ? Effect.void
+                    : Effect.fail(failure),
+                ),
+              );
+            }),
             Effect.catchCause((cause) =>
               setThreadSessionError({
                 threadId: event.payload.threadId,

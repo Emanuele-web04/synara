@@ -99,6 +99,12 @@ import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { EditedFileRow } from "./EditedFileRow";
+import {
+  AssistantRetryEffortFooterActions,
+  AssistantRetryEffortCopyButton,
+  AssistantRetryEffortMessageText,
+  type AssistantRetryEffortContext,
+} from "./AssistantRetryEffortControls";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
@@ -521,6 +527,8 @@ interface MessagesTimelineProps {
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onRespondToAsyncUserInput?: (messageId: MessageId, answers: readonly string[]) => Promise<void>;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
+  /** Optional context for "Retry with different effort" on settled assistant turns. */
+  retryEffortContext?: AssistantRetryEffortContext | null;
   /**
    * The user message the edit affordance may target, resolved by the owner from
    * the raw thread messages (the same list the server-side edit policy
@@ -634,6 +642,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  retryEffortContext: retryEffortContextProp,
   onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
@@ -686,6 +695,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailAnchorMessageId = tailAnchorMessageIdProp ?? null;
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
+  const retryEffortContext = retryEffortContextProp ?? null;
   const findHighlight = findHighlightProp ?? null;
   const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
   const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
@@ -2457,6 +2467,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
+          const assistantMarkdownProps: ComponentProps<typeof ChatMarkdown> = {
+            text: conversationOnly
+              ? rewriteThreadIdsAsMarkdownLinks(
+                  messageText ?? "",
+                  synaraThreadCreationRecaps.flatMap((creation) =>
+                    creation.threads.map((thread) => ({
+                      id: thread.threadId,
+                      title: thread.title,
+                    })),
+                  ),
+                )
+              : (messageText ?? ""),
+            cwd: markdownCwd,
+            directionMode: "auto-blocks",
+            isStreaming: Boolean(row.message.streaming),
+            style: chatTypographyStyle,
+            onImageExpand,
+            knownAbsoluteFilePaths,
+            ...(conversationOnly && onOpenThread ? { onOpenThread } : {}),
+            ...threadFindMarkdownProps(findHighlight, row.message.id),
+          };
           // Computer setup/denied cards carry the only affordance to unblock the
           // agent, so a settled turn shows the latest of each after the answer
           // instead of burying it inside the closed "Worked for" disclosure.
@@ -2680,29 +2711,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           : null
                       }
                     >
-                      <ChatMarkdown
-                        text={
-                          conversationOnly
-                            ? rewriteThreadIdsAsMarkdownLinks(
-                                messageText,
-                                synaraThreadCreationRecaps.flatMap((creation) =>
-                                  creation.threads.map((thread) => ({
-                                    id: thread.threadId,
-                                    title: thread.title,
-                                  })),
-                                ),
-                              )
-                            : messageText
-                        }
-                        cwd={markdownCwd}
-                        directionMode="auto-blocks"
-                        isStreaming={Boolean(row.message.streaming)}
-                        style={chatTypographyStyle}
-                        onImageExpand={onImageExpand}
-                        knownAbsoluteFilePaths={knownAbsoluteFilePaths}
-                        {...(conversationOnly && onOpenThread ? { onOpenThread } : {})}
-                        {...threadFindMarkdownProps(findHighlight, row.message.id)}
-                      />
+                      {retryEffortContext !== null && isTerminalAssistantMessage ? (
+                        <AssistantRetryEffortMessageText
+                          context={retryEffortContext}
+                          message={row.message}
+                          liveText={assistantMarkdownProps.text}
+                          turnDiffSummary={turnSummary}
+                          markdownProps={assistantMarkdownProps}
+                        />
+                      ) : (
+                        <ChatMarkdown {...assistantMarkdownProps} />
+                      )}
                     </InlineVisualEmbedContext.Provider>
                   </div>
                 ) : null}
@@ -2967,7 +2986,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatMessageFooterStyle}
                   >
                     {assistantCopyState.visible ? (
-                      <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                      retryEffortContext !== null && isTerminalAssistantMessage ? (
+                        <AssistantRetryEffortCopyButton
+                          context={retryEffortContext}
+                          message={row.message}
+                          liveText={assistantCopyState.text ?? ""}
+                          turnDiffSummary={turnSummary}
+                        />
+                      ) : (
+                        <MessageCopyButton text={assistantCopyState.text ?? ""} />
+                      )
+                    ) : null}
+                    {retryEffortContext !== null && isTerminalAssistantMessage ? (
+                      <AssistantRetryEffortFooterActions
+                        context={retryEffortContext}
+                        message={row.message}
+                        showAssistantCopyButton={row.showAssistantCopyButton}
+                        assistantTurnInProgress={row.assistantTurnInProgress}
+                        turnDiffSummary={turnSummary}
+                      />
                     ) : null}
                     {showForkAction ? (
                       <MessageActionButton

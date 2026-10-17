@@ -12371,6 +12371,329 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("refuses settled edit replay before provider rollback when the rescue capture fails", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const messageId = asMessageId("user-message-rescue-capture-failure");
+    const turnId = asTurnId("turn-rescue-capture-failure");
+    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+    const captureFailure = new GitCommandError({
+      operation: "checkpoint.capture",
+      cwd: "/tmp/provider-project",
+      command: "git write-tree",
+      detail: "rescue capture refused",
+    });
+    harness.captureCheckpoint.mockImplementationOnce(() => Effect.fail(captureFailure));
+    await seedRollbackTarget(harness, { messageId, turnId, createdAt: now });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-rescue-capture-failure-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId,
+        completedAt: now,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        status: "ready",
+        files: [],
+        assistantMessageId: asMessageId(`assistant-${messageId}`),
+        checkpointTurnCount: 1,
+        createdAt: now,
+      }),
+    );
+    const beforeMessages = (await readHarnessThread(harness))?.messages;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-rescue-capture-failure-replay"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId,
+        text: "edited checkpoint prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.lastError).toContain("rescue capture refused");
+    expect(harness.captureCheckpoint).toHaveBeenCalledTimes(1);
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(thread?.messages).toEqual(beforeMessages);
+  });
+
+  async function seedEffortRetry(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const now = new Date().toISOString();
+    const messageId = asMessageId("user-effort-retry");
+    const turnId = asTurnId("turn-effort-retry");
+    const assistantMessageId = asMessageId(`assistant-${messageId}`);
+    await seedRollbackTarget(harness, { messageId, turnId, createdAt: now });
+    const checkpointRef = checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-effort-retry-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId,
+        completedAt: now,
+        checkpointRef,
+        status: "ready",
+        files: [],
+        assistantMessageId,
+        checkpointTurnCount: 1,
+        createdAt: now,
+      }),
+    );
+    const thread = (await readHarnessThread(harness))!;
+    if (thread.modelSelection.provider !== "codex") throw new Error("Expected Codex fixture");
+    const assistant = thread.messages.find((message) => message.id === assistantMessageId)!;
+    return {
+      type: "thread.message.edit-and-resend" as const,
+      commandId: CommandId.makeUnsafe("cmd-confirmed-effort-retry"),
+      threadId: thread.id,
+      messageId,
+      text: "rollback target",
+      modelSelection: {
+        ...thread.modelSelection,
+        options: { ...thread.modelSelection.options, reasoningEffort: "high" as const },
+      },
+      retryFrom: {
+        assistantMessageId,
+        assistantMessageUpdatedAt: assistant.updatedAt,
+        turnId,
+        userMessageText: "rollback target",
+        modelSelection: thread.modelSelection,
+        checkpointTurnCount: 1,
+        checkpointRef,
+      },
+      runtimeMode: "approval-required" as const,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: now,
+    };
+  }
+
+  it("refuses effort retry before provider rollback when the actual pre-turn baseline is missing", async () => {
+    const harness = await createHarness();
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    const request = await seedEffortRetry(harness);
+    const beforeMessages = (await readHarnessThread(harness))?.messages;
+    await Effect.runPromise(harness.engine.dispatch(request));
+    await harness.drain();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.captureCheckpoint).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.messages).toEqual(beforeMessages);
+    expect((await readHarnessThread(harness))?.session?.lastError).toContain("checkpoint");
+    expect(
+      (await readHarnessThread(harness))?.activities.some(
+        (activity) => activity.kind === "turn.effort-retry.refused",
+      ),
+    ).toBe(true);
+    expect(
+      Option.isNone(
+        await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: request.threadId,
+          }),
+        ),
+      ),
+    ).toBe(true);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-normal-turn-after-refused-effort-retry"),
+        threadId: request.threadId,
+        message: {
+          messageId: asMessageId("normal-after-refused-retry"),
+          role: "user",
+          text: "Continue without restoring",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates an effort retry after admission before touching the provider or workspace", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      checkpointStore: { hasCheckpointRef: () => Effect.succeed(true) },
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    const request = await seedEffortRetry(harness);
+    await Effect.runPromise(harness.engine.dispatch(request));
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-effort-retry-other-client-edit"),
+        threadId: request.threadId,
+        messages: [
+          {
+            messageId: request.messageId,
+            role: "user",
+            text: "Another client's revision",
+            createdAt: request.createdAt,
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(harness.captureCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      (await readHarnessThread(harness))?.messages.find(
+        (message) => message.id === request.messageId,
+      )?.text,
+    ).toBe("Another client's revision");
+  });
+
+  it("preserves a newer active session when a stale effort retry is refused", async () => {
+    const harness = await createHarness({
+      startReactor: false,
+      checkpointStore: { hasCheckpointRef: () => Effect.succeed(true) },
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    const request = await seedEffortRetry(harness);
+    await Effect.runPromise(harness.engine.dispatch(request));
+    const activeTurnId = asTurnId("new-active-turn-after-retry-admission");
+    const updatedAt = new Date(Date.parse(request.createdAt) + 1_000).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-new-active-session-after-retry"),
+        threadId: request.threadId,
+        session: {
+          threadId: request.threadId,
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          status: "running",
+          activeTurnId,
+          lastError: null,
+          updatedAt,
+        },
+        createdAt: updatedAt,
+      }),
+    );
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.captureCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "running",
+      activeTurnId,
+      updatedAt,
+      lastError: null,
+    });
+    expect(
+      (await readHarnessThread(harness))?.activities.some(
+        (activity) => activity.kind === "turn.effort-retry.refused",
+      ),
+    ).toBe(true);
+    expect(
+      Option.isNone(
+        await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: request.threadId,
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rechecks the effort retry source after a held checkpoint capture", async () => {
+    const captureStarted = await Effect.runPromise(Deferred.make<void>());
+    const releaseCapture = await Effect.runPromise(Deferred.make<void>());
+    const harness = await createHarness({
+      checkpointStore: { hasCheckpointRef: () => Effect.succeed(true) },
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    harness.captureCheckpoint.mockImplementationOnce(() =>
+      Deferred.succeed(captureStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseCapture)),
+      ),
+    );
+    const request = await seedEffortRetry(harness);
+    await Effect.runPromise(harness.engine.dispatch(request));
+    await Effect.runPromise(Deferred.await(captureStarted));
+    try {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.messages.import",
+          commandId: CommandId.makeUnsafe("cmd-effort-retry-edit-during-capture"),
+          threadId: request.threadId,
+          messages: [
+            {
+              messageId: request.messageId,
+              role: "user",
+              text: "Changed during snapshot capture",
+              createdAt: request.createdAt,
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    } finally {
+      await Effect.runPromise(Deferred.succeed(releaseCapture, undefined));
+    }
+    await harness.drain();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.restoreCheckpoint).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      (await readHarnessThread(harness))?.messages.find(
+        (message) => message.id === request.messageId,
+      )?.text,
+    ).toBe("Changed during snapshot capture");
+  });
+
+  it("keeps the effort retry rescue checkpoint and its durable reference after a successful restore", async () => {
+    const deleteCheckpointRefs = vi.fn(() => Effect.void);
+    const harness = await createHarness({
+      checkpointStore: {
+        hasCheckpointRef: () => Effect.succeed(true),
+        deleteCheckpointRefs,
+      },
+    });
+    harness.isGitRepository.mockImplementation(() => Effect.succeed(true));
+    const request = await seedEffortRetry(harness);
+    await Effect.runPromise(harness.engine.dispatch(request));
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    const rescue = harness.captureCheckpoint.mock.calls[0]?.[0].checkpointRef;
+    expect(rescue).toContain("/revert-rescue/");
+    expect(deleteCheckpointRefs).not.toHaveBeenCalledWith(
+      expect.objectContaining({ checkpointRefs: [rescue] }),
+    );
+    expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
+      cwd: "/tmp/provider-project",
+      checkpointRef: checkpointRefForThreadTurn(request.threadId, 0),
+      fallbackToHead: false,
+    });
+    const thread = await readHarnessThread(harness);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "turn.effort-retry.snapshot"),
+    ).toMatchObject({
+      turnId: null,
+      payload: { rescueCheckpointRef: rescue, sourceTurnId: request.retryFrom.turnId },
+    });
+  });
+
   it("clears the edit loading state when provider rollback fails before resend", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

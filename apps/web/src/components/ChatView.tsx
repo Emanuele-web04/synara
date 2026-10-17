@@ -2992,15 +2992,32 @@ export default function ChatView({
     };
   }, [pendingComposerFocusRef, focusComposer, threadId]);
   useEffect(() => {
+    let pendingFrame: number | null = null;
     const handleWindowFocus = () => {
       if (!pendingComposerFocusRef.current) return;
-      window.requestAnimationFrame(() => {
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
+      pendingFrame = window.requestAnimationFrame(() => {
+        pendingFrame = null;
+        if (!pendingComposerFocusRef.current) return;
+        const activeElement = document.activeElement;
+        // Window activation may come from clicking a picker or another input.
+        // Respect the control chosen before this deferred focus request runs.
+        if (
+          document.hasFocus() &&
+          activeElement &&
+          activeElement !== document.body &&
+          activeElement !== document.documentElement
+        ) {
+          pendingComposerFocusRef.current = false;
+          return;
+        }
         focusComposer();
       });
     };
     window.addEventListener("focus", handleWindowFocus);
     return () => {
       window.removeEventListener("focus", handleWindowFocus);
+      if (pendingFrame !== null) window.cancelAnimationFrame(pendingFrame);
     };
   }, [pendingComposerFocusRef, focusComposer]);
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
@@ -4687,6 +4704,7 @@ export default function ChatView({
     onSubmitPlanFollowUp,
     onContinueFailedTurn,
     onEditUserMessage,
+    onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
@@ -4714,6 +4732,8 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     selectedPromptEffort,
+    runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
     setOptimisticUserMessages,
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
@@ -4748,6 +4768,44 @@ export default function ChatView({
     [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
   );
   const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const retryEffortContext = useMemo(() => {
+    if (!activeThread || !isServerThread) return null;
+    const retryModelSelection = activeThread.modelSelection;
+    const retryRuntimeModel = resolveRuntimeModelDescriptor({
+      provider: retryModelSelection.provider,
+      model: retryModelSelection.model,
+      runtimeModels:
+        runtimeModelsByProviderInstance[
+          retryModelSelection.instanceId ?? retryModelSelection.provider
+        ] ?? runtimeModelsByProvider[retryModelSelection.provider],
+    });
+    return {
+      threadId: activeThread.id,
+      messages: activeThread.messages,
+      activities: activeThread.activities,
+      runtimeMode: activeThread.runtimeMode,
+      modelSelection: retryModelSelection,
+      modelOptions: retryModelSelection.options,
+      ...(retryRuntimeModel ? { runtimeModel: retryRuntimeModel } : {}),
+      activeTurnId:
+        activeThread.session?.orchestrationStatus === "running"
+          ? (activeThread.session.activeTurnId ?? null)
+          : null,
+      isBusy: isRevertingCheckpoint || isSendBusy || isConnecting,
+      onRetryWithEffort: (assistantMessageId: MessageId, effort: string) => {
+        void onRetryAssistantWithDifferentEffort(assistantMessageId, effort);
+      },
+    };
+  }, [
+    activeThread,
+    isConnecting,
+    isRevertingCheckpoint,
+    isSendBusy,
+    isServerThread,
+    onRetryAssistantWithDifferentEffort,
+    runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
+  ]);
   const composerTraitSelection = getComposerTraitSelection(
     selectedProvider,
     selectedModel,
@@ -6915,6 +6973,7 @@ export default function ChatView({
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
+                    {...(retryEffortContext ? { retryEffortContext } : {})}
                     onRespondToAsyncUserInput={onRespondToAsyncUserInput}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}

@@ -40,6 +40,7 @@ import { Effect } from "effect";
 import { computerActivationMetadata } from "../computer/computerActivation.ts";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { effortRetryPreconditionViolation } from "./effortRetry.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
@@ -2583,6 +2584,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, thread);
+      if (command.retryFrom) {
+        const detail = effortRetryPreconditionViolation(thread, {
+          ...command,
+          retryFrom: command.retryFrom,
+        });
+        if (detail) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail,
+          });
+        }
+      }
       if (threadHasCheckpointRevertInProgress(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2620,6 +2633,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           text: command.text,
           rollbackTurnCount: editTarget.rollbackTurnCount,
           removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
+          ...(command.retryFrom !== undefined ? { retryFrom: command.retryFrom } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
