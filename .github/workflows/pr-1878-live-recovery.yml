@@ -1,0 +1,49 @@
+name: PR 1878 real application recovery journey
+on:
+  push:
+    branches: [qa/pr-1878-live-recovery-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain reviewed drivers outside application source
+        run: |
+          mkdir -p "$RUNNER_TEMP/pr1878-driver"
+          cp .github/qa/pr1878-live.mjs .github/qa/pr1878-live-recovery.mjs "$RUNNER_TEMP/pr1878-driver/"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+      - name: Build actual production application
+        run: bun run build --filter=@synara/cli
+      - name: Install real browser and recorder
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Exercise original assertions with actual first-run dismissal
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pr1878-live-recovery"
+          mkdir -p "$out"
+          git rev-parse HEAD HEAD^{tree} > "$out/tested-source.txt"
+          if QA_REPO="$PWD" QA_OUT="$out" node "$RUNNER_TEMP/pr1878-driver/pr1878-live-recovery.mjs" > "$out/journey.log" 2>&1; then rc=0; else rc=$?; fi
+          cat "$out/journey.log"
+          printf '%s\n' "$rc" > "$out/exit.txt"
+          git diff --exit-code > "$out/source-clean.diff" || exit 1
+          exit "$rc"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-live-recovery
+          path: ${{ runner.temp }}/pr1878-live-recovery
+          retention-days: 14
+          if-no-files-found: error
