@@ -1,6 +1,6 @@
 # Cloudflare Remote — execution state
 
-## Remote .16 published / companion 137 archived — 2026-10-17
+## Remote .16 published / companion 137 uploaded — 2026-10-17
 
 [Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)
 is public for macOS ARM64, Windows x64 and Linux x64. Tag source
@@ -31,12 +31,16 @@ These are public artifact/discovery and packaged startup proofs, not manual
 installed upgrades or new real-provider turns on all operating systems.
 
 Companion iOS source `f7be4ea` (`919042f` connection changes), version **0.1 (137)**,
-passes eight focused connection-supervisor tests. A new universal Release archive
-on the Mini succeeded with matching app/widget builds and both iPhone/iPad device
-families. CLI export/upload failed with `Failed to Use Accounts` / App Store Connect
-access required for the existing Xcode team. The archive is retained; after the
-owner reauthenticates the existing Xcode account, rerun export/upload only.
-**137 is not uploaded or assigned to TestFlight yet.** No API key was created,
+passes eight focused connection-supervisor tests. Its universal archive was reused.
+CLI upload still failed after the owner restored Xcode login, but the supported
+Organizer flow fetched the app record and **uploaded 0.1 (137) successfully** using
+the existing cloud-managed Apple Distribution certificate. Version/build management
+and internal-only distribution were disabled. The exported uploaded IPA passed
+strict app/widget signature checks, matching build 137 and iPhone/iPad device
+families, debugging disabled and production APNs on the app.
+**TestFlight processing and assignment to the existing groups remain unverified:**
+the owner must complete the separate web login in App Store Connect. Do not repeat
+the upload or present it as available to testers yet. No API key was created,
 physical device used or new live simulator pass claimed for this source.
 
 The Mini's idle system sleep is already disabled (`sleep = 0`), its display timeout
