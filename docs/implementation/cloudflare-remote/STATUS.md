@@ -16,12 +16,13 @@ actual Chromium sign-in UI suite 7. The combined source's 18-case built E2E pass
 is recorded below; exact-tag release CI still owns native packaging, signing,
 startup/Defender and publication gates.
 
-Publication is held for the final real GitHub consent/callback check, required
-by the existing release condition in BETA.md. Its production test uses a fresh
-temporary home and the same production account-session implementation, with no
-installed app credentials or data. Provider configuration and the UI test alone
-do not establish callback success. No release tag or installer is published yet;
-the Windows signing exception remains unchanged while this prerequisite is open.
+The operator explicitly authorized publication without waiting for the pending
+real GitHub consent/callback test. That test remains unverified; provider
+configuration and the Chromium UI tests are not live callback proof. No new
+GitHub account access is granted as part of publication. The previously prepared
+isolated OAuth attempt expired without completing login and used no installed
+app credentials or data. Native release CI and public artifact verification are
+still required; no tag or installer was public at candidate preparation.
 Remote distribution stays on its own GitHub release/feed, not the Stable website
 installer links. No API redeployment or new mobile binary is required here.
 

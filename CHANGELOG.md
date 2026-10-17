@@ -19,7 +19,7 @@
 
 ### Verification
 
-- The source fixes passed all 18 built end-to-end scenarios with separate host/controller homes and disposable PostgreSQL, including QR retry, exact-device enrollment, remote chat and automation recovery. Authorization/connectivity regressions and the web suite also pass. WorkOS/provider processes and the Cloudflare boundary in that E2E suite are local fixtures; hosted sign-in is qualified separately before publication.
+- The source fixes passed all 18 built end-to-end scenarios with separate host/controller homes and disposable PostgreSQL, including QR retry, exact-device enrollment, remote chat and automation recovery. Authorization/connectivity regressions and the web suite also pass. WorkOS/provider processes and the Cloudflare boundary in that E2E suite are local fixtures; the real GitHub consent/callback remains unverified and is not a publication prerequisite for this release under the operator’s explicit instruction.
 - Publication requires exact-tag quality/server gates, signed and notarized macOS ARM64 packaging, Windows/Linux packaged startup and Windows Defender checks. Windows uses the exact-version unsigned policy and may show SmartScreen.
 - Remote retains its separate identity, data and update feeds. The updater downloads in the background and requires the normal install/restart action. Stable/Beta and installed local data are not replaced; no new iPhone/iPad binary is required for these host-side fixes.
 

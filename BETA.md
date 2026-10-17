@@ -34,8 +34,10 @@ required. Private deployments leave it unset/`false` and enroll selected users.
 
 The published Remote .14 app offers Google, Apple and email sign-in. GitHub is
 now configured in the hosted WorkOS Production environment; the next desktop
-build restores its existing GitHub button. Release qualification requires a
-completed browser login and callback, not only an enabled provider. Remote also
+build restores its existing GitHub button. For Remote .15, the operator explicitly
+authorized publication without the pending real GitHub consent/callback test.
+Provider configuration and Chromium UI tests pass; they do not prove a completed
+production GitHub login. Record that live verification separately. Remote also
 enables the profile/usage sync path without an operator flag; an explicit
 `SYNARA_ACCOUNT_PROFILE_SYNC=0` still disables it. Stable remains blocked and
 generic/Beta builds still require their existing opt-in. Product analytics remain
