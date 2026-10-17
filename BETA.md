@@ -68,9 +68,10 @@ is not implemented; do not use account switching as local history isolation.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics are Beta-only.** Beta sends redacted error events, raw crash
-  dumps, and anonymous usage counts to a private dashboard. Stable sends nothing. See
-  [Diagnostics](#diagnostics).
+- **Diagnostics run in Beta and Remote, never Stable.** Beta sends redacted error
+  events, raw crash dumps, and anonymous usage counts to a private dashboard. Remote
+  sends the same events except raw crash dumps, plus product usage, by default with a
+  Settings switch to stop both. Stable sends nothing. See [Diagnostics](#diagnostics).
 
 ### Release order
 
@@ -420,10 +421,16 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 Beta builds ship always-on diagnostics — crash reports plus anonymous usage
 counts (which providers are used, how many chats and turns) — while stable
-builds never enable the Beta diagnostics sender. Both channels separately offer
-default-off product analytics through Settings → General → Privacy. See [diagnostics.md](docs/diagnostics.md) for
-exactly what is collected, what usage counters exclude, and how the Cloudflare
-ingest works.
+builds never enable the Beta diagnostics sender. Stable and Beta separately offer
+default-off product analytics through Settings → General → Privacy.
+
+Synara Remote shares usage and diagnostics by default: the same diagnostic events
+without raw crash dumps, and product events such as daily activity, feature use,
+connection, pairing and turn outcomes with a fixed failure category. **Share usage
+and diagnostics** in Settings → General → Privacy turns both off and clears unsent
+events. Chats, prompts, files and account details are never sent. See
+[diagnostics.md](docs/diagnostics.md) for exactly what is collected, what usage
+counters exclude, and how the Cloudflare ingest works.
 
 ## Data
 

@@ -27,6 +27,7 @@ type ProductAnalyticsOptionalFields = {
 
 const EVENTS = [
   "app.open",
+  "app.active",
   "feature.used",
   "connection.pair",
   "connection.connect",
@@ -49,6 +50,18 @@ const FEATURES = [
 ] as const;
 const MODES = ["local", "remote"] as const;
 const PROVIDERS = ["codex", "claude", "other"] as const;
+const REASONS = [
+  "unreachable",
+  "not_accepting",
+  "account_unavailable",
+  "host_unlinked",
+  "pairing_required",
+  "incompatible",
+  "timeout",
+  "invalid_code",
+  "rejected",
+  "other",
+] as const;
 const PLATFORMS = ["darwin", "win32", "linux", "ios", "ipados", "other"] as const;
 
 function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -70,7 +83,10 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
   return isOneOf(PLATFORMS, value) ? value : "other";
 }
 
-/** Consent-gated, bounded sender. It stores only reconstructed allowlisted envelopes. */
+/**
+ * Consent-gated, bounded sender. It stores only reconstructed allowlisted envelopes.
+ * `defaultEnabled` applies until the user makes a choice; an explicit opt-out persists.
+ */
 export class ProductAnalytics {
   private readonly consentPath: string;
   private readonly installIdPath: string;
@@ -79,6 +95,8 @@ export class ProductAnalytics {
   private readonly appVersion: string;
   private readonly platform: ProductAnalyticsEnvelope["platform"];
   private enabled = false;
+  private readonly defaultEnabled: boolean;
+  private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
   private installId: string | null = null;
   private queue: ProductAnalyticsEnvelope[] = [];
@@ -86,6 +104,7 @@ export class ProductAnalytics {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private controller: AbortController | null = null;
   private failures = 0;
+  private activeDay: string | null = null;
   private epoch = 0;
   private flushing = false;
   private disposed = false;
@@ -95,6 +114,7 @@ export class ProductAnalytics {
     channel: ProductAnalyticsChannel;
     appVersion: string;
     platform: string;
+    defaultEnabled?: boolean;
     fetcher?: typeof fetch;
   }) {
     const dir = join(input.homeDir, "product-analytics");
@@ -105,6 +125,7 @@ export class ProductAnalytics {
     this.appVersion = semver(input.appVersion);
     this.platform = platform(input.platform);
     this.fetcher = input.fetcher ?? fetch;
+    this.defaultEnabled = input.defaultEnabled === true;
     this.enabled = this.readConsent();
     if (this.enabled) {
       try {
@@ -123,13 +144,42 @@ export class ProductAnalytics {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.flush(), FLUSH_INTERVAL_MS);
+    this.timer = setInterval(() => {
+      this.trackActiveDay();
+      void this.flush();
+    }, FLUSH_INTERVAL_MS);
     this.timer.unref?.();
+    this.trackActiveDay();
     if (this.enabled && !this.retryTimer) void this.flush();
+  }
+
+  /** One app.active per UTC day while the app runs, so long sessions count every day. */
+  private trackActiveDay(): void {
+    if (!this.enabled) return;
+    const day = new Date().toISOString().slice(0, 10);
+    if (day === this.activeDay) return;
+    this.activeDay = day;
+    this.track({ event: "app.active", outcome: "succeeded" });
   }
 
   getState(): { enabled: boolean } {
     return { enabled: this.enabled };
+  }
+
+  /** Follows the user's choice, so companion diagnostics share one switch. */
+  onChange(listener: (enabled: boolean) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(this.enabled);
+      } catch {
+        // A listener never changes the user's choice.
+      }
+    }
   }
 
   setEnabled(value: unknown): { enabled: boolean } {
@@ -180,6 +230,7 @@ export class ProductAnalytics {
       this.failures = 0;
       if (this.timer && !this.retryTimer) void this.flush();
     }
+    this.notify();
     return this.getState();
   }
 
@@ -293,6 +344,10 @@ export class ProductAnalytics {
       if (!isOneOf(PROVIDERS, input.provider)) return null;
       fields.provider = input.provider;
     }
+    if (input.reason !== undefined) {
+      if (!isOneOf(REASONS, input.reason)) return null;
+      fields.reason = input.reason;
+    }
     if (input.durationMs !== undefined) {
       if (!validInteger(input.durationMs, MAX_DURATION_MS)) return null;
       fields.durationMs = input.durationMs;
@@ -316,6 +371,8 @@ export class ProductAnalytics {
       allowed.add("mode");
       allowed.add("provider");
       allowed.add("durationMs");
+      // Only a failure has a cause.
+      if (outcome === "failed") allowed.add("reason");
     }
     if (event === "turn.completed") {
       allowed.add("mode");
@@ -345,10 +402,17 @@ export class ProductAnalytics {
   }
 
   private readConsent(): boolean {
+    let raw: string;
     try {
-      const value = JSON.parse(readFileSync(this.consentPath, "utf8")) as { enabled?: unknown };
+      raw = readFileSync(this.consentPath, "utf8");
+    } catch {
+      return this.defaultEnabled;
+    }
+    try {
+      const value = JSON.parse(raw) as { enabled?: unknown };
       return value.enabled === true;
     } catch {
+      // A recorded but unreadable choice never re-enables collection.
       return false;
     }
   }
@@ -358,7 +422,7 @@ export class ProductAnalytics {
       const existing = readFileSync(this.installIdPath, "utf8").trim();
       if (UUID_PATTERN.test(existing)) return existing;
     } catch {
-      // Created below only after explicit consent.
+      // Created below once collection is enabled.
     }
     const id = randomUUID();
     this.writeAtomic(this.installIdPath, `${id}\n`, true);
@@ -406,6 +470,7 @@ export class ProductAnalytics {
       "feature",
       "mode",
       "provider",
+      "reason",
       "durationMs",
       "inputTokens",
       "outputTokens",

@@ -10,6 +10,7 @@ import claudeLogo from "../assets/providers/claude.svg?no-inline";
 import {
   chartChrome,
   dayLabel,
+  platformLabel,
   deltaDetail,
   EChart,
   EmptyLine,
@@ -52,6 +53,26 @@ function ProviderLabel({ provider }: { provider: string }) {
   );
 }
 const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+const surfaceLabel = (surface: string) =>
+  surface === "ios" ? "iPhone" : surface === "ipados" ? "iPad" : "Desktop";
+const reasonLabels: Record<string, string> = {
+  unreachable: "Computer unreachable",
+  not_accepting: "Not accepting remote connections",
+  account_unavailable: "Account service unavailable",
+  host_unlinked: "Computer no longer linked",
+  pairing_required: "Pairing required",
+  incompatible: "Version incompatible",
+  timeout: "Timed out",
+  invalid_code: "Invalid pairing code",
+  rejected: "Rejected",
+  other: "Other",
+};
+const eventLabels: Record<string, string> = {
+  "chat.request": "Chat request",
+  "connection.connect": "Connect",
+  "connection.reconnect": "Reconnect",
+  "connection.pair": "Pairing",
+};
 
 const sectionCopy = {
   overview: {
@@ -227,6 +248,7 @@ export function Product({
             <option value="">All channels</option>
             <option value="stable">Stable</option>
             <option value="beta">Beta</option>
+            <option value="remote">Remote</option>
           </select>
         </span>
         <span className="select-wrap">
@@ -266,6 +288,30 @@ export function Product({
           <p className="chart-caption">{sectionCopy[section].description}</p>
           {section === "overview" && (
             <>
+              {data.activeUsers && (
+                <section className="section" aria-labelledby="product-active">
+                  <h3 id="product-active" className="heading-20 section-head">
+                    Active users
+                  </h3>
+                  <p className="chart-caption">
+                    Installations seen in the last 24 hours, 7 days and 30 days, ending now; the
+                    date range does not apply. Active means the app ran; engaged means it sent at
+                    least one chat request. One person can use several installations.
+                  </p>
+                  <div className="stat-strip stat-strip--four">
+                    <Stat label="Daily active" value={compact(data.activeUsers.day)} />
+                    <Stat label="Weekly active" value={compact(data.activeUsers.week)} />
+                    <Stat label="Monthly active" value={compact(data.activeUsers.month)} />
+                    <Stat
+                      label="Engaged this week"
+                      value={compact(data.activeUsers.engagedWeek)}
+                      detail={`${compact(data.activeUsers.engagedDay)} today · ${compact(
+                        data.activeUsers.engagedMonth,
+                      )} this month`}
+                    />
+                  </div>
+                </section>
+              )}
               <div className="stat-strip">
                 <Stat label="Product events" value={compact(data.events)} />
                 <Stat
@@ -317,6 +363,53 @@ export function Product({
                   />
                 )}
               </section>
+              {data.platforms && (
+                <section className="section" aria-labelledby="product-platforms">
+                  <h2 id="product-platforms" className="heading-20 section-head">
+                    Platforms
+                  </h2>
+                  {data.platforms.length === 0 ? (
+                    <EmptyLine text="No product events in this range." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Device</th>
+                            <th scope="col" className="num">
+                              Installations
+                            </th>
+                            <th scope="col" className="num">
+                              Events
+                            </th>
+                            <th scope="col" className="num">
+                              Failed requests
+                            </th>
+                            <th scope="col" className="num">
+                              Failed connections
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.platforms.map((row) => (
+                            <tr key={`${row.surface}:${row.platform}`}>
+                              <td>
+                                {row.surface === "desktop"
+                                  ? platformLabel(row.platform)
+                                  : surfaceLabel(row.surface)}
+                              </td>
+                              <td className="num">{row.installations.toLocaleString()}</td>
+                              <td className="num">{row.events.toLocaleString()}</td>
+                              <td className="num">{row.failedRequests.toLocaleString()}</td>
+                              <td className="num">{row.failedConnections.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
               <section className="section" aria-labelledby="product-features">
                 <h2 id="product-features" className="heading-20 section-head">
                   Features
@@ -579,6 +672,45 @@ export function Product({
                   />
                 </div>
               </section>
+              {data.failureReasons && (
+                <section className="section" aria-labelledby="product-reasons">
+                  <h2 id="product-reasons" className="heading-20 section-head">
+                    Why things failed
+                  </h2>
+                  {data.failureReasons.length === 0 ? (
+                    <EmptyLine text="No failures with a known cause in this range." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Action</th>
+                            <th scope="col">Cause</th>
+                            <th scope="col">Device</th>
+                            <th scope="col" className="num">
+                              Failures
+                            </th>
+                            <th scope="col" className="num">
+                              Installations
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.failureReasons.map((row) => (
+                            <tr key={`${row.event}:${row.reason}:${row.surface}`}>
+                              <td>{eventLabels[row.event] ?? row.event}</td>
+                              <td>{reasonLabels[row.reason] ?? row.reason}</td>
+                              <td>{surfaceLabel(row.surface)}</td>
+                              <td className="num">{row.events.toLocaleString()}</td>
+                              <td className="num">{row.installations.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
               <section className="section" aria-labelledby="product-outcomes">
                 <h2 id="product-outcomes" className="heading-20 section-head">
                   Outcomes

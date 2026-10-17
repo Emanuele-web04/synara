@@ -206,6 +206,143 @@ describe("product event route and D1 storage", () => {
     });
   });
 
+  it("stores the Remote lane and reports active users, platforms and failure reasons", async () => {
+    const remote = (patch) =>
+      envelope({
+        id: crypto.randomUUID(),
+        channel: "remote",
+        feature: undefined,
+        durationMs: undefined,
+        ...patch,
+      });
+    const mac = "00000000-0000-4000-8000-0000000000a1";
+    const phone = "00000000-0000-4000-8000-0000000000a2";
+    const windows = "00000000-0000-4000-8000-0000000000a3";
+    const response = await postEvents([
+      remote({ installId: mac, event: "app.active", outcome: "succeeded" }),
+      remote({ installId: mac, event: "chat.request", outcome: "succeeded" }),
+      remote({
+        installId: phone,
+        surface: "ios",
+        platform: "ios",
+        event: "connection.connect",
+        outcome: "failed",
+        mode: "remote",
+        reason: "not_accepting",
+      }),
+      remote({
+        installId: windows,
+        platform: "win32",
+        event: "chat.request",
+        outcome: "failed",
+        reason: "timeout",
+      }),
+      // A cause on a success is malformed and dropped.
+      remote({ installId: mac, event: "chat.request", outcome: "succeeded", reason: "timeout" }),
+      remote({ installId: mac, event: "chat.request", outcome: "failed", reason: "made_up" }),
+    ]);
+    expect(await response.json()).toEqual({ accepted: 4, received: 6 });
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const dashboard = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&channel=remote`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    const body = await dashboard.json();
+    expect(body.activeUsers).toEqual({
+      day: 3,
+      week: 3,
+      month: 3,
+      engagedDay: 2,
+      engagedWeek: 2,
+      engagedMonth: 2,
+    });
+    expect(body.platforms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "desktop", platform: "darwin", installations: 1 }),
+        expect.objectContaining({
+          surface: "desktop",
+          platform: "win32",
+          installations: 1,
+          failedRequests: 1,
+        }),
+        expect.objectContaining({
+          surface: "ios",
+          platform: "ios",
+          installations: 1,
+          failedConnections: 1,
+        }),
+      ]),
+    );
+    expect(body.failureReasons).toEqual(
+      expect.arrayContaining([
+        {
+          event: "connection.connect",
+          reason: "not_accepting",
+          surface: "ios",
+          events: 1,
+          installations: 1,
+        },
+        {
+          event: "chat.request",
+          reason: "timeout",
+          surface: "desktop",
+          events: 1,
+          installations: 1,
+        },
+      ]),
+    );
+  });
+
+  it("accepts Remote diagnostics and filters them apart from Beta", async () => {
+    const diagnostic = (flavor, installId) => ({
+      v: 1,
+      id: crypto.randomUUID(),
+      ts: new Date(now).toISOString(),
+      installId,
+      appVersion: flavor === "remote" ? "1.0.6-remote.17" : "1.0.6-beta.1",
+      flavor,
+      platform: "darwin",
+      arch: "arm64",
+      event: "app.start",
+      payload: { kind: "lifecycle" },
+    });
+    const response = await worker.fetch(
+      new Request("https://worker.invalid/v1/events", {
+        method: "POST",
+        headers: { "content-type": "application/x-ndjson" },
+        body: [
+          diagnostic("remote", "00000000-0000-4000-8000-0000000000b1"),
+          diagnostic("beta", "00000000-0000-4000-8000-0000000000b2"),
+          { ...diagnostic("stable", "00000000-0000-4000-8000-0000000000b3") },
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      }),
+      env,
+    );
+    expect(response.status).toBeLessThan(300);
+    expect(
+      db.database
+        .prepare("SELECT flavor, COUNT(*) AS n FROM events GROUP BY flavor ORDER BY flavor")
+        .all(),
+    ).toEqual([
+      { flavor: "beta", n: 1 },
+      { flavor: "remote", n: 1 },
+    ]);
+
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const filters = await worker.fetch(
+      new Request("https://worker.invalid/api/filters", {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    expect((await filters.json()).flavors).toEqual(["beta", "remote"]);
+  });
+
   it("counts terminal desktop observations by provider without treating requests or missing usage as completed turns", async () => {
     const turn = (patch) =>
       envelope({ event: "turn.completed", feature: undefined, durationMs: undefined, ...patch });

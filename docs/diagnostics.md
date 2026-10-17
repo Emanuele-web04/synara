@@ -6,6 +6,14 @@ authoritative description of what leaves your computer.
 
 **Stable builds never send Beta diagnostics.** Separate, default-off product analytics
 are available in both channels; see [Product analytics](#product-analytics).
+
+**Synara Remote** constructs the same diagnostics module with `flavor: "remote"`.
+It follows the **Share usage and diagnostics** switch in Settings → General → Privacy,
+which is on by default: turning it off stops new events and deletes the unsent
+diagnostics queue. Remote never starts Electron's crash dump uploader, so raw process
+memory is not sent; crash events still carry the process type, reason and redacted log
+tail described below. Server usage snapshots run for Remote too and are relayed only
+while sharing is on.
 The Beta diagnostics module is only constructed
 when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
@@ -248,5 +256,17 @@ link the new installation identity to earlier events. Turning off cannot
 retract a request already received by Cloudflare; retention applies there.
 
 Release dependency: deploy the product D1 migration and receiving Worker before
-shipping these clients. The existing `/v1/events` and `/v1/crash` routes remain
-Beta-only and are not controlled by this new switch.
+shipping these clients. `/v1/crash` remains Beta-only. `/v1/events` accepts Beta and
+Remote diagnostics; Remote events follow the sharing switch.
+
+### Synara Remote
+
+Remote product events use the `remote` channel and are **on by default** until the
+user turns sharing off; the choice persists per installation. Besides the events
+above, Remote records `app.active` once per UTC day while the app runs, so long
+sessions count as active days. Failed connections, pairings and chat requests can
+carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
+`host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. The
+dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
+installations that sent a chat request in those windows. Installations are not
+people: one person can use several.

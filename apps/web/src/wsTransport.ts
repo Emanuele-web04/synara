@@ -1095,15 +1095,28 @@ export class WsTransport {
       return result;
     } catch (error) {
       if (activity) recordRendererActivity(activity, "failed");
-      if (productActivity)
+      if (productActivity) {
+        const cancelled = options?.signal?.aborted === true;
         trackProductAnalytics({
           ...productActivity,
-          outcome: options?.signal?.aborted ? "cancelled" : "failed",
+          outcome: cancelled ? "cancelled" : "failed",
           mode: this.analyticsMode,
           ...(productActivity.event === "feature.used"
             ? {}
             : { durationMs: Math.round(performance.now() - startedAt) }),
+          ...(cancelled || productActivity.event === "feature.used"
+            ? {}
+            : {
+                // Timed out, dropped before the host answered, or refused by the host.
+                reason:
+                  error instanceof WsTransportRequestInterruptedError
+                    ? error.code === "WS_REQUEST_TIMEOUT"
+                      ? "timeout"
+                      : "unreachable"
+                    : "other",
+              }),
         });
+      }
       throw error;
     }
   }
@@ -1692,14 +1705,15 @@ export class WsTransport {
       return client;
     })().catch((error) => {
       if (!this.disposed && this.sessionVersion === sessionVersion) {
+        const compatibilityError = getTerminalCompatibilityError(error);
         trackProductAnalytics({
           event: analyticsEvent,
           outcome: "failed",
           mode: this.analyticsMode,
           durationMs: Math.round(performance.now() - startedAt),
+          reason: compatibilityError ? "incompatible" : "unreachable",
         });
         this.setCompatibility(null);
-        const compatibilityError = getTerminalCompatibilityError(error);
         if (compatibilityError) {
           this.setCompatibilityIssue(compatibilityError);
           this.setState("incompatible");

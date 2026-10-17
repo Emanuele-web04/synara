@@ -25,8 +25,8 @@ import {
   useChartTheme,
 } from "../components";
 
-const FIELDS = ["days", "version", "platform"] as const;
-const REQ_FIELDS = ["version", "platform"] as const;
+const FIELDS = ["days", "flavor", "version", "platform"] as const;
+const REQ_FIELDS = ["flavor", "version", "platform"] as const;
 const DAY_MS = 86_400_000;
 
 const PROVIDER_LABELS: Record<string, string> = {

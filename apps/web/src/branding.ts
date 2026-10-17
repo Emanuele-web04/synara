@@ -7,6 +7,8 @@ const isCanaryDesktop =
 const isBetaDesktop = typeof window !== "undefined" && window.location?.protocol === "synara-beta:";
 const isRemoteDesktop =
   typeof window !== "undefined" && window.location?.protocol === `${SYNARA_REMOTE_DESKTOP_SCHEME}:`;
+/** Synara Remote shares usage and diagnostics by default. */
+export const IS_REMOTE_DESKTOP = isRemoteDesktop;
 export const APP_DISPLAY_NAME = isRemoteDesktop
   ? "Synara Remote"
   : isCanaryDesktop

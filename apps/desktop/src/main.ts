@@ -451,14 +451,28 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
 
-// Beta-only diagnostics: constructed solely when the baked build flavor is
-// "beta", so production binaries never run a collection path. The payload
-// schema is an allowlist; error text may still contain fragments of user data,
-// and Electron crash dumps are raw process memory.
+// Remote shares usage and diagnostics by default; Settings turns both off.
+// Stable stays opt-in for product events and never runs diagnostics.
+const productAnalytics = new ProductAnalytics({
+  homeDir: BASE_DIR,
+  channel: desktopFlavor === "beta" ? "beta" : desktopFlavor === "remote" ? "remote" : "stable",
+  appVersion: app.getVersion(),
+  platform: process.platform,
+  defaultEnabled: desktopFlavor === "remote",
+});
+
+// Diagnostics are constructed only for the Beta and Remote build flavors, so
+// production binaries never run a collection path. The payload schema is an
+// allowlist; error text may still contain fragments of user data. Remote follows
+// the sharing switch and never uploads raw crash dumps (process memory).
 const betaDiagnostics =
-  desktopFlavor === "beta"
+  desktopFlavor === "beta" || desktopFlavor === "remote"
     ? new BetaDiagnostics({
         homeDir: BASE_DIR,
+        flavor: desktopFlavor,
+        ...(desktopFlavor === "remote"
+          ? { isEnabled: () => productAnalytics.getState().enabled }
+          : {}),
         appVersion: app.getVersion(),
         platform: process.platform,
         arch: process.arch,
@@ -485,14 +499,10 @@ const betaDiagnostics =
         },
       })
     : null;
-
-const productAnalytics = new ProductAnalytics({
-  homeDir: BASE_DIR,
-  channel: desktopFlavor === "beta" ? "beta" : "stable",
-  appVersion: app.getVersion(),
-  platform: process.platform,
+productAnalytics.onChange((enabled) => {
+  if (!enabled) betaDiagnostics?.discardQueue();
 });
-if (betaDiagnostics) {
+if (betaDiagnostics && desktopFlavor === "beta") {
   crashReporter.start({
     productName: APP_DISPLAY_NAME,
     companyName: "Synara",
@@ -5048,7 +5058,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
   ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
     event.returnValue = Boolean(
-      betaDiagnostics &&
+      betaDiagnostics?.isCollecting() &&
       event.sender === mainWindow?.webContents &&
       event.senderFrame === event.sender.mainFrame,
     );

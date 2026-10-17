@@ -2,6 +2,8 @@ import * as Schema from "effect/Schema";
 
 export const ProductAnalyticsEvent = Schema.Literals([
   "app.open",
+  // Once per UTC day while the app runs, so long sessions still count as active days.
+  "app.active",
   "feature.used",
   "connection.pair",
   "connection.connect",
@@ -37,10 +39,24 @@ export const ProductAnalyticsMode = Schema.Literals(["local", "remote"]);
 export type ProductAnalyticsMode = typeof ProductAnalyticsMode.Type;
 export const ProductAnalyticsProvider = Schema.Literals(["codex", "claude", "other"]);
 export type ProductAnalyticsProvider = typeof ProductAnalyticsProvider.Type;
+/** Why a connection, pairing or request failed. A fixed category, never error text. */
+export const ProductAnalyticsReason = Schema.Literals([
+  "unreachable",
+  "not_accepting",
+  "account_unavailable",
+  "host_unlinked",
+  "pairing_required",
+  "incompatible",
+  "timeout",
+  "invalid_code",
+  "rejected",
+  "other",
+]);
+export type ProductAnalyticsReason = typeof ProductAnalyticsReason.Type;
 
 const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_400_000 }));
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
-export const ProductAnalyticsChannel = Schema.Literals(["stable", "beta"]);
+export const ProductAnalyticsChannel = Schema.Literals(["stable", "beta", "remote"]);
 export type ProductAnalyticsChannel = typeof ProductAnalyticsChannel.Type;
 export const ProductAnalyticsSurface = Schema.Literals(["desktop", "ios", "ipados"]);
 export type ProductAnalyticsSurface = typeof ProductAnalyticsSurface.Type;
@@ -60,6 +76,7 @@ export const ProductAnalyticsInput = Schema.Struct({
   feature: Schema.optional(ProductAnalyticsFeature),
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
+  reason: Schema.optional(ProductAnalyticsReason),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
   outputTokens: Schema.optional(TokenCount),
@@ -81,6 +98,7 @@ export const ProductAnalyticsEnvelope = Schema.Struct({
   feature: Schema.optional(ProductAnalyticsFeature),
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
+  reason: Schema.optional(ProductAnalyticsReason),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
   outputTokens: Schema.optional(TokenCount),

@@ -61,8 +61,8 @@ function problemsCaption(ts: OverviewData["timeseries"]): string | null {
   return `Most problems on ${label} came from ${peak.dominant}.`;
 }
 
-const FIELDS = ["days", "version", "platform", "kind", "search"] as const;
-const REQ_FIELDS = ["version", "platform", "kind", "q"] as const;
+const FIELDS = ["days", "flavor", "version", "platform", "kind", "search"] as const;
+const REQ_FIELDS = ["flavor", "version", "platform", "kind", "q"] as const;
 
 export function Overview({
   filters,

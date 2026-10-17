@@ -1,6 +1,7 @@
 // FILE: betaDiagnostics.ts
-// Purpose: Beta-only diagnostics queue for Synara Beta desktop builds.
-// Layer: Desktop telemetry (runs only when the baked build flavor is "beta").
+// Purpose: Diagnostics queue for Synara Beta and Synara Remote desktop builds.
+// Layer: Desktop telemetry (runs only when the baked build flavor is "beta" or
+// "remote"; Remote follows the user's usage-sharing switch).
 //
 // Privacy contract (also documented in docs/diagnostics.md):
 // - Only the fixed event names and payload fields declared in BetaDiagnosticsEvent
@@ -13,8 +14,8 @@
 // - Usage counters do not read prompts, chat text, file contents, provider
 //   payloads, credentials, or environment variables. Free-text error fields
 //   can still contain fragments; raw crash dumps are not redacted.
-// - The install id is a random UUID generated on first launch of a beta install;
-//   it identifies an install, not a person.
+// - The install id is a random UUID generated on first launch of a beta or remote
+//   install; it identifies an install, not a person.
 // - Stable/production builds never construct this object, so the stable binary
 //   has no live diagnostics code path.
 
@@ -153,13 +154,15 @@ export type BetaDiagnosticsPayload =
       readonly outcome: "imported" | "import-failed" | "fresh" | "trash" | "keep";
     };
 
+export type DiagnosticsFlavor = "beta" | "remote";
+
 export interface BetaDiagnosticsEvent {
   readonly v: 1;
   readonly id: string;
   readonly ts: string;
   readonly installId: string;
   readonly appVersion: string;
-  readonly flavor: "beta";
+  readonly flavor: DiagnosticsFlavor;
   readonly platform: string;
   readonly arch: string;
   readonly event: BetaDiagnosticsEventName;
@@ -409,6 +412,9 @@ export class BetaDiagnostics {
     readonly env?: NodeJS.ProcessEnv;
     readonly now?: () => Date;
     readonly sampleMemory?: () => DiagnosticMemoryCounters;
+    readonly flavor?: DiagnosticsFlavor;
+    /** Collection gate; nothing is queued or sent while it returns false. */
+    readonly isEnabled?: () => boolean;
   }) {
     this.queuePath = join(input.homeDir, "diagnostics", "events.jsonl");
     this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
@@ -422,8 +428,12 @@ export class BetaDiagnostics {
     this.arch = input.arch;
     this.homeDir = input.homeDir;
     this.sampleMemory = input.sampleMemory;
+    this.flavor = input.flavor ?? "beta";
+    this.isEnabled = input.isEnabled ?? (() => true);
   }
 
+  private readonly flavor: DiagnosticsFlavor;
+  private readonly isEnabled: () => boolean;
   private readonly now: () => Date;
   private readonly appVersion: string;
   private readonly platform: string;
@@ -505,7 +515,7 @@ export class BetaDiagnostics {
   }
 
   track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): string | undefined {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     if (payload.kind === "crash" && payload.reason === "clean-exit") return;
     const withContext =
       payload.kind === "crash"
@@ -525,7 +535,7 @@ export class BetaDiagnostics {
       ts: this.now().toISOString(),
       installId: this.installId,
       appVersion: this.appVersion,
-      flavor: "beta",
+      flavor: this.flavor,
       platform: this.platform,
       arch: this.arch,
       event,
@@ -546,7 +556,7 @@ export class BetaDiagnostics {
 
   /** Reuse the deployed app.error envelope; no receiver schema change is required. */
   trackIssue(source: "main" | "renderer", input: unknown): string | null {
-    if (this.disposed) return null;
+    if (this.disposed || !this.isEnabled()) return null;
     try {
       if (!Schema.is(DesktopDiagnosticIssue)(input)) return null;
       if (
@@ -709,7 +719,7 @@ export class BetaDiagnostics {
    * per 10 minutes and the session is capped at 30 errors per hour.
    */
   trackError(source: "main" | "renderer", error: unknown): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       const rendererError =
         source === "renderer" && error !== null && typeof error === "object"
@@ -758,7 +768,7 @@ export class BetaDiagnostics {
    * may have been down), and days already recorded in usage-last-day.
    */
   maybeTrackDailyUsage(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.isEnabled()) return;
     try {
       if (!existsSync(this.usageSnapshotPath)) return;
       const raw = JSON.parse(readFileSync(this.usageSnapshotPath, "utf8")) as {
@@ -867,7 +877,7 @@ export class BetaDiagnostics {
    * cannot stall quit.
    */
   async flush(timeoutMs = 15_000): Promise<void> {
-    if (this.flushing || this.disposed) return;
+    if (this.flushing || this.disposed || !this.isEnabled()) return;
     this.flushing = true;
     // The promise resolves only after `flushing` clears, so dispose() can
     // chain a final flush on it.
@@ -950,6 +960,20 @@ export class BetaDiagnostics {
       }
     } catch {
       // Offline / endpoint down: keep the queue for the next flush.
+    }
+  }
+
+  /** Whether events are currently collected; false after an opt-out. */
+  isCollecting(): boolean {
+    return !this.disposed && this.isEnabled();
+  }
+
+  /** Drops unsent events after the user turns sharing off. */
+  discardQueue(): void {
+    try {
+      rmSync(this.queuePath, { force: true });
+    } catch {
+      // best effort
     }
   }
 

@@ -20,8 +20,8 @@ import {
   useApiData,
 } from "../components";
 
-const FIELDS = ["days", "platform"] as const;
-const REQ_FIELDS = ["platform"] as const;
+const FIELDS = ["days", "flavor", "platform"] as const;
+const REQ_FIELDS = ["flavor", "platform"] as const;
 
 export function Releases({
   filters,

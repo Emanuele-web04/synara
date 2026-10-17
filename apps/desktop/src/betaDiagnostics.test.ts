@@ -1025,3 +1025,31 @@ it("passes stall reports through the shared issue allowlist and redaction pipeli
   expect(queued).not.toMatch(/private|person/);
   await diagnostics.dispose();
 });
+
+describe("Remote diagnostics", () => {
+  it("labels events as Remote and collects nothing while sharing is off", () => {
+    const root = makeRoot();
+    let sharing = true;
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "linux",
+      arch: "x64",
+      flavor: "remote",
+      isEnabled: () => sharing,
+    });
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    expect(JSON.parse(readFileSync(queuePath, "utf8").trim())).toMatchObject({
+      flavor: "remote",
+      event: "app.start",
+    });
+
+    sharing = false;
+    diagnostics.discardQueue();
+    expect(diagnostics.isCollecting()).toBe(false);
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    diagnostics.trackError("main", new Error("boom"));
+    expect(existsSync(queuePath)).toBe(false);
+  });
+});
