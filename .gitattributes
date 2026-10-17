@@ -1,1 +1,5 @@
 bun.lock text eol=lf
+# Native patch files are checksummed byte-for-byte by provision-cua-driver.mjs
+# against the pinned hashes in cuaDriverRelease.json. CRLF checkouts on Windows
+# break that comparison, so patches must always check out with LF endings.
+*.patch text eol=lf

@@ -1,0 +1,160 @@
+name: Cua Windows checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cua-windows-check.yml"
+      - ".github/scripts/cua-windows-*"
+      - "apps/desktop/patches/cua-driver/**"
+      - "apps/desktop/scripts/*cua*"
+      - "apps/desktop/src/cuaDriverHost*"
+      - "apps/desktop/src/main.ts"
+      - "apps/desktop/src/windowsCua*"
+      - "apps/desktop/src/escapeKillSwitchMonitor*"
+      - "packages/shared/src/cuaDriver*"
+      - "scripts/build-desktop-artifact.ts"
+  push:
+    branches: ["codex/cua-windows-verify-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cua-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows native input and Electron host
+    runs-on: windows-2025
+    timeout-minutes: 50
+    env:
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "0"
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+          electron: "true"
+
+      - name: Test monitor lifecycle and artifact admission
+        run: bun run --cwd apps/desktop test src/escapeKillSwitchMonitor.test.ts src/windowsCuaDriverHost.test.ts scripts/cua-artifact-provenance.test.mjs
+
+      - name: Prepare the pinned Windows source
+        shell: pwsh
+        run: |
+          $release = Get-Content packages/shared/src/cuaDriverRelease.json | ConvertFrom-Json
+          rustup toolchain install $release.rustVersion --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTUP_TOOLCHAIN=$($release.rustVersion)" >> $env:GITHUB_ENV
+          $source = Join-Path $env:RUNNER_TEMP 'cua-windows-source'
+          git init $source
+          git -C $source -c core.autocrlf=false fetch --depth=1 https://github.com/trycua/cua.git $release.source
+          git -C $source -c core.autocrlf=false checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((git -C $source rev-parse HEAD) -ne $release.source) { throw 'Wrong source commit' }
+          $patches = @{
+            '0001-synara-native.patch' = $release.patchSha256
+            '0002-synara-linux-browser.patch' = $release.linuxBrowserPatchSha256
+            '0003-synara-windows-input.patch' = $release.windowsInputPatchSha256
+          }
+          foreach ($name in ($patches.Keys | Sort-Object)) {
+            $path = Join-Path $env:GITHUB_WORKSPACE "apps/desktop/patches/cua-driver/$name"
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes([System.IO.File]::ReadAllText($path).Replace("`r`n", "`n"))
+            $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+            if ($hash -ne $patches[$name]) { throw "Patch checksum mismatch: $name" }
+            $normalized = Join-Path $env:RUNNER_TEMP $name
+            [System.IO.File]::WriteAllBytes($normalized, $bytes)
+            $patch = [System.IO.Path]::GetFullPath((Join-Path (git --exec-path) '../../../usr/bin/patch.exe'))
+            Push-Location $source
+            try { & $patch --batch --forward -p1 -i $normalized } finally { Pop-Location }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          "CUA_NATIVE_SOURCE=$source" >> $env:GITHUB_ENV
+
+      - name: Compile the real Windows daemon
+        run: cargo build --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver
+
+      - name: Prove the native typing regression fails before the actuator fix
+        shell: pwsh
+        env:
+          SYNARA_CUA_WINDOWS_LIVE_TEST: "1"
+          SYNARA_CUA_DRIVER_TEST_BINARY: ${{ runner.temp }}/cua-windows-source/libs/cua-driver/rust/target/debug/cua-driver.exe
+        run: |
+          $relative = 'libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs'
+          $keyboard = Join-Path $env:CUA_NATIVE_SOURCE $relative
+          $patched = [System.IO.File]::ReadAllBytes($keyboard)
+          $log = Join-Path $env:RUNNER_TEMP 'windows-native-regression-before.log'
+          try {
+            git -C $env:CUA_NATIVE_SOURCE show "HEAD:$relative" | Set-Content -Encoding utf8NoBOM $keyboard
+            cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-windows --test synara_input_lifecycle -- --ignored --nocapture --test-threads=1 *> $log
+            $regressionExit = $LASTEXITCODE
+            Get-Content $log
+            if ($regressionExit -eq 0 -or !(Select-String -Path $log -SimpleMatch 'acknowledgement must include native workers and releases')) {
+              throw 'The unfixed native actuator did not fail for the expected cleanup barrier'
+            }
+          } finally {
+            [System.IO.File]::WriteAllBytes($keyboard, $patched)
+          }
+          exit 0
+
+      - name: Prove untagged Escape cleanup fails at the target window
+        shell: pwsh
+        env:
+          SYNARA_CUA_WINDOWS_LIVE_TEST: "1"
+          SYNARA_CUA_DRIVER_TEST_BINARY: ${{ runner.temp }}/cua-windows-source/libs/cua-driver/rust/target/debug/cua-driver.exe
+        run: |
+          $path = Join-Path $env:CUA_NATIVE_SOURCE 'libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs'
+          $patched = [System.IO.File]::ReadAllText($path)
+          $log = Join-Path $env:RUNNER_TEMP 'windows-escape-release-before.log'
+          try {
+            [System.IO.File]::WriteAllText($path, $patched.Replace('let release = system_release(&tagged);', 'let release = system_release(event);'))
+            cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-windows --test synara_input_lifecycle -- --ignored --nocapture --test-threads=1 *> $log
+            $regressionExit = $LASTEXITCODE
+            Get-Content $log
+            if ($regressionExit -eq 0 -or !(Select-String -Path $log -SimpleMatch 'cleanup Escape key-up did not reach the target')) {
+              throw 'The untagged release did not fail at the expected target delivery boundary'
+            }
+          } finally {
+            [System.IO.File]::WriteAllText($path, $patched)
+          }
+          exit 0
+
+      - name: Verify native input cancellation on the Windows desktop
+        env:
+          SYNARA_CUA_WINDOWS_LIVE_TEST: "1"
+          SYNARA_CUA_DRIVER_TEST_BINARY: ${{ runner.temp }}/cua-windows-source/libs/cua-driver/rust/target/debug/cua-driver.exe
+        run: cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-windows --test synara_input_lifecycle -- --ignored --nocapture --test-threads=1
+
+      - name: Verify browser release and epoch regressions
+        run: |
+          cargo test --manifest-path "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver-core --lib browser::
+
+      - name: Exercise the actual Windows host, Escape and Stop
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          bun build .github/scripts/cua-windows-smoke.ts --target=node --format=cjs --external=electron --outfile=apps/desktop/.smoke/cua-windows-smoke.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CUA_WINDOWS_SMOKE_BINARY = "$env:CUA_NATIVE_SOURCE/libs/cua-driver/rust/target/debug/cua-driver.exe"
+          ./.github/scripts/cua-windows-standard-user.ps1 -Executable apps/desktop/node_modules/electron/dist/electron.exe -Script apps/desktop/.smoke/cua-windows-smoke.cjs
+          exit $LASTEXITCODE
+
+      - name: Verify production source provisioning
+        shell: pwsh
+        run: |
+          node apps/desktop/scripts/provision-cua-driver.mjs --platform win32 --arch x64 --source-checkout "$env:CUA_NATIVE_SOURCE" --destination "$env:RUNNER_TEMP/cua-windows-artifact"
+          exit $LASTEXITCODE
+
+      - name: Exercise the provisioned Windows driver
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $env:CUA_WINDOWS_SMOKE_BINARY = "$env:RUNNER_TEMP/cua-windows-artifact/cua-driver.exe"
+          ./.github/scripts/cua-windows-standard-user.ps1 -Executable apps/desktop/node_modules/electron/dist/electron.exe -Script apps/desktop/.smoke/cua-windows-smoke.cjs
+          exit $LASTEXITCODE

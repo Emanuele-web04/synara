@@ -1,0 +1,2607 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+index f7b2684..6269ba3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+@@ -713,17 +713,23 @@ impl BrowserEngine {
+     /// Test-only: register a driver-owned lifecycle entry backed by a real,
+     /// harmless child process so the Drop reap path runs for real and the
+     /// session-end ownership check has something to prove against.
+-    #[cfg(all(test, unix))]
++    #[cfg(test)]
+     pub(crate) fn register_test_managed_browser(&self, pid: i64, session: &str, headless: bool) {
+-        use std::os::unix::process::CommandExt;
+-        let child = Command::new("sleep")
+-            .arg("600")
+-            .process_group(0)
+-            .stdin(Stdio::null())
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::null())
+-            .spawn()
+-            .expect("spawn a harmless test-browser stand-in");
++        #[cfg(unix)]
++        let mut command = {
++            use std::os::unix::process::CommandExt;
++            let mut command = Command::new("sleep");
++            command.arg("600").process_group(0);
++            command
++        };
++        #[cfg(windows)]
++        let mut command = {
++            let mut command = Command::new("powershell.exe");
++            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 600"]);
++            command
++        };
++        let child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
++            .spawn().expect("spawn a harmless test-browser stand-in");
+         self.managed_browsers.lock().unwrap().push(ManagedBrowser {
+             child,
+             owned_pid: pid,
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+index e772dda..afacc28 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+@@ -888,6 +888,10 @@ fn main() {
+ 
+ #[cfg(not(target_os = "macos"))]
+ fn main() -> anyhow::Result<()> {
++    #[cfg(target_os = "windows")]
++    if std::env::args().nth(1).as_deref() == Some("--escape-monitor") {
++        return platform_windows::input::escape_monitor::run();
++    }
+     if let Some(code) = history_runtime::run_offline_purge_if_requested() {
+         std::process::exit(code);
+     }
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+index 08d3db5..202c7b8 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -12,7 +12,7 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
+ use cua_driver_sdk::{CuaDriver, CuaDriverSession, TrustedSessionOptions};
+ use serde_json::{json, Value};
+ 
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+ pub(crate) fn is_native_input_tool(name: &str) -> bool {
+     matches!(
+         name,
+@@ -282,11 +282,11 @@ impl SdkAdapter {
+         // native desktop synthetic routes disabled; this shared operation gate
+         // owns no compositor, key state, pointer state, or macOS target logic.
+         // Retain the host-captured epoch through SDK preflight and every CDP send.
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "windows"))]
+         let linux_input = if is_native_input_tool(name) {
+             let gate = cua_driver_core::browser::operation_gate::gate();
+             match gate.admit(_expected_input_epoch) {
+-                Ok(operation) => Some(operation),
++                Ok(operation) => Some(Arc::new(operation)),
+                 Err(error) => {
+                     return Ok(json!({
+                         "isError": true,
+@@ -438,6 +438,8 @@ impl SdkAdapter {
+         });
+ 
+         let invocation = self.driver.call_tool_from_trusted_adapter(name, arguments);
++        #[cfg(target_os = "windows")]
++        let invocation = platform_windows::input::cancellation::scope(linux_input.clone(), invocation);
+         #[cfg(target_os = "macos")]
+         let result = if name.starts_with("browser_") {
+             cua_driver_core::browser::cancellation::scope(
+@@ -449,7 +451,7 @@ impl SdkAdapter {
+         } else {
+             invocation.await
+         };
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "windows"))]
+         let result = if let Some(operation) = &linux_input {
+             let epoch = operation.epoch();
+             cua_driver_core::browser::cancellation::scope(
+@@ -465,7 +467,7 @@ impl SdkAdapter {
+         } else {
+             invocation.await
+         };
+-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
++        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+         let result = invocation.await;
+         let result = result.map_err(|error| {
+             if let Some((session, marker, previous)) = ending_tombstone {
+@@ -485,13 +487,20 @@ impl SdkAdapter {
+             }
+             format!("{name} returned invalid SDK result JSON: {error}")
+         })?;
++        #[cfg(target_os = "windows")]
++        if linux_input.as_ref().is_some_and(|operation| cua_driver_core::browser::operation_gate::gate().checkpoint(operation.epoch()).is_err()) {
++            value["isError"] = json!(true);
++            if !value.get("structuredContent").is_some_and(Value::is_object) { value["structuredContent"] = json!({}); }
++            value["structuredContent"]["effect"] = json!("partial");
++            value["structuredContent"]["code"] = json!("input_interrupted");
++        }
+         #[cfg(target_os = "macos")]
+         let input_cleanup_unconfirmed =
+             platform_macos::input::cancellation::gate().has_unconfirmed_releases();
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "windows"))]
+         let input_cleanup_unconfirmed =
+             cua_driver_core::browser::operation_gate::gate().has_unconfirmed_releases();
+-        #[cfg(any(target_os = "macos", target_os = "linux"))]
++        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+         if input_cleanup_unconfirmed {
+             value["isError"] = Value::Bool(true);
+             if !value.get("structuredContent").is_some_and(Value::is_object) {
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index ecaefd8..2af7588 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -21,7 +21,7 @@
+ //! Source-installed local builds use the corresponding `cua-driver-local`
+ //! namespace on every platform.
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "windows"))]
+ use cua_driver_core::browser::operation_gate::gate as native_input_gate;
+ #[cfg(target_os = "macos")]
+ use platform_macos::input::cancellation::gate as native_input_gate;
+@@ -472,7 +472,7 @@ fn observe_daemon_error(
+ /// This field belongs to the authenticated desktop host, outside public tool
+ /// arguments. Retaining the host's epoch rejects buffered pre-interrupt calls
+ /// even when the daemon starts parsing them only after the gate reopens.
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+ fn host_input_epoch(
+     line: &str,
+     request: &DaemonRequest,
+@@ -723,7 +723,7 @@ fn permission_gate_response_for_state(
+ fn daemon_metadata_response() -> DaemonResponse {
+     let mut metadata = serde_json::to_value(cua_driver_core::daemon::current_daemon_metadata())
+         .expect("daemon metadata is serializable");
+-    #[cfg(any(target_os = "macos", target_os = "linux"))]
++    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+     {
+         metadata["synara_native_revision"] = serde_json::json!(40);
+     }
+@@ -733,10 +733,12 @@ fn daemon_metadata_response() -> DaemonResponse {
+         // desktop synthetic input, which the Linux host still refuses.
+         metadata["synara_browser_input_control"] = serde_json::json!(1);
+     }
++    #[cfg(target_os = "windows")]
++    { metadata["synara_windows_input_control"] = serde_json::json!(1); }
+     DaemonResponse::ok(metadata)
+ }
+ 
+-#[cfg(any(target_os = "macos", target_os = "linux"))]
++#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+ async fn cancel_input_response(request: &DaemonRequest, trusted_host: bool) -> DaemonResponse {
+     if !cua_driver_core::embedded_mode() || !trusted_host {
+         return DaemonResponse::err(
+@@ -1009,7 +1011,7 @@ mod peer_authentication_tests {
+         history_relaunch_state_response, shutdown_response, DaemonRequest, ToolObservationOrigin,
+     };
+ 
+-    #[cfg(any(target_os = "macos", target_os = "linux"))]
++    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+     #[test]
+     fn native_input_epoch_is_host_owned_required_and_not_read_from_tool_args() {
+         let parse = |wire: &str, embedded, trusted| {
+@@ -1271,7 +1273,7 @@ pub async fn run_serve(
+                         ).await;
+ 
+                         match req.method.as_str() {
+-                            #[cfg(any(target_os = "macos", target_os = "linux"))]
++                            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+                             "cancel_input" | "interrupt_input" => {
+                                 let resp = cancel_input_response(&req, trusted_host_connection).await;
+                                 let _ = writer.write_all(
+@@ -1399,9 +1401,9 @@ pub async fn run_serve(
+                                 ).await;
+                             }
+                             "call" => {
+-                                #[cfg(any(target_os = "macos", target_os = "linux"))]
++                                #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+                                 let expected_epoch = host_input_epoch(&line, &req, embedded, trusted_host_connection);
+-                                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
++                                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                                 let expected_epoch: Result<Option<u64>, String> = Ok(None);
+                                 let resp = match expected_epoch {
+                                     Ok(epoch) => invoke_daemon_tool(&reg, req, epoch).await,
+@@ -1634,7 +1636,7 @@ pub async fn run_serve(
+     // Host EOF and explicit shutdown must close input admission and let native
+     // owners submit their matching releases before task cancellation can drop
+     // the SDK action lease. Keep the runtime alive if cleanup is still pending.
+-    #[cfg(any(target_os = "macos", target_os = "linux"))]
++    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+     if embedded {
+         loop {
+             let pending = tokio::task::spawn_blocking(|| {
+@@ -2074,6 +2076,10 @@ pub async fn run_serve(
+                                 let _ = crate::mcp_envelope::accept(reg.clone(), lines.into_inner(), writer).await;
+                                 return;
+                             }
++                            "cancel_input" | "interrupt_input" => {
++                                let resp = cancel_input_response(&req, trusted_host_connection).await;
++                                let _ = writer.write_all((serde_json::to_string(&resp).unwrap() + "\n").as_bytes()).await;
++                            }
+                             "metadata" => {
+                                 let resp = daemon_metadata_response();
+                                 let _ = writer.write_all(
+@@ -2172,7 +2178,10 @@ pub async fn run_serve(
+                                 ).await;
+                             }
+                             "call" => {
+-                                let resp = invoke_daemon_tool(&reg, req, None).await;
++                                let resp = match host_input_epoch(&line, &req, embedded, trusted_host_connection) {
++                                    Ok(epoch) => invoke_daemon_tool(&reg, req, epoch).await,
++                                    Err(error) => DaemonResponse::err(error, 77),
++                                };
+                                 let _ = writer.write_all(
+                                     (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
+                                 ).await;
+@@ -2383,6 +2392,15 @@ pub async fn run_serve(
+         }
+     }
+ 
++    // Parent EOF/Stop keep the runtime alive until every native worker and
++    // matching release has drained. No forced exit can acknowledge held input.
++    if embedded {
++        loop {
++            let pending = tokio::task::spawn_blocking(|| native_input_gate().cancel_and_wait(std::time::Duration::from_secs(3))).await?;
++            if pending == 0 { break; }
++            tracing::warn!(pending, "embedded Windows shutdown awaiting input cleanup");
++        }
++    }
+     if let Some(pid_path) = pid_file_path {
+         let _ = std::fs::remove_file(pid_path);
+     }
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
+new file mode 100644
+index 0000000..251e71a
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/cancellation.rs
+@@ -0,0 +1,368 @@
++//! A native worker owns its input until matching releases have completed.
++//! The browser operation gate is shared with CDP so Stop drains both routes.
++use cua_driver_core::browser::operation_gate::{gate, OperationLease};
++use std::{
++    cell::RefCell,
++    future::Future,
++    sync::Arc,
++    time::{Duration, Instant},
++};
++use windows::{
++    core::{Error, Result, HRESULT},
++    Win32::{
++        Foundation::{HWND, LPARAM, WPARAM},
++        UI::{
++            Controls::{HSYNTHETICPOINTERDEVICE, POINTER_TYPE_INFO},
++            Input::{KeyboardAndMouse::*, Pointer::*},
++            WindowsAndMessaging::*,
++        },
++    },
++};
++
++type Lease = Arc<OperationLease<'static>>;
++tokio::task_local! { static OPERATION: Option<Lease>; }
++thread_local! { static WORKER: RefCell<Option<Worker>> = const { RefCell::new(None) }; }
++
++pub fn spawn<F>(future: F) -> tokio::task::JoinHandle<F::Output>
++where
++    F: Future + Send + 'static,
++    F::Output: Send + 'static,
++{
++    let lease = OPERATION.try_with(Clone::clone).ok().flatten();
++    tokio::spawn(scope(lease, future))
++}
++
++pub async fn scope<F: Future>(lease: Option<Lease>, future: F) -> F::Output {
++    OPERATION.scope(lease, future).await
++}
++
++// The lease is moved into the worker, not held only by its abortable JoinHandle.
++pub fn spawn_blocking<F, R>(work: F) -> tokio::task::JoinHandle<R>
++where
++    F: FnOnce() -> R + Send + 'static,
++    R: Send + 'static,
++{
++    let lease = OPERATION.try_with(Clone::clone).ok().flatten().or_else(|| {
++        WORKER.with(|state| state.borrow().as_ref().map(|worker| worker.lease.clone()))
++    });
++    tokio::task::spawn_blocking(move || {
++        let previous = WORKER.with(|state| {
++            state.replace(lease.map(|lease| Worker {
++                lease,
++                held: Vec::new(),
++                foreground: None,
++            }))
++        });
++        struct Restore(Option<Worker>);
++        impl Drop for Restore {
++            fn drop(&mut self) {
++                let mut current = WORKER.with(|state| state.replace(self.0.take()));
++                if let Some(worker) = current.as_mut() {
++                    worker.release_all();
++                }
++                // Dropping the final lease is the completion barrier.
++            }
++        }
++        let _restore = Restore(previous);
++        work()
++    })
++}
++
++pub fn checkpoint() -> anyhow::Result<()> {
++    WORKER.with(|state| match state.borrow().as_ref() {
++        Some(worker) => {
++            gate().checkpoint(worker.lease.epoch())?;
++            if let Some((hwnd, pid, thread)) = worker.foreground {
++                let mut current_pid = 0;
++                let current_thread =
++                    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut current_pid)) };
++                if current_pid != pid
++                    || current_thread != thread
++                    || unsafe { GetForegroundWindow() } != hwnd
++                {
++                    anyhow::bail!("input_target_changed: foreground window changed during input");
++                }
++            }
++            Ok(())
++        }
++        None => OPERATION
++            .try_with(|lease| match lease {
++                Some(lease) => gate().checkpoint(lease.epoch()),
++                None => Ok(()),
++            })
++            .unwrap_or(Ok(())),
++    })
++}
++/// Cosmetic waits also retain the operation lease. Stop must not wait for a
++/// cursor animation's original duration after the native input has drained.
++pub async fn until_interrupted<F: Future>(future: F) -> anyhow::Result<F::Output> {
++    tokio::pin!(future);
++    loop {
++        checkpoint()?;
++        tokio::select! {
++            result = &mut future => return Ok(result),
++            _ = tokio::time::sleep(Duration::from_millis(10)) => {},
++        }
++    }
++}
++
++fn interrupted() -> Error {
++    Error::new(HRESULT(0x800704c7u32 as i32), "Computer input interrupted")
++}
++
++/// Wake long gesture/typing delays promptly; the next actuator checks the epoch.
++/// Cleanup delays must still be allowed, so this function itself never unwinds.
++pub fn sleep(duration: Duration) {
++    let deadline = Instant::now() + duration;
++    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
++        if checkpoint().is_err() {
++            break;
++        }
++        std::thread::sleep(remaining.min(Duration::from_millis(10)));
++    }
++}
++
++enum Release {
++    System {
++        key: (u32, u32),
++        event: INPUT,
++    },
++    Posted {
++        hwnd: HWND,
++        pid: u32,
++        thread: u32,
++        message: u32,
++        key: usize,
++        lparam: LPARAM,
++    },
++    Pointer {
++        device: HSYNTHETICPOINTERDEVICE,
++        id: u32,
++        event: POINTER_TYPE_INFO,
++    },
++}
++struct Worker {
++    lease: Lease,
++    held: Vec<Release>,
++    foreground: Option<(HWND, u32, u32)>,
++}
++
++pub struct ForegroundGuard(Option<(HWND, u32, u32)>);
++impl Drop for ForegroundGuard {
++    fn drop(&mut self) {
++        WORKER.with(|state| {
++            if let Some(worker) = state.borrow_mut().as_mut() {
++                worker.foreground = self.0;
++            }
++        });
++    }
++}
++pub fn guard_foreground(hwnd: HWND) -> ForegroundGuard {
++    let mut pid = 0;
++    let thread = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
++    ForegroundGuard(WORKER.with(|state| {
++        state
++            .borrow_mut()
++            .as_mut()
++            .and_then(|worker| worker.foreground.replace((hwnd, pid, thread)))
++    }))
++}
++impl Worker {
++    fn release_all(&mut self) {
++        for release in self.held.drain(..).rev() {
++            let released = unsafe {
++                match release {
++                    Release::System { event, .. } => {
++                        SendInput(&[event], std::mem::size_of::<INPUT>() as i32) == 1
++                    }
++                    Release::Posted {
++                        hwnd,
++                        pid,
++                        thread,
++                        message,
++                        key,
++                        lparam,
++                    } => {
++                        let mut current_pid = 0;
++                        let current_thread = GetWindowThreadProcessId(hwnd, Some(&mut current_pid));
++                        current_pid == pid
++                            && current_thread == thread
++                            && PostMessageW(hwnd, message, WPARAM(key), lparam).is_ok()
++                    }
++                    Release::Pointer { device, event, .. } => {
++                        InjectSyntheticPointerInput(device, &[event]).is_ok()
++                    }
++                }
++            };
++            if !released {
++                gate().mark_unconfirmed_release();
++            }
++        }
++    }
++}
++
++// Track only events actually accepted by Windows. Never release unrelated keys.
++unsafe fn system_release(event: &INPUT) -> Option<((u32, u32), bool, INPUT)> {
++    let mut release = *event;
++    if event.r#type == INPUT_KEYBOARD {
++        let key = event.Anonymous.ki;
++        let up = key.dwFlags.contains(KEYEVENTF_KEYUP);
++        release.Anonymous.ki.dwFlags |= KEYEVENTF_KEYUP;
++        return Some((
++            (
++                (key.dwFlags.0 & !KEYEVENTF_KEYUP.0) << 8,
++                (u32::from(key.wVk.0) << 16) | u32::from(key.wScan),
++            ),
++            up,
++            release,
++        ));
++    }
++    if event.r#type == INPUT_MOUSE {
++        let flags = event.Anonymous.mi.dwFlags;
++        for (id, down, up) in [
++            (1, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
++            (2, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
++            (3, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
++            (4, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP),
++        ] {
++            if flags.contains(down) || flags.contains(up) {
++                release.Anonymous.mi.dwFlags = up;
++                return Some((
++                    (id, event.Anonymous.mi.mouseData),
++                    flags.contains(up),
++                    release,
++                ));
++            }
++        }
++    }
++    None
++}
++
++pub unsafe fn send_input(events: &[INPUT], size: i32) -> u32 {
++    if !WORKER.with(|state| state.borrow().is_some()) {
++        return SendInput(events, size);
++    }
++    let mut sent = 0;
++    for event in events {
++        let mut tagged = *event;
++        if tagged.r#type == INPUT_KEYBOARD {
++            tagged.Anonymous.ki.dwExtraInfo = super::escape_monitor::OWN_INPUT_TAG;
++        }
++        // The fallback key-up must carry the same ownership as its key-down.
++        let release = system_release(&tagged);
++        let is_up = release.as_ref().is_some_and(|(_, up, _)| *up);
++        if !is_up && checkpoint().is_err() {
++            break;
++        }
++        if SendInput(&[tagged], size) != 1 {
++            if is_up {
++                gate().mark_unconfirmed_release();
++            }
++            break;
++        }
++        sent += 1;
++        if let Some((key, up, release)) = release {
++            WORKER.with(|state| {
++                if let Some(worker) = state.borrow_mut().as_mut() {
++                    worker.held.retain(|held| !matches!(held, Release::System { key: existing, .. } if *existing == key));
++                    if !up { worker.held.push(Release::System { key, event: release }); }
++                }
++            });
++        }
++    }
++    sent
++}
++
++pub unsafe fn post_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<()> {
++    let (up_message, is_up, key) = match message {
++        WM_KEYDOWN | WM_KEYUP => (WM_KEYUP, message == WM_KEYUP, wparam.0),
++        WM_SYSKEYDOWN | WM_SYSKEYUP => (WM_SYSKEYUP, message == WM_SYSKEYUP, wparam.0),
++        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP => {
++            (WM_LBUTTONUP, message == WM_LBUTTONUP, 0)
++        }
++        WM_RBUTTONDOWN | WM_RBUTTONDBLCLK | WM_RBUTTONUP => {
++            (WM_RBUTTONUP, message == WM_RBUTTONUP, 0)
++        }
++        WM_MBUTTONDOWN | WM_MBUTTONDBLCLK | WM_MBUTTONUP => {
++            (WM_MBUTTONUP, message == WM_MBUTTONUP, 0)
++        }
++        _ => (0, false, 0),
++    };
++    if !is_up {
++        checkpoint().map_err(|_| interrupted())?;
++    }
++    let result = PostMessageW(hwnd, message, wparam, lparam);
++    if result.is_err() && is_up {
++        gate().mark_unconfirmed_release();
++    }
++    if result.is_ok() && up_message != 0 {
++        WORKER.with(|state| {
++            if let Some(worker) = state.borrow_mut().as_mut() {
++                worker.held.retain(|held| !matches!(held, Release::Posted { hwnd: h, message: m, key: k, .. } if *h == hwnd && *m == up_message && *k == key));
++                if !is_up {
++                    let lp = if up_message == WM_KEYUP || up_message == WM_SYSKEYUP { LPARAM(lparam.0 | (3isize << 30)) } else { lparam };
++                    let mut pid = 0;
++                    let thread = GetWindowThreadProcessId(hwnd, Some(&mut pid));
++                    worker.held.push(Release::Posted { hwnd, pid, thread, message: up_message, key, lparam: lp });
++                }
++            }
++        });
++    }
++    result
++}
++
++pub unsafe fn inject_pointer(
++    device: HSYNTHETICPOINTERDEVICE,
++    events: &[POINTER_TYPE_INFO],
++) -> Result<()> {
++    for event in events {
++        let info = if event.r#type == PT_PEN {
++            event.Anonymous.penInfo.pointerInfo
++        } else {
++            event.Anonymous.touchInfo.pointerInfo
++        };
++        let up = info.pointerFlags.contains(POINTER_FLAG_UP);
++        if !up {
++            checkpoint().map_err(|_| interrupted())?;
++        }
++        let result = InjectSyntheticPointerInput(device, &[*event]);
++        if result.is_err() && up {
++            gate().mark_unconfirmed_release();
++        }
++        result?;
++        WORKER.with(|state| {
++            if let Some(worker) = state.borrow_mut().as_mut() {
++                worker.held.retain(|held| !matches!(held, Release::Pointer { device: d, id, .. } if *d == device && *id == info.pointerId));
++                if !up {
++                    let mut release = *event;
++                    if release.r#type == PT_PEN { release.Anonymous.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_UP; }
++                    else { release.Anonymous.touchInfo.pointerInfo.pointerFlags = POINTER_FLAG_UP; }
++                    worker.held.push(Release::Pointer { device, id: info.pointerId, event: release });
++                }
++            }
++        });
++    }
++    Ok(())
++}
++
++pub unsafe fn destroy_pointer(device: HSYNTHETICPOINTERDEVICE) {
++    WORKER.with(|state| {
++        if let Some(worker) = state.borrow_mut().as_mut() {
++            worker.held.retain(|held| {
++                if let Release::Pointer {
++                    device: d, event, ..
++                } = held
++                {
++                    if *d == device {
++                        if InjectSyntheticPointerInput(device, &[*event]).is_err() {
++                            gate().mark_unconfirmed_release();
++                        }
++                        return false;
++                    }
++                }
++                true
++            });
++        }
++    });
++    windows::Win32::UI::Controls::DestroySyntheticPointerDevice(device);
++}
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs
+new file mode 100644
+index 0000000..72dc5c7
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/escape_monitor.rs
+@@ -0,0 +1,137 @@
++//! Task-scoped Escape listener used by the desktop's existing helper transport.
++//! No text, key inventory or pointer events are retained. Unlike RegisterHotKey,
++//! a low-level hook observes Escape with any currently held modifier.
++use std::{
++    io::{BufRead, Write},
++    sync::{
++        atomic::{AtomicBool, Ordering},
++        mpsc::{sync_channel, SyncSender},
++        OnceLock,
++    },
++};
++use windows::Win32::{
++    Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM},
++    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
++    UI::{Input::KeyboardAndMouse::VK_ESCAPE, WindowsAndMessaging::*},
++};
++
++// Native input authored by this driver must reach the app, including Escape.
++// External injected events still travel through the real hook in disposable CI.
++pub const OWN_INPUT_TAG: usize = 0x53594e41;
++const ARM: u32 = WM_APP + 1;
++const DISARM: u32 = WM_APP + 2;
++static OUTPUT: OnceLock<SyncSender<&'static str>> = OnceLock::new();
++static ESCAPE_DOWN: AtomicBool = AtomicBool::new(false);
++
++fn emit(message: &'static str) {
++    if let Some(output) = OUTPUT.get() {
++        let _ = output.try_send(message);
++    }
++}
++unsafe extern "system" fn on_keyboard(code: i32, kind: WPARAM, data: LPARAM) -> LRESULT {
++    if code >= 0 {
++        let key = &*(data.0 as *const KBDLLHOOKSTRUCT);
++        if key.vkCode == u32::from(VK_ESCAPE.0) && key.dwExtraInfo != OWN_INPUT_TAG {
++            match kind.0 as u32 {
++                WM_KEYDOWN | WM_SYSKEYDOWN => {
++                    if !ESCAPE_DOWN.swap(true, Ordering::SeqCst) {
++                        emit(r#"{"type":"escape"}"#);
++                    }
++                    return LRESULT(1);
++                }
++                WM_KEYUP | WM_SYSKEYUP => {
++                    ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                    return LRESULT(1);
++                }
++                _ => {}
++            }
++        }
++    }
++    CallNextHookEx(None, code, kind, data)
++}
++
++pub fn run() -> anyhow::Result<()> {
++    let (output, messages) = sync_channel::<&'static str>(32);
++    OUTPUT
++        .set(output)
++        .map_err(|_| anyhow::anyhow!("Escape monitor already started"))?;
++    std::thread::spawn(move || {
++        let stdout = std::io::stdout();
++        let mut stdout = stdout.lock();
++        for message in messages {
++            if writeln!(stdout, "{message}")
++                .and_then(|_| stdout.flush())
++                .is_err()
++            {
++                break;
++            }
++        }
++    });
++    let thread = unsafe { GetCurrentThreadId() };
++    // Create the message queue before the stdin reader can send commands.
++    unsafe {
++        let _ = PeekMessageW(&mut MSG::default(), None, 0, 0, PM_NOREMOVE);
++    }
++    std::thread::spawn(move || {
++        for command in std::io::stdin().lock().lines() {
++            let message = match command.as_deref() {
++                Ok("arm") => ARM,
++                Ok("disarm") => DISARM,
++                Ok(_) => continue,
++                Err(_) => break,
++            };
++            if unsafe { PostThreadMessageW(thread, message, WPARAM(0), LPARAM(0)) }.is_err() {
++                return;
++            }
++        }
++        unsafe {
++            let _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0));
++        }
++    });
++    let mut hook = None;
++    unsafe {
++        let mut message = MSG::default();
++        while GetMessageW(&mut message, None, 0, 0).0 > 0 {
++            match message.message {
++                ARM => {
++                    if hook.is_none() {
++                        let module = GetModuleHandleW(None)?;
++                        match SetWindowsHookExW(
++                            WH_KEYBOARD_LL,
++                            Some(on_keyboard),
++                            HINSTANCE(module.0),
++                            0,
++                        ) {
++                            Ok(installed) => {
++                                hook = Some(installed);
++                                ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                            }
++                            Err(_) => {
++                                emit(
++                                    r#"{"type":"error","code":"event_tap_unavailable","message":"Windows could not install the Escape listener."}"#,
++                                );
++                                continue;
++                            }
++                        }
++                    }
++                    emit(r#"{"type":"ready"}"#);
++                }
++                DISARM => {
++                    if let Some(installed) = hook.take() {
++                        UnhookWindowsHookEx(installed)?;
++                    }
++                    ESCAPE_DOWN.store(false, Ordering::SeqCst);
++                    emit(r#"{"type":"escape-monitor-state","armed":false}"#);
++                }
++                _ => {
++                    let _ = TranslateMessage(&message);
++                    DispatchMessageW(&message);
++                }
++            }
++        }
++        if let Some(installed) = hook {
++            UnhookWindowsHookEx(installed)?;
++        }
++    }
++    Ok(())
++}
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
+index 649f198..a595a8e 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/inject.rs
+@@ -30,20 +30,20 @@
+ use anyhow::{bail, Result};
+ use core::ffi::c_void;
+ use std::sync::Mutex;
+-use std::thread::sleep;
++use crate::input::cancellation::sleep;
+ use std::time::Duration;
+ 
+ use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+ use windows::Win32::UI::Controls::{
+-    CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
++    CreateSyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
+     POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+ };
+ use windows::Win32::UI::Input::Pointer::{
+-    InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
++    POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
+     POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+@@ -271,9 +271,9 @@ fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
+         let mut result: Result<()> = Ok(());
+         let n = count.max(1);
+         for i in 0..n {
+-            let r1 = InjectSyntheticPointerInput(dev, &[down]);
++            let r1 = crate::input::cancellation::inject_pointer(dev, &[down]);
+             sleep(Duration::from_millis(25));
+-            let r2 = InjectSyntheticPointerInput(dev, &[up]);
++            let r2 = crate::input::cancellation::inject_pointer(dev, &[up]);
+             if let Err(e) = r1.and(r2) {
+                 result = Err(anyhow::anyhow!("InjectSyntheticPointerInput(pen): {e}"));
+                 break;
+@@ -282,7 +282,7 @@ fn pen_taps(sx: i32, sy: i32, barrel: bool, count: usize) -> Result<()> {
+                 sleep(Duration::from_millis(70));
+             }
+         }
+-        let _ = DestroySyntheticPointerDevice(dev);
++        let _ = crate::input::cancellation::destroy_pointer(dev);
+         result?;
+     }
+     Ok(())
+@@ -561,11 +561,14 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+             sx0,
+             sy0,
+         );
+-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
++        let mut res = crate::input::cancellation::inject_pointer(dev, &[down]);
+         // Interpolated in-contact moves so frameworks that gate drag-tracking on
+         // motion (rather than a single down→up) see a continuous stroke.
+         let steps = steps.max(1);
+         for i in 1..=steps {
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
+             sleep(Duration::from_millis(8));
+             let t = i as f64 / steps as f64;
+             let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
+@@ -575,13 +578,13 @@ fn pen_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize, barrel: bool)
+                 x,
+                 y,
+             );
+-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
++            res = res.and(crate::input::cancellation::inject_pointer(dev, &[mv]));
+         }
+         // Release at the end.
+         sleep(Duration::from_millis(8));
+         let up = mk(POINTER_FLAG_UP, sx1, sy1);
+-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
+-        let _ = DestroySyntheticPointerDevice(dev);
++        res = res.and(crate::input::cancellation::inject_pointer(dev, &[up]));
++        let _ = crate::input::cancellation::destroy_pointer(dev);
+         res.map_err(|e| anyhow::anyhow!("InjectSyntheticPointerInput(pen drag): {e}"))?;
+     }
+     Ok(())
+@@ -666,9 +669,12 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
+             sx0,
+             sy0,
+         );
+-        let mut res = InjectSyntheticPointerInput(dev, &[down]);
++        let mut res = crate::input::cancellation::inject_pointer(dev, &[down]);
+         let steps = steps.clamp(1, 3);
+         for i in 1..=steps {
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
+             sleep(Duration::from_millis(2));
+             let t = i as f64 / steps as f64;
+             let x = sx0 + ((sx1 - sx0) as f64 * t).round() as i32;
+@@ -678,11 +684,11 @@ fn touch_drag(sx0: i32, sy0: i32, sx1: i32, sy1: i32, steps: usize) -> Result<()
+                 x,
+                 y,
+             );
+-            res = res.and(InjectSyntheticPointerInput(dev, &[mv]));
++            res = res.and(crate::input::cancellation::inject_pointer(dev, &[mv]));
+         }
+         sleep(Duration::from_millis(2));
+         let up = mk(POINTER_FLAG_UP, sx1, sy1);
+-        res = res.and(InjectSyntheticPointerInput(dev, &[up]));
++        res = res.and(crate::input::cancellation::inject_pointer(dev, &[up]));
+         // Snap the cursor back to where the user left it. The OS processes the
+         // promoted mouse messages slightly after injection, so a single restore
+         // right after the `up` can be overrun by that late move — settle briefly,
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
+index 1a1d2e5..3fff9e7 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
+@@ -16,17 +16,17 @@
+ //! Win32-only so the unit tests don't depend on UIA initialisation.
+ 
+ use anyhow::{bail, Result};
+-use std::thread::sleep;
++use crate::input::cancellation::sleep;
+ use std::time::{Duration, Instant};
+ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE, WPARAM};
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+-    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
++    MapVirtualKeyW, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+     KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC,
+     VIRTUAL_KEY,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+     EnumChildWindows, GetClassNameW, GetGUIThreadInfo, GetParent, GetWindowThreadProcessId,
+-    IsChild, PostMessageW, GUITHREADINFO, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
++    IsChild, GUITHREADINFO, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+     WM_SYSKEYUP,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+@@ -231,7 +231,7 @@ pub fn post_char(hwnd: u64, ch: char) -> Result<()> {
+     let h = focused_descendant(h_parent).unwrap_or(h_parent);
+     let code = ch as u32 as usize;
+     unsafe {
+-        PostMessageW(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
++        crate::input::cancellation::post_message(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
+     }
+     Ok(())
+ }
+@@ -254,7 +254,7 @@ unsafe fn post_enter_keystroke(h: HWND) -> Result<()> {
+     let scan = MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC);
+     let lp_down = 1u32 | (scan << 16);
+     let lp_up = lp_down | (1u32 << 30) | (1u32 << 31);
+-    PostMessageW(
++    crate::input::cancellation::post_message(
+         h,
+         WM_KEYDOWN,
+         WPARAM(vk.0 as usize),
+@@ -268,7 +268,7 @@ unsafe fn post_enter_keystroke(h: HWND) -> Result<()> {
+     // next character — visible in the "ABC\nDEF\nGHI" repro as "ABC / DEF /
+     // (gap) / HI".
+     sleep(Duration::from_millis(KEY_DELAY_MS));
+-    PostMessageW(h, WM_KEYUP, WPARAM(vk.0 as usize), LPARAM(lp_up as isize))?;
++    crate::input::cancellation::post_message(h, WM_KEYUP, WPARAM(vk.0 as usize), LPARAM(lp_up as isize))?;
+     Ok(())
+ }
+ 
+@@ -321,7 +321,7 @@ pub fn post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> R
+                 prev_was_cr = false;
+                 let code = ch as u32 as usize;
+                 unsafe {
+-                    PostMessageW(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
++                    crate::input::cancellation::post_message(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
+                 }
+                 sleep(Duration::from_millis(KEY_DELAY_MS + inter_char_ms));
+             }
+@@ -369,7 +369,7 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+         // Press modifiers.
+         for mvk in &mod_vks {
+             let ms = MapVirtualKeyW(mvk.0 as u32, MAPVK_VK_TO_VSC);
+-            PostMessageW(
++            crate::input::cancellation::post_message(
+                 target,
+                 down_msg,
+                 WPARAM(mvk.0 as usize),
+@@ -377,7 +377,7 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+             )?;
+         }
+         // Press key.
+-        PostMessageW(
++        crate::input::cancellation::post_message(
+             target,
+             down_msg,
+             WPARAM(vk.0 as usize),
+@@ -385,7 +385,7 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+         )?;
+         sleep(Duration::from_millis(KEY_DELAY_MS));
+         // Release key.
+-        PostMessageW(
++        crate::input::cancellation::post_message(
+             target,
+             up_msg,
+             WPARAM(vk.0 as usize),
+@@ -394,7 +394,7 @@ pub fn post_key(hwnd: u64, key: &str, modifiers: &[&str]) -> Result<()> {
+         // Release modifiers (reverse order).
+         for mvk in mod_vks.iter().rev() {
+             let ms = MapVirtualKeyW(mvk.0 as u32, MAPVK_VK_TO_VSC);
+-            PostMessageW(
++            crate::input::cancellation::post_message(
+                 target,
+                 up_msg,
+                 WPARAM(mvk.0 as usize),
+@@ -472,7 +472,7 @@ pub fn send_key_synthesized_after_focus(
+     }
+ 
+     with_confirmed_foreground(target, "key delivery", focus, || unsafe {
+-        let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
++        let sent = crate::input::cancellation::send_input(&events, std::mem::size_of::<INPUT>() as i32);
+         if sent as usize != events.len() {
+             bail!(
+                 "SendInput inserted only {sent} of {} events. Likely cause: \
+@@ -549,7 +549,7 @@ pub fn send_text_synthesized_after_focus(
+     }
+ 
+     with_confirmed_foreground(target, "text delivery", focus, || unsafe {
+-        let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
++        let sent = crate::input::cancellation::send_input(&events, std::mem::size_of::<INPUT>() as i32);
+         if sent as usize != events.len() {
+             bail!(
+                 "SendInput inserted only {sent} of {} key events. Likely cause: \
+@@ -643,6 +643,8 @@ fn with_confirmed_foreground<T>(
+                 actual.0
+             );
+         }
++        let _foreground = crate::input::cancellation::guard_foreground(target);
++        crate::input::cancellation::checkpoint()?;
+         body()
+     })();
+ 
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
+index 970660c..b082903 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/mod.rs
+@@ -9,7 +9,9 @@
+ //! For clicks, coordinates are window-client-relative (ScreenToClient applied
+ //! if screen coords are given). We pack with MAKELPARAM(x,y).
+ 
++pub mod cancellation;
+ pub mod delivery;
++pub mod escape_monitor;
+ pub mod inject;
+ pub mod keyboard;
+ pub mod mouse;
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
+index 30c9c92..a745af2 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/mouse.rs
+@@ -5,19 +5,19 @@
+ //! chrome that would call SetForegroundWindow in response to WM_LBUTTONDOWN.
+ 
+ use anyhow::{bail, Result};
+-use std::thread::sleep;
++use crate::input::cancellation::sleep;
+ use std::time::Duration;
+ use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+ use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+-    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
++    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+     MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
+     MOUSEEVENTF_WHEEL, MOUSEINPUT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+     ChildWindowFromPointEx, GetAncestor, GetClassLongPtrW, GetCursorPos, GetForegroundWindow,
+-    GetSystemMetrics, GetWindowLongPtrW, PostMessageW, SetCursorPos, SetWindowPos, CS_DBLCLKS,
++    GetSystemMetrics, GetWindowLongPtrW, SetCursorPos, SetWindowPos, CS_DBLCLKS,
+     CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GCL_STYLE, GWL_EXSTYLE,
+     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WM_LBUTTONDBLCLK,
+@@ -141,12 +141,12 @@ fn post_click_on(hwnd: HWND, x: i32, y: i32, count: usize, button: &str) -> Resu
+         let press_msg = posted_press_message(down_msg, double_msg, i, wants_double);
+         unsafe {
+             // WM_MOUSEMOVE first so hover state is correct before the click.
+-            PostMessageW(hwnd, WM_MOUSEMOVE, WPARAM(0), lparam)?;
++            crate::input::cancellation::post_message(hwnd, WM_MOUSEMOVE, WPARAM(0), lparam)?;
+             // Win32 controls do not infer a double-click from two posted DOWN
+             // messages. The second press must use WM_*BUTTONDBLCLK.
+-            PostMessageW(hwnd, press_msg, wdown, lparam)?;
++            crate::input::cancellation::post_message(hwnd, press_msg, wdown, lparam)?;
+             sleep(Duration::from_millis(CLICK_DELAY_MS));
+-            PostMessageW(hwnd, up_msg, wup, lparam)?;
++            crate::input::cancellation::post_message(hwnd, up_msg, wup, lparam)?;
+         }
+         if i + 1 < count {
+             sleep(Duration::from_millis(80));
+@@ -191,16 +191,19 @@ pub fn post_drag(
+     };
+ 
+     unsafe {
+-        PostMessageW(root, down_msg, wparam, make_lparam(from_x, from_y))?;
++        crate::input::cancellation::post_message(root, down_msg, wparam, make_lparam(from_x, from_y))?;
+     }
+     sleep(Duration::from_millis(CLICK_DELAY_MS));
+ 
+     for i in 1..=steps {
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
+         let t = i as f64 / steps as f64;
+         let ix = from_x + ((to_x - from_x) as f64 * t).round() as i32;
+         let iy = from_y + ((to_y - from_y) as f64 * t).round() as i32;
+         unsafe {
+-            PostMessageW(root, WM_MOUSEMOVE, wparam, make_lparam(ix, iy))?;
++            crate::input::cancellation::post_message(root, WM_MOUSEMOVE, wparam, make_lparam(ix, iy))?;
+         }
+         if step_delay_ms > 0 {
+             sleep(Duration::from_millis(step_delay_ms));
+@@ -208,7 +211,7 @@ pub fn post_drag(
+     }
+ 
+     unsafe {
+-        PostMessageW(root, up_msg, WPARAM(0), make_lparam(to_x, to_y))?;
++        crate::input::cancellation::post_message(root, up_msg, WPARAM(0), make_lparam(to_x, to_y))?;
+     }
+     Ok(())
+ }
+@@ -262,28 +265,31 @@ pub fn post_drag_screen(
+     };
+     unsafe {
+         // Pre-drag MOUSEMOVE (wParam=0, no buttons down yet) then DOWN at from.
+-        PostMessageW(
++        crate::input::cancellation::post_message(
+             target,
+             WM_MOUSEMOVE,
+             WPARAM(0),
+             make_lparam(c_from.x, c_from.y),
+         )?;
+-        PostMessageW(target, down_msg, wparam, make_lparam(c_from.x, c_from.y))?;
++        crate::input::cancellation::post_message(target, down_msg, wparam, make_lparam(c_from.x, c_from.y))?;
+     }
+     sleep(Duration::from_millis(CLICK_DELAY_MS));
+     for i in 1..=steps {
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
+         let t = i as f64 / steps as f64;
+         let ix = c_from.x + ((c_to.x - c_from.x) as f64 * t).round() as i32;
+         let iy = c_from.y + ((c_to.y - c_from.y) as f64 * t).round() as i32;
+         unsafe {
+-            PostMessageW(target, WM_MOUSEMOVE, wparam, make_lparam(ix, iy))?;
++            crate::input::cancellation::post_message(target, WM_MOUSEMOVE, wparam, make_lparam(ix, iy))?;
+         }
+         if step_delay_ms > 0 {
+             sleep(Duration::from_millis(step_delay_ms));
+         }
+     }
+     unsafe {
+-        PostMessageW(target, up_msg, WPARAM(0), make_lparam(c_to.x, c_to.y))?;
++        crate::input::cancellation::post_message(target, up_msg, WPARAM(0), make_lparam(c_to.x, c_to.y))?;
+     }
+     Ok(())
+ }
+@@ -597,6 +603,8 @@ fn send_click_synthesized_mods_impl(
+         } else {
+             None
+         };
++        let _foreground = activate.then(|| crate::input::cancellation::guard_foreground(target));
++        crate::input::cancellation::checkpoint()?;
+         let noactivate = (!activate).then(|| crate::input::NoActivateGuard::arm(target));
+         if !activate {
+             let _ = SetWindowPos(
+@@ -622,7 +630,7 @@ fn send_click_synthesized_mods_impl(
+         let (mod_downs, mod_ups) = crate::input::keyboard::modifier_hold_inputs(modifiers);
+         let mut sent_ok = true;
+         if !mod_downs.is_empty() {
+-            let sent = SendInput(&mod_downs, std::mem::size_of::<INPUT>() as i32);
++            let sent = crate::input::cancellation::send_input(&mod_downs, std::mem::size_of::<INPUT>() as i32);
+             sent_ok = sent as usize == mod_downs.len();
+             sleep(Duration::from_millis(5));
+         }
+@@ -636,7 +644,7 @@ fn send_click_synthesized_mods_impl(
+             // records act at the current pointer position; adding ABSOLUTE to
+             // them can prevent retained-mode controls from seeing the press.
+             let events = [move_input, down_input, up_input];
+-            let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
++            let sent = crate::input::cancellation::send_input(&events, std::mem::size_of::<INPUT>() as i32);
+             if sent as usize != events.len() {
+                 sent_ok = false;
+                 break;
+@@ -648,11 +656,11 @@ fn send_click_synthesized_mods_impl(
+ 
+         // Release any held modifiers (reverse order) before restoring z-order.
+         if !mod_ups.is_empty() {
+-            let released = SendInput(&mod_ups, std::mem::size_of::<INPUT>() as i32);
++            let released = crate::input::cancellation::send_input(&mod_ups, std::mem::size_of::<INPUT>() as i32);
+             if released as usize != mod_ups.len() {
+                 // A second release attempt is safe and reduces the chance of a
+                 // partially inserted chord leaving system modifier state held.
+-                let _ = SendInput(&mod_ups, std::mem::size_of::<INPUT>() as i32);
++                let _ = crate::input::cancellation::send_input(&mod_ups, std::mem::size_of::<INPUT>() as i32);
+                 sent_ok = false;
+             }
+         }
+@@ -820,7 +828,7 @@ pub fn send_drag_synthesized(
+             make_input(nfx, nfy, MOUSEEVENTF_MOVE),
+             make_input(nfx, nfy, down_flag),
+         ];
+-        let sent = SendInput(&prelude, std::mem::size_of::<INPUT>() as i32);
++        let sent = crate::input::cancellation::send_input(&prelude, std::mem::size_of::<INPUT>() as i32);
+         if sent as usize != prelude.len() {
+             if !was_topmost {
+                 let _ = SetWindowPos(
+@@ -856,13 +864,16 @@ pub fn send_drag_synthesized(
+         //    same path — WPF's drag-handler watches GetKeyState during each
+         //    move event.
+         for i in 1..=steps {
++            if crate::input::cancellation::checkpoint().is_err() {
++                break;
++            }
+             let t = i as f64 / steps as f64;
+             let x = sx_from + ((sx_to - sx_from) as f64 * t).round() as i32;
+             let y = sy_from + ((sy_to - sy_from) as f64 * t).round() as i32;
+             let (nx, ny) = norm(x, y);
+             let _ = SetCursorPos(x, y);
+             let mv = [make_input(nx, ny, MOUSEEVENTF_MOVE)];
+-            let _ = SendInput(&mv, std::mem::size_of::<INPUT>() as i32);
++            let _ = crate::input::cancellation::send_input(&mv, std::mem::size_of::<INPUT>() as i32);
+             if step_delay_ms > 0 {
+                 sleep(Duration::from_millis(step_delay_ms));
+             }
+@@ -871,7 +882,7 @@ pub fn send_drag_synthesized(
+         // 3. Release at the end.
+         let (ntx, nty) = norm(sx_to, sy_to);
+         let release = [make_input(ntx, nty, up_flag)];
+-        let _ = SendInput(&release, std::mem::size_of::<INPUT>() as i32);
++        let _ = crate::input::cancellation::send_input(&release, std::mem::size_of::<INPUT>() as i32);
+ 
+         // Brief settle, then restore z-order (demote target, restack user's
+         // window — no activation) and the cursor.
+@@ -964,7 +975,7 @@ pub fn send_wheel_synthesized(sx: i32, sy: i32, ticks: i32, horizontal: bool) ->
+         let _ = SetCursorPos(sx, sy);
+ 
+         let events = [wheel_input];
+-        let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
++        let sent = crate::input::cancellation::send_input(&events, std::mem::size_of::<INPUT>() as i32);
+         if sent as usize != events.len() {
+             let _ = SetCursorPos(prev_cursor.x, prev_cursor.y);
+             bail!("SendInput inserted {sent}/{} wheel events", events.len());
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/launch_uwp.rs b/libs/cua-driver/rust/crates/platform-windows/src/launch_uwp.rs
+index 6739207..ab742b2 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/launch_uwp.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/launch_uwp.rs
+@@ -312,7 +312,7 @@ impl AppsFolderLookupSingleFlight {
+         let timed_out = Arc::new(AtomicBool::new(false));
+         let worker_timed_out = Arc::clone(&timed_out);
+         let worker_gate = Arc::clone(self);
+-        let worker = tokio::task::spawn_blocking(move || {
++        let worker = crate::input::cancellation::spawn_blocking(move || {
+             let _guard = AppsFolderLookupInFlightGuard {
+                 gate: worker_gate,
+                 timed_out: worker_timed_out,
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+index 499d826..3f6e3b9 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+@@ -279,13 +279,14 @@ async fn overlay_glide_to(key: &str, sx: f64, sy: f64) {
+                 end_heading_radians: std::f64::consts::FRAC_PI_4,
+             },
+         );
+-        tokio::time::sleep(std::time::Duration::from_millis(
+-            motion.glide_duration_ms as u64,
+-        ))
+-        .await;
++        let _ = crate::input::cancellation::until_interrupted(tokio::time::sleep(
++            std::time::Duration::from_millis(motion.glide_duration_ms as u64),
++        )).await;
+         return;
+     }
+-    crate::overlay::animate_cursor_to(key.to_owned(), sx, sy).await;
++    let _ = crate::input::cancellation::until_interrupted(
++        crate::overlay::animate_cursor_to(key.to_owned(), sx, sy),
++    ).await;
+ }
+ 
+ async fn track_overlay_drag(
+@@ -305,12 +306,17 @@ async fn track_overlay_drag(
+     let steps = steps.max(1);
+     let step_delay = std::time::Duration::from_millis(duration_ms / steps as u64);
+     for index in 0..=steps {
++        if crate::input::cancellation::checkpoint().is_err() {
++            break;
++        }
+         let t = index as f64 / steps as f64;
+         let x = from.0 + (to.0 - from.0) * t;
+         let y = from.1 + (to.1 - from.1) * t;
+         crate::overlay::send_command(key.clone(), cursor_overlay::track_pointer_command(x, y));
+         if index < steps && !step_delay.is_zero() {
+-            tokio::time::sleep(step_delay).await;
++            if crate::input::cancellation::until_interrupted(tokio::time::sleep(step_delay)).await.is_err() {
++                break;
++            }
+         }
+     }
+     crate::overlay::send_command(key, cursor_overlay::OverlayCommand::SetPressed(false));
+@@ -440,7 +446,7 @@ impl Tool for ExactPidWindowTargetGuard {
+                         }));
+                 };
+                 let owner_pid =
+-                    tokio::task::spawn_blocking(move || crate::win32::window_owner_pid(window_id))
++                    crate::input::cancellation::spawn_blocking(move || crate::win32::window_owner_pid(window_id))
+                         .await
+                         .ok()
+                         .flatten();
+@@ -684,7 +690,7 @@ impl Tool for ListAppsTool {
+         //    that launch_path. Remaining installed entries are emitted with
+         //    running=false, pid=0. Remaining running pids (no installed-app
+         //    match) are emitted as running=true with launch_path=null.
+-        let apps = tokio::task::spawn_blocking(|| -> Vec<serde_json::Value> {
++        let apps = crate::input::cancellation::spawn_blocking(|| -> Vec<serde_json::Value> {
+             use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+             use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+ 
+@@ -898,7 +904,7 @@ impl Tool for ListWindowsTool {
+         use cua_driver_core::tool_args::ArgsExt;
+         let filter_pid = args.opt_u64("pid").map(|v| v as u32);
+         let on_screen_only = args.bool_or("on_screen_only", false);
+-        let (mut windows, pid_to_name) = tokio::task::spawn_blocking(move || {
++        let (mut windows, pid_to_name) = crate::input::cancellation::spawn_blocking(move || {
+             let wins = crate::win32::list_windows(filter_pid);
+             let procs = crate::win32::list_processes();
+             let map: std::collections::HashMap<u32, String> =
+@@ -1280,12 +1286,12 @@ impl Tool for GetWindowStateTool {
+             };
+         // Validate window belongs to pid — Swift's hard error.
+         let windows_for_pid =
+-            tokio::task::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
++            crate::input::cancellation::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
+                 .await
+                 .unwrap_or_default();
+         if !windows_for_pid.iter().any(|w| w.hwnd == hwnd) {
+             // Check if the window exists under a different pid.
+-            let all = tokio::task::spawn_blocking(|| crate::win32::list_windows(None))
++            let all = crate::input::cancellation::spawn_blocking(|| crate::win32::list_windows(None))
+                 .await
+                 .unwrap_or_default();
+             if let Some(w) = all.iter().find(|w| w.hwnd == hwnd) {
+@@ -1308,7 +1314,7 @@ impl Tool for GetWindowStateTool {
+             .iter()
+             .find(|w| w.hwnd == hwnd)
+             .map(|w| (w.title.clone(), w.x, w.y, w.width, w.height));
+-        let app_name = tokio::task::spawn_blocking(move || {
++        let app_name = crate::input::cancellation::spawn_blocking(move || {
+             crate::win32::list_processes()
+                 .into_iter()
+                 .find(|p| p.pid == pid)
+@@ -1382,7 +1388,7 @@ impl Tool for GetWindowStateTool {
+         let state = self.state.clone();
+         let q = query.clone();
+         let out_file = screenshot_out_file.clone();
+-        let blocking = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
++        let blocking = crate::input::cancellation::spawn_blocking(move || -> anyhow::Result<_> {
+             let tree_result = if do_tree {
+                 Some(crate::uia::walk_tree_bounded(
+                     hwnd,
+@@ -1873,6 +1879,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+         GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+     };
+ 
++    if crate::input::cancellation::checkpoint().is_err() { return; }
+     if prior_foreground_addr == 0 {
+         tracing::trace!(
+             target: "launch_app.focus_restore",
+@@ -1904,7 +1911,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+         // antivirus filters tolerate better than QUERY_INFORMATION.
+         // OpenProcess result is also `!Send` (HANDLE), so do the open +
+         // wait + close in one blocking task.
+-        let _ = tokio::task::spawn_blocking(move || unsafe {
++        let _ = crate::input::cancellation::spawn_blocking(move || unsafe {
+             if let Ok(handle) = OpenProcess(
+                 PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                 false,
+@@ -1930,6 +1937,7 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+     // never holds an `!Send` value across an await point.
+     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+     loop {
++        if crate::input::cancellation::checkpoint().is_err() { return; }
+         if std::time::Instant::now() >= deadline {
+             tracing::trace!(
+                 target: "launch_app.focus_restore",
+@@ -2354,7 +2362,7 @@ impl Tool for LaunchAppTool {
+         let pid = if let Some(aumid) = aumid_for_uwp.clone() {
+             let aumid_clone = aumid.clone();
+             let args_clone = extra_joined.clone();
+-            let activation = tokio::task::spawn_blocking(move || {
++            let activation = crate::input::cancellation::spawn_blocking(move || {
+                 crate::launch_uwp::launch_uwp(&aumid_clone, &args_clone)
+             })
+             .await;
+@@ -2391,7 +2399,7 @@ impl Tool for LaunchAppTool {
+             // UI so that case fails fast with an error code; the timeout is the
+             // backstop for any *other* blocking broker dialog (SmartScreen, an
+             // elevation/consent surface) so a bad target can't hang the daemon.
+-            let launch = tokio::task::spawn_blocking(move || -> anyhow::Result<u32> {
++            let launch = crate::input::cancellation::spawn_blocking(move || -> anyhow::Result<u32> {
+                 use windows::core::{PCWSTR, PWSTR};
+                 use windows::Win32::Foundation::CloseHandle;
+                 use windows::Win32::System::Threading::{
+@@ -2546,7 +2554,7 @@ impl Tool for LaunchAppTool {
+         if aumid_for_uwp.is_none() && restore_foreground {
+             let spawned_pid_for_restore = pid;
+             let target_foreground_addr = foreground_before_addr;
+-            tokio::spawn(async move {
++            crate::input::cancellation::spawn(async move {
+                 restore_foreground_polling_best_effort(
+                     target_foreground_addr,
+                     spawned_pid_for_restore,
+@@ -2561,7 +2569,7 @@ impl Tool for LaunchAppTool {
+         if aumid_for_uwp.is_some() && !urls.is_empty() {
+             let urls_clone = urls.clone();
+             let n_show_for_urls = n_show;
+-            let _ = tokio::task::spawn_blocking(move || {
++            let _ = crate::input::cancellation::spawn_blocking(move || {
+                 use windows::core::PCWSTR;
+                 use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+                 fn to_wide(s: &str) -> Vec<u16> {
+@@ -2615,7 +2623,7 @@ impl Tool for LaunchAppTool {
+         if aumid_for_uwp.is_some() {
+             for _ in 0..10 {
+                 let host =
+-                    tokio::task::spawn_blocking(move || crate::win32::resolve_uwp_host_window(pid))
++                    crate::input::cancellation::spawn_blocking(move || crate::win32::resolve_uwp_host_window(pid))
+                         .await
+                         .unwrap_or(None);
+                 if let Some(w) = host {
+@@ -2640,7 +2648,7 @@ impl Tool for LaunchAppTool {
+             if !windows_json.is_empty() {
+                 break;
+             }
+-            let wins = tokio::task::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
++            let wins = crate::input::cancellation::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
+                 .await
+                 .unwrap_or_default();
+             if !wins.is_empty() {
+@@ -2679,7 +2687,7 @@ impl Tool for LaunchAppTool {
+             let max_candidate_attempts: usize = if is_slow_launcher { 30 } else { 3 };
+ 
+             let basename_clone = basename_for_match.clone();
+-            let candidates_initial = tokio::task::spawn_blocking(move || {
++            let candidates_initial = crate::input::cancellation::spawn_blocking(move || {
+                 crate::win32::related_processes(pid, &basename_clone)
+             })
+             .await
+@@ -2699,7 +2707,7 @@ impl Tool for LaunchAppTool {
+                 while let Some(candidate_pid) = candidate_queue.pop() {
+                     for _ in 0..max_candidate_attempts {
+                         total_attempts += 1;
+-                        let wins = tokio::task::spawn_blocking(move || {
++                        let wins = crate::input::cancellation::spawn_blocking(move || {
+                             crate::win32::list_windows(Some(candidate_pid))
+                         })
+                         .await
+@@ -2729,7 +2737,7 @@ impl Tool for LaunchAppTool {
+                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                 total_attempts += 3; // count the 500ms wait as 3 attempts
+                 let basename_rescan = basename_for_match.clone();
+-                let fresh = tokio::task::spawn_blocking(move || {
++                let fresh = crate::input::cancellation::spawn_blocking(move || {
+                     crate::win32::related_processes(pid, &basename_rescan)
+                 })
+                 .await
+@@ -2785,7 +2793,7 @@ impl Tool for LaunchAppTool {
+             // poll window.
+             let parent_pid = pid;
+             let immediate_hwnds_for_poll = immediate_hwnds.clone();
+-            let _ = tokio::task::spawn_blocking(move || {
++            let _ = crate::input::cancellation::spawn_blocking(move || {
+                 use windows::Win32::Foundation::HWND;
+                 use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWMINNOACTIVE};
+                 for h in immediate_hwnds {
+@@ -2834,7 +2842,7 @@ impl Tool for LaunchAppTool {
+                     // Build the family pid set fresh each tick — both
+                     // descendant graph and name-relatives can grow as
+                     // launcher-stub chains spawn deeper children.
+-                    let family_new_pids: Vec<u32> = tokio::task::spawn_blocking(move || {
++                    let family_new_pids: Vec<u32> = crate::input::cancellation::spawn_blocking(move || {
+                         let related: std::collections::HashSet<u32> =
+                             crate::win32::related_processes(parent_pid, &basename_clone)
+                                 .into_iter()
+@@ -2852,7 +2860,7 @@ impl Tool for LaunchAppTool {
+                     .unwrap_or_default();
+                     let mut tick_hits: usize = 0;
+                     for cpid in family_new_pids {
+-                        let wins = tokio::task::spawn_blocking(move || {
++                        let wins = crate::input::cancellation::spawn_blocking(move || {
+                             crate::win32::list_windows(Some(cpid))
+                         })
+                         .await
+@@ -2863,7 +2871,7 @@ impl Tool for LaunchAppTool {
+                                 hit_count_total += 1;
+                             }
+                             let hwnd_iso = w.hwnd as usize;
+-                            let restored = tokio::task::spawn_blocking(move || unsafe {
++                            let restored = crate::input::cancellation::spawn_blocking(move || unsafe {
+                                 let hwnd = HWND(hwnd_iso as *mut _);
+                                 if IsIconic(hwnd).as_bool() {
+                                     false
+@@ -3203,7 +3211,7 @@ impl Tool for ClickTool {
+             // Click the HWND that owned the pixel before the driver overlay
+             // moved there. The active SendInput path performs the foreground
+             // swap and UIPI checks needed for Chromium and retained-mode apps.
+-            let send_result = tokio::task::spawn_blocking(move || -> anyhow::Result<u64> {
++            let send_result = crate::input::cancellation::spawn_blocking(move || -> anyhow::Result<u64> {
+                 let mod_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
+                 crate::input::send_click_synthesized_active_mods(
+                     hwnd_u, sx, sy, count, &button, &mod_refs,
+@@ -3314,7 +3322,7 @@ impl Tool for ClickTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -3413,7 +3421,7 @@ impl Tool for ClickTool {
+                 };
+                 let mods_owned = modifiers.clone();
+                 let activate = delivery == DeliveryMode::Foreground;
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -3430,7 +3438,7 @@ impl Tool for ClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 let half = if want_expand { "dropdown" } else { "press" };
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+@@ -3478,7 +3486,7 @@ impl Tool for ClickTool {
+             // WPF/WinUI menus and tree nodes whose visual click target is
+             // transient or scroll-adjusted.
+             if action_req.as_deref() == Some("expand") {
+-                let expand = tokio::task::spawn_blocking({
++                let expand = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || -> anyhow::Result<()> {
+                         let _admission = &admitted;
+@@ -3577,7 +3585,7 @@ impl Tool for ClickTool {
+                 let prev_fg_addr = unsafe {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -3588,7 +3596,7 @@ impl Tool for ClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+                         "✅ Performed SendInput click on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
+@@ -3627,7 +3635,7 @@ impl Tool for ClickTool {
+                 && count == 1
+                 && crate::input::is_chromium_target_window(hwnd)
+             {
+-                let posted = tokio::task::spawn_blocking({
++                let posted = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -3659,7 +3667,7 @@ impl Tool for ClickTool {
+             //   - count > 1 (double-click semantics aren't an Invoke
+             //     concept — PostMessage produces the actual WM_LBUTTONDBLCLK)
+             let use_uia_invoke = (btn == "left" || btn == "middle") && count == 1;
+-            let result = tokio::task::spawn_blocking({ let admitted = admitted.clone(); move || -> anyhow::Result<BackgroundElementClick> {
++            let result = crate::input::cancellation::spawn_blocking({ let admitted = admitted.clone(); move || -> anyhow::Result<BackgroundElementClick> {
+                 let _admission = &admitted;
+                 let mut failed_calls = Vec::new();
+                 // Direct Chromium UIA Invoke can return S_OK without firing a
+@@ -3816,7 +3824,7 @@ impl Tool for ClickTool {
+             } else {
+                 "PostMessage click"
+             };
+-            let sent = tokio::task::spawn_blocking({
++            let sent = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -3923,7 +3931,7 @@ impl Tool for ClickTool {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+                 let mods_owned = modifiers.clone();
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -3934,7 +3942,7 @@ impl Tool for ClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => {
+                         let click_word = match count {
+@@ -3973,7 +3981,7 @@ impl Tool for ClickTool {
+                 && count == 1
+                 && crate::input::is_chromium_target_window(hwnd)
+             {
+-                let posted = tokio::task::spawn_blocking({
++                let posted = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4002,7 +4010,7 @@ impl Tool for ClickTool {
+             if delivery == DeliveryMode::Background && crate::input::is_chromium_target_window(hwnd)
+             {
+                 let btn2 = btn.clone();
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4025,7 +4033,7 @@ impl Tool for ClickTool {
+             }
+             let use_uia = (btn == "left" || btn == "middle") && count == 1;
+             if use_uia {
+-                let outcome = tokio::task::spawn_blocking({
++                let outcome = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4049,7 +4057,7 @@ impl Tool for ClickTool {
+                 && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
+             {
+                 let btn2 = btn.clone();
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4080,7 +4088,7 @@ impl Tool for ClickTool {
+ 
+             // bitmap pixels -> screen (DWM-frame origin + inset). Use
+             // post_click_screen so we don't double-ClientToScreen.
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -4527,7 +4535,7 @@ impl Tool for TypeTextTool {
+                 Err(error) => return ToolResult::error(error.to_string()),
+             };
+             let text_len = text.chars().count();
+-            return match tokio::task::spawn_blocking(move || {
++            return match crate::input::cancellation::spawn_blocking(move || {
+                 crate::input::send_text_synthesized(hwnd, &text)
+             })
+             .await
+@@ -4635,7 +4643,7 @@ impl Tool for TypeTextTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4729,7 +4737,7 @@ impl Tool for TypeTextTool {
+                 None
+             };
+             let text_fg = text.clone();
+-            let r = tokio::task::spawn_blocking({
++            let r = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -4796,7 +4804,7 @@ impl Tool for TypeTextTool {
+         //    (most legacy Win32 EDITs consume WM_CHAR fine without focus steal).
+         if let Some(idx) = elem_idx {
+             let text_for_uia = text.clone();
+-            let set_result = tokio::task::spawn_blocking({
++            let set_result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -4847,7 +4855,7 @@ impl Tool for TypeTextTool {
+                 // (works regardless of which window is foreground), proving the
+                 // a11y write actually took rather than trusting SetValue's
+                 // return alone.
+-                let verify = tokio::task::spawn_blocking({
++                let verify = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -4946,7 +4954,7 @@ impl Tool for TypeTextTool {
+         let text_for_post = text.clone();
+         let verify_pid = pid;
+         let verify_idx = elem_idx.map(|i| i as usize);
+-        let result = tokio::task::spawn_blocking({
++        let result = crate::input::cancellation::spawn_blocking({
+             let admitted = admitted.clone();
+             move || {
+                 let _admission = &admitted;
+@@ -5282,7 +5290,7 @@ impl Tool for PressKeyTool {
+                 Err(error) => return ToolResult::error(error.to_string()),
+             };
+             let key_display = key.clone();
+-            return match tokio::task::spawn_blocking(move || {
++            return match crate::input::cancellation::spawn_blocking(move || {
+                 let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
+                 crate::input::send_key_synthesized(hwnd, &key, &modifiers)
+             })
+@@ -5375,7 +5383,7 @@ impl Tool for PressKeyTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -5467,7 +5475,7 @@ impl Tool for PressKeyTool {
+                 return error;
+             }
+         } else if elem_idx.is_some() && delivery != DeliveryMode::Foreground {
+-            let focused = tokio::task::spawn_blocking({
++            let focused = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -5502,7 +5510,7 @@ impl Tool for PressKeyTool {
+                 let point = admitted.as_ref().map(|element| element.center);
+                 (idx as usize, point)
+             });
+-            let send_result = tokio::task::spawn_blocking({
++            let send_result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -5524,7 +5532,7 @@ impl Tool for PressKeyTool {
+                 Err(e)     => ToolResult::error(format!("Task error: {e}")),
+             };
+         }
+-        let result = tokio::task::spawn_blocking({
++        let result = crate::input::cancellation::spawn_blocking({
+             let admitted = admitted.clone();
+             move || {
+                 let _admission = &admitted;
+@@ -5662,7 +5670,7 @@ impl Tool for HotkeyTool {
+                 Err(error) => return ToolResult::error(error.to_string()),
+             };
+             let key_display = full_keys.join("+");
+-            return match tokio::task::spawn_blocking(move || {
++            return match crate::input::cancellation::spawn_blocking(move || {
+                 let modifiers: Vec<&str> = mods.iter().map(String::as_str).collect();
+                 crate::input::send_key_synthesized(hwnd, &key, &modifiers)
+             })
+@@ -5746,7 +5754,7 @@ impl Tool for HotkeyTool {
+             Some(h) => h,
+             None => {
+                 let pid2 = pid;
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -5818,7 +5826,7 @@ impl Tool for HotkeyTool {
+             // bound the call so a hung provider returns an error instead of
+             // blocking the daemon indefinitely. 4 s matches the budget the
+             // rest of this file uses for similar UIA scans.
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -5913,7 +5921,7 @@ impl Tool for HotkeyTool {
+             let point = admitted.as_ref().map(|element| element.center);
+             (idx, point)
+         });
+-        let result = tokio::task::spawn_blocking({
++        let result = crate::input::cancellation::spawn_blocking({
+             let admitted = admitted.clone();
+             move || {
+                 let _admission = &admitted;
+@@ -6058,7 +6066,7 @@ impl Tool for SetValueTool {
+             );
+         }
+ 
+-        let result = tokio::task::spawn_blocking({
++        let result = crate::input::cancellation::spawn_blocking({
+             move || -> anyhow::Result<String> {
+                 let _noact = _noact;
+                 let ptr = admitted.as_ptr();
+@@ -6215,7 +6223,7 @@ impl Tool for ScrollTool {
+             };
+             let ticks = sign * amount as i32;
+             let dir_disp = direction.as_str();
+-            let result = tokio::task::spawn_blocking(move || {
++            let result = crate::input::cancellation::spawn_blocking(move || {
+                 crate::input::send_wheel_synthesized(sx, sy, ticks, horizontal)
+             })
+             .await;
+@@ -6270,7 +6278,7 @@ impl Tool for ScrollTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -6316,7 +6324,7 @@ impl Tool for ScrollTool {
+                 None
+             };
+             let direction_for_uia = direction.clone();
+-            let uia_result = tokio::task::spawn_blocking({
++            let uia_result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -6429,7 +6437,7 @@ impl Tool for ScrollTool {
+             let center = if let (Some(x), Some(y)) = (px, py) {
+                 Some(bitmap_to_screen(hwnd, x as i32, y as i32))
+             } else {
+-                tokio::task::spawn_blocking({
++                crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -6455,7 +6463,7 @@ impl Tool for ScrollTool {
+             };
+             let dir_disp = direction.clone();
+             let tick_disp = ticks.abs();
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -6473,13 +6481,13 @@ impl Tool for ScrollTool {
+             };
+         }
+ 
+-        let result = tokio::task::spawn_blocking({
++        let result = crate::input::cancellation::spawn_blocking({
+             let admitted = admitted.clone();
+             move || -> anyhow::Result<()> {
+                 let _admission = &admitted;
+                 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+                 use windows::Win32::UI::WindowsAndMessaging::{
+-                    PostMessageW, SB_LINEDOWN, SB_LINELEFT, SB_LINERIGHT, SB_LINEUP, SB_PAGEDOWN,
++                    SB_LINEDOWN, SB_LINELEFT, SB_LINERIGHT, SB_LINEUP, SB_PAGEDOWN,
+                     SB_PAGELEFT, SB_PAGERIGHT, SB_PAGEUP, WM_HSCROLL, WM_VSCROLL,
+                 };
+ 
+@@ -6498,7 +6506,7 @@ impl Tool for ScrollTool {
+                 };
+                 for _ in 0..amount {
+                     unsafe {
+-                        PostMessageW(hwnd_win, msg, WPARAM(code.0 as usize), LPARAM(0))?;
++                        crate::input::cancellation::post_message(hwnd_win, msg, WPARAM(code.0 as usize), LPARAM(0))?;
+                     }
+                 }
+                 Ok(())
+@@ -6561,7 +6569,7 @@ async fn chromium_click_short_circuit(
+     gesture: &str,
+ ) -> Option<ToolResult> {
+     let is_chromium =
+-        tokio::task::spawn_blocking(move || crate::input::is_chromium_target_window(hwnd))
++        crate::input::cancellation::spawn_blocking(move || crate::input::is_chromium_target_window(hwnd))
+             .await
+             .unwrap_or(false);
+     if !is_chromium {
+@@ -6573,11 +6581,11 @@ async fn chromium_click_short_circuit(
+     let prev_fg_addr =
+         unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize };
+     let button_owned = button.to_string();
+-    let send_result = tokio::task::spawn_blocking(move || {
++    let send_result = crate::input::cancellation::spawn_blocking(move || {
+         crate::input::send_click_synthesized(hwnd, sx, sy, count, &button_owned)
+     })
+     .await;
+-    tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++    crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+     Some(match send_result {
+         Ok(Ok(())) => ToolResult::text(format!(
+             "✅ Sent {gesture} via SendInput to pid {pid} at screen ({sx},{sy}) (Chromium target)."
+@@ -6673,7 +6681,7 @@ async fn winui3_background_gesture(
+     count: usize,
+     button: &str,
+ ) -> Option<ToolResult> {
+-    let is_w = tokio::task::spawn_blocking({
++    let is_w = crate::input::cancellation::spawn_blocking({
+         let admitted = admitted.clone();
+         move || {
+             let _admission = &admitted;
+@@ -6687,7 +6695,7 @@ async fn winui3_background_gesture(
+     }
+     if count >= 2 && button == "left" {
+         if let Some(idx) = idx {
+-            let uia = tokio::task::spawn_blocking({
++            let uia = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -6809,7 +6817,7 @@ impl Tool for DoubleClickTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -6885,7 +6893,7 @@ impl Tool for DoubleClickTool {
+             if delivery == DeliveryMode::Background
+                 && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
+             {
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -6910,7 +6918,7 @@ impl Tool for DoubleClickTool {
+                 let prev_fg_addr = unsafe {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -6925,7 +6933,7 @@ impl Tool for DoubleClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+                         "✅ Sent double-click via SendInput on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
+@@ -6940,7 +6948,7 @@ impl Tool for DoubleClickTool {
+             {
+                 return r;
+             }
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || -> anyhow::Result<String> {
+                     let _admission = &admitted;
+@@ -7006,7 +7014,7 @@ impl Tool for DoubleClickTool {
+             if delivery == DeliveryMode::Background
+                 && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
+             {
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7031,7 +7039,7 @@ impl Tool for DoubleClickTool {
+                 let prev_fg_addr = unsafe {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7046,7 +7054,7 @@ impl Tool for DoubleClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+                         "✅ Sent double-click via SendInput to pid {pid} at screen ({sx_i},{sy_i}) (delivery_mode:foreground)."
+@@ -7062,7 +7070,7 @@ impl Tool for DoubleClickTool {
+             {
+                 return r;
+             }
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -7184,7 +7192,7 @@ impl Tool for RightClickTool {
+         let hwnd = match hwnd_opt {
+             Some(h) => h,
+             None => {
+-                let windows = tokio::task::spawn_blocking({
++                let windows = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7255,7 +7263,7 @@ impl Tool for RightClickTool {
+             if delivery == DeliveryMode::Background
+                 && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
+             {
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7279,7 +7287,7 @@ impl Tool for RightClickTool {
+                 let prev_fg_addr = unsafe {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7294,7 +7302,7 @@ impl Tool for RightClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+                         "✅ Sent right-click via SendInput on [{idx}] at screen ({cx},{cy}) (delivery_mode:foreground)."
+@@ -7309,7 +7317,7 @@ impl Tool for RightClickTool {
+             {
+                 return r;
+             }
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || -> anyhow::Result<String> {
+                     let _admission = &admitted;
+@@ -7373,7 +7381,7 @@ impl Tool for RightClickTool {
+             if delivery == DeliveryMode::Background
+                 && crate::input::delivery::would_be_silently_dropped(hwnd, EventKind::MouseClick)
+             {
+-                let inj = tokio::task::spawn_blocking({
++                let inj = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7397,7 +7405,7 @@ impl Tool for RightClickTool {
+                 let prev_fg_addr = unsafe {
+                     windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+                 };
+-                let send_result = tokio::task::spawn_blocking({
++                let send_result = crate::input::cancellation::spawn_blocking({
+                     let admitted = admitted.clone();
+                     move || {
+                         let _admission = &admitted;
+@@ -7412,7 +7420,7 @@ impl Tool for RightClickTool {
+                     }
+                 })
+                 .await;
+-                tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++                crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+                 return match send_result {
+                     Ok(Ok(())) => ToolResult::text(format!(
+                         "✅ Sent right-click via SendInput to pid {pid} at screen ({sx_i},{sy_i}) (delivery_mode:foreground)."
+@@ -7428,7 +7436,7 @@ impl Tool for RightClickTool {
+             {
+                 return r;
+             }
+-            let result = tokio::task::spawn_blocking({
++            let result = crate::input::cancellation::spawn_blocking({
+                 let admitted = admitted.clone();
+                 move || {
+                     let _admission = &admitted;
+@@ -7513,7 +7521,7 @@ impl Tool for DragTool {
+                 Ok(hwnd) => hwnd,
+                 Err(error) => return ToolResult::error(error.to_string()),
+             };
+-            let native_drag = tokio::task::spawn_blocking(move || {
++            let native_drag = crate::input::cancellation::spawn_blocking(move || {
+                 crate::input::mouse::send_drag_synthesized(
+                     hwnd,
+                     from_x,
+@@ -7606,7 +7614,7 @@ impl Tool for DragTool {
+             Some(h) => h,
+             None => {
+                 let windows =
+-                    tokio::task::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
++                    crate::input::cancellation::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
+                         .await
+                         .unwrap_or_default();
+                 match windows.first() {
+@@ -7660,7 +7668,7 @@ impl Tool for DragTool {
+                     y: sy_from as f64,
+                 },
+             );
+-            let inj = tokio::task::spawn_blocking(move || {
++            let inj = crate::input::cancellation::spawn_blocking(move || {
+                 crate::input::inject::inject_drag_screen(
+                     target,
+                     sx_from,
+@@ -7705,7 +7713,7 @@ impl Tool for DragTool {
+             let prev_fg_addr = unsafe {
+                 windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow().0 as usize
+             };
+-            let send_result = tokio::task::spawn_blocking(move || {
++            let send_result = crate::input::cancellation::spawn_blocking(move || {
+                 crate::input::mouse::send_drag_synthesized(
+                     hwnd,
+                     sx_from,
+@@ -7725,7 +7733,7 @@ impl Tool for DragTool {
+                 steps,
+             );
+             let (send_result, ()) = tokio::join!(send_result, visual_drag);
+-            tokio::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
++            crate::input::cancellation::spawn(restore_foreground_polling_best_effort(prev_fg_addr, pid));
+             let button_suffix = if button == "left" {
+                 String::new()
+             } else {
+@@ -7750,7 +7758,7 @@ impl Tool for DragTool {
+         // structured background_unavailable error so callers escalate to
+         // delivery_mode:"foreground" per the documented ladder instead of
+         // trusting a drag that did nothing.
+-        let nc_hit = tokio::task::spawn_blocking(move || {
++        let nc_hit = crate::input::cancellation::spawn_blocking(move || {
+             crate::input::mouse::non_client_move_resize_hit(hwnd, sx_from, sy_from)
+         })
+         .await
+@@ -7788,7 +7796,7 @@ impl Tool for DragTool {
+         );
+ 
+         let button_c = button.clone();
+-        let result = tokio::task::spawn_blocking(move || {
++        let result = crate::input::cancellation::spawn_blocking(move || {
+             // Screen-coord, deepest-child variant: routes the gesture to the
+             // child control under the start point (e.g. a WinForms Panel),
+             // not the top-level frame that would ignore it.
+@@ -7932,7 +7940,7 @@ impl Tool for GetDesktopStateTool {
+         // Capture the FULL display at native size — no resize. Run the
+         // blocking GDI capture off the async runtime.
+         let out_file = screenshot_out_file.clone();
+-        let res = tokio::task::spawn_blocking(
++        let res = crate::input::cancellation::spawn_blocking(
+             move || -> anyhow::Result<(Option<String>, Option<String>, u32, u32)> {
+                 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+                 let png = crate::capture::screenshot_display_bytes()?;
+@@ -8768,7 +8776,7 @@ impl Tool for GetAccessibilityTreeTool {
+         })
+     }
+     async fn invoke(&self, _args: Value) -> ToolResult {
+-        let (procs, windows) = tokio::task::spawn_blocking(|| {
++        let (procs, windows) = crate::input::cancellation::spawn_blocking(|| {
+             (
+                 crate::win32::list_processes(),
+                 crate::win32::list_windows(None),
+@@ -8898,7 +8906,7 @@ impl Tool for ZoomTool {
+         let (nx1, ny1, nx2, ny2) = (x1 * ratio, y1 * ratio, x2 * ratio, y2 * ratio);
+ 
+         let state = self.state.clone();
+-        let result = tokio::task::spawn_blocking(move || {
++        let result = crate::input::cancellation::spawn_blocking(move || {
+             let png = crate::capture::screenshot_window_bytes(hwnd)?;
+             cursor_overlay::capture_utils::crop_png_to_jpeg(&png, nx1, ny1, nx2, ny2, 500)
+         })
+@@ -8991,7 +8999,7 @@ impl Tool for TypeTextCharsTool {
+             Some(h) => h,
+             None => {
+                 let windows =
+-                    tokio::task::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
++                    crate::input::cancellation::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
+                         .await
+                         .unwrap_or_default();
+                 match windows.first() {
+@@ -9005,7 +9013,7 @@ impl Tool for TypeTextCharsTool {
+             }
+         };
+         let text_len = text.chars().count();
+-        let result = tokio::task::spawn_blocking(move || {
++        let result = crate::input::cancellation::spawn_blocking(move || {
+             crate::input::post_type_text_with_delay(hwnd, &text, delay_ms)
+         })
+         .await;
+@@ -9134,7 +9142,7 @@ impl Tool for InvokeMenuTool {
+             return menu_refusal("invoke_menu: window_id does not belong to pid".into());
+         }
+ 
+-        let outcome = tokio::task::spawn_blocking(move || {
++        let outcome = crate::input::cancellation::spawn_blocking(move || {
+             // `HWND` wraps a raw pointer and is intentionally not `Send`.
+             // Move the integer handle into the blocking worker and rebuild the
+             // process-local wrapper there instead of carrying it across threads.
+@@ -9258,7 +9266,7 @@ impl Tool for SetWindowFrameTool {
+                 Ok(input) => input,
+                 Err(result) => return result,
+             };
+-        let outcome = tokio::task::spawn_blocking(move || {
++        let outcome = crate::input::cancellation::spawn_blocking(move || {
+             use windows::Win32::{
+                 Foundation::{HWND, RECT},
+                 Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
+@@ -9480,7 +9488,7 @@ impl Tool for BringToFrontTool {
+             Some(h) => h,
+             None => {
+                 let windows =
+-                    tokio::task::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
++                    crate::input::cancellation::spawn_blocking(move || crate::win32::list_windows(Some(pid)))
+                         .await
+                         .unwrap_or_default();
+                 match windows.first() {
+@@ -9499,7 +9507,7 @@ impl Tool for BringToFrontTool {
+         // and is validated by `flash-repro/16-edge-launch-fg.ps1` for the
+         // Edge launch focus-steal recovery case.
+         let outcome =
+-            tokio::task::spawn_blocking(move || -> Result<(u64, u64, bool, bool), String> {
++            crate::input::cancellation::spawn_blocking(move || -> Result<(u64, u64, bool, bool), String> {
+                 use windows::Win32::Foundation::HWND;
+                 use windows::Win32::Graphics::Dwm::DwmFlush;
+                 use windows::Win32::UI::WindowsAndMessaging::{
+@@ -9715,7 +9723,7 @@ impl Tool for KillAppTool {
+         // Run the syscalls on a blocking thread — TerminateProcess + the
+         // WaitForSingleObject confirmation are both blocking, and we don't
+         // want to stall the tokio reactor.
+-        let outcome = tokio::task::spawn_blocking(move || -> Result<(), String> {
++        let outcome = crate::input::cancellation::spawn_blocking(move || -> Result<(), String> {
+             use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+             use windows::Win32::System::Threading::{
+                 OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+@@ -9827,7 +9835,7 @@ impl Tool for DebugWindowInfoTool {
+             }
+         };
+ 
+-        let outcome = tokio::task::spawn_blocking(move || -> serde_json::Value {
++        let outcome = crate::input::cancellation::spawn_blocking(move || -> serde_json::Value {
+             use std::collections::HashSet;
+             use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, BOOL, TRUE};
+             use windows::Win32::System::Com::{
+diff --git a/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
+new file mode 100644
+index 0000000..8458611
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-windows/tests/synara_input_lifecycle.rs
+@@ -0,0 +1,397 @@
++//! Requires a disposable, interactive Windows desktop. Exercises real Win32
++//! messages and input state, not a substitute transport or a mocked injector.
++#![cfg(target_os = "windows")]
++use cua_driver_core::browser::operation_gate::gate;
++use platform_windows::input::{cancellation, keyboard, mouse};
++use std::io::{BufRead, Write};
++use std::process::{Child, Command, Stdio};
++use std::{
++    sync::{
++        atomic::{AtomicUsize, Ordering},
++        mpsc, Arc,
++    },
++    time::{Duration, Instant},
++};
++use windows::{
++    core::w,
++    Win32::{
++        Foundation::{HWND, LPARAM, WPARAM},
++        UI::{
++            Input::KeyboardAndMouse::{
++                GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
++                KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_ESCAPE, VK_LBUTTON, VK_SHIFT,
++            },
++            WindowsAndMessaging::*,
++        },
++    },
++};
++
++struct EscapeMonitor {
++    child: Child,
++    events: mpsc::Receiver<String>,
++}
++impl EscapeMonitor {
++    fn new() -> Self {
++        let mut child =
++            Command::new(std::env::var("SYNARA_CUA_DRIVER_TEST_BINARY").expect("real driver path"))
++                .arg("--escape-monitor")
++                .stdin(Stdio::piped())
++                .stdout(Stdio::piped())
++                .stderr(Stdio::inherit())
++                .spawn()
++                .unwrap();
++        let (tx, events) = mpsc::channel();
++        let output = child.stdout.take().unwrap();
++        std::thread::spawn(move || {
++            for line in std::io::BufReader::new(output).lines() {
++                if tx.send(line.unwrap()).is_err() {
++                    break;
++                }
++            }
++        });
++        writeln!(child.stdin.as_mut().unwrap(), "arm").unwrap();
++        let monitor = Self { child, events };
++        assert_eq!(
++            monitor.events.recv_timeout(Duration::from_secs(5)).unwrap(),
++            r#"{"type":"ready"}"#
++        );
++        monitor
++    }
++    fn external_escape(&self) {
++        let events = [KEYBD_EVENT_FLAGS(0), KEYEVENTF_KEYUP].map(|flags| INPUT {
++            r#type: INPUT_KEYBOARD,
++            Anonymous: INPUT_0 {
++                ki: KEYBDINPUT {
++                    wVk: VK_ESCAPE,
++                    dwFlags: flags,
++                    ..Default::default()
++                },
++            },
++        });
++        assert_eq!(
++            unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) },
++            2
++        );
++        assert_eq!(
++            self.events.recv_timeout(Duration::from_secs(5)).unwrap(),
++            r#"{"type":"escape"}"#
++        );
++    }
++}
++impl Drop for EscapeMonitor {
++    fn drop(&mut self) {
++        self.child.stdin.take();
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while self.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
++            std::thread::sleep(Duration::from_millis(10));
++        }
++        if self.child.try_wait().unwrap().is_none() {
++            let _ = self.child.kill();
++        }
++        let _ = self.child.wait();
++    }
++}
++
++struct Window {
++    hwnd: usize,
++    thread: Option<std::thread::JoinHandle<()>>,
++    escape_downs: Arc<AtomicUsize>,
++    escape_ups: Arc<AtomicUsize>,
++}
++impl Window {
++    fn new() -> Self {
++        let (tx, rx) = mpsc::channel();
++        let escape_downs = Arc::new(AtomicUsize::new(0));
++        let escape_ups = Arc::new(AtomicUsize::new(0));
++        let observed_downs = escape_downs.clone();
++        let observed_ups = escape_ups.clone();
++        let thread = std::thread::spawn(move || unsafe {
++            let hwnd = CreateWindowExW(
++                WINDOW_EX_STYLE::default(),
++                w!("EDIT"),
++                w!(""),
++                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WINDOW_STYLE(ES_MULTILINE as u32),
++                100,
++                100,
++                640,
++                400,
++                None,
++                None,
++                None,
++                None,
++            )
++            .expect("create interactive EDIT fixture");
++            let _ = SetForegroundWindow(hwnd);
++            tx.send(hwnd.0 as usize).unwrap();
++            let mut message = MSG::default();
++            while GetMessageW(&mut message, None, 0, 0).as_bool() {
++                if message.message == WM_APP {
++                    break;
++                }
++                if message.wParam.0 == VK_ESCAPE.0 as usize {
++                    match message.message {
++                        WM_KEYDOWN | WM_SYSKEYDOWN => {
++                            observed_downs.fetch_add(1, Ordering::SeqCst);
++                        }
++                        WM_KEYUP | WM_SYSKEYUP => {
++                            observed_ups.fetch_add(1, Ordering::SeqCst);
++                        }
++                        _ => {}
++                    }
++                }
++                let _ = TranslateMessage(&message);
++                DispatchMessageW(&message);
++            }
++            let _ = DestroyWindow(hwnd);
++        });
++        Self {
++            hwnd: rx.recv_timeout(Duration::from_secs(10)).unwrap(),
++            thread: Some(thread),
++            escape_downs,
++            escape_ups,
++        }
++    }
++    fn text(&self) -> String {
++        let mut text = vec![0u16; self.length() + 1];
++        let length = unsafe {
++            SendMessageW(
++                HWND(self.hwnd as *mut _),
++                WM_GETTEXT,
++                WPARAM(text.len()),
++                LPARAM(text.as_mut_ptr() as isize),
++            )
++            .0 as usize
++        };
++        String::from_utf16_lossy(&text[..length])
++    }
++    fn length(&self) -> usize {
++        unsafe {
++            SendMessageW(
++                HWND(self.hwnd as *mut _),
++                WM_GETTEXTLENGTH,
++                WPARAM(0),
++                LPARAM(0),
++            )
++            .0 as usize
++        }
++    }
++}
++impl Drop for Window {
++    fn drop(&mut self) {
++        unsafe {
++            let _ = PostMessageW(HWND(self.hwnd as *mut _), WM_APP, WPARAM(0), LPARAM(0));
++        }
++        if let Some(thread) = self.thread.take() {
++            thread.join().unwrap();
++        }
++    }
++}
++async fn eventually(mut check: impl FnMut() -> bool, message: &str) {
++    let deadline = Instant::now() + Duration::from_secs(5);
++    while !check() {
++        assert!(Instant::now() < deadline, "{message}");
++        tokio::time::sleep(Duration::from_millis(5)).await;
++    }
++}
++async fn start<F, R>(work: F) -> tokio::task::JoinHandle<R>
++where
++    F: FnOnce() -> R + Send + 'static,
++    R: Send + 'static,
++{
++    let lease = Arc::new(gate().admit(None).unwrap());
++    cancellation::scope(Some(lease), async { cancellation::spawn_blocking(work) }).await
++}
++async fn interrupt() -> u64 {
++    let result = tokio::task::spawn_blocking(|| gate().interrupt_and_wait(Duration::from_secs(3)))
++        .await
++        .unwrap();
++    assert_eq!(
++        result.pending, 0,
++        "acknowledgement must include native workers and releases"
++    );
++    assert!(
++        result.resumed,
++        "a verified drain must permit a fresh operation"
++    );
++    result.epoch
++}
++fn down(key: u16) -> bool {
++    unsafe { GetAsyncKeyState(key as i32) < 0 }
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++#[ignore = "mutates the disposable Windows CI desktop"]
++async fn synara_input_lifecycle() {
++    assert_eq!(
++        std::env::var("SYNARA_CUA_WINDOWS_LIVE_TEST").as_deref(),
++        Ok("1")
++    );
++    let monitor = EscapeMonitor::new();
++    let window = Window::new();
++    let hwnd = window.hwnd as u64;
++    let typing =
++        start(move || keyboard::post_type_text_with_delay(hwnd, &"x".repeat(300), 20)).await;
++    eventually(
++        || window.length() >= 3,
++        "fixture must receive real typing before interruption",
++    )
++    .await;
++    let epoch = interrupt().await;
++    assert!(typing.await.unwrap().is_err());
++    let count = window.length();
++    assert!(count < 300, "interruption must stop an in-progress action");
++    tokio::time::sleep(Duration::from_millis(100)).await;
++    assert_eq!(
++        window.length(),
++        count,
++        "no late input after the drain acknowledgement"
++    );
++    assert!(
++        gate().admit(Some(epoch - 1)).is_err(),
++        "buffered pre-Escape requests must stay stale"
++    );
++
++    start(move || keyboard::send_key_synthesized(hwnd, "escape", &[]))
++        .await
++        .await
++        .unwrap()
++        .unwrap();
++    assert!(
++        matches!(
++            monitor.events.recv_timeout(Duration::from_millis(150)),
++            Err(mpsc::RecvTimeoutError::Timeout)
++        ),
++        "the driver's own Escape must reach the target without stopping the task"
++    );
++
++    eventually(
++        || {
++            window.escape_downs.load(Ordering::SeqCst) == 1
++                && window.escape_ups.load(Ordering::SeqCst) == 1
++        },
++        "the target must receive both halves of the driver's Escape",
++    )
++    .await;
++    // Cancel while the driver's own Escape is held: the worker's fallback
++    // release must reach this actual window, even while the hook is armed.
++    let held_escape = start(move || unsafe {
++        let event = INPUT {
++            r#type: INPUT_KEYBOARD,
++            Anonymous: INPUT_0 {
++                ki: KEYBDINPUT {
++                    wVk: VK_ESCAPE,
++                    ..Default::default()
++                },
++            },
++        };
++        assert_eq!(
++            cancellation::send_input(&[event], std::mem::size_of::<INPUT>() as i32),
++            1
++        );
++        cancellation::sleep(Duration::from_secs(5));
++    })
++    .await;
++    eventually(
++        || window.escape_downs.load(Ordering::SeqCst) == 2,
++        "held Escape did not reach the target",
++    )
++    .await;
++    interrupt().await;
++    held_escape.await.unwrap();
++    eventually(
++        || window.escape_ups.load(Ordering::SeqCst) == 2,
++        "cleanup Escape key-up did not reach the target",
++    )
++    .await;
++    assert!(!down(VK_ESCAPE.0), "cleanup left Escape held");
++
++    let modified_click =
++        start(move || mouse::send_click_synthesized_mods(hwnd, 200, 200, 100, "left", &["shift"]))
++            .await;
++    eventually(
++        || down(VK_SHIFT.0),
++        "modified click must actually hold Shift",
++    )
++    .await;
++    monitor.external_escape();
++    // Dropping a JoinHandle must not drop the worker's operation lease.
++    drop(modified_click);
++    interrupt().await;
++    eventually(
++        || !down(VK_SHIFT.0) && !down(VK_LBUTTON.0),
++        "interrupted click left a held input",
++    )
++    .await;
++
++    let changed_target_click = start(move || {
++        mouse::send_click_synthesized_active_mods(hwnd, 200, 200, 100, "left", &["shift"])
++    })
++    .await;
++    eventually(|| down(VK_SHIFT.0), "foreground click did not hold Shift").await;
++    let other_window = Window::new();
++    // Activation crosses the fixture's UI thread. GetForegroundWindow can be
++    // NULL while Windows deactivates the old window; observe the new target
++    // before asserting that the completed cleanup preserves it.
++    eventually(
++        || unsafe { GetForegroundWindow().0 as usize == other_window.hwnd },
++        "replacement fixture did not become the foreground window",
++    )
++    .await;
++    assert!(
++        changed_target_click.await.unwrap().is_err(),
++        "click continued after a foreground target change"
++    );
++    eventually(
++        || !down(VK_SHIFT.0) && !down(VK_LBUTTON.0),
++        "target change left a held input",
++    )
++    .await;
++    assert_eq!(
++        unsafe { GetForegroundWindow().0 as usize },
++        other_window.hwnd,
++        "cleanup stole the user's new foreground"
++    );
++    drop(other_window);
++
++    let drag =
++        start(move || mouse::send_drag_synthesized(hwnd, 200, 200, 400, 250, 5000, 500, "left"))
++            .await;
++    eventually(
++        || down(VK_LBUTTON.0),
++        "drag must actually hold its mouse button",
++    )
++    .await;
++    interrupt().await;
++    let _ = drag.await.unwrap();
++    eventually(
++        || !down(VK_LBUTTON.0),
++        "interrupted drag left its button down",
++    )
++    .await;
++
++    let fresh = start(move || keyboard::post_type_text(hwnd, "recovered")).await;
++    fresh.await.unwrap().unwrap();
++    eventually(
++        || window.text().contains("recovered"),
++        "fresh admitted input did not reach the window",
++    )
++    .await;
++
++    let final_drag =
++        start(move || mouse::send_drag_synthesized(hwnd, 200, 200, 400, 250, 5000, 500, "left"))
++            .await;
++    eventually(|| down(VK_LBUTTON.0), "final drag must begin before Stop").await;
++    assert_eq!(
++        tokio::task::spawn_blocking(|| gate().cancel_and_wait(Duration::from_secs(3)))
++            .await
++            .unwrap(),
++        0
++    );
++    let _ = final_drag.await.unwrap();
++    eventually(|| !down(VK_LBUTTON.0), "retirement left its button down").await;
++    assert!(
++        gate().admit(None).is_err(),
++        "retirement must never reopen this generation"
++    );
++    eprintln!("WINDOWS_NATIVE_INPUT_OK typing=interrupted modified_click=released modified_escape=observed own_escape=passed cleanup_escape=received target_change=released detached_worker=drained drag=released stale_epoch=refused fresh_input=observed stop=retired");
++}

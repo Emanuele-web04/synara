@@ -6,5 +6,6 @@
   "patchSha256": "ad4d1fc0b55e963d4430c386d37e3026476c2c5efcdf2e0587a9bd9ae34f653d",
   "linuxBrowserPatchSha256": "97ef46895b9454e1d0f459bc20a05bdd920f310876e29c9ac3a68510a35fdd30",
   "linuxBrowserInputControl": 1,
-  "rustVersion": "1.97.1"
+  "rustVersion": "1.97.1",
+  "windowsInputPatchSha256": "eaf199b6d639b31107000b35a0d6b8a30b55fc89365a7ffb51b3f66d75f144f0"
 }

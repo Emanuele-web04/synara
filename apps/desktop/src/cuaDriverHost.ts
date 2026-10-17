@@ -511,7 +511,10 @@ export class CuaDriverHost {
        */
       cursorStyle?: () => CuaCursorStyle | null | undefined;
     },
-  ) {}
+  ) {
+    // Windows native input is available only with the qualified patched driver.
+    if (process.platform === "win32") this.options.nativeRevision = CUA_NATIVE_REVISION;
+  }
 
   get isInputMonitorRequested(): boolean {
     return this.inputMonitorRequested;
@@ -1969,6 +1972,7 @@ export class CuaDriverHost {
         ],
         {
           stdio: ["pipe", "ignore", "pipe"],
+          windowsHide: true,
           env: {
             ...process.env,
             CUA_DRIVER_EMBEDDED: "1",
@@ -2088,6 +2092,7 @@ export class CuaDriverHost {
         if (
           !metadata?.ok ||
           metadata.result?.driver_version !== CUA_DRIVER_VERSION ||
+          (process.platform === "win32" && metadata.result?.synara_windows_input_control !== 1) ||
           (expectedNativeRevision !== null && reportedRevision !== expectedNativeRevision) ||
           metadata.result?.embedded !== true ||
           metadata.result?.pid !== child.pid
@@ -2776,14 +2781,14 @@ export class CuaDriverHost {
     const required =
       CUA_ACTION_TOOLS.has(name) ||
       linuxBrowserMutation ||
-      (process.platform === "darwin" &&
+      ((process.platform === "darwin" || process.platform === "win32") &&
         this.options.nativeRevision !== null &&
         CUA_BROWSER_MUTATION_TOOLS.has(name));
     if (!required) return true;
     const monitor = this.options.inputMonitorState?.();
     // Existing portable native paths do not have a listener contract. The
     // verified Linux browser port does: missing integration is not readiness.
-    return monitor?.ready ?? !linuxBrowserMutation;
+    return monitor?.ready ?? (!linuxBrowserMutation && process.platform !== "win32");
   }
 
   /** A separate owned browser can be set up while old targets remain paused.

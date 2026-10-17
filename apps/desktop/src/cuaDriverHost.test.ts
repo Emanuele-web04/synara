@@ -51,7 +51,8 @@ afterEach(async () => {
 async function fixture(
   authority = capability,
   options: {
-    platform?: "darwin" | "linux";
+    platform?: "darwin" | "linux" | "win32";
+    windowsInputControl?: unknown;
     cleanup?: "incomplete" | "wrong-pid" | "missing-admission";
     interruptCleanup?: "incomplete" | "wrong-pid" | "missing-admission" | "once-incomplete";
     inputMonitorState?: (() => ComputerInputMonitorState) | undefined;
@@ -147,7 +148,7 @@ net.createServer(s=>{
   s.once('data',b=>{
     const r=JSON.parse(b.toString());
     if(options.logSessions&&r.method==='call'&&r.args&&typeof r.args.session==='string') write('session:'+r.args.session+':'+r.name);
-    if(r.method==='metadata') setTimeout(()=>reply({driver_version:${JSON.stringify(CUA_DRIVER_VERSION)},synara_native_revision:options.reportedRevision??(options.unpatched?undefined:${CUA_NATIVE_REVISION}),synara_browser_input_control:options.browserInputControl,embedded:true,pid:process.pid+(options.metadataPidOffset??0)}),options.metadataDelayMs??0);
+    if(r.method==='metadata') setTimeout(()=>reply({driver_version:${JSON.stringify(CUA_DRIVER_VERSION)},synara_native_revision:options.reportedRevision??(options.unpatched?undefined:${CUA_NATIVE_REVISION}),synara_browser_input_control:options.browserInputControl,synara_windows_input_control:options.windowsInputControl??1,embedded:true,pid:process.pid+(options.metadataPidOffset??0)}),options.metadataDelayMs??0);
     else if(r.method==='interrupt_input') {
       write('interrupt');
       if(r.args.expected_pid!==process.pid) throw new Error('Wrong interrupt generation');
@@ -255,6 +256,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     setup: async () => {},
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
     ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
+    ...(options.platform === "win32" ? { inputMonitorState: () => ({ ready: true }) } : {}),
     ...(options.inputMonitorState ? { inputMonitorState: options.inputMonitorState } : {}),
     ...(options.activateInputMonitor ? { activateInputMonitor: options.activateInputMonitor } : {}),
     ...(options.onInputMonitorArmedChange
@@ -2492,6 +2494,15 @@ describe("browser surface", () => {
 });
 
 describe("physical Escape interrupt", () => {
+  it("refuses an unqualified Windows driver before dispatching any input", async () => {
+    const f = await fixture(capability, { platform: "win32", windowsInputControl: 0 });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
+      ok: false,
+      effect: "not-dispatched",
+    });
+    expect((await f.events()).some((event) => event.event === "key")).toBe(false);
+  });
+
   const pressKey = (endpoint: string) =>
     cuaRequest<CuaReply>(endpoint, {
       method: "call",
@@ -2507,109 +2518,117 @@ describe("physical Escape interrupt", () => {
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
   });
 
-  it("drains native input, keeps the generation, and requires fresh observation after Escape", async () => {
-    let releaseCalls = 0;
-    const f = await fixture(capability, {
-      releaseHeldInput: async () => {
-        releaseCalls += 1;
-      },
-    });
-    // Prime a live generation.
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+  it.each(["darwin", "win32"] as const)(
+    "drains native input, keeps the generation, and requires fresh observation after Escape (%s)",
+    async (platform) => {
+      let releaseCalls = 0;
+      const f = await fixture(capability, {
+        platform,
+        releaseHeldInput: async () => {
+          releaseCalls += 1;
+        },
+      });
+      // Prime a live generation.
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
 
-    // The fake driver holds a type_text reply for 10s — the wedged-provider
-    // shape the interrupt exists for. The press must not wait on it.
-    const hung = cuaRequest(
-      f.endpoint,
-      { method: "call", name: "type_text", args: { text: "fixture" } },
-      { timeoutMs: 5_000, mutation: true },
-    );
-    await waitForEvent(f, "dispatch");
-    expect(f.host.emergencyStopInput()).toBe(true);
-    // A socket abort returns promptly, while the separate native interrupt
-    // drains the old operation and releases its own held input.
-    await expect(hung).resolves.toMatchObject({ ok: false });
-    await waitForEvent(f, "interrupt-ack");
-    expect(releaseCalls).toBe(0);
-    const mid = await f.events();
-    expect(mid.some((event) => event.event === "interrupt")).toBe(true);
-    expect(mid.filter((event) => event.event === "release")).toHaveLength(1);
-    expect(mid.some((event) => event.event === "effect")).toBe(false);
-    expect(mid.some((event) => event.event === "cancel")).toBe(false);
-    expect(mid.some((event) => event.event === "retiring")).toBe(false);
-    expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
+      // The fake driver holds a type_text reply for 10s — the wedged-provider
+      // shape the interrupt exists for. The press must not wait on it.
+      const hung = cuaRequest(
+        f.endpoint,
+        { method: "call", name: "type_text", args: { text: "fixture" } },
+        { timeoutMs: 5_000, mutation: true },
+      );
+      await waitForEvent(f, "dispatch");
+      expect(f.host.emergencyStopInput()).toBe(true);
+      // A socket abort returns promptly, while the separate native interrupt
+      // drains the old operation and releases its own held input.
+      await expect(hung).resolves.toMatchObject({ ok: false });
+      await waitForEvent(f, "interrupt-ack");
+      expect(releaseCalls).toBe(0);
+      const mid = await f.events();
+      expect(mid.some((event) => event.event === "interrupt")).toBe(true);
+      expect(mid.filter((event) => event.event === "release")).toHaveLength(1);
+      expect(mid.some((event) => event.event === "effect")).toBe(false);
+      expect(mid.some((event) => event.event === "cancel")).toBe(false);
+      expect(mid.some((event) => event.event === "retiring")).toBe(false);
+      expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
 
-    // Inside the cooldown a mutating call is refused with the paused
-    // dialect, while reads keep dispatching on the same generation.
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      ok: true,
-      result: {
-        isError: true,
-        structuredContent: { effect: "refused", code: "computer_input_paused" },
-      },
-    });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "list_windows" }),
-    ).resolves.toMatchObject({ ok: true });
+      // Inside the cooldown a mutating call is refused with the paused
+      // dialect, while reads keep dispatching on the same generation.
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({
+        ok: true,
+        result: {
+          isError: true,
+          structuredContent: { effect: "refused", code: "computer_input_paused" },
+        },
+      });
+      await expect(
+        cuaRequest(f.endpoint, { method: "call", name: "list_windows" }),
+      ).resolves.toMatchObject({ ok: true });
 
-    // Time alone cannot make the model's old target state fresh. A preview
-    // or target-readiness probe cannot clear the model-observation gate.
-    elapseInputCooldown();
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      result: { structuredContent: { code: "computer_input_paused" } },
-      desktopInterruptions: 0,
-    });
-    await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
-    await expect(
-      cuaRequest(f.endpoint, { method: "call", name: "check_input_ready" }),
-    ).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
-      modelObservation: true,
-    });
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true, result: {} });
-    const after = await f.events();
-    expect(after.filter((event) => event.event === "start")).toHaveLength(1);
-    expect(after.filter((event) => event.event === "key")).toHaveLength(2);
-    expect(after.some((event) => event.event === "retiring")).toBe(false);
-  });
+      // Time alone cannot make the model's old target state fresh. A preview
+      // or target-readiness probe cannot clear the model-observation gate.
+      elapseInputCooldown();
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({
+        result: { structuredContent: { code: "computer_input_paused" } },
+        desktopInterruptions: 0,
+      });
+      await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
+      await expect(
+        cuaRequest(f.endpoint, { method: "call", name: "check_input_ready" }),
+      ).resolves.toMatchObject({ result: { isError: true } });
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+      });
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true, result: {} });
+      const after = await f.events();
+      expect(after.filter((event) => event.event === "start")).toHaveLength(1);
+      expect(after.filter((event) => event.event === "key")).toHaveLength(2);
+      expect(after.some((event) => event.event === "retiring")).toBe(false);
+    },
+  );
 
-  it("interrupts the in-flight action on the backend stop verb without retiring", async () => {
-    let releaseCalls = 0;
-    const f = await fixture(capability, {
-      releaseHeldInput: async () => {
-        releaseCalls += 1;
-      },
-    });
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
-    const hung = cuaRequest(
-      f.endpoint,
-      { method: "call", name: "type_text", args: { text: "fixture" } },
-      { timeoutMs: 5_000, mutation: true },
-    );
-    await waitForEvent(f, "dispatch");
-    // The same socket verb the backend's stopInput sends on turn Stop,
-    // control revoke, and the relayed physical-Escape notice.
-    await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({
-      ok: true,
-    });
-    await expect(hung).resolves.toMatchObject({ ok: false });
-    expect(releaseCalls).toBe(0);
-    // Native interrupt is reusable; cancel_input still belongs to retirement.
-    const mid = await f.events();
-    expect(mid.some((event) => event.event === "interrupt-ack")).toBe(true);
-    expect(mid.some((event) => event.event === "effect")).toBe(false);
-    expect(mid.some((event) => event.event === "cancel")).toBe(false);
-    expect(mid.some((event) => event.event === "retiring")).toBe(false);
-    expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
-    // A bare stop arms no cooldown — the cooldown belongs to the physical
-    // press — so the next action dispatches immediately on the live driver.
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
-    const after = await f.events();
-    expect(after.filter((event) => event.event === "key")).toHaveLength(2);
-    expect(after.filter((event) => event.event === "start")).toHaveLength(1);
-  });
+  it.each(["darwin", "win32"] as const)(
+    "interrupts the in-flight action on the backend stop verb without retiring (%s)",
+    async (platform) => {
+      let releaseCalls = 0;
+      const f = await fixture(capability, {
+        platform,
+        releaseHeldInput: async () => {
+          releaseCalls += 1;
+        },
+      });
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+      const hung = cuaRequest(
+        f.endpoint,
+        { method: "call", name: "type_text", args: { text: "fixture" } },
+        { timeoutMs: 5_000, mutation: true },
+      );
+      await waitForEvent(f, "dispatch");
+      // The same socket verb the backend's stopInput sends on turn Stop,
+      // control revoke, and the relayed physical-Escape notice.
+      await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(hung).resolves.toMatchObject({ ok: false });
+      expect(releaseCalls).toBe(0);
+      // Native interrupt is reusable; cancel_input still belongs to retirement.
+      const mid = await f.events();
+      expect(mid.some((event) => event.event === "interrupt-ack")).toBe(true);
+      expect(mid.some((event) => event.event === "effect")).toBe(false);
+      expect(mid.some((event) => event.event === "cancel")).toBe(false);
+      expect(mid.some((event) => event.event === "retiring")).toBe(false);
+      expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
+      // A bare stop arms no cooldown — the cooldown belongs to the physical
+      // press — so the next action dispatches immediately on the live driver.
+      await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+      const after = await f.events();
+      expect(after.filter((event) => event.event === "key")).toHaveLength(2);
+      expect(after.filter((event) => event.event === "start")).toHaveLength(1);
+    },
+  );
 
   it("keeps admission closed after a driver crash until the held-input release is confirmed", async () => {
     const release = deferred<void>();

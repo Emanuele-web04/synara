@@ -5,6 +5,7 @@ import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
+import { createWindowsCuaDriverHost } from "./windowsCuaDriverHost";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
@@ -3888,6 +3889,7 @@ const audioLevelSubscribers = new Map<
   { readonly contents: Electron.WebContents; readonly release: () => void }
 >();
 let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
+let windowsEscapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
 
 function stopComputerInputFromEscape(): void {
   // Native interruption owns the drain. The backend notice only relays the
@@ -3909,31 +3911,53 @@ async function attachCuaHost(host: CuaDriverHost): Promise<void> {
 }
 
 async function startCuaHost(): Promise<void> {
-  if ((process.platform !== "darwin" && process.platform !== "linux") || cuaDriverHost) return;
+  if (!["darwin", "linux", "win32"].includes(process.platform) || cuaDriverHost) return;
   sweepOrphanedCuaDrivers();
-  if (process.platform === "linux") {
-    linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
-      shortcutRegistry: globalShortcut,
-      sessionType: linuxEscapeSession(
-        app.commandLine.getSwitchValue("ozone-platform") ||
-          app.commandLine.getSwitchValue("ozone-platform-hint") ||
-          process.env.ELECTRON_OZONE_PLATFORM_HINT,
-      ),
-      onEscape: stopComputerInputFromEscape,
-      onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
-      onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
-    });
-    await attachCuaHost(
-      createLinuxCuaDriverHost({
-        isPackaged: app.isPackaged,
-        resourcesPath: process.resourcesPath,
-        appRoot: resolveAppRoot(),
-        bundleId: desktopIdentity.bundleId,
-        capability: DESKTOP_BROWSER_HOST_CAPABILITY,
-        inputMonitor: linuxEscapeKillSwitchMonitor,
-        ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]),
-      }),
-    );
+  if (process.platform === "linux" || process.platform === "win32") {
+    if (process.platform === "linux") {
+      linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
+        shortcutRegistry: globalShortcut,
+        sessionType: linuxEscapeSession(
+          app.commandLine.getSwitchValue("ozone-platform") ||
+            app.commandLine.getSwitchValue("ozone-platform-hint") ||
+            process.env.ELECTRON_OZONE_PLATFORM_HINT,
+        ),
+        onEscape: stopComputerInputFromEscape,
+        onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+        onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+      });
+      await attachCuaHost(
+        createLinuxCuaDriverHost({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appRoot: resolveAppRoot(),
+          bundleId: desktopIdentity.bundleId,
+          capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+          inputMonitor: linuxEscapeKillSwitchMonitor,
+          ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]),
+        }),
+      );
+    } else {
+      windowsEscapeKillSwitchMonitor ??= new EscapeKillSwitchMonitor({
+        helperPath: app.isPackaged
+          ? Path.join(process.resourcesPath, "cua-driver", "cua-driver.exe")
+          : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver.exe"),
+        onEscape: stopComputerInputFromEscape,
+        onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+        onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+      });
+      await attachCuaHost(
+        createWindowsCuaDriverHost({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appRoot: resolveAppRoot(),
+          bundleId: desktopIdentity.bundleId,
+          capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+          inputMonitor: windowsEscapeKillSwitchMonitor,
+          ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]),
+        }),
+      );
+    }
     return;
   }
   const host = new CuaDriverHost({
@@ -4793,6 +4817,8 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   audioLevelSubscribers.clear();
   linuxEscapeKillSwitchMonitor?.dispose();
   linuxEscapeKillSwitchMonitor = undefined;
+  windowsEscapeKillSwitchMonitor?.dispose();
+  windowsEscapeKillSwitchMonitor = undefined;
   await cuaDriverHost?.dispose();
   cuaDriverHost = undefined;
   cuaHostEndpoint = undefined;

@@ -284,6 +284,52 @@ transcript, replay system or token-accounting source. Recording/replay, durable
 per-app grants and manual re-arm APIs remain removed; their older documents
 are historical.
 
+## Windows input lifecycle
+
+Windows uses a source-built `cua-driver.exe` with the pinned native revision and
+`synara_windows_input_control: 1`. Stock upstream binaries are rejected before
+input dispatch. Packaging applies the base patch, the shared browser cancellation
+delta, and `0003-synara-windows-input.patch`; reusable artifacts must identify all
+three hashes and the pinned Rust compiler.
+
+The Windows desktop uses the shared helper lifecycle with a native low-level
+Escape hook while Computer tasks are active. Listener failure closes input
+admission. Escape still works while Shift, Ctrl, Alt or Windows keys are held;
+the driver tags its own synthesized keys so its Escape reaches the target app. Escape consumes the key and
+interrupts the current action; after cleanup, the task must obtain a fresh model
+observation before continuing. This listener observes only Escape; it is not a general physical-input monitor.
+Stop interrupts the active action; task revocation/end remains authoritative for
+whether that task can issue another action.
+
+Native blocking workers retain their operation lease even if their caller stops
+awaiting them. Cursor animation waits also stop with the captured epoch so they
+cannot delay the input drain. Matching keyboard, mouse and synthetic-pointer releases run before
+that lease drains. Browser actions use the same epoch gate and the existing CDP
+release protocol. Old buffered epochs stay invalid. An unconfirmed release keeps
+admission closed; killing a process is not proof that held input was released.
+Host lifetime-pipe EOF drains the native workers before daemon shutdown.
+Run Synara without elevation: this pinned driver refuses isolated browser launch
+when its own token can modify the installed browser. The Electron CI smoke uses
+a standard-user token on GitHub's elevated Windows runner.
+
+The Windows CI lane compiles the real driver, exercises a native EDIT window for
+interrupted typing, modified Escape, owned Escape passthrough, target changes,
+detached worker and drag cleanup, and runs
+the actual Electron host against a WinForms target for injected Escape, Stop,
+fresh-observation recovery, browser key releases and listener disposal. Production provisioning builds
+from the same pinned source and reruns the host smoke against the staged executable. These checks cover a disposable Windows x64 desktop;
+they do not establish physical-human Escape, elevated applications, Windows ARM64
+or signed installed-app behavior.
+
+The updated upstream Cua Driver 0.35.4 at
+[`d74a9cab`](https://github.com/trycua/cua/tree/d74a9cab3fb2e80ab7f0cef47025ec828586ea75/libs/cua-driver/rust)
+was inspected on 2026-10-14. It improves Windows integrity-level checks,
+foreground typing delivery and standard-user browser launch from elevated drivers,
+but does not supply Synara's `interrupt_input` /
+`cancel_input` acknowledgement and epoch contract. This port therefore retains
+0.28.2 with the scoped Windows delta; a global upstream upgrade would still need
+the cancellation patch and separate macOS qualification.
+
 ## Linux and Spaces boundaries
 
 Linux packaging stages the driver outside ASAR and starts an authenticated

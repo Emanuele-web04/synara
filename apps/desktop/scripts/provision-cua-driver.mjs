@@ -37,10 +37,11 @@ const targets = {
 };
 const sourceTargets = {
   darwin: targets.darwin,
+  win32: { arm64: "aarch64-pc-windows-msvc", x64: "x86_64-pc-windows-msvc" },
   linux: { arm64: "aarch64-unknown-linux-gnu", x64: "x86_64-unknown-linux-gnu" },
 };
-// Windows keeps the pinned upstream artifact. Linux builds the browser-only
-// cancellation delta after the base patch; this does not enable native input.
+// Every Windows build includes the native input cancellation patch.
+// Linux retains its separate browser-only scope.
 const upstreamAsset = {
   win32: { binary: "cua-driver.exe", suffix: "zip" },
   linux: { binary: "cua-driver", suffix: "tar.gz" },
@@ -51,6 +52,12 @@ const signIdentity = option("--sign-identity") ?? process.env.SYNARA_CUA_SIGN_ID
 /** Stable signing identifier so macOS TCC remembers the driver across rebuilds. */
 const CUA_DRIVER_SIGN_IDENTIFIER = "com.emanueledipietro.synara.cua.driver";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Patch files must hash exactly as pinned in cuaDriverRelease.json. Windows
+// checkouts with core.autocrlf can carry CRLF bytes in the worktree, so compare
+// the LF-normalized text: normalization is a no-op for LF files and never
+// changes what gets applied, only what gets hashed.
+const normalizePatchBytes = (bytes) =>
+  Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
 const patchPath = fileURLToPath(
   new URL("../patches/cua-driver/0001-synara-native.patch", import.meta.url),
 );
@@ -69,14 +76,29 @@ if (
       ? "Native Cua provisioning requires macOS and --arch arm64, x64 or universal."
       : `Cua provisioning for ${platform} requires --platform win32|linux and --arch arm64 or x64.`,
   );
+if (platform === "win32" && !artifact && process.platform !== "win32")
+  throw new Error(
+    "Patched Windows Cua requires a native Windows build host or a verified --artifact-dir.",
+  );
 if (option("--archive"))
   throw new Error(
     "The upstream binary lacks Synara's native patch. Use --source-checkout or --artifact-dir instead.",
   );
-if (digest(patch) !== release.patchSha256) throw new Error("Cua native patch checksum mismatch.");
-if (platform === "linux") {
-  if (digest(await readFile(linuxPatchPath)) !== release.linuxBrowserPatchSha256)
-    throw new Error("Cua Linux browser patch checksum mismatch.");
+if (digest(normalizePatchBytes(patch)) !== release.patchSha256)
+  throw new Error(
+    "Cua native patch checksum mismatch. The worktree patch differs from the pinned " +
+      "cuaDriverRelease.json hash even after line-ending normalization; do not provision " +
+      "from a locally edited patch.",
+  );
+if (platform === "linux" || platform === "win32") {
+  if (
+    digest(normalizePatchBytes(await readFile(linuxPatchPath))) !== release.linuxBrowserPatchSha256
+  )
+    throw new Error(
+      "Cua Linux browser patch checksum mismatch. The worktree patch differs from the " +
+        "pinned cuaDriverRelease.json hash even after line-ending normalization; do not " +
+        "provision from a locally edited patch.",
+    );
   assertLinuxCuaBuildHost({
     platform,
     hostPlatform: process.platform,
@@ -87,7 +109,7 @@ if (platform === "linux") {
 }
 // Check the compiler before fetching ~190 MB of upstream source: a missing or
 // mismatched toolchain is the common failure and needs no network to detect.
-if (!(option("--artifact-dir") ?? process.env.SYNARA_CUA_ARTIFACT_DIR) && platform !== "win32") {
+if (!artifact) {
   let found;
   try {
     found = execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim();
@@ -157,47 +179,6 @@ try {
         ),
       );
     }
-  } else if (platform === "win32") {
-    // Windows: stage the upstream release binary for the pinned
-    // version. The authoritative checksum comes from the release's own
-    // checksums.txt, verified before anything reaches the destination.
-    const releaseBase = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${release.version}`;
-    const checksums = await (await fetch(`${releaseBase}/checksums.txt`)).text();
-    const expected = new Map(
-      [...checksums.matchAll(/^([0-9a-f]{64})\s+(\S+)$/gm)].map((m) => [m[2], m[1]]),
-    );
-    const staged = join(temporary, "upstream");
-    await mkdir(staged);
-    const bundleArch = architectures[0];
-    const assetName = `cua-driver-rs-${release.version}-${targets[platform][bundleArch]}-binary.${upstreamAsset.suffix}`;
-    const wantSha = expected.get(assetName);
-    if (!wantSha) throw new Error(`Upstream release has no checksum for ${assetName}.`);
-    const archivePath = join(temporary, assetName);
-    const downloaded = Buffer.from(
-      await (await fetch(`${releaseBase}/${assetName}`)).arrayBuffer(),
-    );
-    if (digest(downloaded) !== wantSha) throw new Error(`Upstream ${assetName} checksum mismatch.`);
-    await writeFile(archivePath, downloaded);
-    // bsdtar (macOS, Windows) reads zip and tar.gz; GNU tar does not read
-    // zip, so fall back to unzip for the Windows asset on Linux hosts.
-    try {
-      run("tar", ["-xf", archivePath, "-C", staged]);
-    } catch {
-      run("unzip", ["-o", archivePath, "-d", staged]);
-    }
-    binary = join(staged, upstreamAsset.binary);
-    provenance = {
-      version: release.version,
-      source: release.source,
-      nativeRevision: release.nativeRevision,
-      patched: false,
-      patchSha256: null,
-      rustVersion: release.rustVersion,
-      platform,
-      architectures,
-      binarySha256: digest(await readFile(binary)),
-      upstreamArchiveSha256: wantSha,
-    };
   } else {
     let source = option("--source-checkout");
     if (source) source = resolve(source);
@@ -221,9 +202,27 @@ try {
     const build = join(temporary, "build");
     await mkdir(build);
     run("tar", ["-xf", archive, "-C", build]);
-    run("patch", ["--batch", "--forward", "-p1", "-i", patchPath], build);
-    if (platform === "linux") {
-      run("patch", ["--batch", "--forward", "-p1", "-i", linuxPatchPath], build);
+    // Git for Windows ships GNU patch beside its MSYS utilities; that directory
+    // is not normally on a desktop build process's PATH. The base patch contains
+    // sequential deltas for the same files, which must be applied in order.
+    const patchExecutable =
+      process.platform === "win32"
+        ? resolve(output("git", ["--exec-path"]), "../../../usr/bin/patch.exe")
+        : "patch";
+    run(patchExecutable, ["--batch", "--forward", "-p1", "-i", patchPath], build);
+    if (platform === "linux" || platform === "win32") {
+      run(patchExecutable, ["--batch", "--forward", "-p1", "-i", linuxPatchPath], build);
+    }
+    if (platform === "win32") {
+      const windowsPatch = fileURLToPath(
+        new URL("../patches/cua-driver/0003-synara-windows-input.patch", import.meta.url),
+      );
+      if (
+        digest(normalizePatchBytes(await readFile(windowsPatch))) !==
+        release.windowsInputPatchSha256
+      )
+        throw new Error("Cua Windows input patch checksum mismatch.");
+      run(patchExecutable, ["--batch", "--forward", "-p1", "-i", windowsPatch], build);
     }
     const rust = join(build, "libs/cua-driver/rust");
     const rustcVersion = output("rustc", ["--version"], rust);
@@ -255,7 +254,13 @@ try {
         ],
         rust,
       );
-      binaries.push(join(targetDir, target, "release/cua-driver"));
+      binaries.push(
+        join(
+          targetDir,
+          target,
+          platform === "win32" ? "release/cua-driver.exe" : "release/cua-driver",
+        ),
+      );
     }
     binary = join(temporary, "cua-driver");
     if (binaries.length > 1) run("lipo", ["-create", ...binaries, "-output", binary]);
@@ -282,6 +287,13 @@ try {
       platform,
       patched: true,
       patchSha256: release.patchSha256,
+      ...(platform === "win32"
+        ? {
+            linuxBrowserPatchSha256: release.linuxBrowserPatchSha256,
+            windowsInputPatchSha256: release.windowsInputPatchSha256,
+            windowsInputControl: 1,
+          }
+        : {}),
       ...(platform === "linux"
         ? {
             linuxBrowserPatchSha256: release.linuxBrowserPatchSha256,
@@ -296,7 +308,7 @@ try {
       rustcVersion,
       architectures,
       binarySha256: digest(await readFile(binary)),
-      ...(platform === "linux"
+      ...(platform !== "darwin"
         ? { sourceArchiveSha256: digest(await readFile(archive)) }
         : { upstreamArchiveSha256: release.sha256 }),
     };
@@ -314,7 +326,9 @@ try {
     }
   }
   await mkdir(destination, { recursive: true });
-  if (platform === "win32" || (platform === "linux" && provenance.patched === false)) {
+  if (platform === "win32") {
+    await writeFile(join(destination, "cua-driver.exe"), await readFile(binary));
+  } else if (platform === "linux" && provenance.patched === false) {
     // The upstream archive is a bundle — driver plus its sidecars (cursor
     // theme, SDK, node runtime, UIA/Wayland helpers). Stage them all — from
     // the verified artifact dir when one was supplied, else the download.
