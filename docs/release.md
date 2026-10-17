@@ -283,6 +283,21 @@ backoff follows [Apple's guidance for CloudKit network failures](https://develop
 
 ### macOS release toolchains
 
+Mac application bundles declare `LSMinimumSystemVersion` 13.0 through electron-builder's
+`mac.minimumSystemVersion`. The bundled Claude and Cua executables require macOS 13;
+the application manifest must not advertise Electron's lower deployment target as the
+requirement for the complete bundle. This applies to signed, unsigned and local ad-hoc
+packages, including DMG and update ZIP payloads.
+
+The [read-only v1.0.1 inspection](https://github.com/Emanuele-web04/synara/actions/runs/38163962883)
+found app/Electron metadata at 12.0 and bundled Claude/Cua at 13.0 on both architectures.
+The [actual Homebrew audit](https://github.com/Emanuele-web04/synara/actions/runs/38166229495)
+rejected a cask requiring 13 because the old app plist still declares 12. This source fix
+does not modify signed historical releases. Recheck a newly built and published DMG's
+plist and native payload before refreshing the cask; the old audit failure remains
+unresolved until a matching release is available. Metadata inspection and macOS 15
+startup checks do not establish runtime behavior on macOS 13.
+
 Both native macOS release runners use macOS 15. Native helpers and the pinned
 Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
 job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
