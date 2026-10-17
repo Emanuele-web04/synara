@@ -1037,48 +1037,63 @@ describe("Cua native boundary", () => {
     expect(focusedFieldCall).not.toHaveProperty("semantic_only");
   });
 
-  it("types into web content through a composed set_value and verifies on re-read", async () => {
-    const f = fixture();
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
+  it.each(["typeText", "setValue"] as const)(
+    "preserves native uncertainty when label-based web %s is echoed by AX",
+    async (action) => {
+      const f = fixture({ nativeRevision: 40 });
+      f.onTool("set_value", () => ({
+        structuredContent: {
+          route: "ax",
+          delivery: { mode: "background" },
+          effect: "unverifiable",
+          observation_required: true,
+        },
+      }));
+      f.setElements([
+        {
+          role: "AXTextField",
+          label: "Message",
+          frame: { x: -290, y: 30, width: 120, height: 20 },
+          element_token: "web-token",
+          element_index: 2,
+          in_web_content: true,
+          value: "seed",
+        },
+      ]);
+      const state = await f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+      });
+      const node = state.root!.children[0]!;
+      const target = {
+        target: { label: "Message", windowId: "cua:10:20" },
+        node,
+        point: node.activationPoint!,
+      };
+
+      const result =
+        action === "typeText"
+          ? await f.backend.typeText("-typed", "cua:10:20", target)
+          : await f.backend.setValue(target, "replacement");
+      // The native write is one mutation. Echoed AX text cannot justify either
+      // replaying it or claiming that the renderer accepted the edit.
+      expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
+      const writes = f.calls.filter((call) => call.name === "set_value");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.args).toMatchObject({
         element_token: "web-token",
         element_index: 2,
-        in_web_content: true,
-        value: "seed",
-      },
-    ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const node = state.root!.children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
-
-    const result = await f.backend.typeText("-typed", "cua:10:20", target);
-    // Chromium-family fields never honour AXSelectedText: the write must be a
-    // composed AXValue set, not a semantic insert.
-    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
-    const write = f.calls.find((call) => call.name === "set_value");
-    expect(write?.args).toMatchObject({
-      element_token: "web-token",
-      element_index: 2,
-      value: "seed-typed",
-      pid: 10,
-      window_id: 20,
-    });
-    // The independent re-read saw the DOM value land.
-    expect(result).toMatchObject({ verified: "confirmed", effect: "verified" });
-    const reads = f.calls.filter((call) => call.name === "get_window_state");
-    expect(reads).toHaveLength(3);
-    for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
-  });
+        value: action === "typeText" ? "seed-typed" : "replacement",
+        pid: 10,
+        window_id: 20,
+      });
+      expect(result).toMatchObject({
+        deliveryPath: "cua-ax-background",
+        verified: "unverifiable",
+        effect: "dispatched-unknown",
+      });
+    },
+  );
 
   it("refuses a stale semantic field when fresh state has two matching controls", async () => {
     const f = fixture();
@@ -1205,7 +1220,7 @@ describe("Cua native boundary", () => {
       f.delayWindowState(undefined);
       read.resolve();
       await expect(f.backend.setValue(target, "allowed")).resolves.toMatchObject({
-        effect: "verified",
+        effect: "dispatched-unknown",
       });
       expect(
         f.calls.filter((call) => call.name === "set_value").map((call) => call.args?.value),
@@ -1756,6 +1771,7 @@ describe("Cua native boundary", () => {
       kind: "permission-required",
       missing: ["screenRecording"],
       bundleId: "com.synara.test",
+      buildSignature: "unknown",
     });
     expect(availability.kind === "permission-required" && availability.message).not.toContain(
       "Accessibility",
@@ -3566,16 +3582,53 @@ describe("Cua native boundary", () => {
 });
 
 describe("Cua hardening", () => {
-  it("reports a stable build signature on the backend and its availability", async () => {
-    const f = fixture();
-    expect(f.backend.buildSignature()).toBe("unknown");
-    expect(f.backend.buildSignature()).toBe(f.backend.buildSignature());
-    f.denyPermissions();
-    const availability = await f.backend.availability();
-    expect(availability.kind === "permission-required" && availability.buildSignature).toBe(
-      "unknown",
-    );
+  it("refuses clipboard preservation on an older driver before changing the clipboard", async () => {
+    const f = fixture({ nativeRevision: 39 });
+    await expect(f.backend.prepareClipboardPaste({ text: "payload" })).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "clipboard_preservation_unavailable",
+    });
+    expect(f.calls.filter((call) => call.name === "clipboard_write")).toHaveLength(0);
+    await f.backend.dispose();
   });
+
+  it.each(["acknowledged", "lost", "human-copy"] as const)(
+    "keeps an opaque restoration handle for a %s clipboard write",
+    async (outcome) => {
+      const f = fixture({ nativeRevision: 40 });
+      let savedToken: unknown;
+      f.onTool("clipboard_write", (args) => {
+        if (args.preserve === true) {
+          savedToken = args.preserve_token;
+          if (outcome === "lost")
+            throw new CuaTransportError("write reply lost", "dispatched-unknown");
+          return { structuredContent: { restore_token: savedToken } };
+        }
+        expect(args).toEqual({ restore_token: savedToken });
+        return { structuredContent: { clipboard_restored: outcome !== "human-copy" } };
+      });
+      try {
+        const pending = f.backend.prepareClipboardPaste({ imagePath: "/workspace/image.png" });
+        if (outcome === "lost")
+          await expect(pending).rejects.toMatchObject({ effect: "dispatched-unknown" });
+        else {
+          const restore = await pending;
+          await expect(restore()).resolves.toBe(outcome !== "human-copy");
+        }
+        expect(savedToken).toEqual(expect.any(String));
+        const writes = f.calls.filter((call) => call.name === "clipboard_write");
+        expect(writes).toHaveLength(2);
+        expect(writes[0]?.args).toMatchObject({
+          image_path: "/workspace/image.png",
+          preserve: true,
+        });
+        expect(writes[1]?.args).toEqual({ restore_token: savedToken });
+      } finally {
+        await f.backend.dispose();
+      }
+    },
+  );
+
   it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
     const f = fixture();
     f.actionResult({

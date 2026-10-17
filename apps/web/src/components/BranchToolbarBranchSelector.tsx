@@ -334,10 +334,11 @@ function getBranchTriggerLabel(input: {
   activeWorktreePath: string | null;
   effectiveEnvMode: EnvMode;
   resolvedActiveBranch: string | null;
+  isDetachedCheckout: boolean;
 }): string {
   const { activeWorktreePath, effectiveEnvMode, resolvedActiveBranch } = input;
   if (!resolvedActiveBranch) {
-    return "Select branch";
+    return input.isDetachedCheckout ? "Detached HEAD" : "Select branch";
   }
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
     return `From ${resolvedActiveBranch}`;
@@ -401,12 +402,15 @@ export function BranchToolbarBranchSelector({
   );
   const hasOriginRemote = branchesQuery.data?.hasOriginRemote ?? false;
   const currentGitBranch =
-    branchStatusQuery.data?.branch ?? branches.find((branch) => branch.current)?.name ?? null;
+    branchStatusQuery.data !== undefined
+      ? branchStatusQuery.data.branch
+      : (branches.find((branch) => branch.current)?.name ?? null);
   const canonicalActiveBranch = resolveBranchToolbarValue({
     envMode: effectiveEnvMode,
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
+    gitStatusResolved: branchStatusQuery.data !== undefined,
   });
   const branchNames = useMemo(() => branches.map((branch) => branch.name), [branches]);
   const branchByName = useMemo(
@@ -757,6 +761,10 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     effectiveEnvMode,
     resolvedActiveBranch,
+    isDetachedCheckout:
+      branchesQuery.data?.isRepo === true &&
+      branchStatusQuery.data?.branch === null &&
+      (effectiveEnvMode !== "worktree" || activeWorktreePath !== null),
   });
 
   function renderPickerItem(itemValue: string, index: number, style?: CSSProperties) {
@@ -864,7 +872,7 @@ export function BranchToolbarBranchSelector({
         className={
           isPanel
             ? ENVIRONMENT_ROW_CLASS_NAME
-            : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} disabled:cursor-not-allowed disabled:opacity-50`
+            : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} min-w-0 disabled:cursor-not-allowed disabled:opacity-50`
         }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
@@ -877,8 +885,10 @@ export function BranchToolbarBranchSelector({
         ) : (
           <>
             <GitBranchIcon className="size-3.5 shrink-0" />
-            <span className="max-w-[240px] truncate">{triggerLabel}</span>
-            <ChevronDownIcon className="size-3 opacity-60" />
+            <span className="min-w-0 max-w-[240px] truncate" title={triggerLabel}>
+              {triggerLabel}
+            </span>
+            <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
           </>
         )}
       </ComboboxTrigger>

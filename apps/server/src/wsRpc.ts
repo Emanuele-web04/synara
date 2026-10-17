@@ -54,6 +54,8 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 import { AutomationService } from "./automation/Services/AutomationService";
 import { TodoService } from "./todo/Services/TodoService";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
+import { readInlineVisual } from "./inlineVisualStore";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -183,6 +185,7 @@ import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { type McpConnectorError, McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { KeepAwakeService } from "./keepAwake";
@@ -502,6 +505,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const externalMcp = yield* ExternalMcpService;
+      const mcpConnectors = yield* McpConnectors;
       const git = yield* GitCore;
       const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
@@ -1186,6 +1190,9 @@ const makeWsRpcHandlersLayer = () =>
         });
       const whenTasksEnabled = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         tasksEnabled ? effect : Effect.fail(tasksUnavailableError());
+      // Beta only, like the gateway tool that publishes them: a Stable server
+      // serves no visual documents even if one is somehow on disk.
+      const inlineVisualsEnabled = isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE);
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -1286,16 +1293,50 @@ const makeWsRpcHandlersLayer = () =>
           ),
         );
 
-      const requireOwner = Effect.gen(function* () {
-        yield* requireWsOwnerSession;
-        if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+      const requireLoopbackOwner = (message: string) =>
+        Effect.gen(function* () {
+          yield* requireWsOwnerSession;
+          if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
+            return yield* Effect.fail(new WsRpcError({ message }));
+          }
+        });
+      const requireOwner = requireLoopbackOwner(
+        "External MCP management is available only on a loopback-only instance.",
+      );
+      // Connectors (Beta): refused on Stable. Sign-in redirects to this
+      // machine's loopback port, so only a loopback-only instance can finish it.
+      const requireConnectorsOwner = Effect.gen(function* () {
+        if (!mcpConnectors.enabled) {
           return yield* Effect.fail(
             new WsRpcError({
-              message: "External MCP management is available only on a loopback-only instance.",
+              message: "Connectors are unavailable on this server.",
+              code: "mcp-connectors-unavailable",
+              retryable: false,
             }),
           );
         }
+        yield* requireLoopbackOwner(
+          "Connectors can be managed only on the computer running Synara.",
+        );
       });
+      const connectorRpc = <A>(
+        effect: Effect.Effect<A, McpConnectorError>,
+        fallbackMessage: string,
+      ) =>
+        requireConnectorsOwner.pipe(
+          Effect.andThen(
+            effect.pipe(
+              Effect.mapError(
+                (error) =>
+                  new WsRpcError({
+                    message: error.message,
+                    ...(error.code ? { code: error.code } : {}),
+                  }),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)),
+        );
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.settleTurnDispatch]: ({ command }) =>
@@ -1322,7 +1363,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
-              // Groups is Beta-only: Stable refuses to create or re-kind a group.
+              // Refuse creating or re-kinding a Hub if the shared feature policy disables it.
               if (!isServerGroupsEnabled() && isGroupProjectCommand(command)) {
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
@@ -1393,6 +1434,37 @@ const makeWsRpcHandlersLayer = () =>
             checkpointDiffQuery.getFullThreadDiff(input),
             "Failed to load full thread diff",
           ),
+        [ORCHESTRATION_WS_METHODS.getInlineVisual]: (input) =>
+          inlineVisualsEnabled
+            ? rpcEffect(
+                Effect.tryPromise(() =>
+                  readInlineVisual({
+                    attachmentsDir: config.attachmentsDir,
+                    threadId: input.threadId,
+                    visualId: input.visualId,
+                  }),
+                ),
+                "Failed to load visual",
+              ).pipe(
+                Effect.flatMap((html) =>
+                  html === null
+                    ? Effect.fail(
+                        new WsRpcError({
+                          message: "This visual is no longer available.",
+                          code: "inline-visual-missing",
+                          retryable: false,
+                        }),
+                      )
+                    : Effect.succeed({ visualId: input.visualId, html }),
+                ),
+              )
+            : Effect.fail(
+                new WsRpcError({
+                  message: "Inline visuals are unavailable on this server.",
+                  code: "inline-visuals-unavailable",
+                  retryable: false,
+                }),
+              ),
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) => {
           const fromSequenceExclusive = clamp(input.fromSequenceExclusive, {
             maximum: Number.MAX_SAFE_INTEGER,
@@ -2264,6 +2336,19 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.refreshPairing(input))),
             "Failed to refresh external MCP pairing",
+          ),
+        [WS_METHODS.serverListMcpConnectors]: () =>
+          connectorRpc(mcpConnectors.list(), "Failed to list connectors"),
+        [WS_METHODS.serverConnectMcpConnector]: (input) =>
+          connectorRpc(mcpConnectors.connect(input), "Failed to connect"),
+        [WS_METHODS.serverGetMcpConnectorSetup]: () =>
+          connectorRpc(mcpConnectors.setup(), "Failed to read connector setup"),
+        [WS_METHODS.serverDisconnectMcpConnector]: (input) =>
+          connectorRpc(
+            mcpConnectors
+              .disconnect(input.connectorId)
+              .pipe(Effect.map((disconnected) => ({ disconnected }))),
+            "Failed to disconnect",
           ),
         [WS_METHODS.serverListWorktrees]: () =>
           rpcEffect(

@@ -3,7 +3,7 @@ title: Computer Use beta
 description: Let Synara operate Mac apps and browsers, with guided setup, task approval, a window preview and interruption controls.
 ---
 
-Computer Use is **in beta and available on macOS only in Synara 0.9.0**. **Linux is coming soon.** This platform limit applies to Computer Use; Synara itself still has Linux and Windows desktop releases.
+Computer Use is **in beta and available on macOS only**, including Synara 1.0.4 Stable and Synara Beta. **Linux is coming soon.** This platform limit applies to Computer Use; Synara itself still has Linux and Windows desktop releases.
 
 ## Set up your Mac
 
@@ -48,3 +48,27 @@ Preview frames are local feedback, not an automatic screenshot stream to the mod
 ## Beta limits
 
 Native apps, custom controls, multiple displays, other Spaces and permission transitions can behave differently. Do not assume every provider/model/app combination has been qualified on your build. Keep the intended target clear and check the result before continuing a consequential workflow. Linux implementation experiments do not mean Linux Computer Use is supported in this release.
+
+## Paste workspace images and files
+
+In 1.0.4 on macOS, an agent can use native paste for text, an image, or a file from the task workspace. For example:
+
+```text
+/computer-use paste the workspace image assets/diagram.png into the open document, then verify that it appears
+```
+
+The agent resolves the file to an absolute regular-file path inside the task workspace. Short batches validate every file before their first action. Browser file inputs use the separate upload operation; native paste does not turn a browser field into an upload target.
+
+The native driver preserves supported clipboard representations without returning their contents to the model. It reports `clipboardRestored` afterward and leaves a newer copy you made in place. If the original clipboard cannot be preserved within the supported bounds, paste refuses before replacing it. A driver crash or hard termination cannot guarantee restoration.
+
+Paste still requires a proven keyboard target or approved foreground route. Verify the attachment in the destination app and check that upload or saving completed. A dispatched shortcut or a changed accessibility tree is not proof of that result.
+
+## Recover an expired request or uncertain action
+
+A foreground approval left unanswered expires after five minutes with `approval_expired`; it sends no input and can be requested again. Explicit decline or cancellation remains effective for that turn. A silent input listener is restarted, but input stays paused until readiness and required observation are established.
+
+Rich editors can transform text, split blocks or expose an incomplete accessibility tree. Synara keeps uncertain delivery explicit and does not replay text from a guessed character offset. The agent should re-observe and verify the actual result before another mutation. Stable state checks and measured scroll movement count as progress; read-only observation batches do not create a false mutation repetition block.
+
+Multiple real keyboard-capable windows can still make a background target ambiguous. Select a proven target or explicitly authorize a foreground route; these changes do not remove that boundary.
+
+Source evidence: Synara v1.0.4 (`a62d7c733d19f5538ffc0d126d57437b3b578ff1`) `apps/server/src/agentGateway/computerTools.ts`, `computerPasteInput.ts`, `computerWorkspacePath.ts`, `apps/server/src/computer/CuaComputerBackend.ts`, `ComputerApprovalGate.ts`, `apps/desktop/src/escapeKillSwitchMonitor.ts` and native driver revision 40.

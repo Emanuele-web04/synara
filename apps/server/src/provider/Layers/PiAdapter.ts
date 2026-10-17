@@ -95,8 +95,8 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   buildProviderProcessEnv,
   MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
-  providerIsolatedHomePath,
 } from "../providerProcessEnv.ts";
+import { makePiStoragePaths } from "../piStoragePaths.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -948,7 +948,11 @@ function getSessionFile(session: PiAgentSession): string | undefined {
   return session.sessionFile ?? session.sessionManager.getSessionFile();
 }
 
-function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
+// Snapshot reads are not provider activity; transitions pass their actual timestamp.
+function makeSessionSnapshot(
+  context: PiSessionContext,
+  updatedAt = context.session.updatedAt,
+): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
@@ -959,7 +963,7 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
     createdAt: context.session.createdAt,
-    updatedAt: new Date().toISOString(),
+    updatedAt,
     ...(context.session.cwd ? { cwd: context.session.cwd } : {}),
     ...(context.session.model ? { model: context.session.model } : {}),
     ...(resumeCursor ? { resumeCursor } : {}),
@@ -1240,7 +1244,7 @@ function toolTitle(toolName: string, args: unknown): string {
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {
@@ -1416,64 +1420,6 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
     }
   }
   return items;
-}
-
-export function makePiStoragePaths(input: {
-  readonly agentDir?: string | undefined;
-  readonly environment?: Readonly<Record<string, string>> | undefined;
-  readonly instanceId?: string | undefined;
-  readonly stateDir: string;
-  readonly homeDir: string;
-  readonly sdkAgentDir: string;
-}): { readonly agentDir: string; readonly sessionDir?: string } {
-  const boundary =
-    input.environment !== undefined ||
-    (input.instanceId !== undefined && input.instanceId !== PROVIDER);
-  const selectedAbsolutePath = (value: string | undefined) => {
-    const selected = trimToUndefined(value);
-    return selected && path.isAbsolute(selected) ? selected : undefined;
-  };
-  const selectedEnvironmentValue = (name: string) =>
-    Object.entries(input.environment ?? {}).find(
-      ([candidate]) => candidate.toUpperCase() === name,
-    )?.[1];
-  const selectedHome = selectedAbsolutePath(
-    selectedEnvironmentValue("HOME") ?? selectedEnvironmentValue("USERPROFILE"),
-  );
-  const isolatedHome = providerIsolatedHomePath({
-    driver: PROVIDER,
-    instanceId: input.instanceId,
-    homeDir: input.homeDir,
-    isolationRootDir: input.stateDir,
-  });
-  const expansionHome = boundary ? (selectedHome ?? isolatedHome) : (selectedHome ?? input.homeDir);
-  const expandHome = (value: string) =>
-    value === "~" || value.startsWith("~/")
-      ? path.join(expansionHome, value.slice(value === "~" ? 1 : 2))
-      : value;
-  const rawConfiguredAgentDir = trimToUndefined(input.agentDir);
-  const configuredAgentDir = rawConfiguredAgentDir
-    ? rawConfiguredAgentDir === "~" || rawConfiguredAgentDir.startsWith("~/")
-      ? expandHome(rawConfiguredAgentDir)
-      : !boundary || path.isAbsolute(rawConfiguredAgentDir)
-        ? rawConfiguredAgentDir
-        : undefined
-    : undefined;
-  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
-  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
-    return { agentDir: input.sdkAgentDir };
-  }
-  const agentDir =
-    configuredAgentDir ??
-    selectedAgentDir ??
-    path.join(selectedHome ?? isolatedHome, ".pi", "agent");
-  const selectedSessionDir = selectedAbsolutePath(
-    selectedEnvironmentValue("PI_CODING_AGENT_SESSION_DIR"),
-  );
-  return {
-    agentDir,
-    sessionDir: expandHome(selectedSessionDir ?? path.join(agentDir, "sessions")),
-  };
 }
 
 function readPiRuntimeApiKeyOverrides(
@@ -2629,7 +2575,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       context.activeAssistantItemId = undefined;
       context.activeReasoningItemId = undefined;
       context.activeToolItems.clear();
-      context.session = makeSessionSnapshot(context);
+      context.session = makeSessionSnapshot(context, new Date().toISOString());
       offerRuntimeEvent({
         ...completionBase,
         type: "turn.completed",
@@ -2832,7 +2778,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               });
               yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
               context.activeTurnId = undefined;
-              context.session = makeSessionSnapshot(context);
+              context.session = makeSessionSnapshot(context, new Date().toISOString());
               return yield* Effect.fail(error);
             }),
           ),
@@ -2845,7 +2791,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         } satisfies ProviderRuntimeEvent);
         yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
         context.activeTurnId = undefined;
-        context.session = makeSessionSnapshot(context);
+        context.session = makeSessionSnapshot(context, new Date().toISOString());
       });
 
     const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
@@ -3754,7 +3700,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const turnId = TurnId.makeUnsafe(crypto.randomUUID());
           context.activeTurnId = turnId;
           context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
-          context.session = makeSessionSnapshot(context);
+          context.session = makeSessionSnapshot(context, new Date().toISOString());
           if (isPiReloadPayload(payload)) {
             yield* runPiReload(context, payload.text);
             return dispatchResult(context, turnId);
@@ -3915,7 +3861,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
-      Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));
+      Effect.sync(() =>
+        Array.from(sessions.values()).map((context) => makeSessionSnapshot(context)),
+      );
 
     const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => sessions.has(threadId));

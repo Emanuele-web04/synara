@@ -8,8 +8,10 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
 } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime, Option } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
@@ -510,5 +512,54 @@ describe("boot-time pending interaction reconciliation", () => {
       }),
     );
     expect(claimed).toBe(true);
+  });
+
+  it("finalizes the assistant message an orphaned turn left streaming, keeping its text", async () => {
+    const harness = await createHarness();
+    const turnId = TurnId.makeUnsafe("turn-orphaned");
+    const messageId = MessageId.makeUnsafe("assistant:orphaned-item");
+    const at = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running"),
+        threadId: THREAD_ID,
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: at,
+        },
+        createdAt: at,
+      }),
+    );
+    for (const [index, delta] of ["Partial ", "answer"].entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: CommandId.makeUnsafe(`cmd-delta-${index}`),
+          threadId: THREAD_ID,
+          messageId,
+          delta,
+          turnId,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }
+    const before = (await harness.readThread())?.messages.find((m) => m.id === messageId);
+    expect(before).toMatchObject({ streaming: true, text: "Partial answer" });
+
+    await harness.runBootReconciliation();
+    // A second boot pass has nothing left to do.
+    await harness.runBootReconciliation();
+
+    const thread = await harness.readThread();
+    const messages = thread?.messages.filter((m) => m.id === messageId) ?? [];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ streaming: false, text: "Partial answer", turnId });
+    expect(thread?.session).toMatchObject({ status: "interrupted", activeTurnId: null });
   });
 });

@@ -103,4 +103,28 @@ describe("providerUsageDisplay", () => {
     expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly", "Core 5h", "Core Weekly"]);
     expect(rows.find((row) => row.label === "Core 5h")?.resetText).toContain("Resets in");
   });
+
+  it("keeps the Antigravity Gemini and Claude pools as separate usage rows", () => {
+    vi.setSystemTime("2026-09-03T20:00:00.000Z");
+
+    const rows = deriveProviderUsageDisplayRows([
+      {
+        provider: "antigravity",
+        updatedAt: "2026-09-03T20:00:00.000Z",
+        limits: [
+          { window: "5h", usedPercent: 10, windowDurationMins: 300 },
+          { window: "Weekly", usedPercent: 20, windowDurationMins: 10_080 },
+          { window: "Claude 5h", usedPercent: 90, windowDurationMins: 300 },
+          { window: "Claude Weekly", usedPercent: 40, windowDurationMins: 10_080 },
+        ],
+      },
+    ]);
+
+    expect(rows.map((row) => [row.label, row.remainingPercent])).toEqual([
+      ["5h", 90],
+      ["Weekly", 80],
+      ["Claude 5h", 10],
+      ["Claude Weekly", 60],
+    ]);
+  });
 });

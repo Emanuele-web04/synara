@@ -21,6 +21,7 @@ import { useCallback } from "react";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import { waitForDraftThreadDispatchToSettle } from "~/lib/draftThreadDispatch";
 import { runComposerSendOnce } from "~/lib/composerSendOwnership";
+import { ProviderHandoffBackgroundTasksError } from "~/lib/threadHandoff";
 import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadNotes } from "~/pinnedMessages";
@@ -48,6 +49,7 @@ import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  hasServerReceivedSentMessage,
   resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
@@ -729,6 +731,18 @@ export function useChatTurnExecution({
           );
         }
       })().catch(async (err: unknown) => {
+        // The server already recorded this message, so the turn exists whatever failed
+        // around it. Rolling back would delete the promoted thread and hand the sent
+        // prompt back to the composer, where it survives reloads and gets sent again.
+        if (
+          !turnStartSucceeded &&
+          hasServerReceivedSentMessage(
+            getThreadFromState(useStore.getState(), threadIdForSend),
+            messageIdForSend,
+          )
+        ) {
+          turnStartSucceeded = true;
+        }
         // A user-cancelled worktree setup unwinds through this same rollback,
         // but silently: no error styling on the step row, no thread error.
         const setupCancelled = err instanceof WorktreeSetupCancelledError;
@@ -930,7 +944,9 @@ export function useChatTurnExecution({
           if (isFocusedSend)
             setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
         }
-        if (!setupCancelled) {
+        // A handoff refused by the source's background tasks is explained by
+        // the composer notice, which also offers to stop them.
+        if (!setupCancelled && !(err instanceof ProviderHandoffBackgroundTasksError)) {
           setThreadError(
             threadIdForSend,
             err instanceof Error ? err.message : "Failed to send message.",

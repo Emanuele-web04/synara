@@ -82,6 +82,7 @@ import { getThreadFromState } from "../threadDerivation";
 import {
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursorsForTests,
+  setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
@@ -453,6 +454,7 @@ const worker = setupWorker(
 async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
+  requireSyncedThread?: boolean;
 }): Promise<{ router: ReturnType<typeof getRouter>; cleanup: () => Promise<void> }> {
   const host = createFullscreenTestHost();
 
@@ -478,6 +480,9 @@ async function mountApp(options?: {
         expect(
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
+        if (options?.requireSyncedThread) {
+          expect(useStore.getState().threadDetailSyncById?.[expectedThreadId]).toBe("synced");
+        }
       },
       // The first Chromium/MSW mount can spend more than 40 seconds compiling
       // the full desktop route graph on a cold Windows dev cache.
@@ -846,7 +851,10 @@ describe("EventRouter scoped orchestration sync", () => {
   it.each(["thread", "shell"])(
     "surfaces one %s retry rejection even while the paused notice exits",
     async (scope) => {
-      const mounted = await mountApp();
+      // Cached detail can satisfy the mount's message check before its live
+      // snapshot arrives. Confirm that snapshot before injecting an exhausted
+      // failure, otherwise recovery legitimately dismisses the paused notice.
+      const mounted = await mountApp({ requireSyncedThread: true });
       const api = createWsNativeApi();
       const subscribe = vi
         .spyOn(api.orchestration, scope === "thread" ? "subscribeThread" : "subscribeShell")
@@ -987,6 +995,10 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       expect(subscribeShellRequestCount).toBe(1);
+      // The first welcome must not restart the open chat's stream: that would
+      // interrupt its snapshot and load the whole transcript a second time.
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+      expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
     } finally {
       await mounted.cleanup();
     }
@@ -1592,6 +1604,110 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = buildFixture();
       await mounted.cleanup();
     }
+  });
+
+  describe("catch-up polling while a running thread streams", () => {
+    const streamingTurnId = TurnId.makeUnsafe("turn-live-streaming");
+
+    function useStreamingThreadFixture() {
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: streamingTurnId,
+            state: "running",
+            requestedAt: NOW_ISO,
+            startedAt: NOW_ISO,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: streamingTurnId,
+            lastError: null,
+            updatedAt: NOW_ISO,
+          },
+        }),
+      };
+    }
+
+    // Delivers one assistant message on the thread's live stream and mirrors it into the
+    // server projection, whose global sequence other threads keep moving ahead.
+    async function streamAssistantMessage(index: number) {
+      const sequence = index * 100 + 1;
+      const messageId = MessageId.makeUnsafe(`msg-live-${index}`);
+      const createdAt = new Date(Date.parse(NOW_ISO) + index * 1_000).toISOString();
+      const message = {
+        id: messageId,
+        role: "assistant" as const,
+        text: `Live chunk ${index}`,
+        turnId: streamingTurnId,
+        streaming: false,
+        source: "native" as const,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      sendThreadEventPush({
+        sequence,
+        eventId: EventId.makeUnsafe(`event-live-${index}`),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: createdAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: { threadId: THREAD_ID, messageId, ...message },
+      });
+      const [thread] = fixture.snapshot.threads;
+      fixture = {
+        ...fixture,
+        snapshot: {
+          ...fixture.snapshot,
+          snapshotSequence: sequence + 49,
+          threads: [{ ...thread!, messages: [...thread!.messages, message] }],
+        },
+      };
+      await vi.waitFor(
+        () =>
+          expect(
+            getThreadFromState(useStore.getState(), THREAD_ID)?.messages.some(
+              (entry) => entry.id === messageId,
+            ),
+          ).toBe(true),
+        { timeout: 4_000, interval: 16 },
+      );
+    }
+
+    it("skips replay polls while the live stream delivers and resumes once it goes quiet", async () => {
+      useStreamingThreadFixture();
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      const mounted = await mountApp();
+
+      try {
+        await streamAssistantMessage(1);
+        const replaysBeforeStreaming = replayRequestCursors.length;
+        for (let index = 2; index <= 7; index += 1) {
+          await vi.advanceTimersByTimeAsync(750);
+          await streamAssistantMessage(index);
+          await vi.advanceTimersByTimeAsync(750);
+        }
+        expect(replayRequestCursors.length).toBe(replaysBeforeStreaming);
+
+        await vi.advanceTimersByTimeAsync(3_000);
+        await vi.waitFor(
+          () => expect(replayRequestCursors.length).toBeGreaterThan(replaysBeforeStreaming),
+          { timeout: 4_000 },
+        );
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
   });
 
   it("does not poll a converged terminal thread projection", async () => {
@@ -2371,12 +2487,6 @@ describe("EventRouter scoped orchestration sync", () => {
         { timeout: 4_000, interval: 16 },
       );
       sendThreadEventPush(bufferedEvent);
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 4_000, interval: 16 },
-      );
       const subscribeCountBeforeMaterialization =
         subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
       const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
@@ -2834,5 +2944,327 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = buildFixture();
       await mounted.cleanup();
     }
+  });
+
+  describe("snapshot ordering against queued and buffered events", () => {
+    const orderingTurnId = TurnId.makeUnsafe("turn-snapshot-ordering");
+    const orderingMessageId = MessageId.makeUnsafe("msg-snapshot-ordering");
+    const orderingStartedAt = "2026-03-04T12:00:04.000Z";
+
+    function orderingDelta(
+      sequence: number,
+      text: string,
+    ): Extract<OrchestrationEvent, { type: "thread.message-sent" }> {
+      const at = new Date(Date.parse(orderingStartedAt) + sequence * 10).toISOString();
+      return {
+        sequence,
+        eventId: EventId.makeUnsafe(`event-snapshot-ordering-${sequence}`),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: at,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: orderingMessageId,
+          role: "assistant",
+          text,
+          turnId: orderingTurnId,
+          source: "native",
+          streaming: true,
+          createdAt: orderingStartedAt,
+          updatedAt: at,
+        },
+      };
+    }
+
+    function runningOrderingThread(): Partial<OrchestrationThread> {
+      return {
+        latestTurn: {
+          turnId: orderingTurnId,
+          state: "running",
+          requestedAt: orderingStartedAt,
+          startedAt: orderingStartedAt,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: orderingTurnId,
+          lastError: null,
+          updatedAt: orderingStartedAt,
+        },
+        updatedAt: orderingStartedAt,
+      };
+    }
+
+    function orderingThreadWithAssistantText(text: string): OrchestrationThread {
+      const base = getThreadDetailFromFixtureSnapshot(THREAD_ID);
+      return {
+        ...base,
+        messages: [
+          ...base.messages,
+          {
+            id: orderingMessageId,
+            role: "assistant",
+            text,
+            turnId: orderingTurnId,
+            streaming: true,
+            source: "native",
+            createdAt: orderingStartedAt,
+            updatedAt: orderingStartedAt,
+          },
+        ],
+        latestTurn: {
+          turnId: orderingTurnId,
+          state: "running",
+          requestedAt: orderingStartedAt,
+          startedAt: orderingStartedAt,
+          completedAt: null,
+          assistantMessageId: orderingMessageId,
+        },
+      };
+    }
+
+    function orderingMessageText(): string | undefined {
+      return getThreadFromState(useStore.getState(), THREAD_ID)?.messages.find(
+        (message) => message.id === orderingMessageId,
+      )?.text;
+    }
+
+    async function holdNextProjectionRead(): Promise<void> {
+      delayNextThreadDetailSnapshotResponse = true;
+      await vi.waitFor(() => expect(pendingThreadDetailSnapshotResponse).not.toBeNull(), {
+        timeout: 15_000,
+        interval: 16,
+      });
+    }
+
+    // Queueing an event advances the resume cursor before the throttled flush
+    // applies it to the store.
+    async function waitForQueuedCursor(sequence: number): Promise<void> {
+      await vi.waitFor(
+        () =>
+          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: sequence }),
+        { timeout: 2_000, interval: 2 },
+      );
+    }
+
+    // A throttled flush that just ran makes the next queued event wait for most
+    // of the 100 ms flush window instead of flushing on the next task.
+    async function flushThrottledDelta(sequence: number, text: string, expectedText: string) {
+      sendThreadEventPush(orderingDelta(sequence, text));
+      await vi.waitFor(() => expect(orderingMessageText()).toBe(expectedText), {
+        timeout: 4_000,
+        interval: 2,
+      });
+    }
+
+    function releaseProjectionRead(snapshotSequence: number, thread: OrchestrationThread) {
+      const pending = pendingThreadDetailSnapshotResponse;
+      if (pending === null) {
+        throw new Error("No delayed thread-detail snapshot response is pending");
+      }
+      pendingThreadDetailSnapshotResponse = { ...pending, result: { snapshotSequence, thread } };
+      sendPendingThreadDetailSnapshotResponse();
+    }
+
+    it("does not re-apply queued assistant deltas that a projection snapshot already contains", async () => {
+      fixture = { ...fixture, snapshot: createSnapshot(runningOrderingThread()) };
+      const mounted = await mountApp();
+      try {
+        await holdNextProjectionRead();
+        // The first chunk of a message flushes immediately; later ones go
+        // through the 100 ms flush throttle.
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
+          timeout: 4_000,
+          interval: 16,
+        });
+        await flushThrottledDelta(3, " big", "Hello big");
+        // Queued behind the throttle: its cursor advanced before the store saw it.
+        sendThreadEventPush(orderingDelta(4, " world"));
+        await waitForQueuedCursor(4);
+        // The projection read committed after every delta, so it already
+        // contains them; the queued delta must not land on top of it again.
+        releaseProjectionRead(4, orderingThreadWithAssistantText("Hello big world"));
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        expect(orderingMessageText()).toBe("Hello big world");
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it("does not let a queued running session regress a newer settled projection", async () => {
+      fixture = { ...fixture, snapshot: createSnapshot(runningOrderingThread()) };
+      const mounted = await mountApp();
+      try {
+        await holdNextProjectionRead();
+        const nextTurnId = TurnId.makeUnsafe("turn-snapshot-ordering-next");
+        const startedAt = "2026-03-04T12:00:06.000Z";
+        const completedAt = "2026-03-04T12:00:08.000Z";
+        sendThreadEventPush(orderingDelta(2, "Done."));
+        await flushThrottledDelta(3, " Next.", "Done. Next.");
+        sendThreadEventPush({
+          sequence: 4,
+          eventId: EventId.makeUnsafe("event-snapshot-ordering-running"),
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          occurredAt: startedAt,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.session-set",
+          payload: {
+            threadId: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: nextTurnId,
+              lastError: null,
+              updatedAt: startedAt,
+            },
+          },
+        });
+        await waitForQueuedCursor(4);
+        // The projection already settled that turn (sequence 5) when it was read.
+        releaseProjectionRead(5, {
+          ...getThreadDetailFromFixtureSnapshot(THREAD_ID),
+          latestTurn: {
+            turnId: nextTurnId,
+            state: "completed",
+            requestedAt: startedAt,
+            startedAt,
+            completedAt,
+            assistantMessageId: null,
+          },
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+          updatedAt: completedAt,
+        });
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+        expect(thread?.session?.orchestrationStatus).toBe("ready");
+        expect(thread?.latestTurn?.turnId).toBe(nextTurnId);
+        expect(thread?.latestTurn?.state).toBe("completed");
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it("ignores a thread-stream snapshot older than the applied cursor", async () => {
+      const mounted = await mountApp();
+      try {
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await vi.waitFor(() => expect(orderingMessageText()).toBe("Hello"), {
+          timeout: 4_000,
+          interval: 16,
+        });
+
+        // A slower snapshot taken before event 2 must not move the cursor back,
+        // or a catch-up replay from it re-applies the already-consumed delta.
+        sendThreadSnapshotPush(THREAD_ID, 1);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+        expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({ afterSequence: 2 });
+
+        sendThreadEventPush(orderingDelta(2, "Hello"));
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+        expect(orderingMessageText()).toBe("Hello");
+      } finally {
+        await mounted.cleanup();
+      }
+    }, 60_000);
+
+    it.each([1, 40])(
+      "rejects older snapshots after confirming cached resume seed %s",
+      async (cachedSequence) => {
+        // Cover both a current cache and an initial snapshot from a reset journal.
+        useStore
+          .getState()
+          .syncServerReadModel({ ...fixture.snapshot, snapshotSequence: cachedSequence });
+        setThreadDetailResumeCursor(THREAD_ID, cachedSequence);
+        const mounted = await mountApp();
+        try {
+          // The subscription's first snapshot confirms sequence 1. A later older snapshot
+          // is now a race, not the initial snapshot of a reset server journal.
+          sendThreadSnapshotPush(THREAD_ID, fixture.snapshot.snapshotSequence - 1);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({
+            afterSequence: fixture.snapshot.snapshotSequence,
+          });
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+      60_000,
+    );
+
+    it("resyncs instead of applying buffered events after the pre-snapshot buffer overflowed", async () => {
+      const mounted = await mountApp();
+      try {
+        // A terminal stream fault drops the cursor, so the next events buffer
+        // until a projection read lands. Hold that read while the buffer overflows.
+        delayNextThreadDetailSnapshotResponse = true;
+        for (const listener of threadSnapshotFailureListeners) {
+          listener({ threadId: THREAD_ID, code: null, error: new Error("stream fault") });
+        }
+        const chunks = Array.from({ length: 520 }, (_, index) => `${index % 10}`);
+        sendThreadEventPush(orderingDelta(2, chunks[0]!));
+        await vi.waitFor(() => expect(pendingThreadDetailSnapshotResponse).not.toBeNull(), {
+          timeout: 4_000,
+          interval: 16,
+        });
+        for (const [index, chunk] of chunks.entries()) {
+          if (index === 0) continue;
+          sendThreadEventPush(orderingDelta(index + 2, chunk));
+        }
+        const subscribesBeforeRelease = subscribeThreadRequestCountById.get(THREAD_ID) ?? 0;
+        // The resync reads the projection that already holds every chunk.
+        fixture = {
+          ...fixture,
+          snapshot: {
+            ...fixture.snapshot,
+            snapshotSequence: chunks.length + 1,
+            threads: [orderingThreadWithAssistantText(chunks.join(""))],
+          },
+        };
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+        // The held read predates every buffered chunk.
+        releaseProjectionRead(1, buildFixture().snapshot.threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(subscribeThreadRequestCountById.get(THREAD_ID) ?? 0).toBeGreaterThan(
+              subscribesBeforeRelease,
+            );
+            expect(orderingMessageText()).toBe(chunks.join(""));
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        fixture = buildFixture();
+        await mounted.cleanup();
+      }
+    }, 60_000);
   });
 });

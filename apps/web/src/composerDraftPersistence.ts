@@ -314,6 +314,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
+  queueStoppedTurnId: Schema.optionalKey(Schema.String),
+  queueResumedTurnId: Schema.optionalKey(Schema.String),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
     Schema.Record(Schema.String, Schema.optional(ModelSelection)),
@@ -1171,6 +1173,12 @@ function normalizePersistedDraftsByThreadId(
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueStoppedTurnId === "string"
+        ? { queueStoppedTurnId: draftCandidate.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueResumedTurnId === "string"
+        ? { queueResumedTurnId: draftCandidate.queueResumedTurnId }
+        : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
@@ -1493,6 +1501,12 @@ export function partializeComposerDraftStoreState(
       ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
       ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
+      ...(hasQueuedTurns && draft.queueStoppedTurnId
+        ? { queueStoppedTurnId: draft.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && draft.queueResumedTurnId
+        ? { queueResumedTurnId: draft.queueResumedTurnId }
+        : {}),
       ...(draft.restoredSourceProposedPlan
         ? { restoredSourceProposedPlan: draft.restoredSourceProposedPlan }
         : {}),
@@ -1705,6 +1719,12 @@ export function toHydratedThreadDraft(
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),
+    ...(persistedDraft.queueStoppedTurnId
+      ? { queueStoppedTurnId: persistedDraft.queueStoppedTurnId }
+      : {}),
+    ...(persistedDraft.queueResumedTurnId
+      ? { queueResumedTurnId: persistedDraft.queueResumedTurnId }
+      : {}),
     restoredSourceProposedPlan: persistedDraft.restoredSourceProposedPlan ?? null,
     modelSelectionByProvider,
     activeProvider,

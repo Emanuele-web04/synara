@@ -4,6 +4,7 @@ import {
   type ServerSettingsView,
 } from "@synara/contracts";
 
+import { TASKS_COACHMARK } from "../components/OneTimeCoachmark";
 import { FEATURE_TOUR_STORAGE_KEY } from "../featureTour/store";
 import { PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY } from "../projectImport/useProjectImportAnnouncement";
 
@@ -40,8 +41,8 @@ export function createBrowserTestServerSettings(completedAt: string): ServerSett
 }
 
 /**
- * Marks startup announcements as seen for this established fixture's installation,
- * so its sheet does not cover the surface under test; the announcement has its own coverage.
+ * Marks startup announcements and coachmarks as seen for this established fixture's
+ * installation, so they do not cover the surface under test; each has its own coverage.
  * Call after any `localStorage.clear()`.
  */
 export function acknowledgeStartupAnnouncementsForTest(config: ServerConfig): void {
@@ -50,6 +51,8 @@ export function acknowledgeStartupAnnouncementsForTest(config: ServerConfig): vo
     PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY,
     JSON.stringify([config.worktreesDir]),
   );
+  localStorage.setItem(TASKS_COACHMARK.storageKey, "seen");
+  localStorage.setItem("synara:activity-onboarding:v1", "seen");
 }
 
 export function createFullscreenTestHost(): HTMLDivElement {

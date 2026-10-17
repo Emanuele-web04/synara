@@ -52,6 +52,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import {
   canAdoptFirstTurnProvider,
@@ -599,6 +600,9 @@ export function projectEvent(
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
+            ...(payload.forkSourceMessageId
+              ? { forkSourceMessageId: payload.forkSourceMessageId }
+              : {}),
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
             sidechatContext: payload.sidechatContext,
             sidechatLastActivityAt: payload.sidechatLastActivityAt,
@@ -1460,6 +1464,23 @@ export function projectEvent(
         }),
       );
 
+    case "thread.turn-interrupt-requested": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      return Effect.succeed(
+        activity
+          ? {
+              ...nextBase,
+              threads: updateThread(nextBase.threads, thread.id, {
+                activities: upsertThreadActivity(thread.activities, activity),
+                updatedAt: event.occurredAt,
+              }),
+            }
+          : nextBase,
+      );
+    }
+
     case "thread.activity-appended":
       return decodeForEvent(
         ThreadActivityAppendedPayload,
@@ -1473,10 +1494,12 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = upsertThreadActivity(thread.activities, {
-            ...payload.activity,
-            sequence: payload.activity.sequence ?? event.sequence,
-          });
+          const activities = upsertThreadActivity(
+            thread.activities,
+            payload.activity.sequence !== undefined
+              ? payload.activity
+              : { ...payload.activity, sequence: event.sequence, sequenceSource: "orchestration" },
+          );
 
           return {
             ...nextBase,

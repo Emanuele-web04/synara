@@ -1053,11 +1053,11 @@ describe("CheckpointReactor", () => {
       const harness = await createHarness({ seedFilesystemCheckpoints: false });
       await harness.drain();
       const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-      const original = query.getThreadDetailById;
+      const original = query.getThreadShellById;
       // The admission lookup and the first recovery retry both exceed the
       // 200 ms admission budget; a later retry must still adopt the range.
       let delayed = failure === "timeout" ? 2 : 1;
-      vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+      vi.spyOn(query, "getThreadShellById").mockImplementation((id) => {
         if (id !== "thread-1" || delayed === 0) return original(id);
         delayed--;
         return failure === "timeout"
@@ -1249,14 +1249,14 @@ describe("CheckpointReactor", () => {
     );
     await harness.drain();
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const originalDetail = query.getThreadDetailById;
+    const originalDetail = query.getThreadShellById;
     const attempts = new Map<string, number>();
     const release = Deferred.makeUnsafe<void>();
     const twoStarted = Deferred.makeUnsafe<void>();
     const peerCaptured = Deferred.makeUnsafe<void>();
     let active = 0;
     let peak = 0;
-    const detail = vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+    const detail = vi.spyOn(query, "getThreadShellById").mockImplementation((id) => {
       if (!unknown.includes(id)) return originalDetail(id);
       const attempt = (attempts.get(id) ?? 0) + 1;
       attempts.set(id, attempt);
@@ -1335,8 +1335,8 @@ describe("CheckpointReactor", () => {
     const otherThread = await addCheckpointThread(harness, "resolution-independent", otherCwd);
     await harness.drain();
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const originalDetail = query.getThreadDetailById;
-    const detail = vi.spyOn(query, "getThreadDetailById").mockImplementation((id) =>
+    const originalDetail = query.getThreadShellById;
+    const detail = vi.spyOn(query, "getThreadShellById").mockImplementation((id) =>
       id === "thread-1"
         ? Effect.fail(
             new PersistenceSqlError({
@@ -1429,9 +1429,9 @@ describe("CheckpointReactor", () => {
       const peerCaptured = Deferred.makeUnsafe<void>();
       const aliasResolved = Deferred.makeUnsafe<void>();
       const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-      const originalDetail = query.getThreadDetailById;
+      const originalDetail = query.getThreadShellById;
       let firstFailure = true;
-      const detail = vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+      const detail = vi.spyOn(query, "getThreadShellById").mockImplementation((id) => {
         if (id !== threadId) return originalDetail(id);
         if (firstFailure) {
           firstFailure = false;
@@ -1539,12 +1539,14 @@ describe("CheckpointReactor", () => {
     const readerStarted = Deferred.makeUnsafe<void>();
     const releaseReader = Deferred.makeUnsafe<void>();
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const originalDetail = query.getThreadDetailById;
-    let initialFailure = true;
-    const detail = vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+    const originalDetail = query.getThreadShellById;
+    // Gate only the workspace lookups (admission, then its retry). Provider
+    // session resolution reads the same shell and must stay unblocked.
+    let workspaceLookups = 0;
+    const detail = vi.spyOn(query, "getThreadShellById").mockImplementation((id) => {
       if (id !== threadId) return originalDetail(id);
-      if (initialFailure) {
-        initialFailure = false;
+      workspaceLookups += 1;
+      if (workspaceLookups === 1) {
         return Effect.fail(
           new PersistenceSqlError({
             operation: "recovery-cut-test",
@@ -1552,6 +1554,7 @@ describe("CheckpointReactor", () => {
           }),
         );
       }
+      if (workspaceLookups > 2) return originalDetail(id);
       return Deferred.succeed(retryStarted, undefined).pipe(
         Effect.andThen(Deferred.await(releaseRetry)),
         Effect.andThen(originalDetail(id)),
@@ -1693,9 +1696,9 @@ describe("CheckpointReactor", () => {
         ),
       );
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const originalDetail = query.getThreadDetailById;
+    const originalDetail = query.getThreadShellById;
     let initialFailure = true;
-    const detail = vi.spyOn(query, "getThreadDetailById").mockImplementation((id) => {
+    const detail = vi.spyOn(query, "getThreadShellById").mockImplementation((id) => {
       if (id === observerThread)
         return Deferred.succeed(metadataObserved, undefined).pipe(
           Effect.andThen(originalDetail(id)),
@@ -2029,7 +2032,9 @@ describe("CheckpointReactor", () => {
         expect(
           Option.isSome(
             await Effect.runPromise(
-              Deferred.await(independentCaptured).pipe(Effect.timeoutOption("500 millis")),
+              // This is a liveness contract while the first workspace stays
+              // blocked, not a 500 ms Git performance budget on a shared runner.
+              Deferred.await(independentCaptured).pipe(Effect.timeoutOption("10 seconds")),
             ),
           ),
         ).toBe(true);
@@ -2112,6 +2117,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness();
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
     vi.spyOn(query, "getThreadDetailById").mockImplementation(() => Effect.succeed(Option.none()));
+    vi.spyOn(query, "getThreadShellById").mockImplementation(() => Effect.succeed(Option.none()));
     vi.spyOn(query, "getProjectShellById").mockImplementation(() => Effect.succeed(Option.none()));
     const turnId = asTurnId("checkpoint-deferred-detail");
     await Effect.runPromise(
@@ -2609,11 +2615,11 @@ describe("CheckpointReactor", () => {
     );
     await Effect.runPromise(harness.engine.drain);
     const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const originalDetail = query.getThreadDetailById;
+    const originalDetail = query.getThreadShellById;
     const admissionStarted = Deferred.makeUnsafe<void>();
     const releaseAdmission = Deferred.makeUnsafe<void>();
     const detail = vi
-      .spyOn(query, "getThreadDetailById")
+      .spyOn(query, "getThreadShellById")
       .mockImplementation((id) =>
         Deferred.succeed(admissionStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseAdmission)),
@@ -3395,6 +3401,112 @@ describe("CheckpointReactor", () => {
     expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
   });
 
+  // A projection repair deletes every project row and replays them later, while
+  // thread and turn rows stay. The checkpoint context joins the project row, so
+  // the next turn must still be numbered after the thread's own checkpoints.
+  it("numbers a turn after existing checkpoints while project rows are rebuilt", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const firstMessageId = MessageId.makeUnsafe("message-repair-turn-a");
+    const secondMessageId = MessageId.makeUnsafe("message-repair-turn-b");
+    const firstTurnId = asTurnId("turn-repair-a");
+    const secondTurnId = asTurnId("turn-repair-b");
+
+    const runTurnUntilCompletion = async (input: {
+      readonly label: string;
+      readonly messageId: MessageId;
+      readonly turnId: TurnId;
+      readonly fileName: string;
+      readonly beforeCompletion?: () => Promise<void>;
+    }) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-${input.label}-start`),
+          threadId,
+          message: {
+            messageId: input.messageId,
+            role: "user",
+            text: `create ${input.fileName}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitForGitRefExists(
+        harness.cwd,
+        checkpointRefForThreadMessageStart(threadId, input.messageId),
+      );
+      harness.provider.emit({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe(`evt-${input.label}-started`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId: input.turnId,
+      });
+      await waitForGitRefExists(
+        harness.cwd,
+        checkpointRefForThreadTurnStart(threadId, input.turnId),
+      );
+      fs.writeFileSync(path.join(harness.cwd, input.fileName), `${input.fileName}\n`, "utf8");
+      await input.beforeCompletion?.();
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe(`evt-${input.label}-completed`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId: input.turnId,
+        payload: { state: "completed" },
+      });
+      return waitForThread(harness.engine, (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.turnId === input.turnId && checkpoint.status !== "missing",
+        ),
+      );
+    };
+
+    await runTurnUntilCompletion({
+      label: "repair-turn-a",
+      messageId: firstMessageId,
+      turnId: firstTurnId,
+      fileName: "a.txt",
+    });
+    const firstTurnRef = checkpointRefForThreadTurn(threadId, 1);
+    const firstTurnCommit = runGit(harness.cwd, ["rev-parse", firstTurnRef]).trim();
+
+    const thread = await runTurnUntilCompletion({
+      label: "repair-turn-b",
+      messageId: secondMessageId,
+      turnId: secondTurnId,
+      fileName: "b.txt",
+      beforeCompletion: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`DELETE FROM projection_projects`;
+          }),
+        ),
+    });
+
+    expect(
+      thread.checkpoints
+        .map((checkpoint) => [checkpoint.turnId, checkpoint.checkpointTurnCount] as const)
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    ).toEqual([
+      [firstTurnId, 1],
+      [secondTurnId, 2],
+    ]);
+    // Turn 1's ref still holds turn A's tree instead of the tree after turn B.
+    expect(runGit(harness.cwd, ["rev-parse", firstTurnRef]).trim()).toBe(firstTurnCommit);
+    expect(gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 2), "b.txt")).toBe(
+      "b.txt\n",
+    );
+  });
+
   it("leaves a missing message-start baseline unavailable after provider start", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const threadId = ThreadId.makeUnsafe("thread-1");
@@ -3855,6 +3967,119 @@ describe("CheckpointReactor", () => {
     ).toBe(false);
   });
 
+  it("uses the durable workspace marker when completion follows a reactor restart", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-restart-plain-"));
+    tempDirs.push(workspace);
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+      projectWorkspaceRoot: workspace,
+      threadWorktreePath: workspace,
+      providerSessionCwd: workspace,
+      simulateProviderBaseline: false,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-restart-plain");
+    const messageId = MessageId.makeUnsafe("restart-plain-message");
+    const createdAt = new Date().toISOString();
+
+    // The domain start is persisted while the workspace is still a plain
+    // folder. No provider turn.started event is sent, which leaves a fresh
+    // reactor with only the projection marker to consult at completion.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("restart-plain-start"),
+        threadId,
+        message: { messageId, role: "user", text: "initialize", attachments: [] },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    const markerBeforeTurn = await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        return yield* sql<{ started_without_git_workspace: number }>`
+          SELECT started_without_git_workspace
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND pending_message_id = ${messageId}
+        `;
+      }),
+    );
+    expect(markerBeforeTurn[0]?.started_without_git_workspace).toBe(1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("restart-plain-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    // A live diff placeholder is a full-row upsert that used to be able to
+    // erase the durable marker before the terminal completion arrived.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("restart-plain-placeholder"),
+        threadId,
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "missing",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await harness.drain();
+
+    const restarted = await restartCheckpointReactor();
+    await settleCheckpointWork(restarted.drain);
+
+    runGit(workspace, ["init", "--initial-branch=main"]);
+    runGit(workspace, ["config", "user.email", "test@example.com"]);
+    runGit(workspace, ["config", "user.name", "Test User"]);
+    fs.writeFileSync(path.join(workspace, "package.json"), "{}\n", "utf8");
+    runGit(workspace, ["add", "."]);
+    runGit(workspace, ["commit", "-m", "Initial"]);
+
+    await Effect.runPromise(
+      harness.runtimeEvents.append({
+        ...nativeCompletion("evt-turn-completed-restart-plain", threadId, turnId),
+        provider: "claudeAgent",
+      }),
+    );
+    await settleCheckpointWork(restarted.drain);
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.activities.some((activity) => activity.kind === "checkpoint.captured"),
+    );
+    expect(thread.checkpoints[0]?.status).toBe("missing");
+    expect(
+      thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toBe(false);
+  });
+
   it("derives a live turn-diff placeholder from git for claude file edits mid-turn", async () => {
     const harness = await createHarness({
       seedFilesystemCheckpoints: false,
@@ -3883,6 +4108,10 @@ describe("CheckpointReactor", () => {
     );
 
     await harness.prepareBaseline(turnId);
+    // #1900: turn start, the live diff and turn completion read the thread
+    // shell, its checkpoint context and single messages, never the full detail.
+    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const detailReads = vi.spyOn(query, "getThreadDetailById");
     harness.provider.emit({
       type: "turn.started",
       eventId: EventId.makeUnsafe("evt-turn-started-claude-live"),
@@ -3947,6 +4176,7 @@ describe("CheckpointReactor", () => {
       "live.txt",
       "second.txt",
     ]);
+    expect(detailReads).not.toHaveBeenCalled();
   });
 
   it("reports an unavailable baseline when a completed turn has no initial checkpoint", async () => {
@@ -4693,6 +4923,149 @@ describe("CheckpointReactor", () => {
     });
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { location: "same", state: "projected", scope: "thread", allowed: false },
+    { location: "alias", state: "projected", scope: "thread", allowed: false },
+    { location: "nested", state: "projected", scope: "files", allowed: false },
+    { location: "same", state: "runtime", scope: "thread", allowed: false },
+    { location: "same", state: "pending", scope: "thread", allowed: false },
+    { location: "worktree", state: "projected", scope: "thread", allowed: true },
+    { location: "same", state: "error", scope: "thread", allowed: true },
+    { location: "same", state: "idle", scope: "files", allowed: true },
+  ] as const)(
+    "guards shared workspace Undo: $location / $state / $scope",
+    async ({ location, state: peerState, scope: revertScope, allowed }) => {
+      const harness = await createHarness();
+      await seedRevertableThread(harness, "shared-workspace-revert");
+      const peerContainer = fs.mkdtempSync(path.join(os.tmpdir(), "synara-undo-peer-"));
+      tempDirs.push(peerContainer);
+      let peerCwd = harness.cwd;
+      if (location === "alias") {
+        peerCwd = path.join(peerContainer, "alias");
+        fs.symlinkSync(harness.cwd, peerCwd, "dir");
+      } else if (location === "nested") {
+        peerCwd = path.join(harness.cwd, "nested");
+        fs.mkdirSync(peerCwd);
+      } else if (location === "worktree") {
+        peerCwd = path.join(peerContainer, "worktree");
+        runGit(harness.cwd, ["worktree", "add", "--detach", peerCwd, "HEAD"]);
+      }
+      const peerId = ThreadId.makeUnsafe("shared-workspace-peer");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("shared-workspace-peer-create"),
+          threadId: peerId,
+          projectId: asProjectId("project-1"),
+          title: "Working peer",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: peerCwd,
+          createdAt,
+        }),
+      );
+      if (peerState === "projected" || peerState === "error")
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("shared-workspace-peer-running"),
+            threadId: peerId,
+            session: {
+              threadId: peerId,
+              status: peerState === "error" ? "error" : "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("peer-live-turn"),
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      if (peerState === "runtime") {
+        const listSessions = harness.provider.service.listSessions;
+        vi.spyOn(harness.provider.service, "listSessions").mockImplementation(() =>
+          listSessions().pipe(
+            Effect.map((sessions) => [
+              ...sessions,
+              {
+                provider: "codex",
+                status: "running",
+                runtimeMode: "full-access",
+                threadId: peerId,
+                cwd: peerCwd,
+                activeTurnId: asTurnId("peer-live-turn"),
+                createdAt,
+                updatedAt: createdAt,
+              } satisfies ProviderSession,
+            ]),
+          ),
+        );
+      } else if (peerState === "pending") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("shared-workspace-pending-start"),
+            threadId: peerId,
+            message: {
+              messageId: MessageId.makeUnsafe("peer-pending-message"),
+              role: "user",
+              text: "edit workspace",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt,
+          }),
+        );
+      }
+      if (revertScope === "files")
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe("shared-workspace-files-diff"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            turnId: asTurnId("turn-2"),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
+            status: "ready",
+            files: [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }],
+            checkpointTurnCount: 2,
+            createdAt,
+          }),
+        );
+      const initialText = revertScope === "files" ? "v3\n" : "peer's live edits\n";
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), initialText, "utf8");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("shared-workspace-revert-request"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnCount: revertScope === "files" ? 2 : 1,
+          scope: revertScope,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+        allowed ? "v2\n" : initialText,
+      );
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === "thread-1");
+      expect(target?.checkpoints).toHaveLength(allowed && revertScope === "thread" ? 1 : 2);
+      expect(
+        target?.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+      ).toBe(!allowed);
+      expect(harness.provider.rollbackConversation).toHaveBeenCalledTimes(
+        allowed && revertScope === "thread" ? 1 : 0,
+      );
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
 
   it("keeps full thread revert behavior for explicit thread scope", async () => {
     const harness = await createHarness();

@@ -185,6 +185,8 @@ export function createShellSnapshotFromReadModel(
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         archivedAt: thread.archivedAt ?? null,
+        snoozedUntil: thread.snoozedUntil ?? null,
+        snoozeReminderAt: thread.snoozeReminderAt ?? null,
         handoff: thread.handoff ?? null,
         ...(thread.isProjectImport ? { isProjectImport: true } : {}),
         lastKnownPr: thread.lastKnownPr ?? null,

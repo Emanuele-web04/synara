@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { isThreadDetailVerifiedInSync } from "./threadDetailCatchupPolicy";
+import {
+  isLiveThreadStreamDelivering,
+  isThreadDetailVerifiedInSync,
+} from "./threadDetailCatchupPolicy";
 
 describe("isThreadDetailVerifiedInSync", () => {
   it("is false before any replay poll has resolved empty", () => {
@@ -25,5 +28,16 @@ describe("isThreadDetailVerifiedInSync", () => {
     expect(
       isThreadDetailVerifiedInSync({ appliedEventSerial: 8, emptyReplayAtEventSerial: 7 }),
     ).toBe(false);
+  });
+});
+
+describe("isLiveThreadStreamDelivering", () => {
+  it("is false before the thread stream applied any event", () => {
+    expect(isLiveThreadStreamDelivering(null, 10_000, 1_500)).toBe(false);
+  });
+
+  it("is true only while the last live event is inside the window", () => {
+    expect(isLiveThreadStreamDelivering(9_000, 10_000, 1_500)).toBe(true);
+    expect(isLiveThreadStreamDelivering(8_500, 10_000, 1_500)).toBe(false);
   });
 });
