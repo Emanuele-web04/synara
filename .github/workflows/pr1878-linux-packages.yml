@@ -1,0 +1,108 @@
+name: PR 1878 real Linux package and startup qualification
+on:
+  push:
+    branches: [qa/pr1878-linux-native-packaging-20261017]
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_SHA: e6c8014794d70314eeb460d327f79443d12afb1f
+  NODE_OPTIONS: --max-old-space-size=4096
+  SYNARA_PUBLISH_RELEASE: "false"
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Guard immutable PR source and production version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node -p 'require("./apps/desktop/package.json").version')" = "1.0.3"
+          echo "SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/pr1878-native"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-native/source.txt"
+          sha256sum bun.lock > "$RUNNER_TEMP/pr1878-native/lock.txt"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - name: Install exact frozen package graph
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Install Linux native packaging and runtime prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm rpm2cpio cpio libcrypt1 dpkg-dev xz-utils xvfb xauth
+      - name: Reuse pinned official Cua provisioner
+        uses: ./.github/actions/provision-cua
+        with:
+          arch: x64
+      - name: Compile real web, server, CLI and Electron application
+        run: bun run build:desktop
+      - name: Build unsigned, unpublished AppImage, Debian and RPM packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCKFILE_SHA256=$(sha256sum bun.lock | cut -d' ' -f1)
+          node scripts/build-desktop-artifact.ts \
+            --platform linux --target AppImage,deb,rpm --arch x64 \
+            --flavor production --build-version 1.0.3 \
+            --source-commit "$SOURCE_SHA" --lockfile-sha256 "$LOCKFILE_SHA256" \
+            --output-dir release --skip-build --keep-stage --verbose \
+            2>&1 | tee "$RUNNER_TEMP/pr1878-native/build.log"
+      - name: Collect exact unsigned packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for file in release/*.AppImage release/*.deb release/*.rpm release/latest*.yml; do cp "$file" release-publish/; done
+          python - <<'PY'
+          from pathlib import Path
+          fs=list(Path('release-publish').iterdir())
+          for suffix in ('.AppImage','.deb','.rpm'):
+              m=[f for f in fs if f.name.endswith(suffix) and f.stat().st_size>1000000]
+              assert len(m)==1,(suffix,m)
+          assert len([f for f in fs if f.name=='latest-linux.yml'])==1,fs
+          print('Validated three nonempty artifact types and one updater manifest.')
+          PY
+          sha256sum release-publish/* > "$RUNNER_TEMP/pr1878-native/artifacts-sha256.txt"
+          dpkg-deb --field release-publish/*.deb Package Version Architecture > "$RUNNER_TEMP/pr1878-native/deb-metadata.txt"
+          rpm -qpi release-publish/*.rpm > "$RUNNER_TEMP/pr1878-native/rpm-metadata.txt"
+      - name: Verify canonical provenance without publication or signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCKFILE_SHA256=$(sha256sum bun.lock | cut -d' ' -f1)
+          node scripts/write-release-artifact-provenance.ts \
+            --assets-dir release-publish --platform linux --arch x64 \
+            --target AppImage,deb,rpm --version 1.0.3 \
+            --source-commit "$SOURCE_SHA" --source-tag "" \
+            --lockfile-sha256 "$LOCKFILE_SHA256" \
+            --publication false --signed false --allow-unsigned-windows-publication false \
+            --expected-mac-team-id "" --expected-windows-publisher "" \
+            --expected-windows-subject-dn ""
+      - name: Run unchanged packaged startup checks for all three formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-packaged-desktop-startup.ts \
+            --assets-dir release-publish --platform linux --arch x64 \
+            --target AppImage,deb,rpm --version 1.0.3 \
+            --executable-name synara 2>&1 | tee "$RUNNER_TEMP/pr1878-native/packaged-startup.log"
+      - name: Retain compact checks and exact package identities
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-native-linux-package-evidence
+          path: ${{ runner.temp }}/pr1878-native/
+          if-no-files-found: warn
+          retention-days: 14
