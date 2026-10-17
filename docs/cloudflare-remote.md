@@ -143,6 +143,44 @@ The authoritative execution ledger is [STATUS.md](implementation/cloudflare-remo
 
 Live qualification is a separate final step: secure API/Cloudflare/WorkOS configuration, a dedicated test domain and database, the build installed on both Macs, and approved real-provider use. Test different networks, connector/network interruption, app restart, sleep/wake, revocation and a declared-duration soak covering a real credential renewal. Measure connection/recovery/transfer behavior before making performance claims. The hosted early-access beta is open to authenticated accounts under `REMOTE_BETA_ACCESS_ENABLED=true`; the operator has authorized that tester rollout. This enrollment policy is not a billing authority. Any future paid rollout needs its own authoritative entitlement policy; do not infer a subscription from this flag or from a test allowlist.
 
+## Completion notification delivery
+
+Ordinary completion alerts use the phone's APNs device token, separately from
+ActivityKit tokens. The phone registers one exact live turn with the account API
+at `PUT /api/v1/notification-subscriptions`. Each subscription is bound to its
+current account/workspace, registered device session and owned host generation.
+It remains registered when the phone suspends or the turn disappears from its
+foreground running list; completion must not race removal of the watch.
+
+Migration `0023_turn_notifications.sql` extends the existing private outbox with
+an explicit delivery kind and a unique device/exact-turn key. Existing ActivityKit
+rows retain their original kind and behavior. Completion watches expire after
+24 hours, with at most 64 active watches per account. The existing host reporter
+and five-second delivery sweep serve both destinations. Only authoritative
+`completed` or `error` turns produce alerts; stopped, expired and missing/offline
+reports do not invent a completion. An offline host can report later within the
+watch lifetime. Device/session revocation, membership and host generation are
+rechecked before sending. Logout/forget revoke all matching device/host watches
+in one authenticated `DELETE /api/v1/notification-subscriptions` request.
+
+The sender reuses the existing environment-specific APNs credentials, with the
+ordinary app bundle topic, `apns-push-type=alert` and a per-turn collapse ID.
+Payloads contain generic “Synara” / “Response ready” or “Run failed” text and opaque
+routing IDs only. Delivered, invalid-token, rejected or exhausted watches erase
+the token and retain a deduplication tombstone until one day after expiry.
+A fresh UUID cannot resend the same device/exact-turn watch during that window.
+APNs remains at-least-once; a process failure after Apple accepts a request can
+retry the same collapse ID. Native foreground handling suppresses banners, and
+local completion alerts are a fallback for local peers or unacknowledged cloud
+watches while iOS still permits their socket to run. A local-only paired host has
+no account-backed cloud destination after iOS suspends its connection.
+
+Deploy the additive migration and compatible API before publishing the native
+client. Preserve the existing APNs secrets, verify table ownership/default-deny
+RLS and the exact Drizzle hash/timestamp, then test an actual registered sandbox
+or Production device. HTTP tests, `simctl push`, secret configuration and an APNs
+synthetic-token acceptance probe do not prove visible background delivery.
+
 ## Live Activity push delivery (development)
 
 The account API can deliver ActivityKit updates while the iOS app is suspended.

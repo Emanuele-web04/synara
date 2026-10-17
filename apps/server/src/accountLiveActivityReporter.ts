@@ -10,8 +10,8 @@ import {
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 
-/** Reads only explicitly watched turns. The durable projection sequence fences
- * out-of-order snapshots; the next poll repairs interrupted uploads/restarts.
+/** ActivityKit and completion alerts share this exact-turn projection poll.
+ * The durable sequence fences out-of-order reports; later polls repair uploads.
  * APNs credentials never reach this process. */
 export function createAccountLiveActivityReporter(options: {
   baseDir: string;

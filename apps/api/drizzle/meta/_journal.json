@@ -162,6 +162,13 @@
       "when": 1792072304575,
       "tag": "0022_account_deletions",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792277337529,
+      "tag": "0023_turn_notifications",
+      "breakpoints": true
     }
   ]
 }

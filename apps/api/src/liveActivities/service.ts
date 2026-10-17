@@ -1,15 +1,19 @@
 import type pg from "pg";
 import type {
   RegisterLiveActivity,
+  RegisterTurnNotification,
+  RemoveTurnNotifications,
   LiveActivityHostSnapshot,
   LiveActivitySource,
 } from "@synara/contracts";
 import { HostAuthDomainError, type HostRecord } from "../identity/interfaces";
-import type { ActivityDelivery, ApnsResult } from "./apns";
+import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
 
 type Owner = { userId: string; orgId: string; sessionId: string };
 type ActivityRow = {
   id: string;
+  delivery_kind: "liveactivity" | "notification";
+  notification_source: string | null;
   user_id: string;
   org_id: string;
   session_id: string;
@@ -55,6 +59,7 @@ export function createLiveActivityService(options: {
   pool: pg.Pool;
   environment: "sandbox" | "production" | "both";
   send: (delivery: ActivityDelivery) => Promise<ApnsResult>;
+  sendNotification?: (delivery: NotificationDelivery) => Promise<ApnsResult>;
   isMember: (userId: string, orgId: string) => Promise<boolean>;
 }) {
   const { pool } = options;
@@ -73,7 +78,20 @@ export function createLiveActivityService(options: {
     }
   }
 
-  async function register(owner: Owner, request: RegisterLiveActivity) {
+  async function registerDestination(
+    owner: Owner,
+    request: RegisterLiveActivity,
+    kind: ActivityRow["delivery_kind"],
+  ) {
+    const notificationSource =
+      kind === "notification"
+        ? JSON.stringify([
+            owner.orgId,
+            request.sources[0]!.hostId,
+            request.sources[0]!.threadId,
+            request.sources[0]!.turnId,
+          ])
+        : null;
     if (options.environment !== "both" && request.environment !== options.environment)
       fail("Push environment is not configured");
     await transaction(async (db) => {
@@ -101,18 +119,24 @@ export function createLiveActivityService(options: {
           hosts.rows.map((host) => [host.id, host.key_generation]),
         ),
       };
-      const collision = await db.query(
-        "SELECT id FROM live_activities WHERE NOT ended AND request->>'token'=$1 AND id<>$2",
-        [request.token, request.activityId],
-      );
-      if (collision.rowCount) fail("Push token is already registered");
+      // An ordinary device token legitimately owns several exact-turn watches.
+      if (kind === "liveactivity") {
+        const collision = await db.query(
+          "SELECT id FROM live_activities WHERE delivery_kind='liveactivity' AND NOT ended AND request->>'token'=$1 AND id<>$2",
+          [request.token, request.activityId],
+        );
+        if (collision.rowCount) fail("Push token is already registered");
+      }
       const previous = (
-        await db.query<ActivityRow>("SELECT * FROM live_activities WHERE id=$1 FOR UPDATE", [
-          request.activityId,
-        ])
+        await db.query<ActivityRow>(
+          "SELECT * FROM live_activities WHERE id=$1 OR (device_id=$2 AND notification_source=$3) FOR UPDATE",
+          [request.activityId, device.rows[0]!.id, notificationSource],
+        )
       ).rows[0];
       if (previous) {
         if (
+          previous.delivery_kind !== kind ||
+          previous.notification_source !== notificationSource ||
           previous.user_id !== owner.userId ||
           previous.org_id !== owner.orgId ||
           previous.session_id !== owner.sessionId ||
@@ -127,24 +151,28 @@ export function createLiveActivityService(options: {
           )
         )
           fail("Host identity changed");
-        if (previous.ended || previous.expires_at.getTime() <= Date.now())
+        // A different UUID/reconnect cannot resend an already delivered exact turn.
+        if (previous.ended || previous.expires_at.getTime() <= Date.now()) {
+          if (kind === "notification") return;
           fail("Activity has ended");
+        }
         if (request.revision <= previous.request.revision) return;
         await db.query(
           `UPDATE live_activities SET request=$2, dirty=true, attempts=0, next_attempt_at=now() WHERE id=$1`,
-          [request.activityId, JSON.stringify(boundRequest)],
+          [previous.id, JSON.stringify({ ...boundRequest, activityId: previous.id })],
         );
       } else {
         const count = (
           await db.query<{ count: string }>(
-            "SELECT count(*) FROM live_activities WHERE user_id=$1 AND NOT ended AND expires_at>now()",
-            [owner.userId],
+            "SELECT count(*) FROM live_activities WHERE user_id=$1 AND delivery_kind=$2 AND NOT ended AND expires_at>now()",
+            [owner.userId, kind],
           )
         ).rows[0];
-        if (Number(count?.count) >= 8) fail("Too many active Live Activities");
+        if (Number(count?.count) >= (kind === "notification" ? 64 : 8))
+          fail("Too many active push subscriptions");
         await db.query(
-          `INSERT INTO live_activities (id,user_id,org_id,session_id,device_id,request,expires_at)
-          VALUES ($1,$2,$3,$4,$5,$6,now()+interval '4 hours')`,
+          `INSERT INTO live_activities (id,user_id,org_id,session_id,device_id,request,delivery_kind,notification_source,expires_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+($9*interval '1 hour'))`,
           [
             request.activityId,
             owner.userId,
@@ -152,18 +180,65 @@ export function createLiveActivityService(options: {
             owner.sessionId,
             device.rows[0]!.id,
             JSON.stringify(boundRequest),
+            kind,
+            notificationSource,
+            kind === "notification" ? 24 : 4,
           ],
         );
       }
     });
   }
 
-  async function remove(owner: Owner, id: string) {
+  function register(owner: Owner, request: RegisterLiveActivity) {
+    return registerDestination(owner, request, "liveactivity");
+  }
+
+  function registerNotification(owner: Owner, request: RegisterTurnNotification) {
+    if (!options.sendNotification) fail("Completion push is not configured");
+    return registerDestination(
+      owner,
+      {
+        activityId: request.notificationId,
+        deviceJkt: request.deviceJkt,
+        revision: request.revision,
+        token: request.token,
+        environment: request.environment,
+        sources: [request.source],
+      },
+      "notification",
+    );
+  }
+
+  async function remove(
+    owner: Owner,
+    id: string,
+    kind: ActivityRow["delivery_kind"] = "liveactivity",
+  ) {
     // Keep a tombstone until expiry; a late registration cannot resurrect a dismissed activity.
     await pool.query(
       `UPDATE live_activities SET ended=true, request=jsonb_set(request,'{token}','""')
-      WHERE id=$1 AND user_id=$2 AND org_id=$3 AND session_id=$4`,
-      [id, owner.userId, owner.orgId, owner.sessionId],
+      WHERE id=$1 AND user_id=$2 AND org_id=$3 AND session_id=$4 AND delivery_kind=$5`,
+      [id, owner.userId, owner.orgId, owner.sessionId, kind],
+    );
+  }
+
+  // Logout/forget need one bounded revocation request, independent of how many
+  // exact turns the phone watched before suspension.
+  async function removeNotifications(owner: Owner, request: RemoveTurnNotifications) {
+    await pool.query(
+      `UPDATE live_activities a SET ended=true,request=jsonb_set(request,'{token}','""')
+      WHERE a.delivery_kind='notification' AND a.user_id=$1 AND a.org_id=$2 AND a.session_id=$3
+      AND a.device_id IN (SELECT d.id FROM devices d JOIN device_account_sessions s ON s.device_id=d.id
+        WHERE d.user_id=$1 AND d.jkt=$4 AND s.user_id=$1 AND s.session_id=$3)
+      AND ($5::text IS NULL OR a.request->'sources' @> $6::jsonb)`,
+      [
+        owner.userId,
+        owner.orgId,
+        owner.sessionId,
+        request.deviceJkt,
+        request.hostId ?? null,
+        JSON.stringify(request.hostId ? [{ hostId: request.hostId }] : []),
+      ],
     );
   }
 
@@ -251,6 +326,50 @@ export function createLiveActivityService(options: {
       }
       const now = Math.floor(Date.now() / 1000);
       const expired = activity.expires_at.getTime() <= Date.now();
+      if (activity.delivery_kind === "notification") {
+        // Missing/offline reports are never invented completions. Keep the
+        // one-shot watch durable while the phone is suspended, up to its TTL.
+        const source = activity.request.sources[0]!;
+        const host = rows.rows.find((row) => row.id === source.hostId)!;
+        const fresh = host.updated_at && Date.now() - host.updated_at.getTime() < 90000;
+        const turn = fresh
+          ? host.snapshot?.turns.find((turn) => key(turn) === key(source))
+          : undefined;
+        if (expired || turn?.state === "stopped") {
+          await stop();
+          return;
+        }
+        if (!turn || (turn.state !== "ready" && turn.state !== "failed")) {
+          await db.query(
+            "UPDATE live_activities SET dirty=false,next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
+            [id],
+          );
+          return;
+        }
+        const result = await options.sendNotification?.({
+          environment: activity.request.environment,
+          token: activity.request.token,
+          notificationId: id,
+          threadId: source.displayId,
+          turnId: source.turnId,
+          result: turn.state === "ready" ? "completed" : "failed",
+        });
+        if (
+          result === "delivered" ||
+          result === "invalid-token" ||
+          result === "rejected" ||
+          activity.attempts >= 7
+        ) {
+          await stop();
+        } else {
+          const attempts = activity.attempts + 1;
+          await db.query(
+            "UPDATE live_activities SET attempts=$2,next_attempt_at=now()+($3*interval '1 second') WHERE id=$1",
+            [id, attempts, Math.min(300, 2 ** attempts)],
+          );
+        }
+        return;
+      }
       const conversations = activity.request.sources.map((source) => {
         const host = rows.rows.find((row) => row.id === source.hostId)!;
         const fresh = host.updated_at && Date.now() - host.updated_at.getTime() < 90000;
@@ -360,6 +479,6 @@ export function createLiveActivityService(options: {
     });
     return flushing;
   }
-  return { register, remove, watches, publish, flush };
+  return { register, registerNotification, remove, removeNotifications, watches, publish, flush };
 }
 export type LiveActivityService = ReturnType<typeof createLiveActivityService>;

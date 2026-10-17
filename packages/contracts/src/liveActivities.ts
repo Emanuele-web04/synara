@@ -38,3 +38,21 @@ export const LiveActivityHostSnapshot = Schema.Struct({
   ).check(Schema.isMaxLength(256)),
 });
 export type LiveActivityHostSnapshot = typeof LiveActivityHostSnapshot.Type;
+
+// Ordinary alert tokens are distinct from ActivityKit tokens. A subscription
+// owns one exact turn and survives phone suspension until delivery or expiry.
+export const RegisterTurnNotification = Schema.Struct({
+  notificationId: Schema.String.check(Schema.isUUID(4)),
+  deviceJkt: boundedTrimmedNonEmptyString(100),
+  revision: NonNegativeInt,
+  token: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64,512}$/)),
+  environment: Schema.Literals(["sandbox", "production"]),
+  source: LiveActivitySource,
+});
+export type RegisterTurnNotification = typeof RegisterTurnNotification.Type;
+
+export const RemoveTurnNotifications = Schema.Struct({
+  deviceJkt: boundedTrimmedNonEmptyString(100),
+  hostId: Schema.optional(Schema.String.check(Schema.isUUID(4))),
+});
+export type RemoveTurnNotifications = typeof RemoveTurnNotifications.Type;
