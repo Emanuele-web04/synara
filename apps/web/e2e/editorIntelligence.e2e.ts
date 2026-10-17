@@ -71,13 +71,29 @@ async function seed(page: Page) {
       { timeout: 20_000 },
     )
     .toBe(true);
-  // The welcome tour suppresses the separate import announcement for new users.
-  // Dismiss the real tour rather than waiting for an intentionally absent dialog.
+  // Startup surfaces show once per server home and in sequence (welcome tour,
+  // import announcement, feature tour); dismiss whichever appears so no modal
+  // blocks the journey. Toasts also carry the dialog role and may arrive any time.
   const welcome = page.getByRole("dialog", { name: "Welcome to Synara", exact: true });
   const skipTour = welcome.getByRole("button", { name: "Skip setup", exact: true });
-  await expect(skipTour).toBeVisible();
-  await skipTour.click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await skipTour
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => skipTour.click())
+    .catch(() => undefined);
+  for (let round = 0; round < 6; round++) {
+    let dismissed = false;
+    for (const label of ["Not now", "Skip tour", "Dismiss toast"]) {
+      for (const button of await page.getByRole("button", { name: label, exact: true }).all()) {
+        if (await button.isVisible().catch(() => false)) {
+          await button.click({ timeout: 2_000 }).catch(() => undefined);
+          dismissed = true;
+        }
+      }
+    }
+    if (!dismissed) break;
+    await page.waitForTimeout(400);
+  }
+  await expect(welcome).toHaveCount(0);
   await page
     .evaluate(async (cwd) => {
       const modulePath = "/src/nativeApi.ts";
@@ -186,8 +202,8 @@ test("native editor intelligence, guarded persistence, navigation, and debugging
   await page.keyboard.press("Control+End");
   await page.keyboard.press("Enter");
   await page.keyboard.insertText('const broken: number = "type error";\n"hello".toUppercase();\n');
-  await expect(page.getByRole("button", { name: "Show problems in file" })).toBeVisible();
-  await page.getByRole("button", { name: "Show problems in file" }).click();
+  await expect(page.getByRole("button", { name: "Show problems", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Show problems", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("number");
   await capture(page, info, "after-real-diagnostics");
   await page.keyboard.press("Escape");
@@ -212,14 +228,14 @@ test("native editor intelligence, guarded persistence, navigation, and debugging
   const panel = page.getByRole("region", { name: "Debug session" });
   await expect(panel).toContainText("Paused", { timeout: 60_000 });
   await capture(page, info, "after-real-debugging");
-  await panel.getByRole("button", { name: "Step into (F11)", exact: true }).click();
+  await panel.getByRole("button", { name: /^Step into/ }).click();
   await expect(panel).toContainText("increment");
   await panel.getByRole("radio", { name: "Watch", exact: true }).click();
   await panel.getByRole("textbox", { name: "Watch expression" }).fill("value + 1");
   await panel.getByRole("button", { name: "Add", exact: true }).click();
   await expect(panel).toContainText("42");
   await capture(page, info, "after-real-watch-expression");
-  await panel.getByRole("button", { name: "Stop debugging (Shift+F5)", exact: true }).click();
+  await panel.getByRole("button", { name: /^Stop debugging/ }).click();
   await expect(panel).toContainText("ended");
   await capture(page, info, "after-debug-cleanup");
   expect(errors).toEqual([]);
@@ -232,7 +248,7 @@ test("renames an exported symbol after editing the dialog name", async ({ page }
   await open(page, "greeting.ts");
   await position(page, "greet", 1);
   await page.keyboard.press("F2");
-  const name = page.getByRole("textbox", { name: "New symbol name", exact: true });
+  const name = page.getByRole("textbox", { name: "Rename symbol", exact: true });
   await expect(name).toHaveValue("greet");
   await page.keyboard.press("End");
   await page.keyboard.press("Backspace");
