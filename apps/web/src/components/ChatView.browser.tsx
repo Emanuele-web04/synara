@@ -1375,6 +1375,7 @@ function installDeterministicSendNativeApi(options?: {
   rejectTurnStart?: boolean;
   beforeWorktreeCreation?: () => Promise<void>;
   beforeTurnStart?: () => Promise<void>;
+  beforeTerminalOpen?: () => Promise<void>;
   projectThreadCommands?: boolean;
 }): () => void {
   const previousNativeApi = window.nativeApi;
@@ -1411,6 +1412,7 @@ function installDeterministicSendNativeApi(options?: {
             ...input,
           };
           wsRequests.push(request);
+          await options?.beforeTerminalOpen?.();
           return resolveWsRpc(request) as Awaited<ReturnType<typeof wsNativeApi.terminal.open>>;
         },
         write: async (input: Parameters<typeof wsNativeApi.terminal.write>[0]) => {
@@ -2338,6 +2340,9 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentCancelBarrier = null;
     localStorage.clear();
     acknowledgeStartupAnnouncementsForTest(createBaseServerConfig());
+    // Clearing storage does not reset the live dock store. A prior terminal pane
+    // can otherwise steal focus or squeeze a later test's chat header.
+    useRightDockStore.setState({ dockStateByThreadId: {} });
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useThreadDispatchStore.setState({ threads: {} });
     useRetryEffortVariantStore.setState({ groups: {} });
@@ -8635,9 +8640,37 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   it.each([
-    { picker: "model", label: "Change model and reasoning" },
-    { picker: "permissions", label: "Full access" },
-  ])("preserves the $picker picker on first window activation", async ({ label }) => {
+    { picker: "model", label: "Change model and reasoning", terminalDock: false },
+    { picker: "permissions", label: "Full access", terminalDock: false },
+    {
+      picker: "model with a restored terminal dock",
+      label: "Change model and reasoning",
+      terminalDock: true,
+    },
+    {
+      picker: "permissions with a restored terminal dock",
+      label: "Full access",
+      terminalDock: true,
+    },
+  ])("preserves the $picker picker on first window activation", async ({ label, terminalDock }) => {
+    let releaseTerminalOpen = () => {};
+    let terminalOpenStarted = false;
+    let terminalOpenSettled = false;
+    const terminalOpenBarrier = new Promise<void>((resolve) => {
+      releaseTerminalOpen = resolve;
+    });
+    const restoreNativeApi = terminalDock
+      ? installDeterministicSendNativeApi({
+          beforeTerminalOpen: async () => {
+            terminalOpenStarted = true;
+            await terminalOpenBarrier;
+            terminalOpenSettled = true;
+          },
+        })
+      : () => {};
+    if (terminalDock) {
+      useRightDockStore.getState().openPane(THREAD_ID, { kind: "terminal" });
+    }
     // Vitest hosts the real app in a same-origin frame. Give its parent actual
     // focus before mounting, so the app must defer its initial composer focus.
     // No focus result, event, requestAnimationFrame, or production callback is mocked.
@@ -8663,6 +8696,9 @@ describe("ChatView transcript geometry (full app)", () => {
       const editor = await waitForComposerEditor();
       const trigger = page.getByRole("button", { name: label, exact: true });
       await expect.element(trigger).toBeVisible();
+      if (terminalDock) {
+        await vi.waitFor(() => expect(terminalOpenStarted).toBe(true));
+      }
       await waitForLayout();
       expect(document.hasFocus()).toBe(false);
       expect(document.activeElement).not.toBe(editor);
@@ -8670,18 +8706,27 @@ describe("ChatView transcript geometry (full app)", () => {
       await trigger.click();
       await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
       await expect.poll(() => document.hasFocus()).toBe(true);
+      if (terminalDock) {
+        // The terminal starts in the background, then finishes opening only
+        // after the activation click has chosen the picker instead.
+        releaseTerminalOpen();
+        await vi.waitFor(() => expect(terminalOpenSettled).toBe(true));
+      }
       // Let both the activation frame and subsequent popup work settle; a
       // fleeting visible popup during its close transition cannot satisfy this.
       for (let frame = 0; frame < 4; frame += 1) {
         await waitForLayout();
         await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
         expect(document.activeElement).not.toBe(editor);
+        if (terminalDock) expect(document.activeElement?.closest(".xterm")).toBeNull();
       }
       await expect.element(page.getByRole("menu")).toBeVisible();
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
     } finally {
+      releaseTerminalOpen();
       await mounted?.cleanup();
+      restoreNativeApi();
       if (originalTabIndex === null) parentBody.removeAttribute("tabindex");
       else parentBody.setAttribute("tabindex", originalTabIndex);
     }

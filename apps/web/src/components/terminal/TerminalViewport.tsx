@@ -269,9 +269,9 @@ export default function TerminalViewport({
   }, [runtimeCwdReady, runtimeKey, runtimeViewState]);
 
   useEffect(() => {
-    if (!autoFocus || !runtimeCwdReady) return;
+    if (!autoFocus || !isVisible || !runtimeCwdReady || !document.hasFocus()) return;
     terminalRuntimeRegistry.focus(runtimeKey);
-  }, [autoFocus, focusRequestId, runtimeCwdReady, runtimeKey]);
+  }, [autoFocus, focusRequestId, isVisible, runtimeCwdReady, runtimeKey]);
 
   useEffect(() => {
     const mount = containerRef.current;
