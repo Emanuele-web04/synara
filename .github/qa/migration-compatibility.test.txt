@@ -1,0 +1,141 @@
+import { assert, it } from "@effect/vitest";
+import { Effect } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { migrationEntries, runMigrations } from "../Migrations.ts";
+import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import optionalConcurrency from "./141_ExternalMcpOptionalConcurrency.ts";
+import taskFollowups from "./142_ExternalMcpTaskFollowups.ts";
+import agentProfiles from "./143_ExternalAgentProfiles.ts";
+import capabilityEvidence from "./144_CapabilityEvidence.ts";
+import agentLifecycle from "./145_ExternalAgentLifecycle.ts";
+import evidenceWithdrawal from "./146_CapabilityEvidenceWithdrawal.ts";
+import revisionMembership from "./147_ExternalAgentRevisionMembership.ts";
+import titleRefresh from "./148_ThreadTitleRefresh.ts";
+
+const checkerMigrations = [
+  [141, "ExternalMcpOptionalConcurrency", optionalConcurrency],
+  [142, "ExternalMcpTaskFollowups", taskFollowups],
+  [143, "ExternalAgentProfiles", agentProfiles],
+  [144, "CapabilityEvidence", capabilityEvidence],
+  [145, "ExternalAgentLifecycle", agentLifecycle],
+  [146, "CapabilityEvidenceWithdrawal", evidenceWithdrawal],
+  [147, "ExternalAgentRevisionMembership", revisionMembership],
+  [148, "ThreadTitleRefresh", titleRefresh],
+] as const;
+
+const releasedIdentities = [
+  [135, "ProjectionMessageTurnActivityIndex"],
+  [136, "AccountUsageSync"],
+  [137, "AccountUsageSyncIdentity"],
+  [138, "RemoteDeviceTrust"],
+  [139, "RemoteConnectionPreferences"],
+  [140, "RemoteAccessControls"],
+];
+
+it.effect("appends checker features without replaying shipped Remote migrations or state", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 140 });
+    const trackerBefore = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+    yield* sql`UPDATE account_usage_sync SET watermark_minute = '2026-10-16T12:00:00Z',
+      account_identity = 'https://account.example.invalid#organization' WHERE id = 1`;
+    yield* sql`INSERT INTO remote_access_state
+      (environment_id, root_fingerprint, enabled, allow_connections)
+      VALUES ('environment', 'root-fingerprint', 1, 0)`;
+    const accountBefore = yield* sql`SELECT * FROM account_usage_sync`;
+    const accessBefore = yield* sql`SELECT * FROM remote_access_state`;
+
+    assert.deepStrictEqual(
+      yield* runMigrations(),
+      checkerMigrations.map(([id, name]) => [id, name]),
+    );
+    assert.deepStrictEqual(
+      yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 140 ORDER BY migration_id`,
+      trackerBefore,
+    );
+    assert.deepStrictEqual(yield* sql`SELECT * FROM account_usage_sync`, accountBefore);
+    assert.deepStrictEqual(yield* sql`SELECT * FROM remote_access_state`, accessBefore);
+    assert.deepStrictEqual(
+      migrationEntries.filter(([id]) => id >= 135 && id <= 140).map(([id, name]) => [id, name]),
+      releasedIdentities,
+    );
+    assert.deepStrictEqual(yield* runMigrations(), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+);
+
+it.effect("preserves data created by the historical checker while repairing its unshipped IDs", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`PRAGMA foreign_keys = ON`;
+    yield* runMigrations({ toMigrationInclusive: 134 });
+    // Recreate the old checker with its exact unchanged schema modules, not
+    // just forged tracker rows: it really applied these eight migrations at
+    // 135–142 before the published 135–140 identities were reconciled.
+    for (const [id, name, migration] of checkerMigrations) {
+      yield* migration;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id - 6}, ${name})`;
+    }
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES ('checker-project', 'Preserved project', '/workspace/checker', '[]', 'created', 'updated')`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, manual_title_pinned, title_refresh_mode,
+        pending_suggested_title, created_at, updated_at)
+      VALUES ('checker-thread', 'checker-project', 'Pinned title', 1, 'suggested',
+        'Pending title', 'created', 'updated')`;
+    yield* sql`INSERT INTO external_mcp_integrations
+      (integration_id, name, audience, client_kind, credential_hash, capabilities_json,
+        created_at, expires_at, rate_limit_per_minute, concurrency_limit)
+      VALUES ('checker-client', 'Preserved client', 'synara.external-mcp', 'other',
+        'synthetic-credential-hash', '["tasks:create"]', 'created', 'expires', 60, NULL)`;
+    yield* sql`INSERT INTO external_mcp_integration_projects VALUES ('checker-client', 'checker-project')`;
+    yield* sql`INSERT INTO external_mcp_operations
+      (operation_id, integration_id, request_id, fingerprint, requested_count,
+        plan_json, status, created_at, updated_at)
+      VALUES ('checker-operation', 'checker-client', 'create-request', 'create-fingerprint',
+        1, '{}', 'completed', 'created', 'updated')`;
+    yield* sql`INSERT INTO external_mcp_task_followups
+      (run_id, integration_id, request_id, fingerprint, task_operation_id, thread_id,
+        message_id, command_id, mode, status, turn_id, terminal_state, created_at)
+      VALUES ('checker-run', 'checker-client', 'followup-request', 'followup-fingerprint',
+        'checker-operation', 'checker-thread', 'message', 'command', 'queue',
+        'accepted', 'accepted-turn', 'completed', 'created')`;
+    yield* sql`INSERT INTO external_agent_profile_revisions
+      (revision_id, content_hash, payload, created_at) VALUES ('revision', 'content-hash', '{}', 'created')`;
+    yield* sql`INSERT INTO external_agent_profiles
+      (profile_id, name, current_revision_id, status, created_at, updated_at)
+      VALUES ('profile', 'Quarantined profile', 'revision', 'quarantined', 'created', 'updated')`;
+    yield* sql`INSERT INTO external_agent_profile_revision_memberships VALUES ('profile', 'revision')`;
+    const before = {
+      threads: yield* sql`SELECT * FROM projection_threads`,
+      clients: yield* sql`SELECT * FROM external_mcp_integrations`,
+      grants: yield* sql`SELECT * FROM external_mcp_integration_projects`,
+      operations: yield* sql`SELECT * FROM external_mcp_operations`,
+      followups: yield* sql`SELECT * FROM external_mcp_task_followups`,
+      profiles: yield* sql`SELECT * FROM external_agent_profiles`,
+      revisions: yield* sql`SELECT * FROM external_agent_profile_revisions`,
+      memberships: yield* sql`SELECT * FROM external_agent_profile_revision_memberships`,
+    };
+
+    assert.deepStrictEqual(
+      yield* runMigrations(),
+      [...releasedIdentities, ...checkerMigrations.map(([id, name]) => [id, name])],
+    );
+    assert.deepStrictEqual(
+      {
+        threads: yield* sql`SELECT * FROM projection_threads`,
+        clients: yield* sql`SELECT * FROM external_mcp_integrations`,
+        grants: yield* sql`SELECT * FROM external_mcp_integration_projects`,
+        operations: yield* sql`SELECT * FROM external_mcp_operations`,
+        followups: yield* sql`SELECT * FROM external_mcp_task_followups`,
+        profiles: yield* sql`SELECT * FROM external_agent_profiles`,
+        revisions: yield* sql`SELECT * FROM external_agent_profile_revisions`,
+        memberships: yield* sql`SELECT * FROM external_agent_profile_revision_memberships`,
+      },
+      before,
+    );
+    assert.deepStrictEqual(yield* sql`PRAGMA foreign_key_check`, []);
+    assert.deepStrictEqual(yield* runMigrations(), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+);
