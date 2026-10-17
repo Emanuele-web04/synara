@@ -124,7 +124,9 @@ describe("composerDraftStore browser annotations", () => {
     if (queued.kind !== "chat") {
       throw new Error("Expected chat turn");
     }
-    queued.browserAnnotations = [makeBrowserAnnotation({ id: "queued", ordinal: 4 })];
+    queued.browserAnnotations = [
+      { ...makeBrowserAnnotation({ id: "queued", ordinal: 4 }), imageId: "image-queued" },
+    ];
     store.addBrowserAnnotation(threadId, live);
     store.enqueueQueuedTurn(threadId, queued);
 
@@ -135,7 +137,7 @@ describe("composerDraftStore browser annotations", () => {
     ]);
     expect(persisted?.queuedTurns?.[0]).toMatchObject({
       kind: "chat",
-      browserAnnotations: [{ id: "queued", ordinal: 4 }],
+      browserAnnotations: [{ id: "queued", ordinal: 4, imageId: "image-queued" }],
     });
 
     const hydrated = toHydratedThreadDraft(threadId, persisted!);
@@ -144,7 +146,7 @@ describe("composerDraftStore browser annotations", () => {
     ]);
     expect(hydrated.queuedTurns[0]).toMatchObject({
       kind: "chat",
-      browserAnnotations: [{ id: "queued", ordinal: 4 }],
+      browserAnnotations: [{ id: "queued", ordinal: 4, imageId: "image-queued" }],
     });
   });
 });
