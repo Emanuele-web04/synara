@@ -1,0 +1,59 @@
+name: PR1878 source-pinned real app persistence and startup acceptance
+on:
+  push:
+    branches: [qa/pr1878-live-final-head-20261017]
+permissions:
+  contents: read
+jobs:
+  real-app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      SOURCE_SHA: c6312c042ddab5e1f2ae9587d50264511dfecb13
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: Emanuele-web04/synara
+          ref: 08b3bf74ce29824d24516e3cd4f868314db717fc
+          path: qa-final-driver
+          sparse-checkout: .github/qa
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: Emanuele-web04/synara
+          ref: 5a59e58e05bc5d5a4628d4571c78557850880bcc
+          path: qa-original-driver
+          sparse-checkout: .github/qa
+          persist-credentials: false
+      - name: Preserve signed-off exact source and hash-pinned journey drivers
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/pr1878-drivers" "$RUNNER_TEMP/pr1878-live"
+          cp qa-final-driver/.github/qa/pr1878-live-final.mjs "$RUNNER_TEMP/pr1878-drivers/"
+          cp qa-original-driver/.github/qa/pr1878-live.mjs "$RUNNER_TEMP/pr1878-drivers/"
+          echo "$SOURCE_SHA" > "$RUNNER_TEMP/pr1878-live/source.txt"
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: full
+      - name: Build actual server and web application
+        run: bun run build --filter=@synara/cli
+      - name: Install real Chromium and video runtime
+        run: cd apps/web && ./node_modules/.bin/playwright install --with-deps chromium ffmpeg
+      - name: Real HTTP, UI, restart and SQLite project acceptance
+        shell: bash
+        run: |
+          QA_REPO="$PWD" QA_OUT="$RUNNER_TEMP/pr1878-live" node "$RUNNER_TEMP/pr1878-drivers/pr1878-live-final.mjs"
+      - name: Upload real UI and persistence evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-live-real-app-c6312c04
+          path: ${{ runner.temp }}/pr1878-live/
+          if-no-files-found: warn
+          retention-days: 14
