@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Effect } from "effect";
 
 import type { ProviderKind } from "@synara/contracts";
@@ -732,6 +732,28 @@ describe("agent gateway device tools for end-to-end testing", () => {
     expect(saved).toHaveLength(1);
     expect(backend.callsOfKind("screenshot")).toHaveLength(1);
     expect(result.content.some((entry) => entry.type === "image")).toBe(true);
+  });
+});
+
+describe("device tool turn ownership", () => {
+  it("keeps a whitespace-padded device boot leased until its turn ends", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const boot = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (entry) => entry.definition.name === "device_boot",
+      )!;
+      const result = await Effect.runPromise(boot.handler({ udid: ` ${DEVICE} ` }, makeContext()));
+      expect(result.isError).not.toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      manager.endAgentTurn(THREAD, "turn-a");
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: DEVICE }]),
+      );
+    } finally {
+      await manager.dispose();
+    }
   });
 });
 

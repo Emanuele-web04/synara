@@ -1462,6 +1462,8 @@ describe("ProviderRuntimeIngestion", () => {
         provider: "codex",
         threadId,
         turnId,
+        lifecycleGeneration: "device-generation",
+        payload: {},
         createdAt: new Date().toISOString(),
       });
       await harness.drain();
@@ -1487,6 +1489,24 @@ describe("ProviderRuntimeIngestion", () => {
       )!;
       const result = await Effect.runPromise(boot.handler({ udid: "FAKE-0001" }, context));
       expect(result.isError).not.toBe(true);
+      if (terminal.type === "session.exited" || terminal.type === "session.state.changed") {
+        const overlappingTurnId = asTurnId("device-overlapping-turn");
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("device-overlapping-started"),
+          provider: "codex",
+          threadId,
+          turnId: overlappingTurnId,
+          lifecycleGeneration: "device-generation",
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await manager.withAgentActivity(threadId, async () => {}, {
+          udid: "FAKE-0001",
+          turnId: overlappingTurnId,
+        });
+      }
       await new Promise((resolve) => setTimeout(resolve, 40));
       expect(backend.callsOfKind("shutdown")).toHaveLength(0);
       harness.emit({
@@ -1495,6 +1515,7 @@ describe("ProviderRuntimeIngestion", () => {
         provider: "codex",
         threadId,
         turnId,
+        lifecycleGeneration: "device-generation",
         createdAt: new Date().toISOString(),
       });
       await harness.drain();
@@ -1506,6 +1527,189 @@ describe("ProviderRuntimeIngestion", () => {
       await manager.dispose();
     }
   });
+
+  it("releases only the exited generation's simulator turns and preserves newer work", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const harness = await createHarness({ deviceManager: manager });
+      const threadId = asThreadId("thread-1");
+      for (const [turnId, generation, udid] of [
+        ["device-old-a", "old-generation", "FAKE-0001"],
+        ["device-old-b", "old-generation", "FAKE-0001"],
+        ["device-new", "new-generation", "FAKE-0002"],
+      ] as const) {
+        if (generation === "new-generation") {
+          harness.emit({
+            type: "turn.completed",
+            eventId: asEventId("device-old-a-completed"),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId("device-old-a"),
+            lifecycleGeneration: "old-generation",
+            payload: { state: "completed" },
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        }
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId(`${turnId}-started`),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId(turnId),
+          lifecycleGeneration: generation,
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await manager.withAgentActivity(threadId, () => manager.boot(udid), { udid, turnId });
+      }
+      expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe("device-new");
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("device-old-session-exited"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: "old-generation",
+        payload: { exitKind: "error" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: "FAKE-0001" }]),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+      await manager.withAgentActivity(threadId, async () => {}, {
+        udid: "FAKE-0002",
+        turnId: "device-new-unobserved",
+      });
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("device-new-session-exited"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: "new-generation",
+        payload: { exitKind: "graceful" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("device-new-unobserved-completed"),
+        provider: "codex",
+        threadId,
+        turnId: asTurnId("device-new-unobserved"),
+        lifecycleGeneration: "new-generation",
+        payload: { state: "completed" },
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([
+          "FAKE-0001",
+          "FAKE-0002",
+        ]),
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    {
+      type: "runtime.error",
+      payload: { message: "Old turn failed" },
+      generation: "shared-generation",
+    },
+    { type: "session.exited", payload: { exitKind: "error" }, generation: undefined },
+  ])(
+    "preserves newer simulator turns after delayed $type (generation $generation)",
+    async (terminal) => {
+      const backend = new FakeDeviceBackend();
+      const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+      try {
+        const harness = await createHarness({ deviceManager: manager });
+        const threadId = asThreadId("thread-1");
+        const generation = terminal.generation;
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("device-earlier-started"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("device-earlier"),
+          lifecycleGeneration: generation,
+          payload: {},
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("device-earlier-completed"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("device-earlier"),
+          lifecycleGeneration: generation,
+          payload: { state: "completed" },
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        for (const turnId of ["device-current-a", "device-current-b"]) {
+          harness.emit({
+            type: "turn.started",
+            eventId: asEventId(`${turnId}-started`),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId(turnId),
+            lifecycleGeneration: generation,
+            payload: {},
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+          await manager.withAgentActivity(threadId, () => manager.boot("FAKE-0001"), {
+            udid: "FAKE-0001",
+            turnId,
+          });
+        }
+        expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe(
+          "device-current-a",
+        );
+        harness.emit({
+          type: terminal.type,
+          payload: terminal.payload,
+          eventId: asEventId("device-earlier-delayed-error"),
+          provider: "codex",
+          threadId,
+          turnId: asTurnId("device-earlier"),
+          lifecycleGeneration: generation,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+        harness.emit({
+          type: "session.exited",
+          payload: { exitKind: "graceful" },
+          eventId: asEventId("device-current-session-exited"),
+          provider: "codex",
+          threadId,
+          lifecycleGeneration: generation,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await vi.waitFor(() =>
+          expect(backend.callsOfKind("shutdown")).toEqual([
+            { kind: "shutdown", udid: "FAKE-0001" },
+          ]),
+        );
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
 
   it.each([
     { type: "turn.completed", payload: { state: "completed" } },

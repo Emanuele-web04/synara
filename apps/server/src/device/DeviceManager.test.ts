@@ -944,19 +944,37 @@ describe("DeviceManager lifecycle and agent activity", () => {
     expect(availability).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the badge lit until the last overlapping agent action finishes", async () => {
-    const { manager } = makeManager();
-    let innerFinished = false;
-
-    await manager.withAgentActivity(THREAD_A, async () => {
-      await manager.withAgentActivity(THREAD_A, async () => {
-        innerFinished = true;
-      });
-      expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(true);
-    });
-
-    expect(innerFinished).toBe(true);
-    expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(false);
+  it("publishes the badge until the last overlapping agent action finishes", async () => {
+    const { manager, events } = makeManager();
+    const entered = [deferred(), deferred()];
+    const finish = [deferred(), deferred()];
+    const actions = entered.map((started, index) =>
+      manager.withAgentActivity(
+        THREAD_A,
+        async () => {
+          started.resolve();
+          await finish[index]!.promise;
+        },
+        { udid: DEVICE_A, turnId: `overlapping-${index}` },
+      ),
+    );
+    try {
+      await Promise.all(entered.map((started) => started.promise));
+      const badges = () =>
+        events.flatMap((event) =>
+          event.type === "device.thread-state" ? [event.state.agentActive] : [],
+        );
+      expect(badges()).toEqual([true]);
+      finish[0]!.resolve();
+      await actions[0];
+      expect(badges()).toEqual([true]);
+      finish[1]!.resolve();
+      await actions[1];
+      expect(badges()).toEqual([true, false]);
+    } finally {
+      finish.forEach((entry) => entry.resolve());
+      await Promise.all(actions);
+    }
   });
 });
 

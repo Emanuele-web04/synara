@@ -473,7 +473,7 @@ export function makeAgentGatewayDeviceTools(
                 return run(args, context, signal);
               },
               typeof args.udid === "string"
-                ? { udid: args.udid, turnId: context.callerTurnId }
+                ? { udid: readUdid(args), turnId: context.callerTurnId }
                 : undefined,
             );
             return typeof value === "object" && value !== null && PREBUILT_RESULTS.has(value)

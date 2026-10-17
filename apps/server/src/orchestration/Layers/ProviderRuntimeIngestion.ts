@@ -835,14 +835,14 @@ const make = Effect.gen(function* () {
   // Throttle map for the durable last-runtime-activity timestamp: one row
   // write per thread per ~15s of observed activity instead of per event.
   const lastActivityFlushByThreadRef = yield* Ref.make(new Map<string, number>());
-  const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
-    new Map(),
-  );
+  const outstandingTurnIdsByThreadRef = yield* Ref.make<
+    ReadonlyMap<ThreadId, ReadonlyMap<TurnId, string | undefined>>
+  >(new Map());
 
-  const rememberOutstandingTurn = (threadId: ThreadId, turnId: TurnId) =>
+  const rememberOutstandingTurn = (threadId: ThreadId, turnId: TurnId, generation?: string) =>
     Ref.update(outstandingTurnIdsByThreadRef, (state) => {
       const next = new Map(state);
-      next.set(threadId, new Set([...(next.get(threadId) ?? []), turnId]));
+      next.set(threadId, new Map(next.get(threadId)).set(turnId, generation));
       return next;
     });
   const forgetOutstandingTurn = (threadId: ThreadId, turnId: TurnId) =>
@@ -850,17 +850,24 @@ const make = Effect.gen(function* () {
       const current = state.get(threadId);
       if (!current?.has(turnId)) return state;
       const next = new Map(state);
-      const remaining = new Set(current);
+      const remaining = new Map(current);
       remaining.delete(turnId);
       if (remaining.size === 0) next.delete(threadId);
       else next.set(threadId, remaining);
       return next;
     });
-  const clearOutstandingTurns = (threadId: ThreadId) =>
+  const clearOutstandingTurns = (threadId: ThreadId, generation?: string) =>
     Ref.update(outstandingTurnIdsByThreadRef, (state) => {
-      if (!state.has(threadId)) return state;
+      const current = state.get(threadId);
+      if (!current) return state;
       const next = new Map(state);
-      next.delete(threadId);
+      const remaining = new Map(
+        [...current].filter(
+          ([, heldGeneration]) => generation !== undefined && heldGeneration !== generation,
+        ),
+      );
+      if (remaining.size === 0) next.delete(threadId);
+      else next.set(threadId, remaining);
       return next;
     });
 
@@ -2655,7 +2662,7 @@ const make = Effect.gen(function* () {
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
       const rawEventTurnId = toTurnId(event.turnId);
       if (event.type === "turn.started" && rawEventTurnId) {
-        yield* rememberOutstandingTurn(thread.id, rawEventTurnId);
+        yield* rememberOutstandingTurn(thread.id, rawEventTurnId, event.lifecycleGeneration);
       }
       const hasAmbiguousTurns =
         isTerminalTurnEvent &&
@@ -2809,9 +2816,38 @@ const make = Effect.gen(function* () {
         );
       }
 
-      // Simulator leases follow the same exact-turn lifecycle, independent of desktop support.
+      const outstandingTurns = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id);
+      const generation = event.lifecycleGeneration;
+      // A runtime.error can end one turn while its session serves another. Only actual
+      // session teardown retires a generation; a delayed exact-turn exit cannot end newer work.
+      const sessionEndsObservedTurns =
+        computerSessionEnded &&
+        event.type !== "runtime.error" &&
+        (rawEventTurnId === undefined ||
+          activeTurnId === null ||
+          rawEventTurnId === activeTurnId ||
+          (generation !== undefined && outstandingTurns?.get(activeTurnId) !== generation));
+      // Never enumerate manager leases: a newer gateway turn can precede ingestion.
       if (Option.isSome(deviceService) && shouldReleaseTurnResources) {
-        deviceService.value.manager.endAgentTurn(thread.id, releasedTurnId);
+        const endedDeviceTurns = new Set<TurnId>();
+        if (
+          releasedTurnId !== undefined &&
+          (!computerSessionEnded ||
+            rawEventTurnId !== undefined ||
+            generation === undefined ||
+            outstandingTurns?.get(releasedTurnId) === generation)
+        )
+          endedDeviceTurns.add(releasedTurnId);
+        if (sessionEndsObservedTurns) {
+          for (const [turnId, heldGeneration] of outstandingTurns ?? []) {
+            if (generation === undefined || heldGeneration === generation)
+              endedDeviceTurns.add(turnId);
+          }
+        }
+        if (endedDeviceTurns.size === 0 && generation === undefined)
+          deviceService.value.manager.endAgentTurn(thread.id);
+        for (const turnId of endedDeviceTurns)
+          deviceService.value.manager.endAgentTurn(thread.id, turnId);
       }
 
       if (event.type === "session.started") {
@@ -3406,7 +3442,9 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
-        yield* clearOutstandingTurns(thread.id);
+        if (sessionEndsObservedTurns) yield* clearOutstandingTurns(thread.id, generation);
+        else if (rawEventTurnId !== undefined)
+          yield* forgetOutstandingTurn(thread.id, rawEventTurnId);
         const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
         if (exitedTurnId) {
           yield* markTurnFinalized(thread.id, exitedTurnId);

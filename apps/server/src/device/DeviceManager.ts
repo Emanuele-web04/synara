@@ -1289,11 +1289,13 @@ export class DeviceManager {
         attachment.agentDevicesByTurn.set(turnId, devices);
       }
     }
+    const becameActive = attachment.agentActiveCount === 0;
     attachment.agentActiveCount += 1;
     try {
       if (udid !== undefined) await this.waitForIdleShutdown(udid);
-      // Only the badge changes here; the device list the pane shows does not.
-      if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
+      // Capture the 0→1 edge before the wait: overlapping calls may already be counted.
+      if (becameActive && !this.disposed && this.threads.get(threadId) === attachment)
+        await this.publish(threadId, { reuseDiscovery: true });
       this.assertNotDisposed();
       return await action();
     } finally {
