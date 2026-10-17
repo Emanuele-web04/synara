@@ -2,7 +2,9 @@ import {
   BROWSER_ANNOTATION_MAX_COMMENT_LENGTH,
   BROWSER_ANNOTATION_MAX_DOCUMENT_KEY_LENGTH,
   BROWSER_ANNOTATION_MAX_FINGERPRINT_LENGTH,
+  BROWSER_ANNOTATION_IMAGE_MIME_TYPES,
   BROWSER_ANNOTATION_MAX_ID_LENGTH,
+  BROWSER_ANNOTATION_MAX_IMAGE_BYTES,
   BROWSER_ANNOTATION_MAX_MARKERS,
   BROWSER_ANNOTATION_MAX_NAME_LENGTH,
   BROWSER_ANNOTATION_MAX_PAGE_TITLE_LENGTH,
@@ -12,6 +14,7 @@ import {
   BROWSER_ANNOTATION_MAX_TEXT_LENGTH,
   BROWSER_ANNOTATION_MAX_URL_LENGTH,
   type BrowserAnnotation,
+  type BrowserAnnotationImageMimeType,
   type BrowserAnnotationMarker,
   type BrowserAnnotationSource,
   type BrowserAnnotationTheme,
@@ -33,6 +36,13 @@ export interface AnnotationGuestCommittedMessage {
   readonly documentToken: string;
   readonly sessionId: string;
   readonly annotation: BrowserAnnotation;
+  /** Raw image the user pasted or dropped; main re-encodes it before publishing. */
+  readonly image?: AnnotationGuestImage;
+}
+
+export interface AnnotationGuestImage {
+  readonly mimeType: BrowserAnnotationImageMimeType;
+  readonly bytes: Uint8Array;
 }
 
 export interface AnnotationGuestCancelledMessage {
@@ -276,6 +286,23 @@ function parseAnnotation(value: unknown): BrowserAnnotation | null {
   };
 }
 
+// Undefined means no image was attached; null means the image is invalid.
+function parseGuestImage(value: unknown): AnnotationGuestImage | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const mimeType = BROWSER_ANNOTATION_IMAGE_MIME_TYPES.find((type) => type === value.mimeType);
+  const bytes = value.bytes;
+  if (
+    !mimeType ||
+    !(bytes instanceof Uint8Array) ||
+    bytes.byteLength === 0 ||
+    bytes.byteLength > BROWSER_ANNOTATION_MAX_IMAGE_BYTES
+  ) {
+    return null;
+  }
+  return { mimeType, bytes };
+}
+
 export function parseAnnotationGuestMessage(value: unknown): AnnotationGuestMessage | null {
   if (!isRecord(value) || value.version !== BROWSER_ANNOTATION_PROTOCOL_VERSION) return null;
   const documentToken = parseIdentifier(value.documentToken);
@@ -289,13 +316,17 @@ export function parseAnnotationGuestMessage(value: unknown): AnnotationGuestMess
   if (value.kind === "committed") {
     const sessionId = parseIdentifier(value.sessionId);
     const annotation = parseAnnotation(value.annotation);
-    return sessionId && annotation
+    const image = parseGuestImage(value.image);
+    // An image that fails validation drops the whole commit, like any other
+    // malformed field, rather than silently publishing a partial annotation.
+    return sessionId && annotation && image !== null
       ? {
           version: BROWSER_ANNOTATION_PROTOCOL_VERSION,
           kind: "committed",
           documentToken,
           sessionId,
           annotation,
+          ...(image ? { image } : {}),
         }
       : null;
   }

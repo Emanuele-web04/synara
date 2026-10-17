@@ -308,6 +308,45 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       targetRect.y + targetRect.height / 2,
     );
     await insertNativeText("Make this action clearer");
+    // Paste through Electron's native clipboard path: a synthetic page event
+    // must never attach data to the isolated annotation field.
+    await electronApp.evaluate(
+      async ({ clipboard, nativeImage }, input) => {
+        const saved = clipboard
+          .availableFormats()
+          .map((format) => ({ format, bytes: clipboard.readBuffer(format) }));
+        try {
+          const fixture = (
+            globalThis as typeof globalThis & {
+              __synaraVisibleBrowserE2E: {
+                browserManager: {
+                  runtimes: Map<
+                    string,
+                    {
+                      webContents: {
+                        paste(): void;
+                      };
+                    }
+                  >;
+                };
+              };
+            }
+          ).__synaraVisibleBrowserE2E;
+          const runtime = fixture.browserManager.runtimes.get(`${input.threadId}:${input.tabId}`);
+          if (!runtime) throw new Error("Annotation runtime missing.");
+          const image = nativeImage.createFromDataURL(
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+          );
+          clipboard.writeImage(image);
+          runtime.webContents.paste();
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        } finally {
+          clipboard.clear();
+          for (const entry of saved) clipboard.writeBuffer(entry.format, entry.bytes);
+        }
+      },
+      { threadId, tabId },
+    );
     await pressNativeKey("Tab");
     await pressNativeKey("Enter");
 
@@ -325,6 +364,8 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       comment: "Make this action clearer",
       source: { url: site.appUrl },
     });
+    expect(committedEvent?.image?.mimeType).toBe("image/png");
+    expect(committedEvent?.image?.bytes.byteLength).toBeGreaterThan(0);
     expect(JSON.stringify(committedEvent)).not.toContain("private-annotation");
 
     await clickNativePoint(

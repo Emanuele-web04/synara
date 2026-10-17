@@ -151,6 +151,7 @@ async function dispatchQueuedComposerTurnOnce(
     ),
     queuedTurn.browserAnnotations,
     messageId,
+    queuedTurn.images.map((image) => image.id),
   );
   const outgoingTextSeed =
     messageText || (queuedTurn.images.length > 0 ? IMAGE_ONLY_BOOTSTRAP_PROMPT : "");

@@ -103,6 +103,38 @@ describe("browserAnnotations", () => {
     ]);
   });
 
+  it("links an annotation to the actual outgoing image order and omits local ids", () => {
+    const prompt = appendBrowserAnnotationsToPrompt(
+      "Fix this",
+      [makeAnnotation({ imageId: "screenshot" })],
+      MESSAGE_ID,
+      ["other", "screenshot"],
+    );
+    expect(prompt).not.toContain('"imageId"');
+    expect(extractTrailingBrowserAnnotations(prompt, MESSAGE_ID).annotations).toEqual([
+      makeAnnotation({ attachedImage: 2 }),
+    ]);
+    const removed = appendBrowserAnnotationsToPrompt(
+      "Fix this",
+      [makeAnnotation({ imageId: "screenshot", attachedImage: 9 })],
+      MESSAGE_ID,
+      ["other"],
+    );
+    expect(extractTrailingBrowserAnnotations(removed, MESSAGE_ID).annotations).toEqual([
+      makeAnnotation(),
+    ]);
+  });
+
+  it("continues to display annotation messages sent with the previous instruction", () => {
+    const prompt = appendBrowserAnnotationsToPrompt("Fix this", [makeAnnotation()], MESSAGE_ID);
+    const payload = JSON.parse(prompt.split("\n").at(-2)!);
+    payload.instruction = payload.instruction.split(" When attachedImage")[0];
+    const legacy = `Fix this\n\n<browser_annotations>\n${JSON.stringify(payload)}\n</browser_annotations>`;
+    expect(extractTrailingBrowserAnnotations(legacy, MESSAGE_ID).annotations).toEqual([
+      makeAnnotation(),
+    ]);
+  });
+
   it("extracts only the final serializer-shaped block when the visible prompt contains tags", () => {
     const visiblePrompt = [
       "Keep this literal example:",

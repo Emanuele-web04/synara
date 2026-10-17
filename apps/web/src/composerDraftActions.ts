@@ -1654,8 +1654,9 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
-    addBrowserAnnotation: (threadId, annotation) => {
+    addBrowserAnnotation: (threadId, annotation, image) => {
       if (threadId.length === 0) {
+        if (image) revokeObjectPreviewUrl(image.previewUrl);
         return false;
       }
       let inserted = false;
@@ -1663,12 +1664,15 @@ export const createComposerDraftStoreState =
         const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
         if (
           existing.browserAnnotations.length >= BROWSER_ANNOTATION_MAX_COUNT ||
-          existing.browserAnnotations.some((entry) => entry.id === annotation.id)
+          existing.browserAnnotations.some((entry) => entry.id === annotation.id) ||
+          (image &&
+            effectiveComposerAttachmentCount(existing) >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS)
         ) {
           return state;
         }
         const normalized = normalizeBrowserAnnotation({
           ...annotation,
+          ...(image ? { imageId: image.id } : {}),
           ordinal: nextBrowserAnnotationOrdinal(existing.browserAnnotations),
         });
         if (!normalized) {
@@ -1681,10 +1685,14 @@ export const createComposerDraftStoreState =
             [threadId]: {
               ...existing,
               browserAnnotations: [...existing.browserAnnotations, normalized],
+              images: image
+                ? (mergeComposerImages(existing.images, [image]) ?? existing.images)
+                : existing.images,
             },
           },
         };
       });
+      if (!inserted && image) revokeObjectPreviewUrl(image.previewUrl);
       return inserted;
     },
     addBrowserAnnotations: (threadId, annotations) => {
