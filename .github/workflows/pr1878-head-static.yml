@@ -1,0 +1,54 @@
+name: PR 1878 exact published head static and migration acceptance
+on:
+  push:
+    branches: [qa/pr1878-exact-head-static-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: e6c8014794d70314eeb460d327f79443d12afb1f
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Require exact PR head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          mkdir -p "$RUNNER_TEMP/pr1878-static"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-static/source.txt"
+      - uses: ./.github/actions/setup-workspace
+      - name: Execute canonical quality and migration checks
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/pr1878-static"
+          failed=0
+          for check in fmt:check lint typecheck migrations:check windows-runtime:check brand:check release:smoke; do
+            name="${check//:/-}"
+            if bun run "$check" > "$out/$name.log" 2>&1; then rc=0; else rc=$?; failed=1; fi
+            tail -100 "$out/$name.log"
+            printf '%s\t%s\n' "$check" "$rc" >> "$out/exits.tsv"
+          done
+          git diff --exit-code > "$out/source-clean.diff" || failed=1
+          test "$failed" = 0
+      - name: Verify real migration upgrade/lineage cases
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/pr1878-static"
+          bun run --cwd apps/server test src/persistence \
+            --reporter=default --reporter=json \
+            --outputFile.json="$out/persistence.json" \
+            2>&1 | tee "$out/persistence.log"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pr1878-exact-head-static-evidence
+          path: ${{ runner.temp }}/pr1878-static/
+          if-no-files-found: warn
+          retention-days: 14
