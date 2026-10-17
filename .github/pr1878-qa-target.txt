@@ -1,0 +1,5 @@
+PR: Emanuele-web04/synara#1878
+Source repository: cmdr-chara/synara
+Exact tested source: 2608353b8258995192e0d4aa6cd4ad5c3f979a9e
+QA-only branch. Do not merge this driver into the application or main.
+Every application checkout is pinned to the source above; preserve original failures and source guards.
