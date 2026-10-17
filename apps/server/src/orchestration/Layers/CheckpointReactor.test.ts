@@ -45,7 +45,7 @@ import {
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
-import { CheckpointReactorLive } from "./CheckpointReactor.ts";
+import { CheckpointReactorLive, makeCheckpointReactorLive } from "./CheckpointReactor.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -372,6 +372,7 @@ describe("CheckpointReactor", () => {
     readonly sqlStatements?: string[];
     readonly startReactor?: boolean;
     readonly simulateProviderBaseline?: boolean;
+    readonly liveTurnDiffThrottleWindowMs?: number;
   }) {
     const cwd = createGitRepository(options?.hasInitialCommit ?? true);
     tempDirs.push(cwd);
@@ -426,7 +427,11 @@ describe("CheckpointReactor", () => {
       prefix: "synara-checkpoint-reactor-test-",
     });
 
-    const layer = CheckpointReactorLive.pipe(
+    const layer = makeCheckpointReactorLive(
+      options?.liveTurnDiffThrottleWindowMs === undefined
+        ? undefined
+        : { liveTurnDiffThrottleWindowMs: options.liveTurnDiffThrottleWindowMs },
+    ).pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(RuntimeReceiptBusLive),
@@ -1170,6 +1175,51 @@ describe("CheckpointReactor", () => {
       await Effect.runPromise(harness.runtimeEvents.getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)),
     ).toBe(lastSequence);
     expect(checkpointAcks).toBeLessThan(64);
+  });
+
+  it("does not wake a checkpoint scan for persisted text deltas", async () => {
+    const harness = await createHarness({ startReactor: false, seedFilesystemCheckpoints: false });
+    const bus = Effect.runSync(
+      PubSub.unbounded<
+        import("../../persistence/Services/ProviderRuntimeEvents.ts").PersistedProviderRuntimeEvent
+      >(),
+    );
+    Object.assign(harness.provider.service, { streamPersistedEvents: Stream.fromPubSub(bus) });
+    await harness.start();
+    await harness.drain();
+    // drain leaves its last wake pulse queued; let that scan finish first.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const repository = await runtime!.runPromise(Effect.service(ProviderRuntimeEventRepository));
+    // Every scan reads one runtime page; nothing else reads it while no lane is active.
+    const scans = vi.spyOn(repository, "readAfter");
+    const started = performance.now();
+    let lastSequence = 0;
+    for (let index = 0; index < 100; index++) {
+      const row = await Effect.runPromise(
+        harness.runtimeEvents.append({
+          type: "content.delta",
+          eventId: EventId.makeUnsafe(`stream-no-scan-${index}`),
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: asTurnId("stream-no-scan-turn"),
+          createdAt: new Date().toISOString(),
+          payload: { streamKind: "assistant_text", delta: "x" },
+        }),
+      );
+      lastSequence = row.sequence;
+      await Effect.runPromise(PubSub.publish(bus, row));
+      // Streamed deltas arrive spaced out, giving a per-row wake time to scan.
+      await Effect.runPromise(Effect.sleep("1 millis"));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // At most the coalesced idle scan (one per second) may have run.
+    const elapsedSeconds = Math.floor((performance.now() - started) / 1_000);
+    expect(scans.mock.calls.length).toBeLessThanOrEqual(elapsedSeconds);
+    // The cursor still moves past ignored rows on drain.
+    await settleCheckpointWork(harness.reactor.drain);
+    expect(
+      await Effect.runPromise(harness.runtimeEvents.getConsumerCursor(CHECKPOINT_RUNTIME_CONSUMER)),
+    ).toBe(lastSequence);
   });
 
   it("retains physical workspace identity across ordinary domain outcomes", async () => {
@@ -4177,6 +4227,115 @@ describe("CheckpointReactor", () => {
       "second.txt",
     ]);
     expect(detailReads).not.toHaveBeenCalled();
+  });
+
+  it("throttles live turn-diff captures per thread and ends a burst with its last edit", async () => {
+    // About twice the ~0.25 s the five drained edits below take locally.
+    const throttleWindowMs = 500;
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+      liveTurnDiffThrottleWindowMs: throttleWindowMs,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-claude-burst");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-claude-burst"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await harness.prepareBaseline(turnId);
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-claude-burst"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+
+    const liveRef = checkpointRefForThreadTurnLive(threadId, turnId);
+    const captures = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
+    const liveCaptures = () =>
+      captures.mock.calls.filter(([input]) => input.checkpointRef === liveRef).length;
+    const emitFileChange = (index: number) => {
+      fs.writeFileSync(path.join(harness.cwd, `burst-${index}.txt`), `edit ${index}\n`, "utf8");
+      harness.provider.emit({
+        type: "item.completed",
+        eventId: EventId.makeUnsafe(`evt-item-file-change-burst-${index}`),
+        provider: "claudeAgent",
+        createdAt: new Date().toISOString(),
+        threadId,
+        turnId,
+        itemId: `item-file-change-burst-${index}`,
+        payload: { itemType: "file_change", status: "completed" },
+      });
+    };
+
+    // Each edit is processed on its own (no newer journaled edit supersedes it),
+    // so only the throttle keeps this burst from capturing once per edit.
+    for (let index = 1; index <= 5; index++) {
+      emitFileChange(index);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await harness.drain();
+    }
+    expect(liveCaptures()).toBe(1);
+
+    const burstFiles = [1, 2, 3, 4, 5].map((index) => `burst-${index}.txt`);
+    await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.status === "missing" &&
+          burstFiles.every((file) => checkpoint.files?.some((entry) => entry.path === file)),
+      ),
+    );
+    expect(liveCaptures()).toBe(2);
+    expect(gitRefExists(harness.cwd, liveRef)).toBe(false);
+
+    // An edit inside the next window stays pending; turn completion drops it.
+    emitFileChange(6);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await harness.drain();
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-claude-burst"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+    await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointTurnCount === 1 && checkpoint.status === "ready",
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, throttleWindowMs + 200));
+    await harness.drain();
+    expect(liveCaptures()).toBe(2);
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    );
+    expect(thread?.checkpoints).toHaveLength(1);
+    expect(thread?.checkpoints[0]?.status).toBe("ready");
+    expect(thread?.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
+      ...burstFiles,
+      "burst-6.txt",
+    ]);
   });
 
   it("reports an unavailable baseline when a completed turn has no initial checkpoint", async () => {

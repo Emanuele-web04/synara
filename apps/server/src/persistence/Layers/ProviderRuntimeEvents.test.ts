@@ -1125,3 +1125,136 @@ it.effect("releases superseded file notifications behind a stalled checkpoint cu
     ),
   ),
 );
+
+const captureSweepLowerBounds = (bounds: number[]) =>
+  Effect.provideService(Statement.CurrentTransformer, (statement) =>
+    Effect.sync(() => {
+      const [query, params] = statement.compile();
+      // The ingestion sweep's first bound is its exclusive lower sequence.
+      if (/DELETE FROM provider_runtime_events AS event\s+WHERE event\.sequence >/.test(query)) {
+        bounds.push(Number(params[0]));
+      }
+      return statement;
+    }),
+  );
+
+it.effect("does not rescan a still-open turn's accepted rows on the next retention sweep", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const interval = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED;
+    const appendDeltas = (from: number, count: number) =>
+      Effect.gen(function* () {
+        let last = 0;
+        for (let index = from; index < from + count; index++)
+          last = (yield* repository.append(runtimeEvent(`open-turn-sweep-${index}`, "x"))).sequence;
+        return last;
+      });
+    const ack = (throughSequence: number) =>
+      repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      });
+    const bounds: number[] = [];
+
+    const firstThrough = yield* appendDeltas(0, interval * 2);
+    assert.isTrue(yield* ack(firstThrough).pipe(captureSweepLowerBounds(bounds)));
+    const secondThrough = yield* appendDeltas(interval * 2, interval);
+    assert.isTrue(yield* ack(secondThrough).pipe(captureSweepLowerBounds(bounds)));
+
+    // The first sweep scans from the start; the second starts just below the
+    // first sweep's diagnostic tail, above every open-turn row it already kept.
+    assert.deepEqual(bounds, [0, firstThrough - interval]);
+    const [retainedRow] = yield* sql<{ readonly retained: number }>`
+      SELECT COUNT(*) AS retained FROM provider_runtime_events`;
+    assert.strictEqual(retainedRow?.retained, interval * 3);
+
+    // Settling the turn sweeps from the start and releases its whole backlog.
+    const terminal = yield* repository.append({
+      ...runtimeEvent("open-turn-sweep-terminal", ""),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    assert.isTrue(yield* ack(terminal.sequence).pipe(captureSweepLowerBounds(bounds)));
+    assert.strictEqual(bounds.at(-1), 0);
+    const [remainingRow] = yield* sql<{ readonly remaining: number }>`
+      SELECT COUNT(*) AS remaining FROM provider_runtime_events`;
+    assert.strictEqual(remainingRow?.remaining, interval);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+it.effect("rescans rows a checkpoint ACK or open-turn pruning may have released", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    yield* registerCheckpointConsumer;
+    const interval = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED;
+    const bounds: number[] = [];
+    const ackIngestion = (throughSequence: number) =>
+      repository
+        .advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        })
+        .pipe(captureSweepLowerBounds(bounds));
+    const appendWarnings = (from: number, count: number) =>
+      Effect.gen(function* () {
+        let last = 0;
+        for (let index = from; index < from + count; index++)
+          last = (yield* repository.append(checkpointWarning(index))).sequence;
+        return last;
+      });
+
+    // A turnless terminal stays protected only by the checkpoint cursor.
+    const terminal = yield* repository.append({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("floor-checkpoint-terminal"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+      createdAt: "2026-10-07T00:00:00.000Z",
+      payload: { state: "completed" },
+    });
+    let through = yield* appendWarnings(0, interval * 2);
+    assert.isTrue(yield* ackIngestion(through));
+    through = yield* appendWarnings(interval * 2, interval);
+    assert.isTrue(yield* ackIngestion(through));
+    // The terminal is still protected and already below the remembered floor.
+    assert.isAbove(bounds.at(-1)!, terminal.sequence);
+    const terminalRows = () =>
+      sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${terminal.sequence}`;
+    assert.lengthOf(yield* terminalRows(), 1);
+
+    // A small checkpoint ACK (below the prune interval) releases the terminal;
+    // the next ingestion sweep starts at the previous checkpoint cursor.
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: checkpointConsumer,
+        throughSequence: terminal.sequence,
+        updatedAt: "2026-10-07T00:00:02.000Z",
+      }),
+    );
+    through = yield* appendWarnings(interval * 3, interval);
+    assert.isTrue(yield* ackIngestion(through));
+    assert.strictEqual(bounds.at(-1), 0);
+    assert.lengthOf(yield* terminalRows(), 0);
+
+    // Out-of-band open-turn pruning also resets the floor.
+    through = yield* appendWarnings(interval * 4, interval);
+    assert.isTrue(yield* ackIngestion(through));
+    assert.isAbove(bounds.at(-1)!, 0);
+    yield* repository.pruneSettledOpenTurns;
+    through = yield* appendWarnings(interval * 5, interval);
+    assert.isTrue(yield* ackIngestion(through));
+    assert.strictEqual(bounds.at(-1), 0);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);

@@ -1,5 +1,6 @@
 import { OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
 import { useMemo } from "react";
+import { setsEqual, useStableValue } from "../../hooks/useStableValue";
 import { deriveWorkLogEntries, deriveSubagentTaskEnds } from "../../session-logic";
 import { useStore } from "../../store";
 import type { Thread } from "../../types";
@@ -33,8 +34,10 @@ export function useChatWorkLog({
   // bridge for deciding which historical work can fold into visible replies.
   // Memoized on purpose: an inline Set would change identity every render and cascade
   // through the memoized work-log/timeline chain into the virtualized list, which resets
-  // in a loop on unstable data.
-  const workLogVisibleTurnIds = useMemo(() => {
+  // in a loop on unstable data. `messages` is a new array on every streamed text flush,
+  // so the Set is also kept identity-stable while its turn ids are unchanged; otherwise
+  // each flush re-derives the whole work log from every activity.
+  const derivedWorkLogVisibleTurnIds = useMemo(() => {
     const turnIds = new Set<TurnId>();
     for (const message of activeThread?.messages ?? []) {
       if (message.turnId) {
@@ -46,6 +49,10 @@ export function useChatWorkLog({
     }
     return turnIds;
   }, [activeLatestTurnId, activeThread?.messages]);
+  const workLogVisibleTurnIds = useStableValue<ReadonlySet<TurnId>>(
+    derivedWorkLogVisibleTurnIds,
+    setsEqual,
+  );
   const rawWorkLogEntries = useMemo(
     () =>
       deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
