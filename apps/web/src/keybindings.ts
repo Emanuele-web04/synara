@@ -359,7 +359,8 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   // In-app code editor; mirrors the server defaults. F-keys take no `mod`, so they are
-  // the same chord on every platform. Go to symbol and Show problems ship unassigned.
+  // the same chord on every platform. Go to symbol, Go to line and Show problems ship
+  // unassigned.
   ...(
     [
       ["editor.commands", "f1", false],
@@ -378,6 +379,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut(key, { shiftKey, modKey: false }),
     whenAst: whenNotTerminalFocus,
   })),
+  {
+    command: "editor.quickFix",
+    shortcut: commandShortcut("."),
+    whenAst: whenNotTerminalFocus,
+  },
 ];
 
 const TERMINAL_WORD_BACKWARD = "\u001bb";
@@ -875,7 +881,9 @@ export const EDITOR_SHORTCUT_COMMANDS = [
   "editor.goToDefinition",
   "editor.findReferences",
   "editor.goToSymbol",
+  "editor.goToLine",
   "editor.problems",
+  "editor.quickFix",
   "editor.debug.start",
   "editor.debug.stop",
   "editor.debug.toggleBreakpoint",

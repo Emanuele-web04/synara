@@ -209,6 +209,45 @@ test("native editor intelligence, guarded persistence, navigation, and debugging
   await expect(page.locator(".suggest-widget.visible")).toContainText("name");
   await capture(page, info, "after-real-intellisense");
   await page.keyboard.press("Escape");
+  // Inlay hints come from the compiler (the inferred variable type); bracket
+  // pairs take the Shiki theme's colours.
+  await expect(page.locator(".monaco-editor .view-lines").first()).toContainText("message: string");
+  await expect(
+    page.locator('.monaco-editor .view-lines [class*="bracket-highlighting-"]').first(),
+  ).toBeVisible();
+  await capture(page, info, "after-inlay-hints-and-bracket-pairs");
+
+  await position(page, "greet(person", 1);
+  await page.keyboard.press("Shift+F12");
+  const peek = page.locator(".monaco-editor .reference-zone-widget").first();
+  await expect(peek).toBeVisible();
+  await expect(peek).toContainText("greeting.ts");
+  await capture(page, info, "after-peek-references");
+  await page.keyboard.press("Escape");
+  await expect(peek).toBeHidden();
+
+  await command(page, "Go to line");
+  await page.getByRole("combobox", { name: "Go to line", exact: true }).fill("3");
+  // The row's accessible name carries its detail ("of 11 lines"); match the label.
+  const gotoLineRow = page.getByRole("option", { name: /^Go to line 3\b/ });
+  await expect(gotoLineRow).toBeVisible();
+  await capture(page, info, "after-go-to-line");
+  await gotoLineRow.click();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const modulePath = "/src/components/codeEditor/editorRuntime.ts";
+        const { monaco } = await import(/* @vite-ignore */ modulePath);
+        return monaco.editor
+          .getEditors()
+          .find(
+            (candidate: { getModel(): { uri: { scheme: string } } | null }) =>
+              candidate.getModel()?.uri.scheme === "synara-workspace",
+          )
+          ?.getPosition()?.lineNumber;
+      }),
+    )
+    .toBe(3);
 
   await position(page, "greet(person", 1);
   await page.keyboard.press("F12");
@@ -227,7 +266,10 @@ test("native editor intelligence, guarded persistence, navigation, and debugging
   await capture(page, info, "after-real-diagnostics");
   await page.keyboard.press("Escape");
   await position(page, "toUppercase", 2);
-  await command(page, "Quick fixes and refactorings");
+  // The lightbulb marks the fixable line; the quick-fix menu is the engine's own.
+  await expect(page.locator(".monaco-editor .lightBulbWidget").first()).toBeVisible();
+  await command(page, "Quick fix");
+  await expect(page.locator(".action-widget").first()).toBeVisible();
   await expect(page.getByRole("option", { name: /toUpperCase/ })).toBeVisible();
   await capture(page, info, "after-native-quick-fix");
   await page
@@ -290,5 +332,51 @@ test("renames an exported symbol after editing the dialog name", async ({ page }
   await expect
     .poll(() => readFile(path.join(workspace, "greeting.ts"), "utf8"))
     .toContain("export function greetRenamed(");
+  expect(errors).toEqual([]);
+});
+
+test("edits a changed file as a diff with collapsed regions and symbol breadcrumbs", async ({
+  page,
+}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  // Earlier journeys edit main.ts; one change against the committed baseline
+  // leaves a long unchanged head for the diff to collapse.
+  await writeFile(path.join(workspace, "main.ts"), source.replace('"Ada"', '"Grace"'));
+  await seed(page);
+  // Land on the file preview (the settled route the other journeys use), then
+  // switch the rail to the Diff pane; each changed file's header carries the
+  // actions menu that opens the editable diff.
+  await page.goto(`/${threadId}?view=editor&editorFilePath=${encodeURIComponent("main.ts")}`);
+  const previewEdit = page.getByRole("button", { name: "Edit file", exact: true });
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await dismissStartupSurfaces(page);
+    if (await previewEdit.isVisible().catch(() => false)) break;
+    await page.waitForTimeout(500);
+  }
+  await page.getByRole("button", { name: "Diff", exact: true }).click();
+  const actions = page.getByRole("button", { name: "File actions", exact: true });
+  await expect.poll(() => actions.count(), { timeout: 30_000 }).toBeGreaterThan(0);
+  const mainHeader = page
+    .locator("[data-diff-file-header], [data-diffs-header], [data-file-info]")
+    .filter({ hasText: /\bmain\.ts\b/ })
+    .first();
+  await dismissStartupSurfaces(page);
+  await mainHeader.getByRole("button", { name: "File actions", exact: true }).click();
+  // Toasts can land over the menu; activate the item from the keyboard.
+  const editFile = page.getByRole("menuitem", { name: "Edit file", exact: true });
+  await expect(editFile).toBeVisible();
+  await editFile.focus();
+  await editFile.press("Enter");
+  await editorVisible(page, "main.ts");
+  // The unchanged head of the file collapses behind a bar whose breadcrumb
+  // names the enclosing symbol from the compiler's document symbols.
+  // The bar's container has no box of its own; assert its visible label and crumb.
+  const diff = page.locator(".monaco-diff-editor").first();
+  await expect(diff.getByText(/\d+ hidden lines/).first()).toBeVisible();
+  await expect(
+    diff.locator(".diff-hidden-lines .breadcrumb-item").filter({ hasText: "Person" }).first(),
+  ).toBeVisible();
+  await capture(page, info, "after-diff-breadcrumbs");
   expect(errors).toEqual([]);
 });

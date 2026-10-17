@@ -3,7 +3,8 @@
 //          previews and diffs already use, so edited code keeps Synara's
 //          GitHub themes instead of the engine's built-in palette.
 // Layer: Web editor runtime
-// Exports: ensureEditorLanguage, editorTokenRules, editorLanguageForPath
+// Exports: ensureEditorLanguage, editorTokenRules, editorThemeColor,
+//          editorLanguageForPath
 // Depends on: the shared Pierre/Shiki highlighter (lib/syntaxHighlighting) and
 //             Monaco's language registry.
 
@@ -20,6 +21,12 @@ const FOREGROUND_OFFSET = 15;
 const FONT_STYLE_MASK = 0b00000000000000000111100000000000;
 const FONT_STYLE_OFFSET = 11;
 const FONT_STYLE_NAMES = ["italic", "bold", "underline", "strikethrough"] as const;
+// The grammar's standard token type (comment, string, regex) rides in the same
+// word; naming it in the token lets the engine keep bracket pairs, bracket
+// colours and auto-closing out of strings and comments.
+const TOKEN_TYPE_MASK = 0b00000000000000000000001100000000;
+const TOKEN_TYPE_OFFSET = 8;
+const TOKEN_TYPE_NAMES = ["", "comment", "string", "regexp"] as const;
 
 // Monaco language configurations (brackets, comments, auto-closing pairs) come
 // from the engine's bundled definitions; the Monarch grammar they also export
@@ -142,7 +149,11 @@ function tokensProvider(
         const metadata = result.tokens[index + 1]!;
         const color = (metadata & FOREGROUND_MASK) >>> FOREGROUND_OFFSET;
         const style = (metadata & FONT_STYLE_MASK) >>> FONT_STYLE_OFFSET;
-        tokens.push({ startIndex: result.tokens[index]!, scopes: tokenName(color, style) });
+        const type = TOKEN_TYPE_NAMES[(metadata & TOKEN_TYPE_MASK) >>> TOKEN_TYPE_OFFSET] ?? "";
+        tokens.push({
+          startIndex: result.tokens[index]!,
+          scopes: type ? `${tokenName(color, style)}.${type}` : tokenName(color, style),
+        });
       }
       return { endState: new ShikiTokenizerState(result.ruleStack), tokens };
     },
@@ -171,6 +182,20 @@ function monacoHex(color: string | undefined): string | null {
           .join("")
       : digits.slice(0, 6);
   return expanded.length === 6 ? expanded.toLowerCase() : null;
+}
+
+/**
+ * A workbench colour of the shared Shiki theme (`colors` in the GitHub theme),
+ * such as the bracket pair palette, as `#rrggbb`; null when the theme lacks it.
+ */
+export function editorThemeColor(
+  highlighter: DiffsHighlighter | null,
+  theme: "light" | "dark",
+  name: string,
+): string | null {
+  const value = highlighter?.getTheme(resolveDiffThemeName(theme)).colors?.[name];
+  const hex = monacoHex(value);
+  return hex ? `#${hex}` : null;
 }
 
 /** Monaco theme rules naming every colour of the Shiki theme, incl. font-style variants. */

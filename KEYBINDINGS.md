@@ -158,6 +158,7 @@ Shortcuts follow the character your layout types: on AZERTY, the key labelled A 
   { "key": "f2", "command": "editor.rename", "when": "!terminalFocus" },
   { "key": "f12", "command": "editor.goToDefinition", "when": "!terminalFocus" },
   { "key": "shift+f12", "command": "editor.findReferences", "when": "!terminalFocus" },
+  { "key": "mod+.", "command": "editor.quickFix", "when": "!terminalFocus" },
   { "key": "f5", "command": "editor.debug.start", "when": "!terminalFocus" },
   { "key": "shift+f5", "command": "editor.debug.stop", "when": "!terminalFocus" },
   { "key": "f9", "command": "editor.debug.toggleBreakpoint", "when": "!terminalFocus" },
@@ -246,9 +247,11 @@ The command identifiers are defined by [`STATIC_KEYBINDING_COMMANDS`](packages/c
 | `editor.file.save`                                       | Save the focused file editor's unsaved changes.                                                      |
 | `editor.commands`                                        | Open the editor command picker for the focused code editor.                                          |
 | `editor.rename`                                          | Rename the symbol under the cursor across the workspace.                                             |
-| `editor.goToDefinition`, `editor.findReferences`         | Jump to the definition of, or list references to, the symbol under the cursor.                       |
+| `editor.goToDefinition`, `editor.findReferences`         | Jump to the definition of, or peek references to, the symbol under the cursor.                       |
 | `editor.goToSymbol`                                      | Jump to a symbol in the open file; no default binding.                                               |
+| `editor.goToLine`                                        | Jump to a line, or line:column, in the open file; no default binding.                                |
 | `editor.problems`                                        | List diagnostics for the open file; no default binding.                                              |
+| `editor.quickFix`                                        | Show quick fixes and refactorings for the code at the cursor.                                        |
 | `editor.debug.start`, `editor.debug.stop`                | Start or continue debugging the open file, or stop the debug session.                                |
 | `editor.debug.toggleBreakpoint`                          | Add or remove a breakpoint on the cursor line.                                                       |
 | `editor.debug.stepOver`                                  | Run the next statement without entering calls.                                                       |
@@ -256,7 +259,7 @@ The command identifiers are defined by [`STATIC_KEYBINDING_COMMANDS`](packages/c
 | `git.commitAndPush`                                      | Commit pending changes and push the active thread's repository.                                      |
 | `script.{id}.run`                                        | Run a project script, for example `script.test.run`.                                                 |
 
-The in-app code editor runs `editor.commands` through `editor.debug.stepOut` while it has focus. Their defaults are F-keys, which keep the same chord on every platform; on macOS, F11 is Show Desktop unless you change it in System Settings. `editor.goToSymbol` and `editor.problems` ship unassigned because Mod+Shift+O and Mod+Shift+M already add a project and open the model picker.
+The in-app code editor runs `editor.commands` through `editor.debug.stepOut` while it has focus. Their defaults are F-keys, which keep the same chord on every platform; on macOS, F11 is Show Desktop unless you change it in System Settings. `editor.goToSymbol`, `editor.goToLine` and `editor.problems` ship unassigned because Mod+Shift+O, Mod+G and Mod+Shift+M already add a project, toggle the terminal and open the model picker; the editor command picker (F1) reaches them. The engine's own editing chords (Ctrl+Space, Alt+F12, F8, Alt+Up and the rest) stay active while the editor has focus unless a Synara binding claims the key.
 
 The legacy identifiers `terminal.split`, `terminal.splitRight`, `terminal.splitLeft`, `terminal.splitDown`, and `terminal.splitUp` remain accepted by the schema for old files. They have no defaults, are omitted from Settings, and the dispatcher ignores them so they cannot consume terminal input.
 

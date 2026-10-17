@@ -21,17 +21,90 @@
   background: var(--app-code-viewer-deletion-row, var(--vscode-diffEditor-removedLineBackground));
 }
 
-/* In-editor popovers (suggestions, hover, signature help, find) read as Synara
-   popovers: the popover radius and shadow, the UI font and the chosen UI size. */
+/* In-editor popovers (suggestions, hover, signature help, find, quick-fix
+   menu, marker navigation, colour picker) read as Synara popovers: the popover
+   radius and shadow, the UI font and the chosen UI size. */
 .synara-code-editor .monaco-editor .suggest-widget,
 .synara-code-editor .monaco-editor .monaco-hover,
 .synara-code-editor .monaco-editor .parameter-hints-widget,
-.synara-code-editor .monaco-editor .find-widget {
+.synara-code-editor .monaco-editor .find-widget,
+.synara-code-editor .action-widget,
+.synara-code-editor .monaco-editor .marker-widget,
+.synara-code-editor .monaco-editor .colorpicker-widget,
+.synara-code-editor .monaco-editor .monaco-editor-overlaymessage .message {
   overflow: hidden;
   border-radius: var(--radius-lg);
   box-shadow: 0 8px 24px -8px var(--vscode-widget-shadow);
   font-family: var(--font-ui-family);
   font-size: var(--app-font-size-ui);
+}
+/* The quick-fix menu is a context view on the editor container, outside .monaco-editor. */
+.synara-code-editor .action-widget .monaco-list-row,
+.synara-code-editor .action-widget .action-list-filter-input {
+  border-radius: var(--radius-sm);
+}
+.synara-code-editor .action-widget .monaco-list-row .title,
+.synara-code-editor .action-widget .monaco-list-row .group-title {
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui);
+}
+/* Peek views (definition, references, problems) are Synara panels inside the
+   editor: a rounded, bordered card with the UI font in its header and tree. */
+.synara-code-editor .monaco-editor .zone-widget .zone-widget-container {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin: 0 8px;
+}
+.synara-code-editor .monaco-editor .peekview-widget .head {
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui-sm);
+  border-bottom: 1px solid var(--border);
+}
+.synara-code-editor .monaco-editor .peekview-widget .head .peekview-title .filename {
+  font-weight: 500;
+}
+/* The embedded preview keeps Synara's thin scrollbar and no decoration ruler. */
+.synara-code-editor .monaco-editor .peekview-widget .monaco-editor .decorationsOverviewRuler {
+  display: none;
+}
+.synara-code-editor .monaco-editor .reference-zone-widget .ref-tree {
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui-sm);
+}
+.synara-code-editor .monaco-editor .reference-zone-widget .ref-tree .monaco-list-row {
+  border-radius: var(--radius-sm);
+}
+.synara-code-editor .monaco-editor .marker-widget .descriptioncontainer {
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui);
+}
+/* The lightbulb sits in the glyph margin next to the breakpoint column. */
+.synara-code-editor .monaco-editor .lightBulbWidget {
+  border-radius: var(--radius-sm);
+}
+/* Sticky headers take the dense glass surface the horizontally scrolled gutter uses. */
+.synara-code-editor .monaco-editor .sticky-widget {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+/* Inlay hints are quiet capsules in the muted colour, never competing with code. */
+.synara-code-editor .monaco-editor .view-lines span[class*="inlayHint"] {
+  border-radius: var(--radius-sm);
+}
+/* Collapsed unchanged regions in diffs: the elevated surface, UI font, and
+   breadcrumbs that match Synara's file-header crumbs. */
+.synara-code-editor .monaco-diff-editor .diff-hidden-lines {
+  font-family: var(--font-ui-family);
+  font-size: var(--app-font-size-ui-sm);
+}
+.synara-code-editor .monaco-diff-editor .diff-hidden-lines .center {
+  border-radius: var(--radius-sm);
+}
+.synara-code-editor .monaco-diff-editor .diff-hidden-lines div.breadcrumb-item {
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+}
+.synara-code-editor .monaco-diff-editor .diff-hidden-lines div.breadcrumb-item:hover {
+  color: var(--foreground);
 }
 .synara-code-editor .monaco-editor .find-widget {
   top: 8px;

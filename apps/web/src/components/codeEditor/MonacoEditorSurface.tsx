@@ -1,7 +1,8 @@
 // FILE: MonacoEditorSurface.tsx
 // Purpose: The editable code surface (single file or diff) over the shared
 //          native document model, with Synara's command picker, rename dialog,
-//          context menu, diagnostics strip and debug controls around the engine.
+//          context menu, problems strip and debug controls around the engine's
+//          own in-editor widgets (peek, lightbulb, hover, suggestions).
 // Layer: Web editor UI
 // Depends on: editorRuntime (engine + appearance), editorModels (shared
 //             models, language service), editorDebugStore, Synara keybindings.
@@ -62,19 +63,24 @@ type Controller = {
 };
 type PickerState = {
   title: string;
-  mode: "commands" | "results" | "workspaceSymbols";
+  mode: "commands" | "results" | "workspaceSymbols" | "gotoLine";
   rows: EditorActionRow[];
 };
 type EditorCommand =
   | "commands"
   | "rename"
   | "definition"
+  | "peekDefinition"
   | "typeDefinition"
   | "references"
   | "documentSymbols"
   | "workspaceSymbols"
+  | "gotoLine"
   | "problems"
+  | "nextProblem"
+  | "previousProblem"
   | "codeActions"
+  | "refactor"
   | "organizeImports"
   | "referenceInChat"
   | "undo"
@@ -95,7 +101,9 @@ const SHORTCUT_COMMANDS: Record<EditorShortcutCommand, EditorCommand> = {
   "editor.goToDefinition": "definition",
   "editor.findReferences": "references",
   "editor.goToSymbol": "documentSymbols",
+  "editor.goToLine": "gotoLine",
   "editor.problems": "problems",
+  "editor.quickFix": "codeActions",
   "editor.debug.start": "debugLaunch",
   "editor.debug.stop": "debugStop",
   "editor.debug.toggleBreakpoint": "debugBreakpoint",
@@ -108,16 +116,41 @@ const COMMAND_SHORTCUTS = Object.fromEntries(
 ) as Partial<Record<EditorCommand, EditorShortcutCommand>>;
 const NAVIGATION_COMMANDS: readonly EditorCommand[] = [
   "definition",
+  "peekDefinition",
   "typeDefinition",
   "references",
   "documentSymbols",
   "workspaceSymbols",
+  "gotoLine",
 ];
+/** `line` or `line:column`, as typed into the go-to-line picker. */
+const GOTO_LINE_PATTERN = /^\s*:?(\d+)(?:[:,]\s*(\d+))?\s*$/;
+function parseGotoLine(query: string, model: monaco.editor.ITextModel) {
+  const match = GOTO_LINE_PATTERN.exec(query);
+  if (!match) return null;
+  const lineNumber = Math.min(Math.max(1, Number(match[1])), model.getLineCount());
+  const column = match[2]
+    ? Math.min(Math.max(1, Number(match[2])), model.getLineMaxColumn(lineNumber))
+    : 1;
+  return { lineNumber, column, explicitColumn: match[2] !== undefined };
+}
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const diffLabels = (fileName: string) => ({
   originalAriaLabel: `Original ${fileName}`,
   modifiedAriaLabel: `Edit ${fileName}`,
 });
+function markerSeverityLabel(severity: monaco.MarkerSeverity) {
+  switch (severity) {
+    case monaco.MarkerSeverity.Error:
+      return "error";
+    case monaco.MarkerSeverity.Warning:
+      return "warning";
+    case monaco.MarkerSeverity.Info:
+      return "info";
+    default:
+      return "hint";
+  }
+}
 
 export default function MonacoEditorSurface(props: SurfaceProps) {
   const client = useQueryClient();
@@ -146,6 +179,8 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
   const [rename, setRename] = useState<{ word: string; offset: number; version: number } | null>(
     null,
   );
+  // The viewport before the go-to-line picker started previewing lines; restored on cancel.
+  const gotoLineOrigin = useRef<monaco.editor.ICodeEditorViewState | null>(null);
   const [debugLaunch, setDebugLaunch] = useState<"launch" | "attach" | null>(null);
 
   function report(error: unknown) {
@@ -157,6 +192,26 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
   }
   function focusEditor() {
     queueMicrotask(() => controllerRef.current?.editor.focus());
+  }
+  // Engine widgets (peek, quick-fix menu, marker navigation) anchor to the
+  // focused editor and close on blur, so the picker closes and hands focus back
+  // before the action runs.
+  async function engineAction(id: string) {
+    if (pickerRef.current) {
+      setPicker(null);
+      // The dialog hands focus back when its exit transition ends; a widget
+      // opened before that would lose focus and dismiss itself.
+      const deadline = Date.now() + 1_000;
+      while (document.querySelector('[data-slot="command-dialog-popup"]') && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    const editor = controllerRef.current?.editor;
+    if (!editor) return;
+    editor.focus();
+    // Peek references is an editor command rather than an action; trigger runs both.
+    const action = editor.getAction(id);
+    if (action) await action.run();
+    else editor.trigger("synara", id, undefined);
   }
   const openFile = useEffectEvent(
     (relativePath: string) => opener?.openFile(relativePath) ?? false,
@@ -258,50 +313,62 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           );
         return;
       }
+      // Navigation, peek views, quick fixes and problem stepping are the engine's
+      // own in-editor widgets; other workspace files open through the opener below.
       case "definition":
-      case "typeDefinition":
-      case "references": {
-        const result = await requestIntelligence(entry, id as "definition", { offset });
-        if (!result) return;
-        if (id !== "references" && result.locations?.length === 1) reveal(result.locations[0]!);
-        else
-          results(
-            id === "references" ? "Find references" : "Go to location",
-            locationRows(result.locations ?? []),
-          );
+        await engineAction("editor.action.revealDefinition");
         return;
-      }
+      case "peekDefinition":
+        await engineAction("editor.action.peekDefinition");
+        return;
+      case "typeDefinition":
+        await engineAction("editor.action.goToTypeDefinition");
+        return;
+      case "references":
+        await engineAction("editor.action.referenceSearch.trigger");
+        return;
+      case "nextProblem":
+        await engineAction("editor.action.marker.next");
+        return;
+      case "previousProblem":
+        await engineAction("editor.action.marker.prev");
+        return;
+      case "codeActions":
+        if (!readOnly) await engineAction("editor.action.quickFix");
+        return;
+      case "refactor":
+        if (!readOnly) await engineAction("editor.action.refactor");
+        return;
+      case "gotoLine":
+        gotoLineOrigin.current = editor.saveViewState();
+        setQuery("");
+        setPicker({ title: "Go to line", mode: "gotoLine", rows: [] });
+        return;
       case "problems": {
-        const result = await requestIntelligence(entry, "diagnostics");
-        if (!result) return;
+        const markers = monaco.editor
+          .getModelMarkers({ resource: entry.model.uri })
+          .toSorted(
+            (a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn,
+          );
         results(
           "Problems in this file",
-          (result.diagnostics ?? []).map((item, index) => ({
+          markers.map((marker, index) => ({
             id: `problem:${index}`,
-            label: item.message,
-            detail: `${item.severity} · line ${entry.model.getPositionAt(item.start).lineNumber}`,
+            label: marker.message,
+            detail: `${markerSeverityLabel(marker.severity)} · line ${marker.startLineNumber}`,
             run: () => {
-              const range = offsetRange(entry.model, item);
+              const range = new monaco.Range(
+                marker.startLineNumber,
+                marker.startColumn,
+                marker.endLineNumber,
+                marker.endColumn,
+              );
               editor.setSelection(range);
               editor.revealRangeInCenter(range);
               editor.focus();
             },
           })),
         );
-        return;
-      }
-      case "codeActions": {
-        const result = await requestIntelligence(entry, "codeActions", { offset: start, length });
-        if (result)
-          results(
-            "Quick fixes and refactorings",
-            (result.actions ?? []).map((action, index) => ({
-              id: `action:${index}`,
-              label: action.title,
-              detail: action.kind,
-              run: () => applyEditorEdits(entry, action.edits),
-            })),
-          );
         return;
       }
       case "organizeImports": {
@@ -359,13 +426,17 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             action("editor.action.triggerParameterHints", "Show signature help"),
             action("editor.action.showHover", "Show documentation"),
             action("definition", "Go to definition"),
+            action("peekDefinition", "Peek definition"),
             action("typeDefinition", "Go to type definition"),
-            action("references", "Find references"),
+            action("references", "Peek references"),
             action("documentSymbols", "Go to symbol in file"),
             action("workspaceSymbols", "Find a workspace symbol"),
-            action("problems", "Show problems in file"),
           ]
         : []),
+      action("gotoLine", "Go to line…"),
+      action("problems", "Show problems in file"),
+      action("nextProblem", "Go to next problem"),
+      action("previousProblem", "Go to previous problem"),
       ...(editable
         ? [
             action("undo", "Undo"),
@@ -374,7 +445,8 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             ...(intelligence
               ? [
                   action("rename", "Rename symbol"),
-                  action("codeActions", "Quick fixes and refactorings"),
+                  action("codeActions", "Quick fix…"),
+                  action("refactor", "Refactor…"),
                   action("organizeImports", "Organize imports"),
                 ]
               : []),
@@ -433,6 +505,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       ...contextMenuGroup({ id: "refactor", label: "Refactor", separatorBefore: true }, [
         ...item("rename"),
         ...item("codeActions"),
+        ...item("refactor"),
         ...item("organizeImports"),
         ...item("editor.action.formatDocument"),
       ]),
@@ -492,7 +565,8 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
             readOnly: initial.readOnly ?? false,
             renderOverviewRuler: false,
             enableSplitViewResizing: true,
-            hideUnchangedRegions: { enabled: false },
+            // Collapsed unchanged regions carry the enclosing symbol as breadcrumbs.
+            hideUnchangedRegions: { enabled: true },
             ...diffLabels(initial.fileName),
           });
           instance.setModel({ original, modified: entry.model });
@@ -582,7 +656,12 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
                 return true;
               }
               rememberEditorLocation(resource, range);
-              if (!openFile(resource.path.slice(1))) forgetEditorLocation(resource);
+              if (!openFile(resource.path.slice(1))) {
+                forgetEditorLocation(resource);
+                report(
+                  new Error("This surface cannot open another workspace file. Open it from Files."),
+                );
+              }
               return true;
             },
           }),
@@ -790,10 +869,6 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
                 ],
               })),
             );
-            setProblems({
-              errors: diagnostics.filter((item) => item.severity === "error").length,
-              warnings: diagnostics.filter((item) => item.severity === "warning").length,
-            });
           })
           .catch(report);
       }, 350);
@@ -804,9 +879,49 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       clearTimeout(timer);
       request?.abort();
       change.dispose();
+    };
+  }, [controller]);
+
+  // The problems strip counts every marker on the document: the compiler's and
+  // the JSON/CSS/HTML workers' alike.
+  useEffect(() => {
+    if (!controller) return;
+    const { entry } = controller;
+    const update = () => {
+      if (entry.model.isDisposed()) return;
+      const markers = monaco.editor.getModelMarkers({ resource: entry.model.uri });
+      setProblems({
+        errors: markers.filter((marker) => marker.severity === monaco.MarkerSeverity.Error).length,
+        warnings: markers.filter((marker) => marker.severity === monaco.MarkerSeverity.Warning)
+          .length,
+      });
+    };
+    update();
+    const key = entry.model.uri.toString();
+    const changed = monaco.editor.onDidChangeMarkers((uris) => {
+      if (uris.some((uri) => uri.toString() === key)) update();
+    });
+    return () => {
+      changed.dispose();
       setProblems({ errors: 0, warnings: 0 });
     };
   }, [controller]);
+
+  // Go to line previews the typed line like the engine's own picker would; Escape restores.
+  useEffect(() => {
+    if (picker?.mode !== "gotoLine" || !controller) return;
+    const { editor, entry } = controller;
+    const target = parseGotoLine(query, entry.model);
+    if (!target) return;
+    const highlight = editor.createDecorationsCollection([
+      {
+        range: new monaco.Range(target.lineNumber, 1, target.lineNumber, 1),
+        options: { isWholeLine: true, className: "rangeHighlight" },
+      },
+    ]);
+    editor.revealLineInCenterIfOutsideViewport(target.lineNumber);
+    return () => highlight.clear();
+  }, [picker?.mode, query, controller]);
 
   useEffect(() => {
     if (picker?.mode !== "workspaceSymbols" || !controller) return;
@@ -855,8 +970,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       .finally(() => {
         setRunning(false);
         if (pickerRef.current !== chosen) return;
-        setPicker(null);
-        focusEditor();
+        closePicker();
       });
   };
   const handleShortcut = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -866,12 +980,47 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     event.stopPropagation();
     run(SHORTCUT_COMMANDS[command]);
   };
+  const gotoLine = (() => {
+    if (picker?.mode !== "gotoLine" || !controller) return null;
+    const { editor, entry } = controller;
+    const target = parseGotoLine(query, entry.model);
+    if (!target) return null;
+    const row: EditorActionRow = {
+      id: "gotoLine:target",
+      label: target.explicitColumn
+        ? `Go to line ${target.lineNumber}, column ${target.column}`
+        : `Go to line ${target.lineNumber}`,
+      detail: `of ${entry.model.getLineCount()} lines`,
+      run: () => {
+        gotoLineOrigin.current = null;
+        editor.setPosition(target);
+        editor.revealPositionInCenter(target);
+      },
+    };
+    return row;
+  })();
   const rows =
-    picker?.rows.filter(
-      (row) =>
-        picker.mode === "workspaceSymbols" ||
-        `${row.label} ${row.detail ?? ""}`.toLowerCase().includes(query.toLowerCase()),
-    ) ?? [];
+    picker?.mode === "gotoLine"
+      ? gotoLine
+        ? [gotoLine]
+        : []
+      : (picker?.rows.filter(
+          (row) =>
+            picker.mode === "workspaceSymbols" ||
+            `${row.label} ${row.detail ?? ""}`.toLowerCase().includes(query.toLowerCase()),
+        ) ?? []);
+  const closePicker = () => {
+    const origin = gotoLineOrigin.current;
+    gotoLineOrigin.current = null;
+    if (origin) controllerRef.current?.editor.restoreViewState(origin);
+    setPicker(null);
+    focusEditor();
+  };
+  const pickerMessage = running
+    ? "Running…"
+    : picker?.mode === "gotoLine" && !gotoLine
+      ? `Type a line number (1–${controller?.entry.model.getLineCount() ?? 1}) or line:column.`
+      : null;
   const problemCount = problems.errors + problems.warnings;
   return (
     <div
@@ -963,12 +1112,9 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         query={query}
         rows={rows}
         busy={picker?.mode === "workspaceSymbols" && searching}
-        message={running ? "Running…" : null}
+        message={pickerMessage}
         onQueryChange={setQuery}
-        onClose={() => {
-          setPicker(null);
-          focusEditor();
-        }}
+        onClose={closePicker}
         onChoose={choose}
       />
       <RenameDialog

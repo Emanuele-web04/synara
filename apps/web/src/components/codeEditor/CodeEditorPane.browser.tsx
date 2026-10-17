@@ -331,3 +331,79 @@ it("keeps both diff inputs labelled after layout and theme updates", async () =>
   }
   await view.unmount();
 });
+
+it("colours bracket pairs from the Shiki theme and leaves brackets inside strings plain", async () => {
+  const view = await mount(false, 'const pair = ("x(");\n');
+  await ready();
+  // Two coloured brackets: the pair around the string, not the one inside it.
+  await expect
+    .poll(
+      () =>
+        activeEditor()
+          .getDomNode()
+          ?.querySelectorAll('.view-lines [class*="bracket-highlighting-"]').length,
+      { timeout: 10_000 },
+    )
+    .toBe(2);
+  await view.unmount();
+});
+
+it("collapses a long unchanged diff region behind a bar", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  const shared = Array.from({ length: 40 }, (_, index) => `const line${index} = ${index};`).join(
+    "\n",
+  );
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <div style={{ width: 900, height: 500, display: "flex", flexDirection: "column" }}>
+        <CodeDiffEditorPane
+          original={`${shared}\nconst last = 0;\n`}
+          modified={`${shared}\nconst last = 1;\n`}
+          modifiedVersion={0}
+          fileName="region.ts"
+          resolvedTheme="dark"
+          renderSideBySide
+          onChange={() => {}}
+          onSave={() => {}}
+        />
+      </div>
+    </QueryClientProvider>,
+  );
+  await ready();
+  await expect
+    .poll(() =>
+      Array.from(document.querySelectorAll(".monaco-diff-editor .diff-hidden-lines"))
+        .map((bar) => bar.textContent)
+        .join(" "),
+    )
+    .toContain("hidden lines");
+  // The engine renders spaces as no-break spaces; match the identifier only.
+  await expect.poll(rendered).toContain("last");
+  await view.unmount();
+  client.clear();
+});
+
+it("goes to a typed line from Synara's picker and restores the viewport on cancel", async () => {
+  const view = await mount(false, "const first = 1;\nconst second = 2;\nconst third = 3;\n");
+  const editor = await ready();
+  editor.setPosition({ lineNumber: 1, column: 1 });
+  await userEvent.keyboard("{F1}");
+  await page.getByRole("combobox", { name: "Editor commands", exact: true }).fill("go to line");
+  await page.getByRole("option", { name: "Go to line…", exact: true }).click();
+  const input = page.getByRole("combobox", { name: "Go to line", exact: true });
+  await expect.element(input).toBeVisible();
+  await expect.element(page.getByText("Type a line number (1–4) or line:column.")).toBeVisible();
+  await input.fill("3");
+  await expect.element(page.getByText("Go to line 3", { exact: true })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(editor.getPosition()?.lineNumber).toBe(1);
+  await userEvent.keyboard("{F1}");
+  await page.getByRole("combobox", { name: "Editor commands", exact: true }).fill("go to line");
+  await page.getByRole("option", { name: "Go to line…", exact: true }).click();
+  await page.getByRole("combobox", { name: "Go to line", exact: true }).fill("3:7");
+  await page.getByRole("option", { name: "Go to line 3, column 7", exact: false }).click();
+  await expect.poll(() => editor.getPosition()?.toString()).toBe("(3,7)");
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  await view.unmount();
+});

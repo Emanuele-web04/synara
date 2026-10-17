@@ -371,9 +371,19 @@ const CODE_EDITOR_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Jump to a symbol in the open file.",
   },
   {
+    command: "editor.goToLine",
+    label: "Go to line",
+    description: "Jump to a line, or line:column, in the open file.",
+  },
+  {
     command: "editor.problems",
     label: "Show problems",
     description: "List diagnostics for the open file.",
+  },
+  {
+    command: "editor.quickFix",
+    label: "Quick fix",
+    description: "Show quick fixes and refactorings for the code at the cursor.",
   },
   {
     command: "editor.debug.start",

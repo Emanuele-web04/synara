@@ -3,8 +3,8 @@
 //          file, diff and preview surfaces, plus the typed bridge to the
 //          server's language service and the multi-file edit transaction.
 // Layer: Web editor runtime
-// Exports: acquireEditorModel, requestIntelligence, applyEditorEdits, editor
-//          URI/location helpers.
+// Exports: acquireEditorModel, ensureEditorModels, requestIntelligence,
+//          applyEditorEdits, editor URI/location helpers.
 
 import * as monaco from "monaco-editor/editor/editor.api";
 import type {
@@ -32,6 +32,9 @@ const IDLE_MODEL_DISPOSE_MS = 60_000;
 // A remembered reveal target that no surface consumed (the open was declined
 // or redirected) must not jump a later open of that file.
 const PENDING_LOCATION_TTL_MS = 15_000;
+// Peek views render other workspace files inside a surface; the files a
+// document keeps loaded for that are bounded like a language request.
+const MAX_DEPENDENCY_MODELS = 64;
 
 export interface EditorModelEntry {
   model: monaco.editor.ITextModel;
@@ -45,6 +48,10 @@ export interface EditorModelEntry {
   listeners: Set<(value: string) => void>;
   statusListeners: Set<(message: string | null) => void>;
   status: string | null;
+  /** Models of other files this document holds for peek views; released when its last surface closes. */
+  dependencies: Map<string, () => void>;
+  /** Peek-model loads in flight, so concurrent requests share one read. */
+  loading: Map<string, Promise<void>>;
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
   dispose: () => void;
 }
@@ -125,6 +132,8 @@ export function acquireEditorModel(
       listeners: new Set(),
       statusListeners: new Set(),
       status: null,
+      dependencies: new Map(),
+      loading: new Map(),
       dispose: () => undefined,
     };
     let changingFromSession = false;
@@ -161,6 +170,7 @@ export function acquireEditorModel(
       model.dispose();
       owned.listeners.clear();
       owned.statusListeners.clear();
+      releaseDependencies(owned);
     };
     entry = owned;
     store.entries.set(key, entry);
@@ -176,6 +186,9 @@ export function acquireEditorModel(
       released = true;
       entry.references--;
       if (entry.references > 0) return;
+      // Peeked files go first: two documents peeking each other must not keep
+      // each other referenced past their last surface.
+      releaseDependencies(entry);
       if (cwd === null) {
         entry.dispose();
         return;
@@ -187,6 +200,68 @@ export function acquireEditorModel(
       }, IDLE_MODEL_DISPOSE_MS);
     },
   };
+}
+
+function releaseDependencies(entry: EditorModelEntry) {
+  entry.dependencies.forEach((release) => release());
+  entry.dependencies.clear();
+}
+
+/**
+ * Loads the models of other workspace files so the engine's peek views and
+ * reference trees can show them from this document. Unsaved buffers are shown
+ * as they are; clean files are re-read through Synara's file API so the peek
+ * matches the disk state the language service located. The models stay held
+ * until this document's last surface closes. Files Synara treats as read-only
+ * (truncated, symlinks, mixed line endings) are skipped.
+ */
+export async function ensureEditorModels(
+  entry: EditorModelEntry,
+  relativePaths: readonly string[],
+): Promise<void> {
+  if (!entry.cwd) return;
+  await Promise.allSettled(
+    [...new Set(relativePaths)]
+      .filter((relativePath) => relativePath !== entry.relativePath)
+      .map((relativePath) => loadDependencyModel(entry, relativePath)),
+  );
+}
+
+function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Promise<void> {
+  const pending = entry.loading.get(relativePath);
+  if (pending) return pending;
+  const cwd = entry.cwd!;
+  const task = (async () => {
+    if (!entry.dependencies.has(relativePath) && entry.dependencies.size >= MAX_DEPENDENCY_MODELS)
+      throw new Error("Too many files are held for peek views.");
+    const session = getWorkspaceEditorSession(entry.client, cwd, relativePath);
+    let contents = session.getSnapshot().value;
+    if (!session.dirty && !session.saving) {
+      // Cancel a read in flight for the pane first, as the session's reload does,
+      // so this fetch is never deduplicated onto an older request.
+      const readOptions = projectReadFileQueryOptions({ cwd, relativePath });
+      await entry.client.cancelQueries({ queryKey: readOptions.queryKey, exact: true });
+      const data = await entry.client.fetchQuery({ ...readOptions, staleTime: 0 });
+      if (data.relativePath !== relativePath) throw new Error("The file resolved elsewhere.");
+      const reason = resolveWorkspaceFileEditorReadOnlyReason(data);
+      if (reason) throw new Error(reason);
+      session.load(data);
+      contents = session.getSnapshot().key ? session.getSnapshot().value : data.contents;
+    }
+    if (entry.model.isDisposed() || entry.references === 0) throw new Error("The document closed.");
+    if (!entry.dependencies.has(relativePath)) {
+      const handle = acquireEditorModel(
+        entry.client,
+        cwd,
+        relativePath,
+        contents,
+        session.getSnapshot().version,
+      );
+      entry.dependencies.set(relativePath, handle.release);
+    }
+  })().finally(() => entry.loading.delete(relativePath));
+  entry.loading.set(relativePath, task);
+  return task;
 }
 
 export function replaceEditorText(model: monaco.editor.ITextModel, value: string) {

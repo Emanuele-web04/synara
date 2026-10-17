@@ -82,7 +82,10 @@ export const EditorSymbol = Schema.Struct({
   name: Schema.String,
   kind: Schema.String,
   containerName: Schema.String,
+  /** The symbol's name; what navigation selects. */
   location: EditorLocation,
+  /** The whole declaration (document symbols only); what outlines, sticky headers and diff breadcrumbs enclose. */
+  extent: Schema.optional(EditorLocation),
 });
 export const EditorCodeAction = Schema.Struct({
   title: Schema.String,

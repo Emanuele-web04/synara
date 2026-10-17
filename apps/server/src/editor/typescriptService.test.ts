@@ -69,9 +69,10 @@ describe("real TypeScript project intelligence", () => {
     expect(new Set(request("references").locations?.map((item) => item.relativePath))).toEqual(
       new Set(["main.ts", "math.ts"]),
     );
-    expect(request("documentSymbols").symbols?.some((symbol) => symbol.name === "answer")).toBe(
-      true,
-    );
+    const answer = request("documentSymbols").symbols?.find((symbol) => symbol.name === "answer");
+    expect(answer).toBeDefined();
+    // The extent spans the whole declaration so outlines and sticky headers can enclose it.
+    expect(answer!.extent!.length).toBeGreaterThan(answer!.location.length);
     expect(
       request("workspaceSymbols", { query: "add" }).symbols?.some(
         (symbol) => symbol.name === "add",

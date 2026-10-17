@@ -416,18 +416,19 @@ export function createTypeScriptService(workspaceRoot: string) {
           const symbols: NonNullable<EditorIntelligenceResult["symbols"]>[number][] = [];
           const visit = (item: ts.NavigationTree, container: string) => {
             const loc = location(file, item.nameSpan ?? item.spans[0]!);
-            if (item.kind !== "script" && loc)
+            const extent = location(file, item.spans[0]!);
+            if (loc)
               symbols.push({
                 name: item.text,
                 kind: item.kind,
                 containerName: container,
                 location: loc,
+                ...(extent ? { extent } : {}),
               });
-            item.childItems?.forEach((child) =>
-              visit(child, item.kind === "script" ? "" : item.text),
-            );
+            item.childItems?.forEach((child) => visit(child, item.text));
           };
-          visit(service.getNavigationTree(file), "");
+          // The root is the script, or the quoted module name of an ES module; neither is a symbol.
+          service.getNavigationTree(file).childItems?.forEach((child) => visit(child, ""));
           return { ...base, symbols: symbols.slice(0, MAX_RESULT_ITEMS) };
         }
         case "workspaceSymbols":

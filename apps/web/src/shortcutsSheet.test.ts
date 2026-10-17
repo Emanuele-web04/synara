@@ -171,7 +171,7 @@ describe("buildShortcutSheetSections", () => {
 
     const editorSection = sections.find((section) => section.id === "code-editor");
     expect(editorSection?.title).toBe("Code editor");
-    // Go to symbol and Show problems ship unassigned, so they are not listed until bound.
+    // Go to symbol, Go to line and Show problems ship unassigned, so they are not listed until bound.
     expect(
       editorSection?.entries.map((entry) => [entry.command, entry.label, entry.shortcutLabel]),
     ).toEqual([
@@ -179,6 +179,7 @@ describe("buildShortcutSheetSections", () => {
       ["editor.rename", "Rename symbol", "F2"],
       ["editor.goToDefinition", "Go to definition", "F12"],
       ["editor.findReferences", "Find references", "⇧F12"],
+      ["editor.quickFix", "Quick fix", "⌘."],
       ["editor.debug.start", "Start or continue debugging", "F5"],
       ["editor.debug.stop", "Stop debugging", "⇧F5"],
       ["editor.debug.toggleBreakpoint", "Toggle breakpoint", "F9"],
