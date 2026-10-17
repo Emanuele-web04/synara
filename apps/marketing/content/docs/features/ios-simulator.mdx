@@ -84,6 +84,8 @@ Simulator screenshot results render as image previews in the chat, with expand a
 
 Synara distinguishes simulators it booted from devices that were already running. It can reclaim Synara-owned devices after task cleanup or a crash; it does not automatically shut down a user-owned simulator simply because the pane detaches.
 
+An agent-made attachment starts the ten-minute idle countdown when the last turn using that device ends. A running device tool, a live pane viewer, a recording, or an explicit user attachment keeps it alive. A new tool or viewer cancels the countdown; its next release starts a fresh grace period. Devices booted outside Synara remain outside this automatic cleanup.
+
 Shutting down ends the simulator session. Detaching only removes the task's live attachment. Choose detach when another tool or task should keep using the booted device.
 
 ## Setup and recovery

@@ -500,6 +500,193 @@ describe("DeviceManager idle shutdown", () => {
   });
 });
 
+describe("DeviceManager agent-owned idle lifetime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function useDevice(manager: DeviceManager, threadId: string, udid: string, turnId: string) {
+    await manager.withAgentActivity(threadId, () => manager.ensureThreadAttached(threadId, udid), {
+      udid,
+      turnId,
+    });
+  }
+
+  it("waits for all exact-turn users, including a device different from the visible attachment", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await useDevice(manager, THREAD_A, DEVICE_A, "old");
+    await useDevice(manager, THREAD_A, DEVICE_A, "new");
+    await useDevice(manager, THREAD_B, DEVICE_A, "other-thread");
+    await useDevice(manager, THREAD_A, DEVICE_B, "new");
+    manager.endAgentTurn(THREAD_A, "old");
+    manager.endAgentTurn(THREAD_A, "old");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    manager.endAgentTurn(THREAD_A, "new");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_B]);
+    manager.endAgentTurn(THREAD_B, "other-thread");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_B, DEVICE_A]);
+  });
+
+  it.each(["user attachment", "viewer", "recording", "user boot"] as const)(
+    "preserves a %s and starts a new grace period only after release",
+    async (consumer) => {
+      const { manager, backend } = makeManager();
+      if (consumer === "user boot") backend.bootExternally(DEVICE_A);
+      else await manager.boot(DEVICE_A);
+      await useDevice(manager, THREAD_A, DEVICE_A, "agent-turn");
+      manager.endAgentTurn(THREAD_A, "agent-turn");
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS / 2);
+      let release = async () => {};
+      if (consumer === "user attachment") {
+        await manager.attach(THREAD_A, DEVICE_A);
+        release = async () => {
+          await manager.detach(THREAD_A);
+        };
+      } else if (consumer === "viewer") {
+        const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+          send: () => undefined,
+          bufferedAmount: () => 0,
+          isOpen: () => true,
+        });
+        release = async () => unsubscribe();
+      } else if (consumer === "recording") {
+        await manager.startRecording(DEVICE_A);
+        release = async () => {
+          await manager.stopRecording(DEVICE_A);
+        };
+      }
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      await release();
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS - 1);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(consumer === "user boot" ? 0 : 1);
+    },
+  );
+
+  it("lets an in-flight tool finish after its terminal event without leaking a completed turn", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    const finish = deferred();
+    const action = manager.withAgentActivity(THREAD_A, () => finish.promise, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    finish.resolve();
+    await action;
+    // A late admitted call cannot resurrect a lease already released by its exact terminal event.
+    await manager.withAgentActivity(THREAD_A, async () => {}, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+  });
+
+  it("rechecks ownership after asynchronous stream teardown before shutting down", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const finish = deferred();
+    const detached = deferred();
+    const detachStream = backend.detachStream.bind(backend);
+    backend.detachStream = async (udid) => {
+      detached.resolve();
+      await finish.promise;
+      await detachStream(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await detached.promise;
+    const attach = manager.attach(THREAD_B, DEVICE_A);
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    finish.resolve();
+    await attach;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+    unsubscribe();
+    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_A);
+  });
+
+  it("waits out an idle poweroff and restores the owned boot before new agent input", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const started = deferred();
+    const finish = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await started.promise;
+    const input = manager.withAgentActivity(THREAD_A, () => manager.tap(DEVICE_A, 1, 1), {
+      udid: DEVICE_A,
+      turnId: "new-turn",
+    });
+    const attach = manager.attach(THREAD_B, DEVICE_A);
+    const recording = manager.startRecording(DEVICE_A);
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("tap")).toHaveLength(0);
+    expect(backend.callsOfKind("startRecording")).toHaveLength(0);
+    finish.resolve();
+    await Promise.all([input, attach, recording]);
+    expect(backend.callsOfKind("boot")).toHaveLength(2);
+    const lifecycle = backend.calls.filter(
+      (call) => call.kind === "shutdown" || call.kind === "boot" || call.kind === "tap",
+    );
+    expect(lifecycle.slice(-3).map((call) => call.kind)).toEqual(["shutdown", "boot", "tap"]);
+    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_A);
+    unsubscribe();
+    expect((await manager.list()).devices.find((device) => device.udid === DEVICE_A)?.state).toBe(
+      "booted",
+    );
+  });
+
+  it("does not recreate an archived attachment or arm new timers after disposal", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const finish = deferred();
+    const action = manager.withAgentActivity(THREAD_A, () => finish.promise, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    await manager.handleThreadRemoved(THREAD_A);
+    await manager.dispose();
+    finish.resolve();
+    await action;
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+  });
+});
+
 describe("DeviceManager device switching", () => {
   it("frees the old slot immediately when a thread switches devices", async () => {
     const { backend, manager } = makeManager();

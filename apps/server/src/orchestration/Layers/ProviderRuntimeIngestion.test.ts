@@ -71,6 +71,11 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ComputerManager } from "../../computer/ComputerManager.ts";
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { DeviceManager } from "../../device/DeviceManager.ts";
+import { FakeDeviceBackend } from "../../device/FakeDeviceBackend.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
+import { makeAgentGatewayDeviceTools } from "../../agentGateway/deviceTools.ts";
+import type { ToolContext } from "../../agentGateway/toolRuntime.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -404,6 +409,7 @@ describe("ProviderRuntimeIngestion", () => {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
+    readonly deviceManager?: DeviceManager;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
@@ -420,6 +426,11 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(
+        options?.deviceManager
+          ? Layer.succeed(DeviceService, { supported: true, manager: options.deviceManager })
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         options?.computerManager
           ? Layer.succeed(ComputerService, {
@@ -1416,6 +1427,71 @@ describe("ProviderRuntimeIngestion", () => {
         harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
       ),
     ).toBe(rows[1]!.sequence);
+  });
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "turn.aborted", payload: { reason: "User interrupted" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "session.state.changed", payload: { state: "stopped" } },
+    { type: "session.state.changed", payload: { state: "error" } },
+    { type: "runtime.error", payload: { message: "Provider stopped" } },
+  ])("shuts down an agent-booted simulator after $type $payload becomes idle", async (terminal) => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const harness = await createHarness({ deviceManager: manager });
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("device-turn");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("device-turn-started"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      const context: ToolContext = {
+        principal: {
+          kind: "provider-session",
+          sessionKey: "device-test",
+          threadId,
+          provider: "codex",
+          turnId,
+        },
+        callerThreadId: threadId,
+        callerThreadLabel: null,
+        callerSessionKey: "device-test",
+        callerProvider: "codex",
+        callerCapabilities: new Set(["device:control"]),
+        callerTurnId: turnId,
+        assertCallerTurnActive: () => Effect.void,
+        jsonRpcRequestId: 1,
+      };
+      const boot = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (tool) => tool.definition.name === "device_boot",
+      )!;
+      const result = await Effect.runPromise(boot.handler({ udid: "FAKE-0001" }, context));
+      expect(result.isError).not.toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      harness.emit({
+        ...terminal,
+        eventId: asEventId("device-turn-completed"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: "FAKE-0001" }]),
+      );
+      expect((await manager.getThreadState(threadId)).attachedDeviceUdid).toBeNull();
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it.each([

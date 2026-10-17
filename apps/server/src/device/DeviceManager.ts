@@ -13,7 +13,7 @@
  *   refusable rather than fatal: the caller is handed the shutdown candidates
  *   so the pane can prompt.
  * - Shutdown triggers: app quit (`dispose`), thread removal
- *   (`handleThreadRemoved`), and an idle timeout after the last detach.
+ *   (`handleThreadRemoved`), and an idle timeout after the last agent turn or detach.
  *
  * Everything the manager does to the device itself goes through DeviceBackend,
  * so the whole state machine is testable against `FakeDeviceBackend`.
@@ -80,7 +80,7 @@ import {
   type DeviceUiTargetMatch,
 } from "./uiTreeTargeting.ts";
 
-/** How long a Synara-booted device stays up with no thread attached. */
+/** How long an unused Synara-booted device stays up after work or viewing ends. */
 export const DEVICE_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
 
 /**
@@ -211,6 +211,10 @@ interface ThreadAttachment {
   version: number;
   attachedDeviceUdid: string | null;
   agentActiveCount: number;
+  attachmentSource: "user" | "agent";
+  /** Device use outlives an individual tool until its exact provider turn settles. */
+  readonly agentDevicesByTurn: Map<string, Set<string>>;
+  readonly endedAgentTurns: Set<string>;
   lastError: string | null;
   /** Non-null while the attachment is still coming up. */
   attachPhase: DeviceAttachPhase | null;
@@ -255,6 +259,9 @@ export class DeviceManager {
    */
   private readonly bootsInFlight = new Set<string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  /** New consumers wait out an already-issued idle poweroff before dispatching. */
+  private readonly idleShutdowns = new Map<string, Promise<void>>();
+  private readonly activeAgentDevices = new Map<string, number>();
   private activeStreamUdid: string | null = null;
   private desiredStreamUdid: string | null = null;
   /** Serializes the native helper's single stream while allowing the desired device to change. */
@@ -420,6 +427,8 @@ export class DeviceManager {
   // ── Boot / shutdown ────────────────────────────────────────────────
 
   async boot(udid: string): Promise<DeviceBootResult> {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    await this.waitForIdleShutdown(udid);
     const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
     // Devices that stopped without Synara doing it still held their slots, so
     // three shutdowns from a shell were enough to make every later boot refuse.
@@ -466,9 +475,16 @@ export class DeviceManager {
     return { kind: "booted", device: { ...device, bootSource: "synara" } };
   }
 
-  async shutdown(udid: string): Promise<void> {
+  async shutdown(udid: string, onlyIfIdle = false): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
     await this.stopStream(udid);
+    // Stream teardown yields: a new tool, user attachment or viewer may arrive meanwhile.
+    if (onlyIfIdle && (this.disposed || this.isDeviceBusy(udid))) return;
+    const attachedTokens = onlyIfIdle
+      ? new Map(
+          [...this.threads].map(([threadId, attachment]) => [threadId, attachment.attachToken]),
+        )
+      : null;
     await this.backend.shutdown(udid);
     this.synaraBooted.delete(udid);
     await this.recordBootOwnership();
@@ -477,6 +493,8 @@ export class DeviceManager {
     // at a shut-down simulator.
     for (const [threadId, attachment] of this.threads) {
       if (attachment.attachedDeviceUdid !== udid) continue;
+      if (attachedTokens !== null && attachedTokens.get(threadId) !== attachment.attachToken)
+        continue;
       attachment.attachedDeviceUdid = null;
       attachment.attachPhase = null;
       // Stops a retry loop still waiting on this device's display: it is not
@@ -499,17 +517,25 @@ export class DeviceManager {
    * the background, pushing a phase per stage, and the pane renders the device
    * it was told to show from the first frame of the interaction.
    */
-  async attach(threadId: string, udid: string): Promise<ThreadDeviceState> {
+  async attach(
+    threadId: string,
+    udid: string,
+    source: "user" | "agent" = "user",
+  ): Promise<ThreadDeviceState> {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
     const attachment = this.threadState(threadId);
     const previous = attachment.attachedDeviceUdid;
     // Cleared before releasing: `releaseDevice` asks whether anyone still holds
     // the device, and this thread must no longer count as a holder.
     attachment.attachedDeviceUdid = udid;
+    attachment.attachmentSource = source;
     attachment.lastError = null;
     attachment.attachPhase = "connecting";
     const token = (attachment.attachToken += 1);
     if (previous !== null && previous !== udid) await this.releaseDevice(previous, "switched");
     this.clearIdleTimer(udid);
+    await this.waitForIdleShutdown(udid);
+    if (attachment.attachToken !== token) return await this.snapshot(threadId);
 
     // Already streaming (another thread is watching the same device): there is
     // nothing to wait for, so the phase clears without a round trip.
@@ -612,7 +638,8 @@ export class DeviceManager {
     const attached = this.threadState(threadId).attachedDeviceUdid;
     if (attached === udid) return;
     if (attached !== null) return;
-    await this.attach(threadId, udid);
+    await this.attach(threadId, udid, "agent");
+    this.updateIdleTimer(udid);
   }
 
   async detach(threadId: string): Promise<ThreadDeviceState> {
@@ -631,7 +658,11 @@ export class DeviceManager {
   async handleThreadRemoved(threadId: string): Promise<void> {
     if (!this.threads.has(threadId)) return;
     await this.detach(threadId);
+    const devices = new Set(
+      [...this.threads.get(threadId)!.agentDevicesByTurn.values()].flatMap((used) => [...used]),
+    );
     this.threads.delete(threadId);
+    for (const device of devices) this.updateIdleTimer(device);
   }
 
   // ── Streaming ──────────────────────────────────────────────────────
@@ -641,21 +672,29 @@ export class DeviceManager {
    * started lazily and stopped when the last subscriber and attachment go away.
    */
   subscribeFrames(udid: string, sink: DeviceFrameSink): () => void {
+    if (this.disposed) return () => {};
     const unsubscribe = this.transport.subscribe(udid, sink);
-    // A thread whose attach deferred its stream (see `wouldStealStream`) gets
-    // the attach's retry loop now that someone is watching: the device may
-    // still be publishing its display.
-    const waiting = [...this.threads].find(
-      ([, attachment]) => attachment.attachedDeviceUdid === udid && this.activeStreamUdid !== udid,
-    );
-    if (waiting) {
-      const [threadId, attachment] = waiting;
-      void this.bringStreamUp(threadId, udid, attachment.attachToken);
-    } else {
-      void this.startStream(udid).catch(() => undefined);
-    }
+    this.clearIdleTimer(udid);
+    void (async () => {
+      await this.waitForIdleShutdown(udid);
+      if (this.disposed || this.transport.deviceSubscriberCount(udid) === 0) return;
+      // A thread whose attach deferred its stream (see `wouldStealStream`) gets
+      // the attach's retry loop now that someone is watching: the device may
+      // still be publishing its display.
+      const waiting = [...this.threads].find(
+        ([, attachment]) =>
+          attachment.attachedDeviceUdid === udid && this.activeStreamUdid !== udid,
+      );
+      if (waiting) {
+        const [threadId, attachment] = waiting;
+        void this.bringStreamUp(threadId, udid, attachment.attachToken);
+      } else {
+        void this.startStream(udid).catch(() => undefined);
+      }
+    })().catch(() => undefined);
     return () => {
       unsubscribe();
+      this.updateIdleTimer(udid);
       // Capture stops as soon as the last viewer goes, whether or not a thread
       // is still attached. Collapsing the pane closes the frame socket but
       // leaves the attachment, and gating this on the attachment too meant the
@@ -1172,12 +1211,16 @@ export class DeviceManager {
   }
 
   async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
     const alreadyTracked = this.recording.has(udid);
     this.recording.add(udid);
+    this.clearIdleTimer(udid);
     try {
+      await this.waitForIdleShutdown(udid);
       return await this.backend.startRecording(udid);
     } catch (error) {
       if (!alreadyTracked) this.recording.delete(udid);
+      this.updateIdleTimer(udid);
       throw error;
     }
   }
@@ -1185,6 +1228,7 @@ export class DeviceManager {
   async stopRecording(udid: string): Promise<DeviceStopRecordingResult> {
     const result = await this.backend.stopRecording(udid);
     this.recording.delete(udid);
+    this.updateIdleTimer(udid);
     return result;
   }
 
@@ -1210,17 +1254,66 @@ export class DeviceManager {
    * device" badge for exactly as long as the action runs. Nested calls are
    * counted, so overlapping tool calls do not clear the badge early.
    */
-  async withAgentActivity<A>(threadId: string, action: () => Promise<A>): Promise<A> {
+  async withAgentActivity<A>(
+    threadId: string,
+    action: () => Promise<A>,
+    deviceUse?: { readonly udid: string; readonly turnId: string | null },
+  ): Promise<A> {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
     const attachment = this.threadState(threadId);
+    const udid = deviceUse?.udid;
+    if (udid !== undefined) {
+      this.clearIdleTimer(udid);
+      this.activeAgentDevices.set(udid, (this.activeAgentDevices.get(udid) ?? 0) + 1);
+      const turnId = deviceUse?.turnId ?? null;
+      if (turnId !== null && !attachment.endedAgentTurns.has(turnId)) {
+        const devices = attachment.agentDevicesByTurn.get(turnId) ?? new Set<string>();
+        devices.add(udid);
+        attachment.agentDevicesByTurn.set(turnId, devices);
+      }
+    }
     attachment.agentActiveCount += 1;
-    // Only the badge changes here; the device list the pane shows does not.
-    if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
     try {
+      if (udid !== undefined) await this.waitForIdleShutdown(udid);
+      // Only the badge changes here; the device list the pane shows does not.
+      if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
+      if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
       return await action();
     } finally {
       attachment.agentActiveCount = Math.max(0, attachment.agentActiveCount - 1);
-      if (attachment.agentActiveCount === 0) await this.publish(threadId, { reuseDiscovery: true });
+      if (udid !== undefined) {
+        const remaining = (this.activeAgentDevices.get(udid) ?? 1) - 1;
+        if (remaining === 0) this.activeAgentDevices.delete(udid);
+        else this.activeAgentDevices.set(udid, remaining);
+        this.updateIdleTimer(udid);
+      }
+      // Archive/disposal may finish while an admitted device call is settling.
+      if (
+        !this.disposed &&
+        this.threads.get(threadId) === attachment &&
+        attachment.agentActiveCount === 0
+      )
+        await this.publish(threadId, { reuseDiscovery: true });
     }
+  }
+
+  /** Release only the settled turn; delayed terminal events cannot evict newer work. */
+  endAgentTurn(threadId: string, turnId?: string): void {
+    const attachment = this.threads.get(threadId);
+    if (!attachment || this.disposed) return;
+    if (turnId === undefined && attachment.agentDevicesByTurn.size > 1) return;
+    const devices = new Set<string>();
+    for (const [heldTurn, used] of attachment.agentDevicesByTurn) {
+      if (turnId !== undefined && heldTurn !== turnId) continue;
+      for (const udid of used) devices.add(udid);
+      attachment.agentDevicesByTurn.delete(heldTurn);
+      attachment.endedAgentTurns.add(heldTurn);
+    }
+    if (turnId !== undefined) attachment.endedAgentTurns.add(turnId);
+    // Bound replay guards while rejecting tool completions from recently settled turns.
+    while (attachment.endedAgentTurns.size > 64)
+      attachment.endedAgentTurns.delete(attachment.endedAgentTurns.values().next().value!);
+    for (const udid of devices) this.updateIdleTimer(udid);
   }
 
   /** Auto-open the pane when an agent puts an app on a device. */
@@ -1275,6 +1368,7 @@ export class DeviceManager {
     this.disposed = true;
     for (const [, timer] of this.idleTimers) this.cancel(timer);
     this.idleTimers.clear();
+    await Promise.allSettled([...this.idleShutdowns.values()]);
     // Snapshotted: both loops mutate the set they are walking.
     const recording = Array.from(this.recording);
     const booted = Array.from(this.synaraBooted);
@@ -1300,6 +1394,9 @@ export class DeviceManager {
         version: 0,
         attachedDeviceUdid: null,
         agentActiveCount: 0,
+        attachmentSource: "user",
+        agentDevicesByTurn: new Map(),
+        endedAgentTurns: new Set(),
         lastError: null,
         attachPhase: null,
         attachToken: 0,
@@ -1327,6 +1424,44 @@ export class DeviceManager {
       if (attachment.attachedDeviceUdid === udid) return true;
     }
     return false;
+  }
+
+  /** Metadata-only agent attachments do not keep a simulator alive after work ends. */
+  private isDeviceBusy(udid: string): boolean {
+    if (
+      this.bootsInFlight.has(udid) ||
+      this.recording.has(udid) ||
+      this.activeAgentDevices.has(udid) ||
+      this.transport.deviceSubscriberCount(udid) > 0
+    )
+      return true;
+    for (const attachment of this.threads.values()) {
+      if (attachment.attachedDeviceUdid === udid && attachment.attachmentSource === "user")
+        return true;
+      for (const devices of attachment.agentDevicesByTurn.values())
+        if (devices.has(udid)) return true;
+    }
+    return false;
+  }
+
+  /** Reuse the existing grace period whenever the last real consumer goes away. */
+  private updateIdleTimer(udid: string): void {
+    if (this.disposed || !this.synaraBooted.has(udid)) return;
+    if (this.isDeviceBusy(udid)) {
+      this.clearIdleTimer(udid);
+      return;
+    }
+    if (this.idleTimers.has(udid)) return;
+    const timer = this.schedule(() => {
+      if (this.idleTimers.get(udid) !== timer) return;
+      this.idleTimers.delete(udid);
+      const shutdown = this.shutdownIfStillIdle(udid).finally(() => {
+        if (this.idleShutdowns.get(udid) === shutdown) this.idleShutdowns.delete(udid);
+      });
+      this.idleShutdowns.set(udid, shutdown);
+    }, this.idleShutdownMs);
+    timer.unref?.();
+    this.idleTimers.set(udid, timer);
   }
 
   /** Starting `udid` would end a stream someone is watching, for no viewer of its own. */
@@ -1493,7 +1628,7 @@ export class DeviceManager {
     reason: "detached" | "switched" = "detached",
   ): Promise<void> {
     await this.stopRecordingIfActive(udid).catch(() => undefined);
-    if (this.isAttachedAnywhere(udid)) return;
+    if (this.isAttachedAnywhere(udid) || this.isDeviceBusy(udid)) return;
     if (this.transport.deviceSubscriberCount(udid) === 0) {
       await this.stopStream(udid).catch(() => undefined);
     }
@@ -1505,15 +1640,7 @@ export class DeviceManager {
       await this.shutdown(udid).catch(() => undefined);
       return;
     }
-    this.clearIdleTimer(udid);
-    const timer = this.schedule(() => {
-      this.idleTimers.delete(udid);
-      void this.shutdownIfStillIdle(udid);
-    }, this.idleShutdownMs);
-    // A pending idle shutdown must not keep the process alive at exit; quit
-    // shuts these devices down anyway.
-    timer.unref?.();
-    this.idleTimers.set(udid, timer);
+    this.updateIdleTimer(udid);
   }
 
   private async stopRecordingIfActive(udid: string): Promise<void> {
@@ -1524,8 +1651,36 @@ export class DeviceManager {
   private async shutdownIfStillIdle(udid: string): Promise<void> {
     if (this.disposed) return;
     // Re-checked at fire time: a thread may have re-attached during the wait.
-    if (this.isAttachedAnywhere(udid) || !this.synaraBooted.has(udid)) return;
-    await this.shutdown(udid).catch(() => undefined);
+    if (this.isDeviceBusy(udid) || !this.synaraBooted.has(udid)) return;
+    await this.shutdown(udid, true).catch(() => undefined);
+  }
+
+  /** An idle poweroff already sent to simctl cannot be cancelled; renew its owned boot first. */
+  private async waitForIdleShutdown(udid: string): Promise<void> {
+    const shutdown = this.idleShutdowns.get(udid);
+    if (!shutdown) return;
+    await shutdown;
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    const resuming = this.idleShutdowns.get(udid);
+    if (resuming !== undefined && resuming !== shutdown) {
+      await resuming;
+      return;
+    }
+    if (!this.synaraBooted.has(udid) && this.isDeviceBusy(udid)) {
+      // Concurrent viewers/tools share the one restoration, including its boot-cap check.
+      const restoration = this.boot(udid)
+        .then((result) => {
+          if (result.kind !== "booted")
+            throw new DeviceBackendError(
+              "The simulator boot limit was reached while resuming device use.",
+            );
+        })
+        .finally(() => {
+          if (this.idleShutdowns.get(udid) === restoration) this.idleShutdowns.delete(udid);
+        });
+      this.idleShutdowns.set(udid, restoration);
+      await restoration;
+    }
   }
 
   private clearIdleTimer(udid: string): void {

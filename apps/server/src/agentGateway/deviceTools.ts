@@ -465,8 +465,12 @@ export function makeAgentGatewayDeviceTools(
               }
             }
             signal.throwIfAborted();
-            const value = await manager.withAgentActivity(context.callerThreadId, () =>
-              run(args, context, signal),
+            const value = await manager.withAgentActivity(
+              context.callerThreadId,
+              () => run(args, context, signal),
+              typeof args.udid === "string"
+                ? { udid: args.udid, turnId: context.callerTurnId }
+                : undefined,
             );
             return typeof value === "object" && value !== null && PREBUILT_RESULTS.has(value)
               ? (value as McpToolCallResult)
@@ -996,6 +1000,7 @@ export function makeAgentGatewayDeviceTools(
                   );
                   return { result, artifact };
                 },
+                { udid, turnId: context.callerTurnId },
               );
               await surfaceDevice(context, udid, "agent-tool");
               // Image content beside the JSON so the model sees the screen

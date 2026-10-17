@@ -61,6 +61,7 @@ import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImage
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { activeThreadGoal } from "../../provider/goalMode.ts";
 import {
   classifyTerminalTurnApplicability,
@@ -823,6 +824,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
+  const deviceService = yield* Effect.serviceOption(DeviceService);
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -2785,15 +2787,14 @@ const make = Effect.gen(function* () {
         event.type === "runtime.error" ||
         (event.type === "session.state.changed" &&
           (event.payload.state === "stopped" || event.payload.state === "error"));
-      if (
-        Option.isSome(computerService) &&
-        (computerSessionEnded ||
-          (isTerminalTurnEvent &&
-            (eventTurnId !== undefined || (shouldApplyThreadLifecycle && !hasAmbiguousTurns))))
-      ) {
-        const releasedTurnId = isTerminalTurnEvent
-          ? eventTurnId
-          : (rawEventTurnId ?? activeTurnId ?? undefined);
+      const shouldReleaseTurnResources =
+        computerSessionEnded ||
+        (isTerminalTurnEvent &&
+          (eventTurnId !== undefined || (shouldApplyThreadLifecycle && !hasAmbiguousTurns)));
+      const releasedTurnId = isTerminalTurnEvent
+        ? eventTurnId
+        : (rawEventTurnId ?? activeTurnId ?? undefined);
+      if (Option.isSome(computerService) && shouldReleaseTurnResources) {
         endComputerTurnTiming(thread.id, releasedTurnId);
         yield* Effect.tryPromise(() =>
           computerService.value.manager.releaseDesktopControl(thread.id, releasedTurnId),
@@ -2806,6 +2807,11 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      }
+
+      // Simulator leases follow the same exact-turn lifecycle, independent of desktop support.
+      if (Option.isSome(deviceService) && shouldReleaseTurnResources) {
+        deviceService.value.manager.endAgentTurn(thread.id, releasedTurnId);
       }
 
       if (event.type === "session.started") {
