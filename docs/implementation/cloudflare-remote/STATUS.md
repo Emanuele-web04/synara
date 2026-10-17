@@ -1,5 +1,46 @@
 # Cloudflare Remote — execution state
 
+## Ordinary completion push API deployed — 2026-10-18
+
+Notification source `3fe82b5d47089f9b70741d04b800525fde6b8cc2` adds ordinary
+APNs completion destinations to the existing private watched-turn outbox. It
+reuses the current device-session/host ownership and generation fences, one host
+reporter, the environment-specific APNs keys and maintenance loop. ActivityKit
+keeps its original delivery kind and payload. Only exact completed/error turns
+produce generic completion alerts; stopped, expired and missing host reports do
+not invent completion. Tokens are erased at retirement and device/exact-turn
+keys deduplicate reconnect/re-registration during retention.
+
+- **Checks:** all 389 API tests pass against disposable PostgreSQL, including
+  HTTP admission/HostProof, real-signature APNs wire shape, durable restart,
+  rotation, exact-turn matching, revocation, TTL, deduplication and bulk removal.
+  The ordinary-header regressions first failed against the previous sender.
+  Workspace format, lint, typecheck, identity, migration lineage and Windows
+  runtime checks pass. No signed build or physical-phone delivery is implied.
+- **Backup and migration:** a non-exposed private schema preserves 177 outbox
+  rows, nine host snapshots and all 23 previous Drizzle journal rows. Its three
+  tables have RLS; `anon`/`authenticated` have no schema access and no public table
+  grants exist. Only metadata counts leave the database. Additive migration
+  `0023_turn_notifications` is applied; the live 24th Drizzle entry matches source
+  SHA-256 `9ef29ef5012769fcc26923031eb6b9710148d0bbf4865ce129de8b5cdde34da1`
+  and timestamp `1792277337529`. Existing rows retain `liveactivity`; table owner
+  `synara_account_api`, default-deny RLS and public grants are unchanged.
+- **Deployment:** Worker `6872693d-8e41-472b-aa6e-eb850387566c`, Container version
+  24 and image `sha256:0b78e508208564c849cc82460237833c37317f2b78b7b3a981cdbeb62f21c1ba`
+  are live. The rollout completed with one active instance and no rollout errors.
+  Curl health returns 200; ordinary registration/removal and existing ActivityKit
+  registration return 401 without authentication. Existing secrets were reused;
+  no Apple key was created or replaced, and no test alert targets other users.
+- **Rollback:** first tombstone ordinary notification rows, then restore the
+  recorded previous Worker/image; keep the additive columns and exact Drizzle
+  journal. The old sender does not understand notification destinations. Private
+  backup and immutable metadata receipts remain available for operator recovery.
+
+The API and transport checks do not prove visible background APNs delivery.
+Qualification must use an actual registered device token and owned live turn;
+physical Production/TestFlight delivery remains unverified. Local-only pairing
+continues to use the native notification fallback during iOS's transport grace.
+
 ## Remote .20 and companion 141 delivered — 2026-10-17
 
 [Synara Remote 1.0.6-remote.20](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.20)
