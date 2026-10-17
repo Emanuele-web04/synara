@@ -243,9 +243,10 @@ history and native completion events are not included. They are not billing data
 
 Each envelope contains a random per-installation UUID, event UUID, timestamp,
 app version, channel, surface and platform. Additional fields are restricted to
-fixed enums and bounded durations/token counts. No account/provider identifiers,
-model names, task/project names, routes, URLs, prompts, files or error text enter
-this path. The UUID is independent of the Beta diagnostics identity.
+fixed enums and bounded durations/token counts. No account ids (Remote adds only the
+hashed account described below), provider identifiers, model names, task/project names,
+routes, URLs, prompts, files or error text enter this path. The UUID is independent of
+the Beta diagnostics identity.
 
 Events go to the Cloudflare Worker `/v1/product-events` and a separate D1
 `product_events` table, viewed through its authenticated Product dashboard.
@@ -274,5 +275,11 @@ sessions count as active days. Failed connections, pairings and chat requests ca
 carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
 `host_unlinked`, `timeout`); the receiver rejects a reason on any other outcome. The
 dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
-installations that sent a chat request in those windows. Installations are not
-people: one person can use several.
+installations that sent a chat request in those windows.
+
+To count people rather than installations, Remote events from a signed-in app carry
+`accountHash`: the first 32 hex characters of SHA-256 of `synara-usage-v1:` plus the
+account's user id. The account id itself is never sent, and the same hash on a Mac and a
+phone counts one person. It is a pseudonymous identifier: whoever holds the account
+list could recompute it, so it is linked to the account for privacy-label purposes.
+Signing out stops tagging new events; turning sharing off deletes it locally.

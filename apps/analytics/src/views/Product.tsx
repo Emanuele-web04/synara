@@ -294,14 +294,29 @@ export function Product({
                     Active users
                   </h3>
                   <p className="chart-caption">
-                    Installations seen in the last 24 hours, 7 days and 30 days, ending now; the
-                    date range does not apply. Active means the app ran; engaged means it sent at
-                    least one chat request. One person can use several installations.
+                    People seen in the last 24 hours, 7 days and 30 days, ending now; the date range
+                    does not apply. A signed-in person counts once across their devices; without an
+                    account each installation counts. Engaged installations sent at least one chat
+                    request.
                   </p>
                   <div className="stat-strip stat-strip--four">
-                    <Stat label="Daily active" value={compact(data.activeUsers.day)} />
-                    <Stat label="Weekly active" value={compact(data.activeUsers.week)} />
-                    <Stat label="Monthly active" value={compact(data.activeUsers.month)} />
+                    <Stat
+                      label="Daily active"
+                      value={compact(data.activeUsers.peopleDay ?? data.activeUsers.day)}
+                      detail={`${compact(data.activeUsers.day)} installations`}
+                    />
+                    <Stat
+                      label="Weekly active"
+                      value={compact(data.activeUsers.peopleWeek ?? data.activeUsers.week)}
+                      detail={`${compact(data.activeUsers.week)} installations`}
+                    />
+                    <Stat
+                      label="Monthly active"
+                      value={compact(data.activeUsers.peopleMonth ?? data.activeUsers.month)}
+                      detail={`${compact(data.activeUsers.month)} installations · ${compact(
+                        data.activeUsers.signedInMonth ?? 0,
+                      )} signed in`}
+                    />
                     <Stat
                       label="Engaged this week"
                       value={compact(data.activeUsers.engagedWeek)}

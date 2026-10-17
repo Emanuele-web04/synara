@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
@@ -18,6 +19,15 @@ const MAX_BACKOFF_MS = 60_000;
 const MAX_COUNTER = 1_000_000_000_000;
 const MAX_DURATION_MS = 86_400_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
+
+/** Counts one person across devices; the account id itself never leaves the app. */
+export function productAnalyticsAccountHash(userId: string): string {
+  return createHash("sha256")
+    .update(`${PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX}${userId}`)
+    .digest("hex")
+    .slice(0, 32);
+}
 type ProductAnalyticsOptionalFields = {
   -readonly [Key in keyof Omit<
     ProductAnalyticsInput,
@@ -90,6 +100,7 @@ function platform(value: string): ProductAnalyticsEnvelope["platform"] {
 export class ProductAnalytics {
   private readonly consentPath: string;
   private readonly installIdPath: string;
+  private readonly accountHashPath: string;
   private readonly queuePath: string;
   private readonly channel: ProductAnalyticsChannel;
   private readonly appVersion: string;
@@ -99,6 +110,7 @@ export class ProductAnalytics {
   private readonly listeners = new Set<(enabled: boolean) => void>();
   private consentNeedsPersistence = false;
   private installId: string | null = null;
+  private accountHash: string | null = null;
   private queue: ProductAnalyticsEnvelope[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +132,7 @@ export class ProductAnalytics {
     const dir = join(input.homeDir, "product-analytics");
     this.consentPath = join(dir, "consent.json");
     this.installIdPath = join(dir, "install-id");
+    this.accountHashPath = join(dir, "account-hash");
     this.queuePath = join(dir, "events.json");
     this.channel = input.channel;
     this.appVersion = semver(input.appVersion);
@@ -130,6 +143,7 @@ export class ProductAnalytics {
     if (this.enabled) {
       try {
         this.installId = this.readOrCreateInstallId();
+        this.accountHash = this.readAccountHash();
         this.queue = this.readQueue();
       } catch {
         this.installId = null;
@@ -217,6 +231,7 @@ export class ProductAnalytics {
       if (this.consentNeedsPersistence) this.persistConsent();
       this.clearPersistentDataStrict();
       this.installId = this.readOrCreateInstallId();
+      if (this.accountHash) this.writeAtomic(this.accountHashPath, `${this.accountHash}\n`);
       this.queue = [];
       this.enabled = true;
       try {
@@ -246,6 +261,27 @@ export class ProductAnalytics {
       if (this.timer && !this.retryTimer) void this.flush();
     } catch {
       // Analytics never affects the observed product action.
+    }
+  }
+
+  /** Tracks the signed-in account by hash only; null clears it after sign-out. */
+  setAccount(userId: unknown): void {
+    if (this.disposed) return;
+    const next =
+      typeof userId === "string" && userId.trim().length > 0 && userId.length <= 256
+        ? productAnalyticsAccountHash(userId.trim())
+        : null;
+    if (next === this.accountHash) return;
+    this.accountHash = next;
+    if (!this.enabled) return;
+    if (next) {
+      this.writeAtomic(this.accountHashPath, `${next}\n`);
+      return;
+    }
+    try {
+      rmSync(this.accountHashPath, { force: true });
+    } catch {
+      // Local analytics persistence must never affect the app.
     }
   }
 
@@ -391,6 +427,7 @@ export class ProductAnalytics {
       id: randomUUID(),
       ts: now.toISOString(),
       installId: this.installId!,
+      ...(this.accountHash ? { accountHash: this.accountHash } : {}),
       channel: this.channel,
       surface: "desktop",
       platform: this.platform,
@@ -427,6 +464,15 @@ export class ProductAnalytics {
     const id = randomUUID();
     this.writeAtomic(this.installIdPath, `${id}\n`, true);
     return id;
+  }
+
+  private readAccountHash(): string | null {
+    try {
+      const value = readFileSync(this.accountHashPath, "utf8").trim();
+      return ACCOUNT_HASH_PATTERN.test(value) ? value : null;
+    } catch {
+      return null;
+    }
   }
 
   private readQueue(): ProductAnalyticsEnvelope[] {
@@ -477,12 +523,17 @@ export class ProductAnalytics {
       "cachedInputTokens",
     ])
       if (Object.hasOwn(row, key)) input[key] = row[key];
-    const safe = this.buildEnvelope(input);
-    if (!safe) return null;
+    const built = this.buildEnvelope(input);
+    if (!built) return null;
+    // A stored event keeps the account it was recorded under, not the current one.
+    const { accountHash: _current, ...safe } = built;
     return {
       ...safe,
       id: row.id,
       ts: new Date(row.ts).toISOString(),
+      ...(typeof row.accountHash === "string" && ACCOUNT_HASH_PATTERN.test(row.accountHash)
+        ? { accountHash: row.accountHash }
+        : {}),
       channel: row.channel as ProductAnalyticsChannel,
       platform: row.platform,
       appVersion: row.appVersion,
@@ -513,7 +564,7 @@ export class ProductAnalytics {
   }
 
   private clearPersistentData(): void {
-    for (const path of [this.installIdPath, this.queuePath]) {
+    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
       try {
         rmSync(path, { force: true });
       } catch {
@@ -523,7 +574,7 @@ export class ProductAnalytics {
   }
 
   private clearPersistentDataStrict(): void {
-    for (const path of [this.installIdPath, this.queuePath]) {
+    for (const path of [this.installIdPath, this.accountHashPath, this.queuePath]) {
       rmSync(path, { force: true });
     }
   }

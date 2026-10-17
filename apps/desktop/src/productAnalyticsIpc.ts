@@ -19,9 +19,13 @@ export function attachProductAnalyticsIpc(
   const onTrack = (event: IpcMainEvent, input: unknown): void => {
     if (ownsMainFrame(event)) analytics.track(input);
   };
+  const onSetAccount = (event: IpcMainEvent, userId: unknown): void => {
+    if (ownsMainFrame(event)) analytics.setAccount(userId);
+  };
   ipcMain.removeHandler(channels.getState);
   ipcMain.removeHandler(channels.setEnabled);
   ipcMain.removeAllListeners(channels.track);
+  ipcMain.removeAllListeners(channels.setAccount);
   ipcMain.handle(channels.getState, (event) =>
     ownsMainFrame(event) ? analytics.getState() : { enabled: false },
   );
@@ -29,9 +33,11 @@ export function attachProductAnalyticsIpc(
     ownsMainFrame(event) ? analytics.setEnabled(enabled) : { enabled: false },
   );
   ipcMain.on(channels.track, onTrack);
+  ipcMain.on(channels.setAccount, onSetAccount);
   return () => {
     ipcMain.removeHandler(channels.getState);
     ipcMain.removeHandler(channels.setEnabled);
     ipcMain.removeListener(channels.track, onTrack);
+    ipcMain.removeListener(channels.setAccount, onSetAccount);
   };
 }

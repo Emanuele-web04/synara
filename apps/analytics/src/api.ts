@@ -216,6 +216,11 @@ export interface ProductData {
     engagedDay: number;
     engagedWeek: number;
     engagedMonth: number;
+    /** Signed-in people count once across devices; others count per installation. */
+    peopleDay?: number;
+    peopleWeek?: number;
+    peopleMonth?: number;
+    signedInMonth?: number;
   };
   platforms?: {
     surface: string;

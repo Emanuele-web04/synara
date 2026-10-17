@@ -2,14 +2,15 @@
 ALTER TABLE events ADD COLUMN flavor TEXT NOT NULL DEFAULT 'beta';
 CREATE INDEX IF NOT EXISTS idx_events_flavor_ts ON events (flavor, ts);
 
--- Product events gain the Remote channel, the daily active heartbeat and a fixed
--- failure category. SQLite cannot change CHECK constraints, so the table is rebuilt
--- with every existing row.
+-- Product events gain the Remote channel, the daily active heartbeat, a fixed
+-- failure category and a hashed account id that counts one person across devices.
+-- SQLite cannot change CHECK constraints, so the table is rebuilt with every row.
 CREATE TABLE product_events_next (
   event_id TEXT PRIMARY KEY,
   ts TEXT NOT NULL,
   received_at TEXT NOT NULL,
   install_id TEXT NOT NULL,
+  account_hash TEXT CHECK (account_hash IS NULL OR length(account_hash) = 32),
   channel TEXT NOT NULL CHECK (channel IN ('stable', 'beta', 'remote')),
   surface TEXT NOT NULL CHECK (surface IN ('desktop', 'ios', 'ipados')),
   platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32', 'linux', 'ios', 'ipados', 'other')),
@@ -54,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_product_events_channel_surface_ts
   ON product_events (channel, surface, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_event_ts ON product_events (event, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_install_ts ON product_events (install_id, ts);
+CREATE INDEX IF NOT EXISTS idx_product_events_account_ts ON product_events (account_hash, ts);
 
 -- Finished turns per usage.daily window by fixed categories: provider, catalogued
 -- model name, effort, interaction and permission mode, origin and outcome.

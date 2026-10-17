@@ -118,6 +118,7 @@ const productAnalyticsBridge: DesktopBridge["productAnalytics"] = {
   getState: () => ipcRenderer.invoke(IPC.productAnalytics.getState),
   setEnabled: (enabled) => ipcRenderer.invoke(IPC.productAnalytics.setEnabled, enabled),
   track: (input: ProductAnalyticsInput) => ipcRenderer.send(IPC.productAnalytics.track, input),
+  setAccount: (userId) => ipcRenderer.send(IPC.productAnalytics.setAccount, userId),
 };
 let lastBrowserResize = -Infinity;
 function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {

@@ -345,3 +345,28 @@ it("shares Remote usage by default until the user opts out, and reports daily ac
   expect(changes).toEqual([false]);
   expect(make().getState()).toEqual({ enabled: false });
 });
+
+it("tags events with a hash of the signed-in account and never the account id", () => {
+  const homeDir = makeRoot();
+  const analytics = new ProductAnalytics({
+    homeDir,
+    channel: "remote",
+    appVersion: "1.0.6-remote.17",
+    platform: "darwin",
+    defaultEnabled: true,
+    fetcher: vi.fn(async () => new Response(null, { status: 503 })),
+  });
+  analytics.setAccount("user_01HZTESTACCOUNT");
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  analytics.setAccount(null);
+  analytics.track({ event: "app.open", outcome: "succeeded" });
+  const raw = readFileSync(join(homeDir, "product-analytics", "events.json"), "utf8");
+  const queued = JSON.parse(raw) as Array<Record<string, unknown>>;
+  // The same vector is asserted by the native client, so devices agree on one person.
+  expect(queued.map((event) => event.accountHash)).toEqual([
+    "aabeca326019f52e2e13cbab8574fcac",
+    undefined,
+  ]);
+  expect(raw).not.toContain("user_01HZTESTACCOUNT");
+  expect(existsSync(join(homeDir, "product-analytics", "account-hash"))).toBe(false);
+});

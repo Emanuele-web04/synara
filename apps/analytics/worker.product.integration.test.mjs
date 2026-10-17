@@ -218,11 +218,14 @@ describe("product event route and D1 storage", () => {
     const mac = "00000000-0000-4000-8000-0000000000a1";
     const phone = "00000000-0000-4000-8000-0000000000a2";
     const windows = "00000000-0000-4000-8000-0000000000a3";
+    // The Mac and the phone belong to one signed-in person.
+    const person = "0123456789abcdef0123456789abcdef";
     const response = await postEvents([
-      remote({ installId: mac, event: "app.active", outcome: "succeeded" }),
+      remote({ installId: mac, accountHash: person, event: "app.active", outcome: "succeeded" }),
       remote({ installId: mac, event: "chat.request", outcome: "succeeded" }),
       remote({
         installId: phone,
+        accountHash: person,
         surface: "ios",
         platform: "ios",
         event: "connection.connect",
@@ -240,8 +243,14 @@ describe("product event route and D1 storage", () => {
       // A cause on a success is malformed and dropped.
       remote({ installId: mac, event: "chat.request", outcome: "succeeded", reason: "timeout" }),
       remote({ installId: mac, event: "chat.request", outcome: "failed", reason: "made_up" }),
+      remote({
+        installId: mac,
+        accountHash: "not-a-hash",
+        event: "app.open",
+        outcome: "succeeded",
+      }),
     ]);
-    expect(await response.json()).toEqual({ accepted: 4, received: 6 });
+    expect(await response.json()).toEqual({ accepted: 4, received: 7 });
 
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const dashboard = await worker.fetch(
@@ -258,6 +267,12 @@ describe("product event route and D1 storage", () => {
       engagedDay: 2,
       engagedWeek: 2,
       engagedMonth: 2,
+      // The Mac and phone are one person, even for the Mac's event sent before
+      // sign-in; the Windows installation counts once more.
+      peopleDay: 2,
+      peopleWeek: 2,
+      peopleMonth: 2,
+      signedInMonth: 1,
     });
     expect(body.platforms).toEqual(
       expect.arrayContaining([

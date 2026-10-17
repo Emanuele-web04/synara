@@ -84,11 +84,18 @@ export const ProductAnalyticsInput = Schema.Struct({
 });
 export type ProductAnalyticsInput = typeof ProductAnalyticsInput.Type;
 
+/**
+ * Counts people across their devices without naming them: the first 32 hex
+ * characters of SHA-256("synara-usage-v1:" + account user id).
+ */
+export const PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX = "synara-usage-v1:";
+
 export const ProductAnalyticsEnvelope = Schema.Struct({
   v: Schema.Literal(1),
   id: Schema.String,
   ts: Schema.String,
   installId: Schema.String,
+  accountHash: Schema.optional(Schema.String),
   channel: ProductAnalyticsChannel,
   surface: ProductAnalyticsSurface,
   platform: ProductAnalyticsPlatform,
@@ -114,4 +121,6 @@ export interface DesktopProductAnalyticsBridge {
   getState: () => Promise<ProductAnalyticsConsentState>;
   setEnabled: (enabled: boolean) => Promise<ProductAnalyticsConsentState>;
   track: (input: ProductAnalyticsInput) => void;
+  /** The signed-in account's user id, or null after sign-out; only its hash is kept. */
+  setAccount?: (userId: string | null) => void;
 }

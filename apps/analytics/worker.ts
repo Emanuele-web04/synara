@@ -96,6 +96,7 @@ const PRODUCT_RETENTION_MAX_BATCHES = 10;
 const PRODUCT_MAX_DURATION_MS = 86_400_000;
 const PRODUCT_MAX_TOKEN_COUNT = 1_000_000_000_000;
 const PRODUCT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRODUCT_ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
 const PRODUCT_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PRODUCT_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -103,6 +104,7 @@ interface NormalizedProductEvent {
   id: string;
   ts: string;
   installId: string;
+  accountHash: string | null;
   channel: string;
   surface: string;
   platform: string;
@@ -120,10 +122,10 @@ interface NormalizedProductEvent {
 }
 
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
-  event_id, ts, received_at, install_id, channel, surface, platform, app_version,
+  event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
   event, outcome, feature, mode, provider, reason, duration_ms,
   input_tokens, output_tokens, cached_input_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function productEventStatement(
   env: Env,
@@ -135,6 +137,7 @@ function productEventStatement(
     event.ts,
     receivedAt,
     event.installId,
+    event.accountHash,
     event.channel,
     event.surface,
     event.platform,
@@ -226,6 +229,12 @@ export function normalizeProductEvent(
   if (!isRecord(raw) || raw.v !== 1) return null;
   if (typeof raw.id !== "string" || !PRODUCT_UUID_PATTERN.test(raw.id)) return null;
   if (typeof raw.installId !== "string" || !PRODUCT_UUID_PATTERN.test(raw.installId)) return null;
+  if (
+    raw.accountHash !== undefined &&
+    (typeof raw.accountHash !== "string" || !PRODUCT_ACCOUNT_HASH_PATTERN.test(raw.accountHash))
+  ) {
+    return null;
+  }
   if (typeof raw.channel !== "string" || !PRODUCT_CHANNELS.has(raw.channel)) return null;
   if (!PRODUCT_SURFACES.has(String(raw.surface)) || !PRODUCT_PLATFORMS.has(String(raw.platform))) {
     return null;
@@ -298,6 +307,7 @@ export function normalizeProductEvent(
     id: raw.id,
     ts: raw.ts,
     installId: raw.installId,
+    accountHash: typeof raw.accountHash === "string" ? raw.accountHash : null,
     channel: raw.channel,
     surface: raw.surface as string,
     platform: raw.platform as string,
@@ -2072,6 +2082,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       providerDailyRows,
       previousRows,
       activeRows,
+      peopleRows,
       platformRows,
       reasonRows,
     ] = await Promise.all([
@@ -2204,6 +2215,35 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           engagedWeek: number;
           engagedMonth: number;
         }>(),
+      // An installation takes the account it reported anywhere in the window, so
+      // events sent before sign-in do not count the same person twice.
+      env.DB.prepare(
+        `WITH installs AS (
+           SELECT install_id, MAX(account_hash) AS account_hash, MAX(ts) AS last_seen
+           FROM product_events WHERE ts >= ?${productFilters.scopeClause}
+           GROUP BY install_id
+         )
+         SELECT
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN COALESCE(account_hash, install_id) END)
+             AS peopleDay,
+           COUNT(DISTINCT CASE WHEN last_seen >= ? THEN COALESCE(account_hash, install_id) END)
+             AS peopleWeek,
+           COUNT(DISTINCT COALESCE(account_hash, install_id)) AS peopleMonth,
+           COUNT(DISTINCT account_hash) AS signedInMonth
+         FROM installs`,
+      )
+        .bind(
+          new Date(Date.now() - PRODUCT_RETENTION_DAYS * DAY_MS).toISOString(),
+          ...productFilters.scopeBinds,
+          new Date(Date.now() - DAY_MS).toISOString(),
+          new Date(Date.now() - 7 * DAY_MS).toISOString(),
+        )
+        .first<{
+          peopleDay: number;
+          peopleWeek: number;
+          peopleMonth: number;
+          signedInMonth: number;
+        }>(),
       env.DB.prepare(
         `SELECT surface, platform, COUNT(DISTINCT install_id) AS installations, COUNT(*) AS events,
                   SUM(event = 'chat.request' AND outcome = 'failed') AS failedRequests,
@@ -2262,6 +2302,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
         engagedDay: activeRows?.engagedDay ?? 0,
         engagedWeek: activeRows?.engagedWeek ?? 0,
         engagedMonth: activeRows?.engagedMonth ?? 0,
+        // A signed-in person counts once across devices; others count per installation.
+        peopleDay: peopleRows?.peopleDay ?? 0,
+        peopleWeek: peopleRows?.peopleWeek ?? 0,
+        peopleMonth: peopleRows?.peopleMonth ?? 0,
+        signedInMonth: peopleRows?.signedInMonth ?? 0,
       },
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
