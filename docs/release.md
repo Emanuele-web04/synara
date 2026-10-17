@@ -334,10 +334,15 @@ is why `DESKTOP_PACKAGE_AUTHOR_EMAIL` and `DESKTOP_PACKAGE_HOMEPAGE` exist in
 `scripts/build-desktop-artifact.ts`. That email is written into the `.deb` control
 file and the RPM maintainer field, so it must stay a real contactable address.
 
-electron-builder treats `deb`/`rpm` as auto-update-capable targets by default. The target-level
-`publish: null` settings exclude their artifact events from updater metadata; AppImage keeps
-the existing publish configuration. Synara's gate in `getAutoUpdateDisabledReason` additionally
-requires `process.env.APPIMAGE` on Linux, so package-manager installs have in-app updates disabled.
+electron-builder treats `deb`/`rpm` as auto-update-capable targets by default. Their
+target-level `publish: null` settings alone do not prevent a mixed-target build
+from adding package-manager files to `latest-linux.yml`. After packaging,
+`scripts/lib/linux-appimage-update-feed.ts` verifies the real AppImage hash,
+size, and version, rejects unknown update entries, and retains only the AppImage
+in the updater manifest. Release artifact provenance independently verifies that
+manifest before publication. Synara's gate in `getAutoUpdateDisabledReason`
+additionally requires `process.env.APPIMAGE` on Linux, so package-manager installs
+have in-app updates disabled.
 Users download a newer Deb/RPM and install it again; these installers do not configure an apt/dnf repository.
 
 Before release, qualify actual installation, launch, upgrade and removal on disposable Debian/Ubuntu
