@@ -1,0 +1,29 @@
+name: PR 1878 Linux feed formatter and focused tests
+on:
+  push:
+    branches: [qa/pr1878-linux-feed-format-20261017]
+permissions:
+  contents: read
+env:
+  SOURCE_SHA: 34defa8bc52755f13b999e8ef20290ade7358401
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: static
+      - name: Expose exact formatting delta
+        run: |
+          ./node_modules/.bin/oxfmt scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts
+          git diff -- scripts/lib/linux-appimage-update-feed.ts scripts/lib/linux-appimage-update-feed.test.ts
+      - name: Focused Linux updater and provenance tests
+        run: bun run --cwd scripts test lib/linux-appimage-update-feed.test.ts build-desktop-artifact.test.ts lib/release-artifact-provenance.test.ts release-linux-packaging.test.ts
+      - name: Scripts typecheck
+        run: bun run --cwd scripts typecheck
