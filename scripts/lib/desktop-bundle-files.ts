@@ -25,6 +25,7 @@ export function createDesktopBundleFilePatterns(
   options: { readonly diagnostics?: boolean; readonly linuxGlibc?: boolean } = {},
 ): string[] {
   const files = ["**/*"];
+  files.push("!apps/desktop/native/passkeys/**");
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
 
   // node-pty is rebuilt before packaging. Its platform prebuilds are not

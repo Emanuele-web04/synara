@@ -16,13 +16,15 @@
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs",
-    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs"
+    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs",
+    "smoke:browser-passkeys": "node scripts/build-passkey-helper.mjs && bun build scripts/browser-passkey-smoke.ts --target=node --external=electron --external=effect --outfile=.smoke/browser-passkey-smoke.mjs && bun build src/browserPasskeyGuest.ts --target=node --format=cjs --external=electron --outfile=.smoke/passkey-preload.cjs && electron .smoke/browser-passkey-smoke.mjs .electron-runtime/passkeys/synara-passkey-helper"
   },
   "dependencies": {
     "betterwright": "2.7.3",
     "effect": "catalog:",
     "electron": "43.4.1",
     "electron-updater": "^6.6.2",
+    "tldts": "7.4.9",
     "undici": "8.10.2",
     "ws": "^8.21.0"
   },

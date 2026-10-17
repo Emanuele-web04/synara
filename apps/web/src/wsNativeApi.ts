@@ -1030,6 +1030,9 @@ export function createWsNativeApi(): NativeApi {
       onEvent: computerEventListeners.subscribe,
     },
     browser: {
+      ...(window.desktopBridge?.browser?.passkeys
+        ? { passkeys: window.desktopBridge.browser.passkeys }
+        : {}),
       ...(window.desktopBridge?.browser?.vault
         ? { vault: window.desktopBridge.browser.vault }
         : {}),

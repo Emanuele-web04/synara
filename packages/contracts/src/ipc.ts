@@ -728,6 +728,7 @@ export interface BrowserUseOpenPanelRequest {
 
 interface BrowserControlMethods {
   vault?: import("./browserVault").BrowserVaultMethods;
+  passkeys?: import("./browserPasskeys").BrowserPasskeyMethods;
   open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
   close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
   hide: (input: BrowserThreadInput) => Promise<void>;

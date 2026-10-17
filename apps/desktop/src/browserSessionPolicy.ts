@@ -214,7 +214,10 @@ export class BrowserSessionPolicy {
     return this.localHtmlPreviews.toDisplayUrl(url);
   }
 
-  buildOAuthPopupWindowOptions(parent: BrowserWindow | null): BrowserWindowConstructorOptions {
+  buildOAuthPopupWindowOptions(
+    parent: BrowserWindow | null,
+    preload?: string,
+  ): BrowserWindowConstructorOptions {
     return {
       width: 480,
       height: 640,
@@ -227,6 +230,7 @@ export class BrowserSessionPolicy {
       title: "Sign in",
       ...(parent ? { parent } : {}),
       webPreferences: {
+        ...(preload ? { preload } : {}),
         // Apply before Electron creates the child that the browser manager adopts.
         focusOnNavigation: false,
         partition: BROWSER_SESSION_PARTITION,

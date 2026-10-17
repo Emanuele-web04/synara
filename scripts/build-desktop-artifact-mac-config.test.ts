@@ -58,10 +58,11 @@ describe("createDesktopPlatformBuildConfig", () => {
       "Contents/Helpers/synara-appsnap-helper",
       "Contents/Frameworks/synara-window-material.node",
       "Contents/Resources/cua-driver/cua-driver",
+      "Contents/Resources/passkeys/synara-passkey-helper",
     ]);
     assert.equal(
       mac.x64ArchFiles,
-      "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
+      "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/passkeys/synara-passkey-helper}",
     );
     assert.equal(
       MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -73,6 +74,10 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
+      {
+        from: "apps/desktop/native/passkeys/build",
+        to: "Resources/passkeys",
+      },
       {
         from: "apps/desktop/resources/cua-driver",
         to: "Resources/cua-driver",
@@ -179,6 +184,10 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(linux.extraFiles, undefined);
     assert.deepStrictEqual(linux.extraResources, [
       { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+      {
+        from: "apps/desktop/native/passkeys/build",
+        to: "passkeys",
+      },
     ]);
     assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
     assert.ok(linux.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));

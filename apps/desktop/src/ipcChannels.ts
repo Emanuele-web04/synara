@@ -91,6 +91,15 @@ export const DESKTOP_IPC_CHANNELS = {
     state: "desktop:appsnap-state",
   },
   browser: {
+    passkeys: {
+      available: "desktop:browser-passkey-available",
+      request: "desktop:browser-passkey-request",
+      abort: "desktop:browser-passkey-abort",
+      snapshot: "desktop:browser-passkey-snapshot",
+      start: "desktop:browser-passkey-start",
+      cancel: "desktop:browser-passkey-cancel",
+      changed: "desktop:browser-passkey-changed",
+    },
     vault: {
       snapshot: "desktop:browser-vault-snapshot",
       configure: "desktop:browser-vault-configure",

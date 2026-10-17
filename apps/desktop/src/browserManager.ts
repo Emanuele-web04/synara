@@ -766,6 +766,7 @@ export class DesktopBrowserManager {
           action: "allow",
           overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
             this.window,
+            this.options.annotationPreloadPath,
           ),
           createWindow: (options) => this.createEmbeddedPopup({ threadId, tabId }, options, url),
         };

@@ -159,6 +159,21 @@ jobs:
           echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
 
+      - name: Prepare phone-passkey native toolchain
+        if: inputs.platform != 'win' && steps.restore_checkpoint.outcome != 'success'
+        shell: bash
+        env:
+          PASSKEY_BUILD_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          rustup update stable --no-self-update
+          if [ "$PASSKEY_BUILD_PLATFORM" = mac ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev
+          fi
+
       - name: Report runner capacity
         if: steps.restore_checkpoint.outcome != 'success'
         run: node scripts/report-build-runner.ts

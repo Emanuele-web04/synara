@@ -35,6 +35,7 @@ export const MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH =
   "Contents/Frameworks/synara-window-material.node";
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
+export const PASSKEY_HELPER_STAGE_PATH = "apps/desktop/native/passkeys/build/synara-passkey-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
 // Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
 // CFBundleIconName out of Assets.car and renders that layered icon with the
@@ -136,13 +137,16 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_BUNDLE_PATH,
         MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,
         "Contents/Resources/cua-driver/cua-driver",
+        "Contents/Resources/passkeys/synara-passkey-helper",
       ],
       // The universal build stages the same pre-lipo'd helper and addon in both app trees.
       // @electron/universal needs this pattern to preserve those existing fat binaries.
       x64ArchFiles:
-        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
+        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/passkeys/synara-passkey-helper}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
+        NSBluetoothAlwaysUsageDescription:
+          "Synara uses Bluetooth to confirm that your phone is nearby when you sign in with a phone passkey.",
         NSAudioCaptureUsageDescription: AUDIO_CAPTURE_USAGE_DESCRIPTION,
         NSScreenCaptureUsageDescription:
           "Synara captures the windows you authorize for Computer use.",
@@ -181,9 +185,11 @@ export function createDesktopPlatformBuildConfig(
         ...files,
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
         MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
+        "!apps/desktop/native/passkeys/**",
         "!apps/desktop/resources/cua-driver/**",
       ],
       extraFiles: [
+        { from: "apps/desktop/native/passkeys/build", to: "Resources/passkeys" },
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -219,7 +225,10 @@ export function createDesktopPlatformBuildConfig(
         "!apps/desktop/resources/cua-driver/**",
         "!apps/desktop/prod-resources/cua-driver/**",
       ],
-      extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
+      extraResources: [
+        { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+        { from: "apps/desktop/native/passkeys/build", to: "passkeys" },
+      ],
       linux: {
         target: [input.target],
         executableName: "synara",

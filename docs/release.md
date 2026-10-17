@@ -53,6 +53,8 @@ version, release notes and lockfile are final.
 
 ## Desktop auto-update notes
 
+The macOS and Linux native packaging stage also builds the phone-passkey helper with Cargo from its committed lockfile. macOS needs the arm64 and x86_64 Rust targets; Linux needs `pkg-config` and D-Bus development headers. OpenSSL is statically linked. The release workflow provisions those prerequisites, includes the helper's dependency notices and MPL source archives, and signs the macOS helper with the app. Before publishing passkey changes, run the [native helper checks](../apps/desktop/native/passkeys/README.md) and validate a real phone sign-in in a signed macOS build. A QR-generation/cancellation smoke is not proof of successful phone authentication.
+
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
 - Update UX:
   - Background checks run on startup delay + interval.
