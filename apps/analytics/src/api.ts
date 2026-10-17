@@ -230,6 +230,7 @@ export interface ProductData {
     failedRequests: number;
     failedConnections: number;
   }[];
+  commands?: { command: string; events: number; installations: number }[];
   failureReasons?: {
     event: string;
     reason: string;

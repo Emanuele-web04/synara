@@ -50,6 +50,7 @@ const PRODUCT_EVENTS = new Set([
   "app.open",
   "app.active",
   "feature.used",
+  "command.used",
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
@@ -97,6 +98,8 @@ const PRODUCT_MAX_DURATION_MS = 86_400_000;
 const PRODUCT_MAX_TOKEN_COUNT = 1_000_000_000_000;
 const PRODUCT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRODUCT_ACCOUNT_HASH_PATTERN = /^[0-9a-f]{32}$/;
+// Built-in shortcut or slash command names only; clients report others as `custom`.
+const PRODUCT_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
 const PRODUCT_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PRODUCT_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -115,6 +118,7 @@ interface NormalizedProductEvent {
   mode: string | null;
   provider: string | null;
   reason: string | null;
+  command: string | null;
   durationMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -123,9 +127,9 @@ interface NormalizedProductEvent {
 
 const INSERT_PRODUCT_EVENT_SQL = `INSERT OR IGNORE INTO product_events (
   event_id, ts, received_at, install_id, account_hash, channel, surface, platform, app_version,
-  event, outcome, feature, mode, provider, reason, duration_ms,
+  event, outcome, feature, mode, provider, reason, command, duration_ms,
   input_tokens, output_tokens, cached_input_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function productEventStatement(
   env: Env,
@@ -148,6 +152,7 @@ function productEventStatement(
     event.mode,
     event.provider,
     event.reason,
+    event.command,
     event.durationMs,
     event.inputTokens,
     event.outputTokens,
@@ -278,6 +283,13 @@ export function normalizeProductEvent(
   ) {
     return null;
   }
+  const command =
+    raw.command === undefined
+      ? null
+      : typeof raw.command === "string" && PRODUCT_COMMAND_PATTERN.test(raw.command)
+        ? raw.command
+        : undefined;
+  if (command === undefined || (command === null) === (raw.event === "command.used")) return null;
 
   const optionalCount = (
     key: "durationMs" | "inputTokens" | "outputTokens" | "cachedInputTokens",
@@ -318,6 +330,7 @@ export function normalizeProductEvent(
     mode,
     provider,
     reason,
+    command,
     durationMs,
     inputTokens,
     outputTokens,
@@ -2083,6 +2096,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       previousRows,
       activeRows,
       peopleRows,
+      commandRows,
       platformRows,
       reasonRows,
     ] = await Promise.all([
@@ -2245,6 +2259,13 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           signedInMonth: number;
         }>(),
       env.DB.prepare(
+        `SELECT command, COUNT(*) AS events, COUNT(DISTINCT install_id) AS installations
+           FROM product_events WHERE ${where} AND event = 'command.used' AND command IS NOT NULL
+           GROUP BY command ORDER BY events DESC, command LIMIT 60`,
+      )
+        .bind(...binds)
+        .all<{ command: string; events: number; installations: number }>(),
+      env.DB.prepare(
         `SELECT surface, platform, COUNT(DISTINCT install_id) AS installations, COUNT(*) AS events,
                   SUM(event = 'chat.request' AND outcome = 'failed') AS failedRequests,
                   SUM(event IN ('connection.connect', 'connection.reconnect') AND outcome = 'failed')
@@ -2310,6 +2331,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       },
       platforms: platformRows.results,
       failureReasons: reasonRows.results,
+      commands: commandRows.results,
       daily,
       features: featureRows.results,
       outcomes: outcomeRows.results,

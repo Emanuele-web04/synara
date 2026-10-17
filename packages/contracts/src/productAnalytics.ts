@@ -5,6 +5,8 @@ export const ProductAnalyticsEvent = Schema.Literals([
   // Once per UTC day while the app runs, so long sessions still count as active days.
   "app.active",
   "feature.used",
+  // A built-in shortcut or slash command; see ProductAnalyticsCommand.
+  "command.used",
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
@@ -53,6 +55,14 @@ export const ProductAnalyticsReason = Schema.Literals([
   "other",
 ]);
 export type ProductAnalyticsReason = typeof ProductAnalyticsReason.Type;
+/**
+ * `shortcut:<built-in command>` or `slash:<built-in command>`; anything a user
+ * defined is reported as `custom`, so no free text enters this field.
+ */
+export const PRODUCT_ANALYTICS_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
+const ProductAnalyticsCommand = Schema.String.check(
+  Schema.isPattern(PRODUCT_ANALYTICS_COMMAND_PATTERN),
+);
 
 const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_400_000 }));
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
@@ -77,6 +87,7 @@ export const ProductAnalyticsInput = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
   outputTokens: Schema.optional(TokenCount),
@@ -106,6 +117,7 @@ export const ProductAnalyticsEnvelope = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
   outputTokens: Schema.optional(TokenCount),

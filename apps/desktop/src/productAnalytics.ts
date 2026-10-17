@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import {
   PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX,
+  PRODUCT_ANALYTICS_COMMAND_PATTERN,
   type ProductAnalyticsChannel,
   type ProductAnalyticsEnvelope,
   type ProductAnalyticsInput,
@@ -39,6 +40,7 @@ const EVENTS = [
   "app.open",
   "app.active",
   "feature.used",
+  "command.used",
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
@@ -384,6 +386,14 @@ export class ProductAnalytics {
       if (!isOneOf(REASONS, input.reason)) return null;
       fields.reason = input.reason;
     }
+    if (input.command !== undefined) {
+      if (
+        typeof input.command !== "string" ||
+        !PRODUCT_ANALYTICS_COMMAND_PATTERN.test(input.command)
+      )
+        return null;
+      fields.command = input.command;
+    }
     if (input.durationMs !== undefined) {
       if (!validInteger(input.durationMs, MAX_DURATION_MS)) return null;
       fields.durationMs = input.durationMs;
@@ -419,8 +429,10 @@ export class ProductAnalytics {
       allowed.add("cachedInputTokens");
     }
     if (event === "performance.startup") allowed.add("durationMs");
+    if (event === "command.used") allowed.add("command");
     if (Object.keys(fields).some((key) => !allowed.has(key))) return null;
     if (event === "feature.used" && fields.feature === undefined) return null;
+    if (event === "command.used" && fields.command === undefined) return null;
     const now = new Date();
     return {
       v: 1,
@@ -517,6 +529,7 @@ export class ProductAnalytics {
       "mode",
       "provider",
       "reason",
+      "command",
       "durationMs",
       "inputTokens",
       "outputTokens",

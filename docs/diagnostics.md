@@ -277,6 +277,12 @@ carry one fixed `reason` category (for example `unreachable`, `not_accepting`,
 dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
 installations that sent a chat request in those windows.
 
+Remote and the other desktop lanes also record `command.used` for built-in keyboard
+shortcuts (`shortcut:terminal.toggle`) and slash commands (`slash:plan`), once per key
+press or command. Numbered jumps share one name; anything a person defined, such as a
+custom shortcut, script or skill, is reported as `custom`. The receiver accepts only
+that fixed `shortcut:` or `slash:` shape.
+
 To count people rather than installations, Remote events from a signed-in app carry
 `accountHash`: the first 32 hex characters of SHA-256 of `synara-usage-v1:` plus the
 account's user id. The account id itself is never sent, and the same hash on a Mac and a

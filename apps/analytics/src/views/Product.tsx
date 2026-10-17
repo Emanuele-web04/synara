@@ -425,6 +425,50 @@ export function Product({
                   )}
                 </section>
               )}
+              {data.commands && (
+                <section className="section" aria-labelledby="product-commands">
+                  <h2 id="product-commands" className="heading-20 section-head">
+                    Commands
+                  </h2>
+                  <p className="chart-caption">
+                    Built-in keyboard shortcuts and slash commands. Names people defined themselves
+                    are counted as custom.
+                  </p>
+                  {data.commands.length === 0 ? (
+                    <EmptyLine text="No commands in this range." />
+                  ) : (
+                    <TableWrap>
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Command</th>
+                            <th scope="col">Used with</th>
+                            <th scope="col" className="num">
+                              Uses
+                            </th>
+                            <th scope="col" className="num">
+                              Installations
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.commands.map((row) => {
+                            const [kind, name] = row.command.split(":");
+                            return (
+                              <tr key={row.command}>
+                                <td>{kind === "slash" ? `/${name}` : name}</td>
+                                <td>{kind === "slash" ? "Slash command" : "Shortcut"}</td>
+                                <td className="num">{row.events.toLocaleString()}</td>
+                                <td className="num">{row.installations.toLocaleString()}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </TableWrap>
+                  )}
+                </section>
+              )}
               <section className="section" aria-labelledby="product-features">
                 <h2 id="product-features" className="heading-20 section-head">
                   Features

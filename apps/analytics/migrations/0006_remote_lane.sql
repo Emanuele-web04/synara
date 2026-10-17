@@ -16,8 +16,9 @@ CREATE TABLE product_events_next (
   platform TEXT NOT NULL CHECK (platform IN ('darwin', 'win32', 'linux', 'ios', 'ipados', 'other')),
   app_version TEXT NOT NULL,
   event TEXT NOT NULL CHECK (event IN (
-    'app.open', 'app.active', 'feature.used', 'connection.pair', 'connection.connect',
-    'connection.reconnect', 'chat.request', 'turn.completed', 'performance.startup'
+    'app.open', 'app.active', 'feature.used', 'command.used', 'connection.pair',
+    'connection.connect', 'connection.reconnect', 'chat.request', 'turn.completed',
+    'performance.startup'
   )),
   outcome TEXT NOT NULL CHECK (outcome IN ('started', 'succeeded', 'failed', 'cancelled')),
   feature TEXT CHECK (feature IS NULL OR feature IN (
@@ -29,6 +30,7 @@ CREATE TABLE product_events_next (
     'unreachable', 'not_accepting', 'account_unavailable', 'host_unlinked', 'pairing_required',
     'incompatible', 'timeout', 'invalid_code', 'rejected', 'other'
   )),
+  command TEXT CHECK (command IS NULL OR length(command) BETWEEN 8 AND 56),
   duration_ms INTEGER CHECK (duration_ms IS NULL OR (duration_ms BETWEEN 0 AND 86400000)),
   input_tokens INTEGER CHECK (input_tokens IS NULL OR (input_tokens BETWEEN 0 AND 1000000000000)),
   output_tokens INTEGER CHECK (output_tokens IS NULL OR (output_tokens BETWEEN 0 AND 1000000000000)),

@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_WS_METHODS,
+  STATIC_KEYBINDING_COMMANDS,
   WS_METHODS,
   type DesktopBridge,
   type OrchestrationEvent,
@@ -7,6 +8,7 @@ import {
   type ProductAnalyticsInput,
   type ProductAnalyticsMode,
 } from "@synara/contracts";
+import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
 import { readWorkspaceFrame } from "./hosts/workspaceFrame";
 
 /** Only trusted app workspace frames may use the controlling window's consent. */
@@ -27,6 +29,31 @@ export function trackProductAnalytics(input: ProductAnalyticsInput): void {
   } catch {
     // Analytics never changes the operation it observes.
   }
+}
+
+const BUILT_IN_SHORTCUTS = new Set<string>(STATIC_KEYBINDING_COMMANDS);
+const countedShortcutEvents = new WeakSet<object>();
+
+/** Counts a resolved shortcut once per key press; numbered jumps share one name. */
+export function trackShortcutCommand(event: object, command: string): void {
+  if (countedShortcutEvents.has(event)) return;
+  countedShortcutEvents.add(event);
+  const name = BUILT_IN_SHORTCUTS.has(command) ? command.replace(/\.\d+$/, "") : "custom";
+  trackProductAnalytics({
+    event: "command.used",
+    outcome: "succeeded",
+    command: `shortcut:${name}`,
+  });
+}
+
+/** Counts a slash command; only built-in names are kept. */
+export function trackSlashCommand(command: string): void {
+  const name = command.trim().replace(/^\/+/, "").toLowerCase();
+  trackProductAnalytics({
+    event: "command.used",
+    outcome: "succeeded",
+    command: `slash:${isBuiltInComposerSlashCommandName(name) ? name : "custom"}`,
+  });
 }
 
 /** Classifies intent only; no route, RPC arguments, names or identifiers are sent. */

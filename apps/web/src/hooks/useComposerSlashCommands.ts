@@ -33,6 +33,15 @@ import {
 } from "../composerSlashCommands";
 import { resolveThreadHandoffModelSelection } from "../lib/threadHandoff";
 import { toastManager } from "../components/ui/toast";
+import { trackSlashCommand } from "../lib/productAnalytics";
+
+const SLASH_COMMANDS_COUNTED_ON_SEND = new Set<string>([
+  "model",
+  "goal",
+  "rename",
+  "automation",
+  "computer-use",
+]);
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
 import { dispatchThreadFork } from "../lib/threadFork";
@@ -871,6 +880,7 @@ export function useComposerSlashCommands(input: {
         trimmed,
         availableBuiltInSlashCommands,
       );
+      if (slashInvocation) trackSlashCommand(slashInvocation.command);
       if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
@@ -1088,6 +1098,8 @@ export function useComposerSlashCommands(input: {
       if (!trigger) {
         return;
       }
+      // Commands that insert `/name ` are counted when that text is sent.
+      if (!SLASH_COMMANDS_COUNTED_ON_SEND.has(item.command)) trackSlashCommand(item.command);
 
       if (
         item.command === "model" ||

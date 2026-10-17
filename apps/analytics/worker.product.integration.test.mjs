@@ -249,8 +249,30 @@ describe("product event route and D1 storage", () => {
         event: "app.open",
         outcome: "succeeded",
       }),
+      remote({
+        installId: mac,
+        event: "command.used",
+        outcome: "succeeded",
+        command: "slash:plan",
+      }),
+      remote({
+        installId: windows,
+        platform: "win32",
+        event: "command.used",
+        outcome: "succeeded",
+        command: "shortcut:terminal.toggle",
+      }),
+      // Free text, a missing command, or a command on another event is dropped.
+      remote({
+        installId: mac,
+        event: "command.used",
+        outcome: "succeeded",
+        command: "slash:my secret",
+      }),
+      remote({ installId: mac, event: "command.used", outcome: "succeeded" }),
+      remote({ installId: mac, event: "app.open", outcome: "succeeded", command: "slash:plan" }),
     ]);
-    expect(await response.json()).toEqual({ accepted: 4, received: 7 });
+    expect(await response.json()).toEqual({ accepted: 6, received: 12 });
 
     const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
     const dashboard = await worker.fetch(
@@ -289,6 +311,12 @@ describe("product event route and D1 storage", () => {
           installations: 1,
           failedConnections: 1,
         }),
+      ]),
+    );
+    expect(body.commands).toEqual(
+      expect.arrayContaining([
+        { command: "slash:plan", events: 1, installations: 1 },
+        { command: "shortcut:terminal.toggle", events: 1, installations: 1 },
       ]),
     );
     expect(body.failureReasons).toEqual(

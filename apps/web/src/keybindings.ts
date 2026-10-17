@@ -11,6 +11,7 @@ import {
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { isUnassignedKeybindingShortcut } from "@synara/shared/keybindingRules";
+import { trackShortcutCommand } from "./lib/productAnalytics";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -629,7 +630,11 @@ function matchesCommandShortcut(
   command: KeybindingCommand,
   options?: ShortcutMatchOptions,
 ): boolean {
-  return resolveShortcutCommand(event, keybindings, options) === command;
+  // Probing whether a key matches one command is not a use of it.
+  return (
+    dispatchSuspensions === 0 &&
+    resolveShortcutCommandUntracked(event, keybindings, options) === command
+  );
 }
 
 function resolveShortcutCommandFromBindings(
@@ -666,6 +671,18 @@ export function resolveShortcutCommand(
   options?: ShortcutMatchOptions,
 ): string | null {
   if (dispatchSuspensions > 0) return null;
+  const command = resolveShortcutCommandUntracked(event, keybindings, options);
+  if (command !== null && typeof event === "object" && event !== null) {
+    trackShortcutCommand(event, command);
+  }
+  return command;
+}
+
+function resolveShortcutCommandUntracked(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): string | null {
   const explicitCommand = resolveShortcutCommandFromBindings(event, keybindings, options);
   if (explicitCommand !== null) {
     return explicitCommand;
