@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.7 — 2026-10-17
+
+**Lighter long-running turns, model switches that take effect and safer workspace recovery.**
+
+This Stable patch covers all eight commits from `v1.0.6` through feature head `4cd66c35d897a98aa61ffd075607e08a6c46e4cf`, including the previous release's download snapshot refresh. Connectors and diagnostics remain Beta-only; channel identities, data homes and update feeds stay separate.
+
+### Added
+
+- Message edits that restore an earlier Git workspace retain a hidden recovery checkpoint before provider rollback. The snapshot survives successful replay and later failures; capture failure refuses the edit before rollback. Ignored and external files are not promised recovery coverage.
+
+### Changed
+
+- Long turns bound repeated Git, event-history and checkpoint work. Claude retains turn identifiers rather than every SDK message body; usage reads cache unchanged files and parse appended records. Streaming Markdown reuses settled blocks and updates avoid repainting every transcript row.
+- Live file-change captures share a three-second per-thread throttle with a trailing capture. Read-only tools avoid unnecessary Git refreshes; PR status refreshes at turn end, branch changes, focus and regular polls.
+- Desktop frame capture runs only with a renderer subscriber. Cookie restoration uses a temporary view. Browser console/log domains quiesce after 60 seconds without automation and reactivate on acquisition; captured history, network tracking and request metadata remain available.
+- Scoped measurements reported in #1963: 200 untracked-file numstats, 1.44 s → 9 ms; a repeated usage scan, 214 ms → 4 ms; parsing updates to a 29 KB answer, 18.6 ms → 0.7 ms. These are workload-specific operation timings, not independent whole-app CPU, RAM or battery benchmarks.
+
+### Fixed
+
+- Devin model/Fast switches and Grok model/effort switches reject incompatible resume cursors and start a fresh native session with conversation context. Droid avoids duplicate transcript bootstrapping after a successful native reload.
+- Stopped-but-retained OpenCode sessions no longer trap later turns in a closed runtime. Normal recovery preserves native identity where available and retains unavailable-session failure handling.
+- Windows prepares a bounded process observer before owned OpenCode startup and retains it through pool reuse, then requests fresh teardown evidence. Creation identity, deadlines, cancellation, observer disposal and process exit proof remain required.
+- Missing or moved working directories are reported before executable resolution instead of being misreported as a missing Claude installation. WSL UNC behavior remains unchanged.
+- Beta connector retries reuse an already rotated, unexpired access token; failed OpenCode MCP installation statuses are logged. One connector sign-in covers supported accounts/providers on that computer. Stable keeps Connectors disabled.
+
+### Verification
+
+The finished candidate requires local formatting, lint, typecheck, release smoke, Windows runtime boundary, marketing build and affected unit/browser tests. The single exact-tag workflow supplies the full quality/server test suite, portable build, four native packages, Intel startup, provenance, macOS signing/notarization and Windows Defender/startup. Results are pending until recorded in the local checkpoint and public release notes; no earlier SHA is treated as qualification for this candidate.
+
+The documentation audit covers the complete range and updates recovery, provider troubleshooting, live-change cadence, desktop browser diagnostics and Beta connector scope. See [source audit](docs/releases/1.0.7-source-audit.md). This release changes curated release text on existing surfaces only. Manual installation, installed-app upgrades, real Windows 11 downloads and live-provider behavior remain unverified.
+
 ## 1.0.6 — 2026-10-16
 
 **Faster long conversations, smoother parallel work and safer provider recovery.**

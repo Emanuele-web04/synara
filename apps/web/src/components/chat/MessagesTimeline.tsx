@@ -78,6 +78,8 @@ import {
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
+import { useStableCallback } from "~/hooks/useStableCallback";
+import { mapsEqual, setsEqual, useStableValue } from "~/hooks/useStableValue";
 import { Button } from "../ui/button";
 import { LiveStatusSpinner } from "../ui/spinner";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
@@ -601,7 +603,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
-  onForkFromMessage,
+  onForkFromMessage: onForkFromMessageProp,
   goalAchievements: goalAchievementsProp,
   enteringUserMessageIds: enteringUserMessageIdsProp,
   tailAnchorMessageId: tailAnchorMessageIdProp,
@@ -619,7 +621,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   recoverableTurnId,
   turnRecoveryDisabled,
   onContinueFailedTurn,
-  onChangeRecoveryModel,
+  onChangeRecoveryModel: onChangeRecoveryModelProp,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -631,9 +633,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   computerControlEnabled,
   onEnableComputerControl,
   revertTurnCountByUserMessageId,
-  onRevertUserMessage,
-  onUndoTurnFiles,
-  onEditUserMessage,
+  onRevertUserMessage: onRevertUserMessageProp,
+  onUndoTurnFiles: onUndoTurnFilesProp,
+  onEditUserMessage: onEditUserMessageProp,
   onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
@@ -687,6 +689,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
   const findHighlight = findHighlightProp ?? null;
+  // Event-only callbacks get one identity for the timeline's lifetime. Rows are cached by
+  // LegendList and re-render only when something they read changes, and the owner rebuilds
+  // these from the streaming thread on every flush, which would re-render every row.
+  const onForkFromMessage = useOptionalEventCallback(onForkFromMessageProp);
+  const onChangeRecoveryModel = useOptionalEventCallback(onChangeRecoveryModelProp);
+  const onRevertUserMessage = useStableCallback(onRevertUserMessageProp);
+  const onUndoTurnFiles = useOptionalEventCallback(onUndoTurnFilesProp);
+  const onEditUserMessage = useOptionalEventCallback(onEditUserMessageProp);
   const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
   const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
@@ -1017,9 +1027,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [rows]);
   // On a subagent's thread, the answers to its parent's briefs went back to the
   // parent: the terminal answer after an agent-sent message carries that note.
-  const subagentDeliveredMessageIds = useMemo(() => {
+  // Rows change on every streamed flush, so the Set is kept identity-stable while
+  // its members are unchanged: it reaches LegendList's `extraData`, and a new
+  // identity there re-renders every mounted row instead of just the streaming one.
+  const derivedSubagentDeliveredMessageIds = useMemo((): ReadonlySet<MessageId> => {
+    if (!subagentThread) return EMPTY_MESSAGE_ID_SET;
     const ids = new Set<MessageId>();
-    if (!subagentThread) return ids;
     let answeringParent = false;
     for (const row of rows) {
       if (row.kind !== "message") continue;
@@ -1031,52 +1044,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return ids;
   }, [rows, subagentThread]);
+  const subagentDeliveredMessageIds = useStableValue(derivedSubagentDeliveredMessageIds, setsEqual);
   const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
-  const timelineExtraData = useMemo(
-    () => ({
-      hubWorkItemsByMessageId,
-      crossTaskOrigin,
-      subagentThread,
-      subagentDeliveredMessageIds,
-      editingUserMessageId,
-      enteringMessageRowIds,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      findHighlight,
-      firstUserMessageId,
-      highlightedMessageId,
-      lastLiveWorkGroupId,
-      pinnedMessageIds,
-      settledTurnCollapseTransitions,
-      submittingEditedUserMessageId,
-      toolGroupSummaryOverrides,
-    }),
-    [
-      hubWorkItemsByMessageId,
-      crossTaskOrigin,
-      subagentThread,
-      subagentDeliveredMessageIds,
-      editingUserMessageId,
-      enteringMessageRowIds,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      findHighlight,
-      firstUserMessageId,
-      highlightedMessageId,
-      lastLiveWorkGroupId,
-      pinnedMessageIds,
-      settledTurnCollapseTransitions,
-      submittingEditedUserMessageId,
-      toolGroupSummaryOverrides,
-    ],
-  );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
   // index lazily without re-installing the controller on every transcript change.
   const rowsRef = useRef(rows);
@@ -1444,11 +1414,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => ({ cwd: markdownCwd, onSendChoice: onSendVisualChoice }),
     [markdownCwd, onSendVisualChoice],
   );
-  const inlineVisualsById = useMemo(() => collectInlineVisuals(timelineEntries), [timelineEntries]);
-  const inlineVisualOwners = useMemo(
+  // Both maps are rebuilt from every streamed flush; keeping them identity-stable
+  // while their contents match keeps `renderRowContent` (and so `extraData`) stable.
+  const derivedInlineVisualsById = useMemo(
+    () => collectInlineVisuals(timelineEntries),
+    [timelineEntries],
+  );
+  const inlineVisualsById = useStableValue(derivedInlineVisualsById, mapsEqual);
+  const derivedInlineVisualOwners = useMemo(
     () => collectInlineVisualEmbedOwners(timelineEntries),
     [timelineEntries],
   );
+  const inlineVisualOwners = useStableValue(derivedInlineVisualOwners, mapsEqual);
   // Replies place visuals in their text with an embed fence; the markdown asks
   // for the visual by id and draws it right there, as part of the answer.
   const renderInlineVisual = useCallback(
@@ -1465,6 +1442,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       );
     },
     [handleEmbeddedScrollIntent, inlineVisualActions, inlineVisualsById, threadId],
+  );
+  // One embed resolver per assistant message, so the context value a row hands its
+  // memoized markdown keeps its identity whenever that row re-renders.
+  const resolveInlineVisualEmbed = useMemo(
+    () => createInlineVisualEmbedResolverCache(inlineVisualOwners, renderInlineVisual),
+    [inlineVisualOwners, renderInlineVisual],
   );
   const handleViewableItemsChanged = useCallback<
     NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
@@ -1544,13 +1527,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // it, unless the turn kept visuals, whose first row renders it instead so
   // the visuals and the answer read as one block below it.
   const renderSettledTurnHeader = (row: Extract<MessagesTimelineRow, { kind: "message" }>) => {
-    const knownAbsoluteFilePaths = collectAbsoluteFilePathsFromWorkEntries([
-      ...(row.leadingWorkEntries ?? []),
-      ...(row.inlineWorkEntries ?? []),
-      ...(row.collapsedTurnItems ?? []).flatMap((item) =>
-        item.kind === "work" ? [item.entry] : [],
-      ),
-    ]);
+    const knownAbsoluteFilePaths = knownAbsoluteFilePathsForRow(row);
     // Keep main's lifetime semantics: only tasks outliving this turn stay pinned.
     const turnEndedAt = row.turnHeader?.endedAt ?? null;
     const pinnedBackgroundEntries = (row.collapsedTurnItems ?? []).flatMap((item) =>
@@ -2015,11 +1992,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               data-chat-find-segment-index={row.segmentIndex}
             >
               <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
-                <InlineVisualEmbedContext.Provider
-                  value={(id) =>
-                    inlineVisualOwners.get(id) === row.message.id ? renderInlineVisual(id) : null
-                  }
-                >
+                <InlineVisualEmbedContext.Provider value={resolveInlineVisualEmbed(row.message.id)}>
                   <ChatMarkdown
                     text={segmentText}
                     cwd={markdownCwd}
@@ -2404,15 +2377,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showForkAction =
             messageCanPin && Boolean(onForkFromMessage) && assistantCopyState.visible;
           const turnSummary = row.assistantTurnDiffSummary;
-          const fileDiffStatByPath = new Map(
-            (turnSummary?.files ?? []).map((file) => [
-              file.path,
-              {
-                additions: file.additions ?? 0,
-                deletions: file.deletions ?? 0,
-              },
-            ]),
-          );
+          const fileDiffStatByPath = fileDiffStatByPathForTurnSummary(turnSummary);
           const inlineEditedFilesFromTurnSummary =
             (leadingWorkDisplay.hasGenericFileChangeEntry ||
               inlineWorkDisplay.hasGenericFileChangeEntry) &&
@@ -2446,8 +2411,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind === "work" ? [item.entry] : [],
             ),
           ];
-          const knownAbsoluteFilePaths =
-            collectAbsoluteFilePathsFromWorkEntries(allTurnWorkEntries);
+          const knownAbsoluteFilePaths = knownAbsoluteFilePathsForRow(row);
           const synaraThreadCreationRecaps = [
             ...new Map(
               allTurnWorkEntries.flatMap((entry) =>
@@ -2674,11 +2638,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     data-chat-find-document-id={row.message.id}
                   >
                     <InlineVisualEmbedContext.Provider
-                      value={(id) =>
-                        inlineVisualOwners.get(id) === row.message.id
-                          ? renderInlineVisual(id)
-                          : null
-                      }
+                      value={resolveInlineVisualEmbed(row.message.id)}
                     >
                       <ChatMarkdown
                         text={
@@ -3113,6 +3073,59 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     </div>
   );
 
+  // LegendList re-runs `renderItem` for a cached row only when that row's data or
+  // `extraData` changes. `renderRowContent` is memoized (by React Compiler) on every
+  // value a row reads, so carrying it here re-renders cached rows whenever any of
+  // those values changes, while a streamed flush that only replaces one row object
+  // re-renders just that row. Values derived from `rows`/`timelineEntries` that rows
+  // read are therefore kept identity-stable (see subagentDeliveredMessageIds and the
+  // inline visual maps): a fresh identity there re-renders the whole transcript.
+  const timelineExtraData = useMemo(
+    () => ({
+      renderRowContent,
+      hubWorkItemsByMessageId,
+      crossTaskOrigin,
+      subagentThread,
+      subagentDeliveredMessageIds,
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      findHighlight,
+      firstUserMessageId,
+      highlightedMessageId,
+      lastLiveWorkGroupId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      toolGroupSummaryOverrides,
+    }),
+    [
+      renderRowContent,
+      hubWorkItemsByMessageId,
+      crossTaskOrigin,
+      subagentThread,
+      subagentDeliveredMessageIds,
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      findHighlight,
+      firstUserMessageId,
+      highlightedMessageId,
+      lastLiveWorkGroupId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      toolGroupSummaryOverrides,
+    ],
+  );
   // Transient rows (for example failed first-send worktree setup) must be able
   // to render even when there are no persisted chat messages yet.
   const hasRenderableTranscriptContent =
@@ -3604,6 +3617,75 @@ function applySettledTurnCollapseTransitions(params: {
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
   return items.map((item) => `${item.kind}:${item.id}`).join("|");
+}
+
+// useStableCallback for an optional handler: presence still follows the prop, so
+// "is this action offered" checks keep working, while the identity stays fixed.
+function useOptionalEventCallback<Args extends unknown[], Result>(
+  callback: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined {
+  const stableCallback = useStableCallback((...args: Args) => callback!(...args));
+  return callback ? stableCallback : undefined;
+}
+
+type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+type FileDiffStat = { additions: number; deletions: number };
+
+const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, FileDiffStat> = new Map();
+const knownAbsoluteFilePathsByRow = new WeakMap<MessageTimelineRow, string[]>();
+const fileDiffStatsByTurnSummary = new WeakMap<
+  TurnDiffSummary,
+  ReadonlyMap<string, FileDiffStat>
+>();
+
+// Rows keep their identity until their content changes (useStableRows), so caching
+// per row object hands memoized markdown and tool rows the same array whenever a
+// row re-renders for an unrelated reason (an expansion, a sibling's extraData).
+function knownAbsoluteFilePathsForRow(row: MessageTimelineRow): string[] {
+  const cached = knownAbsoluteFilePathsByRow.get(row);
+  if (cached) return cached;
+  const paths = collectAbsoluteFilePathsFromWorkEntries([
+    ...(row.leadingWorkEntries ?? []),
+    ...(row.inlineWorkEntries ?? []),
+    ...(row.collapsedTurnItems ?? []).flatMap((item) => (item.kind === "work" ? [item.entry] : [])),
+  ]);
+  knownAbsoluteFilePathsByRow.set(row, paths);
+  return paths;
+}
+
+function fileDiffStatByPathForTurnSummary(
+  turnSummary: TurnDiffSummary | undefined,
+): ReadonlyMap<string, FileDiffStat> {
+  if (!turnSummary) return EMPTY_FILE_DIFF_STATS;
+  const cached = fileDiffStatsByTurnSummary.get(turnSummary);
+  if (cached) return cached;
+  const stats = new Map(
+    turnSummary.files.map((file) => [
+      file.path,
+      { additions: file.additions ?? 0, deletions: file.deletions ?? 0 },
+    ]),
+  );
+  fileDiffStatsByTurnSummary.set(turnSummary, stats);
+  return stats;
+}
+
+// Kept at module scope: the per-message cache is written while rows render, which
+// React Compiler would reject inside the component. A new owners map or renderer
+// builds a new cache, so stale resolvers are never reused.
+function createInlineVisualEmbedResolverCache(
+  owners: ReadonlyMap<string, string>,
+  renderInlineVisual: (visualId: string) => ReactNode,
+): (messageId: string) => (visualId: string) => ReactNode {
+  const resolvers = new Map<string, (visualId: string) => ReactNode>();
+  return (messageId) => {
+    let resolver = resolvers.get(messageId);
+    if (!resolver) {
+      resolver = (visualId) =>
+        owners.get(visualId) === messageId ? renderInlineVisual(visualId) : null;
+      resolvers.set(messageId, resolver);
+    }
+    return resolver;
+  };
 }
 
 function collectAbsoluteFilePathsFromWorkEntries(entries: ReadonlyArray<WorkLogEntry>): string[] {

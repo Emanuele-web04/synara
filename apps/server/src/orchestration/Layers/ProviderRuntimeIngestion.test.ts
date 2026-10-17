@@ -326,6 +326,19 @@ type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
+function singleLineFileDiff(path: string): string {
+  return [
+    `diff --git a/${path} b/${path}`,
+    "index 1111111..2222222 100644",
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "",
+  ].join("\n");
+}
+
 describe("ProviderRuntimeIngestion", () => {
   it("backs off idle journal safety polls and returns to the fast recovery cadence", () => {
     let delayMs = 250;
@@ -7593,6 +7606,54 @@ describe("ProviderRuntimeIngestion", () => {
         { path: "src/next.ts", kind: "added", additions: 1, deletions: 0 },
       ],
     });
+  });
+
+  it("applies only the newest turn diff of a replayed page", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const rows: PersistedProviderRuntimeEvent[] = [];
+    const append = async (event: ProviderRuntimeEvent) =>
+      rows.push(await Effect.runPromise(harness.runtimeEventRepository.append(event)));
+    for (let index = 0; index < 3; index += 1) {
+      await append({
+        type: "turn.diff.updated",
+        eventId: asEventId(`diff-burst-${index}`),
+        provider: "codex",
+        createdAt: "2026-10-06T12:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-diff-burst"),
+        payload: { unifiedDiff: singleLineFileDiff(`file-${index}.txt`) },
+      } as ProviderRuntimeEvent);
+      // The thread's other events between patches do not close the diff run.
+      await append({
+        type: "runtime.warning",
+        eventId: asEventId(`diff-burst-warning-${index}`),
+        provider: "codex",
+        createdAt: "2026-10-06T12:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-diff-burst"),
+        payload: { message: `Between patches ${index}` },
+      } as ProviderRuntimeEvent);
+    }
+    await harness.startIngestion();
+    await harness.drain();
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.turnId === "turn-diff-burst"),
+    );
+    // Superseded snapshots never ran: the placeholder is keyed by the survivor.
+    expect(
+      thread.checkpoints.filter((checkpoint) => checkpoint.turnId === "turn-diff-burst"),
+    ).toMatchObject([
+      {
+        checkpointRef: "provider-diff:diff-burst-2",
+        status: "missing",
+        files: [{ path: "file-2.txt", kind: "modified", additions: 1, deletions: 1 }],
+      },
+    ]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(rows.at(-1)!.sequence);
   });
 
   it("does not parse live diff files for providers without patch capability", async () => {

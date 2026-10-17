@@ -4,12 +4,16 @@
 // Depends on: rootEventInvalidation predicates and Vitest assertions.
 
 import { ProjectId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
+  getTurnDiffInvalidationThreadIdForEvent,
+  invalidateFinalizedTurnDiffQueries,
+  isLocalGitActivityInvalidationEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -25,16 +29,27 @@ function event(type: OrchestrationEvent["type"], payload: object = {}): Orchestr
 }
 
 describe("root event invalidation", () => {
-  it("invalidates git queries when a turn diff is finalized", () => {
-    const turnDiffEvent = event("thread.turn-diff-completed");
+  it("scopes a finalized turn diff to its own thread", () => {
+    const threadId = ThreadId.makeUnsafe("thread-turn-diff");
+    const turnDiffEvent = event("thread.turn-diff-completed", { threadId });
 
     expect(shouldInvalidateGitQueriesForEvent(turnDiffEvent)).toBe(true);
-    expect(shouldInvalidateProviderQueriesForEvent(turnDiffEvent)).toBe(true);
+    // Full Git refresh (pull requests included), not the local tool-activity one.
+    expect(isLocalGitActivityInvalidationEvent(turnDiffEvent)).toBe(false);
+    // No longer drops every provider and project cache.
+    expect(shouldInvalidateProviderQueriesForEvent(turnDiffEvent)).toBe(false);
+    expect(getTurnDiffInvalidationThreadIdForEvent(turnDiffEvent)).toBe(threadId);
+    expect(getProjectFileInvalidationThreadIdForEvent(turnDiffEvent)).toBe(threadId);
+    expect(getTurnDiffInvalidationThreadIdForEvent(event("thread.reverted", { threadId }))).toBe(
+      null,
+    );
   });
 
   it("invalidates git queries when checkpoint changes can rewrite files", () => {
-    expect(shouldInvalidateGitQueriesForEvent(event("thread.reverted"))).toBe(true);
-    expect(shouldInvalidateGitQueriesForEvent(event("thread.conversation-rolled-back"))).toBe(true);
+    for (const type of ["thread.reverted", "thread.conversation-rolled-back"] as const) {
+      expect(shouldInvalidateGitQueriesForEvent(event(type))).toBe(true);
+      expect(shouldInvalidateProviderQueriesForEvent(event(type))).toBe(true);
+    }
   });
 
   it("invalidates git queries when thread workspace metadata changes", () => {
@@ -106,6 +121,55 @@ describe("root event invalidation", () => {
     expect(shouldInvalidateGitQueriesForEvent(completedTool("image_view"))).toBe(false);
   });
 
+  it("skips refreshes after known read-only tools and keeps them for everything else", () => {
+    const threadId = ThreadId.makeUnsafe("thread-read-only");
+    const completed = (payload: Record<string, unknown>) =>
+      event("thread.activity-appended", {
+        threadId,
+        activity: { kind: "tool.completed", payload },
+      });
+    const claudeTool = (toolName: string, itemType = "dynamic_tool_call") =>
+      completed({ itemType, data: { toolCallId: toolName, toolName } });
+    const acpTool = (kind: string) =>
+      completed({ itemType: "dynamic_tool_call", data: { toolCallId: kind, kind } });
+
+    for (const readOnly of [
+      claudeTool("Read"),
+      claudeTool("Grep"),
+      claudeTool("Glob"),
+      claudeTool("LS"),
+      claudeTool("WebFetch"),
+      acpTool("read"),
+      acpTool("search"),
+      acpTool("fetch"),
+    ]) {
+      expect(shouldInvalidateGitQueriesForEvent(readOnly)).toBe(false);
+      expect(getProjectFileInvalidationThreadIdForEvent(readOnly)).toBe(null);
+      expect(getStudioOutputInvalidationThreadIdForEvent(readOnly)).toBe(null);
+    }
+
+    for (const mutating of [
+      claudeTool("Bash", "command_execution"),
+      claudeTool("Edit", "file_change"),
+      claudeTool("mcp__files__read_file", "mcp_tool_call"),
+      claudeTool("SomeNewTool"),
+      acpTool("execute"),
+      acpTool("edit"),
+      completed({ itemType: "command_execution", data: { command: "cat README.md" } }),
+    ]) {
+      expect(shouldInvalidateGitQueriesForEvent(mutating)).toBe(true);
+      expect(isLocalGitActivityInvalidationEvent(mutating)).toBe(true);
+      expect(getProjectFileInvalidationThreadIdForEvent(mutating)).toBe(threadId);
+    }
+  });
+
+  it("refreshes pull requests only for turn-level and workspace metadata events", () => {
+    expect(
+      isLocalGitActivityInvalidationEvent(event("thread.meta-updated", { branch: "feature/diff" })),
+    ).toBe(false);
+    expect(isLocalGitActivityInvalidationEvent(event("thread.reverted"))).toBe(false);
+  });
+
   it("invalidates project files when a turn diff or rollback settles", () => {
     const threadId = ThreadId.makeUnsafe("thread-checkpoint");
 
@@ -160,6 +224,49 @@ describe("root event invalidation", () => {
         }),
       ),
     ).toBe(null);
+  });
+
+  it("invalidates only the finalized thread's diffs and workspace caches", () => {
+    const projectId = ProjectId.makeUnsafe("project-scoped");
+    const finishedId = ThreadId.makeUnsafe("thread-finished");
+    const otherId = ThreadId.makeUnsafe("thread-other");
+    const state: AppState = {
+      spaces: [],
+      projects: [{ id: projectId, cwd: "/repo/main" }] as AppState["projects"],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+      threadIds: [finishedId, otherId],
+      threadShellById: {
+        [finishedId]: makeThread({ id: finishedId, projectId }),
+        [otherId]: makeThread({
+          id: otherId,
+          projectId,
+          envMode: "worktree",
+          worktreePath: "/repo/other",
+        }),
+      },
+    };
+    const queryClient = new QueryClient();
+    const keys = {
+      finishedDiff: ["providers", "checkpointDiff", finishedId, 0, 1, false, null],
+      otherDiff: ["providers", "checkpointDiff", otherId, 0, 1, false, null],
+      finishedScripts: ["projects", "discover-scripts", "/repo/main", 2],
+      otherScripts: ["projects", "discover-scripts", "/repo/other", 2],
+      // Left to the throttled file-change pass that the same event feeds.
+      finishedFile: ["projects", "read-file", "/repo/main", "README.md"],
+    };
+    for (const key of Object.values(keys)) queryClient.setQueryData(key, {});
+
+    expect(invalidateFinalizedTurnDiffQueries(queryClient, state, [finishedId])).toBe(true);
+
+    const invalidated = Object.entries(keys)
+      .filter(([, key]) => queryClient.getQueryState(key)?.isInvalidated)
+      .map(([name]) => name);
+    expect(invalidated).toEqual(["finishedDiff", "finishedScripts"]);
+    expect(
+      invalidateFinalizedTurnDiffQueries(queryClient, state, [ThreadId.makeUnsafe("missing")]),
+    ).toBe(false);
+    expect(queryClient.getQueryState(keys.otherScripts)?.isInvalidated).toBe(true);
   });
 
   it("resolves local and worktree cwd from the current thread projection", () => {

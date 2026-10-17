@@ -167,8 +167,15 @@ it("keeps the composer clear during ripples and after it grows", async () => {
   expect(isComposerClear()).toBe(true);
   await wait(2800);
   exclusionRef.current!.style.height = "260px";
-  await wait(500);
-  expect(isComposerClear()).toBe(true);
-  expect(pixels(canvas).some((byte) => byte > 0)).toBe(true);
+  // Resize redraws in an idle slot; wait for a complete frame, not a fixed delay.
+  await expect
+    .poll(
+      () => ({
+        composerClear: isComposerClear(),
+        fieldVisible: pixels(canvas).some((byte) => byte > 0),
+      }),
+      { timeout: 5000 },
+    )
+    .toEqual({ composerClear: true, fieldVisible: true });
   await view.unmount();
 });

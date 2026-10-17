@@ -563,17 +563,7 @@ export function deriveWorkLogEntries(
     options,
   )
     .filter((entry) => !isUninformativeCommandStartEntry(entry))
-    .map(
-      ({
-        collapseCommand: _collapseCommand,
-        collapseKey: _collapseKey,
-        runtimeWarningMessage: _runtimeWarningMessage,
-        runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
-        suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
-        taskListHasTasks: _taskListHasTasks,
-        ...entry
-      }) => entry,
-    );
+    .map(toPublicWorkLogEntry);
   const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
   if (handoffFastModeNotices.size > 0) {
     for (const [index, entry] of derived.entries()) {
@@ -1713,6 +1703,29 @@ function withUserInputExchanges(
     return exchangeEntry;
   });
   return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
+}
+
+const publicWorkLogEntryCache = new WeakMap<DerivedWorkLogEntry, WorkLogEntry>();
+
+// Unchanged derived entries come back as the same objects (the per-activity cache),
+// so their public copy is reused too: each streamed pass then costs one lookup per
+// entry instead of an object spread, and consumers keep entry identity.
+function toPublicWorkLogEntry(derived: DerivedWorkLogEntry): WorkLogEntry {
+  const cached = publicWorkLogEntryCache.get(derived);
+  if (cached) {
+    return cached;
+  }
+  const {
+    collapseCommand: _collapseCommand,
+    collapseKey: _collapseKey,
+    runtimeWarningMessage: _runtimeWarningMessage,
+    runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+    suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+    taskListHasTasks: _taskListHasTasks,
+    ...entry
+  } = derived;
+  publicWorkLogEntryCache.set(derived, entry);
+  return entry;
 }
 
 const decodeInlineVisualPayload = Schema.decodeUnknownOption(InlineVisualActivityPayload);

@@ -136,6 +136,57 @@ describe("provider runtime progress coalescing", () => {
     ).toEqual(["base", "other-turn", "other-instance", "other-generation", "child"]);
   });
 
+  it("keeps only the newest turn diff per turn until the turn settles", () => {
+    const diff = (id: string, overrides: Partial<ProviderRuntimeEvent> = {}) =>
+      event(id, {
+        type: "turn.diff.updated",
+        provider: "codex",
+        payload: { unifiedDiff: id },
+        ...overrides,
+      } as Partial<ProviderRuntimeEvent>);
+    const otherTurn = TurnId.makeUnsafe("other-turn");
+    const input = [
+      row(1, diff("diff-1")),
+      row(2, event("text", { type: "content.delta" } as Partial<ProviderRuntimeEvent>)),
+      row(3, event("item", { type: "item.completed" } as Partial<ProviderRuntimeEvent>)),
+      row(4, diff("other-turn-1", { turnId: otherTurn })),
+      row(5, diff("diff-2")),
+      row(6, diff("other-thread", { threadId: ThreadId.makeUnsafe("other-thread") })),
+      row(7, diff("diff-3")),
+      row(8, event("completed", { type: "turn.completed" } as Partial<ProviderRuntimeEvent>)),
+      row(9, diff("diff-after-settle")),
+      row(10, diff("other-turn-2", { turnId: otherTurn })),
+    ];
+    expect(providerRuntimeProgressKey(diff("keyed"))).toBeDefined();
+    expect(providerRuntimeProgressKey(diff("turnless", { turnId: undefined }))).toBeUndefined();
+    expect(ids(coalesceProviderRuntimeProgress(input))).toEqual([
+      "text",
+      "item",
+      // The thread's turn.completed closes every turn-diff run of that thread.
+      "other-turn-1",
+      "other-thread",
+      "diff-3",
+      "completed",
+      "diff-after-settle",
+      "other-turn-2",
+    ]);
+  });
+
+  it("does not let a turn diff close a tool progress run", () => {
+    const input = [
+      row(1, event("tool-old")),
+      row(
+        2,
+        event("diff", {
+          type: "turn.diff.updated",
+          payload: { unifiedDiff: "" },
+        } as Partial<ProviderRuntimeEvent>),
+      ),
+      row(3, event("tool-latest")),
+    ];
+    expect(ids(coalesceProviderRuntimeProgress(input))).toEqual(["diff", "tool-latest"]);
+  });
+
   it("coalesces only in-progress tool snapshots with stable IDs", () => {
     const tool = event("tool", {
       type: "item.updated",

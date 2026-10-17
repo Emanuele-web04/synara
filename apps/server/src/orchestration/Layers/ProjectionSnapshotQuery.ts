@@ -84,6 +84,7 @@ import {
   type ProjectionSnapshotCounts,
   type ProjectionSnapshotSequence,
   type ProjectionThreadCheckpointContext,
+  type ProjectionThreadTurnDiffContext,
   type ProjectionSnapshotQueryShape,
   type OrchestrationThreadMentionContext,
   type OrchestrationThreadWithoutActivities,
@@ -222,6 +223,20 @@ const ProjectIdsLookupInput = Schema.Struct({
 const SpaceIdLookupInput = Schema.Struct({
   spaceId: SpaceId,
 });
+function toCheckpointSummary(
+  row: typeof ProjectionCheckpointDbRowSchema.Type,
+): OrchestrationCheckpointSummary {
+  return {
+    turnId: row.turnId,
+    checkpointTurnCount: row.checkpointTurnCount,
+    checkpointRef: row.checkpointRef,
+    status: row.status,
+    files: row.files,
+    assistantMessageId: row.assistantMessageId,
+    completedAt: row.completedAt,
+  };
+}
+
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -1172,6 +1187,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             MAX(
               COALESCE(sessions.updated_at, threads.updated_at),
               threads.updated_at,
+              -- Ingestion stamps every runtime event here (throttled to ~15 s
+              -- per thread), so a turn running a long command or subagent
+              -- with no message updates still counts as observed.
+              COALESCE(sessions.last_activity_at, threads.updated_at),
               COALESCE(
                 (
                   SELECT MAX(messages.updated_at)
@@ -2611,6 +2630,47 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Live provider turn diffs (Codex sends one per patch) need only the highest
+  // checkpoint turn count and this turn's row, under the same completed filter as
+  // listCheckpointRowsByThread. Both reads stay on the thread's turn indexes
+  // instead of decoding every checkpoint's file list.
+  const getMaxCheckpointTurnCountRowByThread = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ maxCheckpointTurnCount: Schema.NullOr(Schema.Number) }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT MAX(checkpoint_turn_count) AS "maxCheckpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND checkpoint_turn_count IS NOT NULL
+          AND completed_at IS NOT NULL
+      `,
+  });
+
+  const getCheckpointRowByThreadTurn = SqlSchema.findOneOption({
+    Request: ThreadTurnLookupInput,
+    Result: ProjectionCheckpointDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "status",
+          checkpoint_files_json AS "files",
+          assistant_message_id AS "assistantMessageId",
+          started_at AS "startedAt",
+          COALESCE(completed_at, started_at, requested_at) AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND checkpoint_turn_count IS NOT NULL
+          AND completed_at IS NOT NULL
+        LIMIT 1
+      `,
+  });
+
   // File-change tool payloads and captured per-turn Studio outputs remain available in
   // non-Git workspaces, where checkpoint capture intentionally does not run. Studio output
   // attribution requests this narrow slice.
@@ -3384,18 +3444,46 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         envMode: threadRow.value.envMode,
         worktreePath: threadRow.value.worktreePath,
         workingDirectory: threadRow.value.workingDirectory,
-        checkpoints: checkpointRows.map(
-          (row): OrchestrationCheckpointSummary => ({
-            turnId: row.turnId,
-            checkpointTurnCount: row.checkpointTurnCount,
-            checkpointRef: row.checkpointRef,
-            status: row.status,
-            files: row.files,
-            assistantMessageId: row.assistantMessageId,
-            completedAt: row.completedAt,
-          }),
-        ),
+        checkpoints: checkpointRows.map(toCheckpointSummary),
         ...(fileChangeActivityPayloads ? { fileChangeActivityPayloads } : {}),
+      });
+    });
+
+  const getThreadTurnDiffContext: ProjectionSnapshotQueryShape["getThreadTurnDiffContext"] = (
+    threadId,
+    turnId,
+  ) =>
+    Effect.gen(function* () {
+      const threadRow = yield* getThreadCheckpointContextThreadRow({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:getThread:query",
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:getThread:decodeRow",
+          ),
+        ),
+      );
+      if (Option.isNone(threadRow)) {
+        return Option.none<ProjectionThreadTurnDiffContext>();
+      }
+      const maxRow = yield* getMaxCheckpointTurnCountRowByThread({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:maxCheckpointTurnCount:query",
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:maxCheckpointTurnCount:decodeRow",
+          ),
+        ),
+      );
+      const checkpointRow = yield* getCheckpointRowByThreadTurn({ threadId, turnId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:getCheckpoint:query",
+            "ProjectionSnapshotQuery.getThreadTurnDiffContext:getCheckpoint:decodeRow",
+          ),
+        ),
+      );
+      return Option.some({
+        maxCheckpointTurnCount: maxRow.maxCheckpointTurnCount ?? 0,
+        checkpoint: Option.isSome(checkpointRow) ? toCheckpointSummary(checkpointRow.value) : null,
       });
     });
 
@@ -4024,6 +4112,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSpaceShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
+    getThreadTurnDiffContext,
     listGeneratedImageActivitiesByTurn,
     getFullThreadDiffContext,
     getThreadShellById,

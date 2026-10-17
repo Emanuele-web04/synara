@@ -92,6 +92,7 @@ import {
 
 import {
   checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -2127,6 +2128,20 @@ const make = Effect.gen(function* () {
         new Error(`Filesystem checkpoint is unavailable for edit replay turn ${targetTurnCount}.`),
       );
     }
+
+    // The hidden Git ref is the durable recovery record, discoverable by thread
+    // even after restart. Keep it out of chat activities and retain it on success:
+    // it may be the only copy of files changed since the restored checkpoint.
+    const rescueCheckpointRef = checkpointRefForThreadRevertRescue(
+      input.threadId,
+      crypto.randomUUID(),
+    );
+    yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: rescueCheckpointRef });
+    yield* Effect.logInfo("edit replay workspace recovery snapshot retained", {
+      threadId: input.threadId,
+      checkpointRef: rescueCheckpointRef,
+      restoreTargetRef: targetCheckpointRef,
+    });
 
     return {
       cwd,

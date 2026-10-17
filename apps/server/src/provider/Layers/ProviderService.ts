@@ -2459,6 +2459,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // phases. Adopt its fresh runtime instead of replacing it again.
             if (
               activeSession &&
+              (yield* providerAdapter.hasSession(threadId)) &&
               !requiresCredentialRotation &&
               sessionMatchesProviderInstance(
                 activeSession,
@@ -2669,9 +2670,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           adapters,
           (adapter) =>
             adapter.listSessions().pipe(
-              Effect.map((sessions) => {
+              Effect.flatMap((sessions) => {
                 const session = sessions.find((candidate) => candidate.threadId === threadId);
-                return session ? { adapter, session } : null;
+                return session
+                  ? adapter
+                      .hasSession(threadId)
+                      .pipe(Effect.map((active) => (active ? { adapter, session } : null)))
+                  : Effect.succeed(null);
               }),
               Effect.orElseSucceed(() => null),
             ),
@@ -2880,6 +2885,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
         if (
           activeSession !== undefined &&
+          (yield* providerAdapter.hasSession(input.threadId)) &&
           sessionMatchesProviderInstance(
             activeSession,
             routedProviderInstanceId,

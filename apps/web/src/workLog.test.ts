@@ -272,6 +272,42 @@ describe("deriveWorkLogEntries", () => {
     expect(timeline[0]?.kind).toBe("work");
   });
 
+  it("reuses unchanged entry objects across passes over the same activities", () => {
+    const activities = [
+      makeActivity({
+        id: "read-completed",
+        sequence: 1,
+        kind: "tool.completed",
+        summary: "Read file",
+        turnId: "turn-1",
+        payload: { itemType: "dynamic_tool_call", data: { toolCallId: "read", toolName: "Read" } },
+      }),
+      makeActivity({
+        id: "command-completed",
+        sequence: 2,
+        kind: "tool.completed",
+        summary: "Ran checks",
+        turnId: "turn-1",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+    ];
+    // A streamed text flush rebuilds the visible-turn Set with the same members.
+    const derive = () =>
+      deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+      });
+    const first = derive();
+    const second = derive();
+
+    expect(first).toHaveLength(2);
+    expect(second).toEqual(first);
+    second.forEach((entry, index) => expect(entry).toBe(first[index]));
+    expect(first[0]).not.toHaveProperty("collapseKey");
+  });
+
   it("omits routine approval resolutions between tool lifecycle updates", () => {
     const activities = [
       makeActivity({
