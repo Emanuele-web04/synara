@@ -261,7 +261,7 @@ export class DeviceManager {
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   /** New consumers wait out an already-issued idle poweroff before dispatching. */
   private readonly idleShutdowns = new Map<string, Promise<void>>();
-  private readonly activeAgentDevices = new Map<string, number>();
+  private readonly activeDeviceActions = new Map<string, number>();
   private activeStreamUdid: string | null = null;
   private desiredStreamUdid: string | null = null;
   /** Serializes the native helper's single stream while allowing the desired device to change. */
@@ -427,9 +427,11 @@ export class DeviceManager {
   // ── Boot / shutdown ────────────────────────────────────────────────
 
   async boot(udid: string): Promise<DeviceBootResult> {
-    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    this.assertNotDisposed();
     await this.waitForIdleShutdown(udid);
+    this.assertNotDisposed();
     const listed = await this.backend.listDevices({ includeShutdown: true }).catch(() => null);
+    this.assertNotDisposed();
     // Devices that stopped without Synara doing it still held their slots, so
     // three shutdowns from a shell were enough to make every later boot refuse.
     if (listed !== null) this.reconcileSynaraBooted(listed);
@@ -522,7 +524,7 @@ export class DeviceManager {
     udid: string,
     source: "user" | "agent" = "user",
   ): Promise<ThreadDeviceState> {
-    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    this.assertNotDisposed();
     const attachment = this.threadState(threadId);
     const previous = attachment.attachedDeviceUdid;
     // Cleared before releasing: `releaseDevice` asks whether anyone still holds
@@ -535,6 +537,7 @@ export class DeviceManager {
     if (previous !== null && previous !== udid) await this.releaseDevice(previous, "switched");
     this.clearIdleTimer(udid);
     await this.waitForIdleShutdown(udid);
+    this.assertNotDisposed();
     if (attachment.attachToken !== token) return await this.snapshot(threadId);
 
     // Already streaming (another thread is watching the same device): there is
@@ -658,9 +661,9 @@ export class DeviceManager {
   async handleThreadRemoved(threadId: string): Promise<void> {
     if (!this.threads.has(threadId)) return;
     await this.detach(threadId);
-    const devices = new Set(
-      [...this.threads.get(threadId)!.agentDevicesByTurn.values()].flatMap((used) => [...used]),
-    );
+    const devices = new Set<string>();
+    for (const used of this.threads.get(threadId)!.agentDevicesByTurn.values())
+      for (const udid of used) devices.add(udid);
     this.threads.delete(threadId);
     for (const device of devices) this.updateIdleTimer(device);
   }
@@ -716,7 +719,7 @@ export class DeviceManager {
     y: number,
     options: { readonly holdMs?: number } = {},
   ): Promise<void> {
-    await this.backend.tap(udid, x, y, options);
+    await this.withDeviceAction(udid, () => this.backend.tap(udid, x, y, options));
   }
 
   /**
@@ -738,11 +741,13 @@ export class DeviceManager {
     options.signal?.throwIfAborted();
     const match = await this.scrollToElement(udid, target, options);
     options.signal?.throwIfAborted();
-    await this.backend.tap(
-      udid,
-      match.point.x,
-      match.point.y,
-      options.holdMs === undefined ? {} : { holdMs: options.holdMs },
+    await this.withDeviceAction(udid, () =>
+      this.backend.tap(
+        udid,
+        match.point.x,
+        match.point.y,
+        options.holdMs === undefined ? {} : { holdMs: options.holdMs },
+      ),
     );
     return match;
   }
@@ -780,7 +785,7 @@ export class DeviceManager {
       if (step === null) return match as DeviceUiTargetMatch;
 
       const positionBefore = match === null ? null : match.node.frame.y;
-      await this.backend.swipe(udid, step);
+      await this.withDeviceAction(udid, () => this.backend.swipe(udid, step));
       tree = await this.describeUi(udid);
       match = this.locate(tree.root, target);
 
@@ -854,7 +859,7 @@ export class DeviceManager {
   }
 
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.backend.swipe(udid, gesture);
+    await this.withDeviceAction(udid, () => this.backend.swipe(udid, gesture));
   }
 
   /** A stationary frame alone can also be an off-screen or keyboard-covered control. */
@@ -868,7 +873,7 @@ export class DeviceManager {
   }
 
   async typeText(udid: string, text: string): Promise<DeviceTypeTextOutcome> {
-    return await this.backend.typeText(udid, text);
+    return await this.withDeviceAction(udid, () => this.backend.typeText(udid, text));
   }
 
   /**
@@ -906,7 +911,10 @@ export class DeviceManager {
       method = "value";
     } else {
       method =
-        printableAscii && (await this.backend.usesUsKeyboardLayout(udid).catch(() => false))
+        printableAscii &&
+        (await this.withDeviceAction(udid, () => this.backend.usesUsKeyboardLayout(udid)).catch(
+          () => false,
+        ))
           ? "keys"
           : "value";
     }
@@ -926,16 +934,20 @@ export class DeviceManager {
       } else {
         const current = options.clear === true ? "" : (effectiveValue(focused) ?? "");
         options.signal?.throwIfAborted();
-        await this.backend.setFocusedValue(udid, `${current}${body}`);
+        await this.withDeviceAction(udid, () =>
+          this.backend.setFocusedValue(udid, `${current}${body}`),
+        );
       }
     }
     if (method === "keys") {
       options.signal?.throwIfAborted();
       if (options.clear === true) await this.clearFocusedField(udid);
       if (body.length > 0) {
-        const outcome = await this.backend.typeText(udid, body, {
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
+        const outcome = await this.withDeviceAction(udid, () =>
+          this.backend.typeText(udid, body, {
+            ...(options.signal ? { signal: options.signal } : {}),
+          }),
+        );
         if (outcome.skipped > 0) {
           throw new DeviceBackendError(
             `${outcome.skipped} character(s) have no key and were not typed; retry with method "value".`,
@@ -943,7 +955,7 @@ export class DeviceManager {
         }
       }
     } else if (body.length === 0 && options.clear === true) {
-      await this.backend.setFocusedValue(udid, "");
+      await this.withDeviceAction(udid, () => this.backend.setFocusedValue(udid, ""));
     }
     options.signal?.throwIfAborted();
     if (submit) await this.pressKey(udid, HID_USAGE.returnKey);
@@ -961,8 +973,12 @@ export class DeviceManager {
     keyCode: number,
     modifiers: DeviceKeyEvent["modifiers"] = [],
   ): Promise<void> {
-    await this.backend.keyEvent(udid, { keyCode, modifiers, direction: "down" });
-    await this.backend.keyEvent(udid, { keyCode, modifiers, direction: "up" });
+    await this.withDeviceAction(udid, () =>
+      this.backend.keyEvent(udid, { keyCode, modifiers, direction: "down" }),
+    );
+    await this.withDeviceAction(udid, () =>
+      this.backend.keyEvent(udid, { keyCode, modifiers, direction: "up" }),
+    );
   }
 
   // ── Observation ────────────────────────────────────────────────────
@@ -1166,15 +1182,15 @@ export class DeviceManager {
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    await this.backend.keyEvent(udid, event);
+    await this.withDeviceAction(udid, () => this.backend.keyEvent(udid, event));
   }
 
   async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
-    await this.backend.pressButton(udid, button);
+    await this.withDeviceAction(udid, () => this.backend.pressButton(udid, button));
   }
 
   async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
-    return await this.backend.install(udid, appPath);
+    return await this.withDeviceAction(udid, () => this.backend.install(udid, appPath));
   }
 
   async launch(
@@ -1183,19 +1199,21 @@ export class DeviceManager {
     launchArguments?: readonly string[],
     options?: DeviceLaunchOptions,
   ): Promise<DeviceLaunchAppResult> {
-    return await this.backend.launch(udid, bundleId, launchArguments, options);
+    return await this.withDeviceAction(udid, () =>
+      this.backend.launch(udid, bundleId, launchArguments, options),
+    );
   }
 
   async configure(udid: string, configuration: DeviceConfiguration): Promise<void> {
-    await this.backend.configure(udid, configuration);
+    await this.withDeviceAction(udid, () => this.backend.configure(udid, configuration));
   }
 
   async readLogs(udid: string, query: DeviceLogQuery): Promise<DeviceLogResult> {
-    return await this.backend.readLogs(udid, query);
+    return await this.withDeviceAction(udid, () => this.backend.readLogs(udid, query));
   }
 
   async openUrl(udid: string, url: string): Promise<void> {
-    await this.backend.openUrl(udid, url);
+    await this.withDeviceAction(udid, () => this.backend.openUrl(udid, url));
   }
 
   async screenshot(
@@ -1207,17 +1225,16 @@ export class DeviceManager {
       readonly proof?: boolean;
     } = {},
   ): Promise<DeviceScreenshotCapture> {
-    return await this.backend.screenshot(udid, options);
+    return await this.withDeviceAction(udid, () => this.backend.screenshot(udid, options));
   }
 
   async startRecording(udid: string): Promise<DeviceStartRecordingResult> {
-    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    this.assertNotDisposed();
     const alreadyTracked = this.recording.has(udid);
     this.recording.add(udid);
     this.clearIdleTimer(udid);
     try {
-      await this.waitForIdleShutdown(udid);
-      return await this.backend.startRecording(udid);
+      return await this.withDeviceAction(udid, () => this.backend.startRecording(udid));
     } catch (error) {
       if (!alreadyTracked) this.recording.delete(udid);
       this.updateIdleTimer(udid);
@@ -1233,7 +1250,7 @@ export class DeviceManager {
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
-    return await this.backend.describeUi(udid);
+    return await this.withDeviceAction(udid, () => this.backend.describeUi(udid));
   }
 
   /** The screen in points: helper geometry when attached, else the tree's root. */
@@ -1259,12 +1276,12 @@ export class DeviceManager {
     action: () => Promise<A>,
     deviceUse?: { readonly udid: string; readonly turnId: string | null },
   ): Promise<A> {
-    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    this.assertNotDisposed();
     const attachment = this.threadState(threadId);
     const udid = deviceUse?.udid;
     if (udid !== undefined) {
       this.clearIdleTimer(udid);
-      this.activeAgentDevices.set(udid, (this.activeAgentDevices.get(udid) ?? 0) + 1);
+      this.activeDeviceActions.set(udid, (this.activeDeviceActions.get(udid) ?? 0) + 1);
       const turnId = deviceUse?.turnId ?? null;
       if (turnId !== null && !attachment.endedAgentTurns.has(turnId)) {
         const devices = attachment.agentDevicesByTurn.get(turnId) ?? new Set<string>();
@@ -1277,14 +1294,14 @@ export class DeviceManager {
       if (udid !== undefined) await this.waitForIdleShutdown(udid);
       // Only the badge changes here; the device list the pane shows does not.
       if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
-      if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+      this.assertNotDisposed();
       return await action();
     } finally {
       attachment.agentActiveCount = Math.max(0, attachment.agentActiveCount - 1);
       if (udid !== undefined) {
-        const remaining = (this.activeAgentDevices.get(udid) ?? 1) - 1;
-        if (remaining === 0) this.activeAgentDevices.delete(udid);
-        else this.activeAgentDevices.set(udid, remaining);
+        const remaining = (this.activeDeviceActions.get(udid) ?? 1) - 1;
+        if (remaining === 0) this.activeDeviceActions.delete(udid);
+        else this.activeDeviceActions.set(udid, remaining);
         this.updateIdleTimer(udid);
       }
       // Archive/disposal may finish while an admitted device call is settling.
@@ -1368,7 +1385,7 @@ export class DeviceManager {
     this.disposed = true;
     for (const [, timer] of this.idleTimers) this.cancel(timer);
     this.idleTimers.clear();
-    await Promise.allSettled([...this.idleShutdowns.values()]);
+    await Promise.allSettled(this.idleShutdowns.values());
     // Snapshotted: both loops mutate the set they are walking.
     const recording = Array.from(this.recording);
     const booted = Array.from(this.synaraBooted);
@@ -1431,7 +1448,7 @@ export class DeviceManager {
     if (
       this.bootsInFlight.has(udid) ||
       this.recording.has(udid) ||
-      this.activeAgentDevices.has(udid) ||
+      this.activeDeviceActions.has(udid) ||
       this.transport.deviceSubscriberCount(udid) > 0
     )
       return true;
@@ -1655,15 +1672,37 @@ export class DeviceManager {
     await this.shutdown(udid, true).catch(() => undefined);
   }
 
+  /** Guard the shared native boundary, including pane RPCs that have no agent turn. */
+  private async withDeviceAction<A>(udid: string, action: () => Promise<A>): Promise<A> {
+    this.assertNotDisposed();
+    this.clearIdleTimer(udid);
+    this.activeDeviceActions.set(udid, (this.activeDeviceActions.get(udid) ?? 0) + 1);
+    try {
+      await this.waitForIdleShutdown(udid);
+      this.assertNotDisposed();
+      return await action();
+    } finally {
+      const remaining = (this.activeDeviceActions.get(udid) ?? 1) - 1;
+      if (remaining === 0) this.activeDeviceActions.delete(udid);
+      else this.activeDeviceActions.set(udid, remaining);
+      this.updateIdleTimer(udid);
+    }
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+  }
+
   /** An idle poweroff already sent to simctl cannot be cancelled; renew its owned boot first. */
   private async waitForIdleShutdown(udid: string): Promise<void> {
     const shutdown = this.idleShutdowns.get(udid);
     if (!shutdown) return;
     await shutdown;
-    if (this.disposed) throw new DeviceBackendError("Device manager is disposed.");
+    this.assertNotDisposed();
     const resuming = this.idleShutdowns.get(udid);
     if (resuming !== undefined && resuming !== shutdown) {
       await resuming;
+      this.assertNotDisposed();
       return;
     }
     if (!this.synaraBooted.has(udid) && this.isDeviceBusy(udid)) {
@@ -1680,6 +1719,7 @@ export class DeviceManager {
         });
       this.idleShutdowns.set(udid, restoration);
       await restoration;
+      this.assertNotDisposed();
     }
   }
 

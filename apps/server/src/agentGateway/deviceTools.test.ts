@@ -734,3 +734,75 @@ describe("agent gateway device tools for end-to-end testing", () => {
     expect(result.content.some((entry) => entry.type === "image")).toBe(true);
   });
 });
+
+describe("device tool cancellation during idle cleanup", () => {
+  it.each([
+    {
+      name: "device_tap",
+      args: { udid: DEVICE, x: 1, y: 1, observe: false },
+      kind: "tap" as const,
+    },
+    {
+      name: "device_install",
+      args: { udid: DEVICE, appPath: "/tmp/Test.app" },
+      kind: "install" as const,
+    },
+    { name: "device_screenshot", args: { udid: DEVICE }, kind: "screenshot" as const },
+  ])(
+    "does not dispatch $name after Stop while waiting for pending poweroff",
+    async ({ name, args, kind }) => {
+      let fireIdle: (() => void) | undefined;
+      const backend = new FakeDeviceBackend();
+      const manager = new DeviceManager({
+        backend,
+        attachDeadlineMs: 0,
+        setTimeout: (fire) => {
+          fireIdle = fire;
+          return { unref: () => {} } as unknown as NodeJS.Timeout;
+        },
+        clearTimeout: () => {},
+      });
+      await manager.boot(DEVICE);
+      await manager.withAgentActivity(
+        "old-thread",
+        () => manager.ensureThreadAttached("old-thread", DEVICE),
+        { udid: DEVICE, turnId: "old-turn" },
+      );
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const shutdown = backend.shutdown.bind(backend);
+      backend.shutdown = async (udid) => {
+        started.resolve();
+        await finish.promise;
+        await shutdown(udid);
+      };
+      manager.endAgentTurn("old-thread", "old-turn");
+      fireIdle!();
+      await started.promise;
+      const settled = Promise.withResolvers<void>();
+      manager.onEvent((event) => {
+        if (
+          event.type === "device.thread-state" &&
+          event.state.threadId === THREAD &&
+          !event.state.agentActive
+        )
+          settled.resolve();
+      });
+      const tool = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (entry) => entry.definition.name === name,
+      )!;
+      const abort = new AbortController();
+      const result = Effect.runPromiseExit(tool.handler(args, makeContext()), {
+        signal: abort.signal,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(backend.callsOfKind(kind)).toHaveLength(0);
+      abort.abort();
+      finish.resolve();
+      await settled.promise;
+      await result;
+      expect(backend.callsOfKind(kind)).toHaveLength(0);
+      await manager.dispose();
+    },
+  );
+});

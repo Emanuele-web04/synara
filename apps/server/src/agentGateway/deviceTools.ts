@@ -467,7 +467,11 @@ export function makeAgentGatewayDeviceTools(
             signal.throwIfAborted();
             const value = await manager.withAgentActivity(
               context.callerThreadId,
-              () => run(args, context, signal),
+              () => {
+                // An idle poweroff may have delayed admission; Stop still cancels native work.
+                signal.throwIfAborted();
+                return run(args, context, signal);
+              },
               typeof args.udid === "string"
                 ? { udid: args.udid, turnId: context.callerTurnId }
                 : undefined,
@@ -968,12 +972,13 @@ export function makeAgentGatewayDeviceTools(
       handler: (args, context) =>
         Effect.gen(function* () {
           return yield* Effect.tryPromise({
-            try: async () => {
+            try: async (signal) => {
               const udid = readUdid(args);
               const proof = readBooleanArg(args, "proof") === true;
               const { result, artifact } = await manager.withAgentActivity(
                 context.callerThreadId,
                 async () => {
+                  signal.throwIfAborted();
                   const result = await manager.screenshot(udid, {
                     maxInlineBytes: DEVICE_SCREENSHOT_MAX_INLINE_BYTES,
                     resolution: "points",
@@ -1002,6 +1007,7 @@ export function makeAgentGatewayDeviceTools(
                 },
                 { udid, turnId: context.callerTurnId },
               );
+              signal.throwIfAborted();
               await surfaceDevice(context, udid, "agent-tool");
               // Image content beside the JSON so the model sees the screen
               // without a second decode step, matching browser_screenshot.

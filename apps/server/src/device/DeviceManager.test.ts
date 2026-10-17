@@ -668,6 +668,68 @@ describe("DeviceManager agent-owned idle lifetime", () => {
     );
   });
 
+  it("protects direct pane input while an idle poweroff is already pending", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const started = deferred();
+    const finish = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await started.promise;
+    const input = manager.tap(DEVICE_A, 1, 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("tap")).toHaveLength(0);
+    finish.resolve();
+    await input;
+    expect(
+      backend.calls
+        .filter((call) => ["shutdown", "boot", "tap"].includes(call.kind))
+        .slice(-3)
+        .map((call) => call.kind),
+    ).toEqual(["shutdown", "boot", "tap"]);
+  });
+
+  it("does not start recording if disposal begins while its owned boot is being restored", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const shutdownStarted = deferred();
+    const finishShutdown = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      shutdownStarted.resolve();
+      await finishShutdown.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await shutdownStarted.promise;
+    const bootStarted = deferred();
+    const finishBoot = deferred();
+    const boot = backend.boot.bind(backend);
+    backend.boot = async (udid) => {
+      bootStarted.resolve();
+      await finishBoot.promise;
+      return await boot(udid);
+    };
+    const recording = manager.startRecording(DEVICE_A);
+    const recorded = expect(recording).rejects.toThrow("disposed");
+    finishShutdown.resolve();
+    await bootStarted.promise;
+    const dispose = manager.dispose();
+    finishBoot.resolve();
+    await recorded;
+    await dispose;
+    expect(backend.callsOfKind("startRecording")).toHaveLength(0);
+  });
+
   it("does not recreate an archived attachment or arm new timers after disposal", async () => {
     const { manager, backend } = makeManager();
     await manager.boot(DEVICE_A);
