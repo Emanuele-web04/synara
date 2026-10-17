@@ -1,4 +1,12 @@
 import { AgentGateway } from "./agentGateway/Services/AgentGateway";
+import {
+  desktopUpdateAuthorityForSession,
+  hasDesktopUpdateThreadWork,
+  hasDesktopUpdateProviderWork,
+  makeDesktopUpdateRpcHandlers,
+} from "./desktopUpdateRpc";
+import { QueuedTurnPromotionRepository } from "./persistence/Services/QueuedTurnPromotions";
+import { AutomationRepository } from "./persistence/Services/AutomationRepository";
 import { RemoteAgentResult } from "@synara/contracts";
 import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { superviseHostConnections } from "./hostConnections/supervisor";
@@ -560,6 +568,35 @@ const makeWsRpcHandlersLayer = () =>
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
+      const queuedTurnPromotions = yield* QueuedTurnPromotionRepository;
+      const automationRepository = yield* AutomationRepository;
+      const desktopUpdates = makeDesktopUpdateRpcHandlers(
+        Effect.gen(function* () {
+          const [sessions, model, queued, servers, automations] = yield* Effect.all(
+            [
+              providerService.listSessions(),
+              orchestrationEngine.getReadModel(),
+              queuedTurnPromotions.listPendingThreadIds,
+              devServerManager.list,
+              // UI history is capped and hides archived definitions; recovery queries all admitted runs.
+              automationRepository.listRecoverableRuns({ limit: 1 }),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (
+            model.threads.some(hasDesktopUpdateThreadWork) ||
+            queued.length > 0 ||
+            servers.servers.length > 0 ||
+            automations.length > 0
+          )
+            return true;
+          return yield* hasDesktopUpdateProviderWork(
+            sessions,
+            model.threads.map((thread) => thread.id),
+            providerService.hasLiveRuntimeTasks,
+          );
+        }),
+      );
       const agentGateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway));
       const serverSettings = yield* ServerSettingsService;
       const keepAwake = yield* KeepAwakeService;
@@ -2497,6 +2534,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(loadServerConfig, "Failed to load server config"),
         [WS_METHODS.serverGetEnvironment]: () =>
           rpcEffect(serverEnvironment.getDescriptor, "Failed to load server environment"),
+        [WS_METHODS.serverDesktopUpdateStatus]: () => desktopUpdates.status,
+        [WS_METHODS.serverDesktopUpdate]: (input) => desktopUpdates.action(input),
         [WS_METHODS.serverGetSettings]: () =>
           rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
@@ -3611,6 +3650,10 @@ export function makeWebsocketRpcRouteLayer<R>(
             runWithConnectionSession(request, {
               role: authenticatedSession.role,
               attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+              desktopUpdateAuthority: desktopUpdateAuthorityForSession(
+                authenticatedSession.sessionId,
+                authenticatedSession.role,
+              ),
             }),
           );
         }).pipe(

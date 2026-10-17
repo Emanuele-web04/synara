@@ -20,6 +20,7 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  desktopUpdates: Schema.optional(Schema.Boolean),
   accountProfileSync: Schema.optional(Schema.Boolean),
   remoteConnections: Schema.optional(Schema.Boolean),
   remoteResources: Schema.optional(Schema.Boolean),

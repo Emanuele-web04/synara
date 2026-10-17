@@ -1,4 +1,5 @@
 import "./httpRuntime";
+import { attachDesktopUpdateControl, DESKTOP_UPDATE_IPC_ENV } from "./desktopUpdateControl";
 import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
@@ -31,6 +32,7 @@ import * as OriginalFS from "original-fs";
 
 import {
   app,
+  autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
   crashReporter,
@@ -225,6 +227,7 @@ import {
 } from "./rendererCrashRecovery";
 import {
   type DownloadProgressSample,
+  canCheckForDesktopUpdates,
   getAutoUpdateDisabledReason,
   getDownloadStallTimeoutMessage,
   hasDownloadProgressAdvanced,
@@ -285,6 +288,7 @@ import {
 } from "./updateArtifactIdentity";
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
+import { MacUpdateInstallHandoff } from "./macUpdateInstallHandoff";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
 import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
@@ -1093,6 +1097,16 @@ let downloadedUpdateArtifact: {
 let downloadedUpdateIdentityTask: Promise<void> | null = null;
 let activeUpdateInstallHandoff: UpdateInstallHandoffExpectation | null = null;
 const pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
+const macUpdateInstallHandoff =
+  process.platform === "darwin"
+    ? new MacUpdateInstallHandoff(nativeAutoUpdater, (error) =>
+        autoUpdater.emit("error", error instanceof Error ? error : new Error(String(error))),
+      )
+    : null;
+
+function getUpdaterInstallBlockedReason(): string | null {
+  return macUpdateInstallHandoff?.blockedReason ?? null;
+}
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
   if (isUpdaterInstallPreparing || isUpdaterQuitAndInstallInFlight) return "install";
@@ -1104,6 +1118,7 @@ function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
 function clearUpdaterInstallInFlightAfterError(input?: {
   readonly preservePendingPreparation?: boolean;
 }): boolean {
+  macUpdateInstallHandoff?.cancel();
   const preparationCancelled = updateInstallPreparation.cancel();
   if (preparationCancelled && input?.preservePendingPreparation) {
     return true;
@@ -2967,7 +2982,10 @@ function scheduleUpdatePoll(): void {
 
 function isExplicitUpdateCheckReason(reason: string): boolean {
   return (
-    reason === "menu" || reason === "renderer" || reason === UPDATE_CHECK_REASON_MIGRATION_RECOVERY
+    reason === "menu" ||
+    reason === "renderer" ||
+    reason === "remote" ||
+    reason === UPDATE_CHECK_REASON_MIGRATION_RECOVERY
   );
 }
 
@@ -2981,6 +2999,18 @@ function emitUpdateState(): void {
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
   const previous = updateState;
   updateState = { ...updateState, ...patch };
+  const blockedReason = getUpdaterInstallBlockedReason();
+  if (
+    blockedReason !== null &&
+    (updateState.status === "downloaded" || updateState.status === "error")
+  ) {
+    updateState = {
+      ...updateState,
+      message: blockedReason,
+      errorContext: "install",
+      canRetry: false,
+    };
+  }
   emitUpdateState();
   betaDiagnostics?.trackUpdateStateChange(previous, updateState);
 }
@@ -3315,7 +3345,14 @@ function beginActiveUpdateCheck(): () => void {
 }
 
 async function checkForUpdates(reason: string): Promise<void> {
-  if (isQuitting || isUpdaterInstallPreparing || !updaterConfigured || updateCheckInFlight) return;
+  if (
+    isQuitting ||
+    isUpdaterInstallPreparing ||
+    !updaterConfigured ||
+    updateCheckInFlight ||
+    updateDownloadInFlight
+  )
+    return;
   if (automaticUpdateActivitySuppressed) {
     if (!isExplicitUpdateCheckReason(reason)) {
       console.info(
@@ -3329,11 +3366,7 @@ async function checkForUpdates(reason: string): Promise<void> {
     );
     scheduleUpdatePoll();
   }
-  if (
-    updateState.status === "checking" ||
-    updateState.status === "downloading" ||
-    updateState.status === "downloaded"
-  ) {
+  if (!canCheckForDesktopUpdates(updateState)) {
     console.info(
       `[desktop-updater] Skipping update check (${reason}) while status=${updateState.status}.`,
     );
@@ -3374,7 +3407,13 @@ async function downloadAvailableUpdate(): Promise<{
     await checkForUpdates("renderer");
     return { accepted: true, completed: false };
   }
-  if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
+  if (
+    isQuitting ||
+    isUpdaterInstallPreparing ||
+    !updaterConfigured ||
+    updateDownloadInFlight ||
+    updateState.status !== "available"
+  ) {
     return { accepted: false, completed: false };
   }
   if (!isAcceptableUpdateVersion(updateState.availableVersion)) {
@@ -3423,6 +3462,9 @@ async function downloadAvailableUpdate(): Promise<{
     const identityTask = downloadedUpdateIdentityTask;
     if (identityTask) {
       await identityTask;
+    }
+    if (downloadedUpdateArtifact === null) {
+      throw new Error("The update download did not produce a verified update. Try again.");
     }
     return {
       accepted: true,
@@ -3640,7 +3682,11 @@ async function runDownloadedUpdateInstall(
     }
     activeUpdateInstallHandoff = handoffExpectation;
     isUpdaterQuitAndInstallInFlight = true;
-    autoUpdater.quitAndInstall();
+    if (macUpdateInstallHandoff !== null) {
+      macUpdateInstallHandoff.start();
+    } else {
+      autoUpdater.quitAndInstall();
+    }
     updateInstallPreparation.requireActive(preparationAttempt);
     armInstallWatchdog();
     return { accepted: true, completed: false };
@@ -3666,7 +3712,19 @@ async function installDownloadedUpdate(): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
-  if (isQuitting || !updaterConfigured || updateState.status !== "downloaded") {
+  const blockedReason = getUpdaterInstallBlockedReason();
+  if (blockedReason !== null) {
+    setUpdateState({ message: blockedReason, errorContext: "install", canRetry: false });
+    return { accepted: false, completed: false };
+  }
+  // A recheck can replace electron-updater's selected payload before its transfer starts.
+  if (
+    isQuitting ||
+    !updaterConfigured ||
+    updateCheckInFlight ||
+    updateDownloadInFlight ||
+    updateState.status !== "downloaded"
+  ) {
     return { accepted: false, completed: false };
   }
   const preparationAttempt = updateInstallPreparation.begin();
@@ -3691,6 +3749,18 @@ async function installDownloadedUpdate(): Promise<{
 }
 
 async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Promise<void> {
+  const cancellationToken = updateDownloadCancellationToken;
+  const ownsDownload = () =>
+    !isQuitting &&
+    !isUpdaterInstallPreparing &&
+    updateDownloadInFlight &&
+    cancellationToken !== null &&
+    !cancellationToken.cancelled &&
+    updateDownloadCancellationToken === cancellationToken &&
+    updateState.status === "downloading" &&
+    updateState.availableVersion === info.version;
+  // Ignore late events without touching the newer transfer's watchdog, artifact, or cache.
+  if (!ownsDownload()) return;
   clearUpdateDownloadStallTimer();
   if (!isAcceptableUpdateVersion(info.version)) {
     downloadedUpdateArtifact = null;
@@ -3706,6 +3776,7 @@ async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Prom
 
   try {
     const identity = await fingerprintUpdateArtifact(info.downloadedFile);
+    if (!ownsDownload()) return;
     if (!isAcceptableUpdateVersion(info.version)) {
       downloadedUpdateArtifact = null;
       clearPendingUpdateCacheWhenSafe(
@@ -3720,6 +3791,7 @@ async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Prom
       `[desktop-updater] Update downloaded and fingerprinted: ${info.version} (${identity.size} bytes, sha512=${identity.sha512.slice(0, 16)}…).`,
     );
   } catch (error) {
+    if (!ownsDownload()) return;
     downloadedUpdateArtifact = null;
     clearPendingUpdateCacheWhenSafe("downloaded artifact fingerprint failed");
     const message = `The downloaded update could not be verified: ${formatErrorMessage(error)}`;
@@ -3795,13 +3867,17 @@ function configureAutoUpdater(): void {
     console.info("[desktop-updater] Looking for updates...");
   });
   autoUpdater.on("update-available", (info) => {
+    if (isQuitting || isUpdaterInstallPreparing || updateDownloadInFlight) return;
     clearUpdateCheckTimeoutTimer();
-    downloadedUpdateArtifact = null;
     if (!isAcceptableUpdateVersion(info.version)) {
-      void clearPendingUpdateCache(
-        `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
-      );
-      setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
+      const nextState = reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString());
+      if (nextState.downloadedVersion === null) {
+        downloadedUpdateArtifact = null;
+        void clearPendingUpdateCache(
+          `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
+        );
+      }
+      setUpdateState(nextState);
       lastLoggedDownloadMilestone = -1;
       console.info(
         `[desktop-updater] Ignoring available update: ${describeRejectedUpdateVersion(info.version)}.`,
@@ -3815,15 +3891,24 @@ function configureAutoUpdater(): void {
         new Date().toISOString(),
       ),
     );
+    if (updateState.downloadedVersion !== null) {
+      console.info("[desktop-updater] Keeping newer or already downloaded pending update.");
+      return;
+    }
+    downloadedUpdateArtifact = null;
     lastLoggedDownloadMilestone = -1;
     console.info(`[desktop-updater] Update available: ${info.version}`);
     prepareAvailableUpdateInBackground(`available ${info.version}`);
   });
   autoUpdater.on("update-not-available", () => {
+    if (isQuitting || isUpdaterInstallPreparing || updateDownloadInFlight) return;
     clearUpdateCheckTimeoutTimer();
-    downloadedUpdateArtifact = null;
-    void clearPendingUpdateCache("no newer update available");
-    setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
+    const nextState = reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString());
+    if (nextState.downloadedVersion === null) {
+      downloadedUpdateArtifact = null;
+      void clearPendingUpdateCache("no newer update available");
+    }
+    setUpdateState(nextState);
     lastLoggedDownloadMilestone = -1;
     console.info("[desktop-updater] No updates available.");
   });
@@ -3870,6 +3955,12 @@ function configureAutoUpdater(): void {
     }
   });
   autoUpdater.on("download-progress", (progress) => {
+    if (
+      !updateDownloadInFlight ||
+      updateDownloadCancellationToken?.cancelled ||
+      updateState.status !== "downloading"
+    )
+      return;
     const percent = Math.floor(progress.percent);
     updateDownloadStallTimerOnProgress(progress);
     if (
@@ -3885,6 +3976,7 @@ function configureAutoUpdater(): void {
     }
   });
   autoUpdater.on("update-downloaded", (info) => {
+    if (!updateDownloadInFlight || updateState.availableVersion !== info.version) return;
     const task = recordDownloadedUpdateIdentity(info);
     downloadedUpdateIdentityTask = task;
     const clearTask = () => {
@@ -4672,12 +4764,14 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
+      [DESKTOP_UPDATE_IPC_ENV]:
+        app.isPackaged && desktopFlavor === "remote" && process.platform === "darwin" ? "1" : "0",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
     // pipe carries the browser-host capability and must never be inherited.
     // Leave stdin open: EOF lets the backend clean up if this main process dies.
-    stdio: ["pipe", "pipe", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe", "pipe", "ipc"],
   });
   const capabilityPipe = child.stdio[DESKTOP_BROWSER_HOST_CAPABILITY_FD];
   if (capabilityPipe && "end" in capabilityPipe) {
@@ -4697,6 +4791,19 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  attachDesktopUpdateControl(child, {
+    isCurrentChild: () => backendProcess === child && !isQuitting,
+    supported: () =>
+      app.isPackaged &&
+      desktopFlavor === "remote" &&
+      process.platform === "darwin" &&
+      updaterConfigured,
+    getState: () => updateState,
+    getInstallBlockedReason: getUpdaterInstallBlockedReason,
+    check: () => checkForUpdates("remote"),
+    download: downloadAvailableUpdate,
+    install: installDownloadedUpdate,
+  });
   cuaDriverHost?.resume();
   const backendBaseUrl = backendHttpUrl;
   let backendSessionClosed = false;

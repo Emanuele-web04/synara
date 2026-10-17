@@ -6,6 +6,7 @@ import {
 import { RemoteAgentCall } from "./remoteAgentGateway";
 import { RemoteAccessInput } from "./remotePairing";
 import { Schema, Struct } from "effect";
+import { ServerDesktopUpdateInput } from "./desktopUpdate";
 import {
   LoadProjectImportHistoryInput,
   ImportProjectInput,
@@ -361,6 +362,8 @@ export const WS_METHODS = {
   serverGetRuntimeStatus: "server.getRuntimeStatus",
   serverGetConfig: "server.getConfig",
   serverGetEnvironment: "server.getEnvironment",
+  serverDesktopUpdateStatus: "server.desktopUpdateStatus",
+  serverDesktopUpdate: "server.desktopUpdate",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
@@ -688,6 +691,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetRuntimeStatus, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetEnvironment, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverDesktopUpdateStatus, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverDesktopUpdate, ServerDesktopUpdateInput),
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
