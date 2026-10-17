@@ -1,3 +1,4 @@
+import { resolveManagedWorktreeMergeCleanup } from "../../managedWorktreeMergeCleanup";
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
@@ -112,11 +113,13 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const git = yield* GitCore;
 
+  const mergeCleanup = yield* resolveManagedWorktreeMergeCleanup;
   const pruneManagedWorktreesAfterLifecycle = (context: {
     readonly eventType: ThreadDeletedEvent["type"];
     readonly threadId?: string;
   }) =>
     pruneProjectedArchivedManagedWorktrees({
+      ...(mergeCleanup ? { mergeCleanup } : {}),
       homeDir: serverConfig.homeDir,
       worktreesDir: serverConfig.worktreesDir,
       snapshotQuery: projectionSnapshotQuery,

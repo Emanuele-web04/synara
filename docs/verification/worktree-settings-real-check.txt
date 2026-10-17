@@ -1,0 +1,1 @@
+PASS {"home":"/tmp/synara-settings-acceptance-Cy2P0o","defaultOff":true,"persistedEnabled":true,"reloadRetained":true,"revertedOff":true}

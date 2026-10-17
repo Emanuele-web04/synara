@@ -349,6 +349,7 @@ describe("wsNativeApi", () => {
         },
         providerInstances: {},
         skills: { disabled: [] },
+        worktrees: { pruneAfterMerge: false },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

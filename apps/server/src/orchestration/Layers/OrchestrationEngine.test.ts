@@ -1,3 +1,4 @@
+import { withWorktreeRemoval } from "../../worktreeLifecycle";
 import {
   CheckpointRef,
   CommandId,
@@ -15,7 +16,17 @@ import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import type { DrainableWorkerStatus } from "@synara/shared/DrainableWorker";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Cause, Effect, Fiber, Layer, ManagedRuntime, Option, PubSub, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  Option,
+  PubSub,
+  Stream,
+} from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it, vi } from "vitest";
 
@@ -191,6 +202,7 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
     eventStore,
     projectionPipeline,
     managedAttachmentRepository,
+    homeDir: serverConfig.homeDir,
     stateDir: serverConfig.stateDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
@@ -202,6 +214,82 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("waits for worktree removal's ownership fence before restoring a thread", async () => {
+    const system = await createOrchestrationSystem();
+    const projectId = asProjectId("cleanup-fence");
+    const threadId = ThreadId.makeUnsafe("cleanup-fence");
+    const entered = await Effect.runPromise(Deferred.make<void>());
+    const release = await Effect.runPromise(Deferred.make<void>());
+    let removal: Promise<void> | undefined;
+    let restore: Promise<unknown> | undefined;
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cleanup-project"),
+          projectId,
+          title: "Cleanup",
+          workspaceRoot: "/tmp/cleanup",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("cleanup-thread"),
+          threadId,
+          projectId,
+          title: "Cleanup",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now(),
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.makeUnsafe("cleanup-archive"),
+          threadId,
+        }),
+      );
+      removal = Effect.runPromise(
+        withWorktreeRemoval(
+          system.homeDir,
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ).pipe(Effect.asVoid),
+      );
+      await Effect.runPromise(Deferred.await(entered));
+      restore = system.run(
+        system.engine.dispatch({
+          type: "thread.unarchive",
+          commandId: CommandId.makeUnsafe("cleanup-restore"),
+          threadId,
+        }),
+      );
+      await Effect.runPromise(Effect.sleep("30 millis"));
+      expect(
+        (await system.run(system.engine.getReadModel())).threads.find(
+          (thread) => thread.id === threadId,
+        )?.archivedAt,
+      ).not.toBeNull();
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await Promise.all([removal, restore]);
+      expect(
+        (await system.run(system.engine.getReadModel())).threads.find(
+          (thread) => thread.id === threadId,
+        )?.archivedAt,
+      ).toBeNull();
+    } finally {
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await Promise.allSettled([removal, restore]);
+      await system.dispose();
+    }
+  });
+
   it("commits the metadata snapshot cursor before publishing its accepted event", async () => {
     const system = await createOrchestrationSystem();
     const commandId = CommandId.makeUnsafe("metadata-phase-commit");

@@ -443,11 +443,6 @@ describe("createThreadActivityAccumulator", () => {
   });
 });
 
-describe("dedupeActivitiesByIdAfterAppend", () => {
-  const byIdOf = (activities: readonly ThreadActivity[]) =>
-    Object.fromEntries(activities.map((activity) => [activity.id, activity]));
-});
-
 describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
   it("takes snapshot text when a completed local message is longer than the server twin", () => {
     const assistantId = MessageId.makeUnsafe("assistant-completed-duplicate");

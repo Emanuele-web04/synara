@@ -141,6 +141,9 @@ export type KeepAwakeMode = typeof KeepAwakeMode.Type;
 export const DEFAULT_KEEP_AWAKE_MODE: KeepAwakeMode = "off";
 
 export const ServerSettings = Schema.Struct({
+  worktrees: Schema.Struct({
+    pruneAfterMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  }).pipe(Schema.withDecodingDefault(() => ({}))),
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
@@ -208,6 +211,9 @@ const ProviderSettingsBasePatch = {
 };
 
 export const ServerSettingsPatch = Schema.Struct({
+  worktrees: Schema.optionalKey(
+    Schema.Struct({ pruneAfterMerge: Schema.optionalKey(Schema.Boolean) }),
+  ),
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),

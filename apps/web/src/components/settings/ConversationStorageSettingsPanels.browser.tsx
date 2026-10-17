@@ -5,6 +5,7 @@
 import "../../index.css";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
@@ -19,18 +20,39 @@ const harness = vi.hoisted(() => ({
   removeDeletedThreadFromClientState: vi.fn(),
   mutateAsync: vi.fn(),
   invalidateQueries: vi.fn(),
+  setQueryData: vi.fn(),
+  updateSettings: vi.fn(async (patch: unknown) => patch),
   confirm: vi.fn(async (_message: string) => true),
   deleteArchivedThreadsFromClient: vi.fn(async (_input: { threadIds: string[] }) => {}),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: { worktrees: harness.worktrees }, isLoading: false, isError: false }),
-  useMutation: () => ({ isPending: false, mutateAsync: harness.mutateAsync }),
-  useQueryClient: () => ({ invalidateQueries: harness.invalidateQueries }),
+  useQuery: (options: { queryKey: string[] }) => ({
+    data:
+      options.queryKey[0] === "settings"
+        ? { worktrees: { pruneAfterMerge: false } }
+        : { worktrees: harness.worktrees },
+    isLoading: false,
+    isError: false,
+  }),
+  useMutation: (options: {
+    mutationFn?: (value: boolean) => Promise<unknown>;
+    onSuccess?: (value: unknown) => void;
+  }) => ({
+    isPending: false,
+    mutateAsync: harness.mutateAsync,
+    mutate: (value: boolean) =>
+      options.mutationFn?.(value).then((result) => options.onSuccess?.(result)),
+  }),
+  useQueryClient: () => ({
+    invalidateQueries: harness.invalidateQueries,
+    setQueryData: harness.setQueryData,
+  }),
 }));
 
 vi.mock("~/lib/serverReactQuery", () => ({
-  serverQueryKeys: { worktrees: () => ["worktrees"] },
+  serverQueryKeys: { worktrees: () => ["worktrees"], settings: () => ["settings"] },
+  serverSettingsQueryOptions: () => ({ queryKey: ["settings"] }),
   serverWorktreesQueryOptions: () => ({ queryKey: ["worktrees"] }),
 }));
 
@@ -51,7 +73,11 @@ vi.mock("~/store", () => ({
 }));
 
 vi.mock("~/nativeApi", () => {
-  const api = { dialogs: { confirm: harness.confirm }, orchestration: {} };
+  const api = {
+    dialogs: { confirm: harness.confirm },
+    orchestration: {},
+    server: { updateSettings: harness.updateSettings },
+  };
   return { readNativeApi: () => api, ensureNativeApi: () => api };
 });
 
@@ -79,8 +105,23 @@ describe("ConversationStorageSettingsPanels", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     harness.threadShells = [];
+    harness.updateSettings.mockClear();
+    harness.setQueryData.mockClear();
     harness.confirm.mockClear();
     harness.deleteArchivedThreadsFromClient.mockClear();
+  });
+
+  it("keeps merge cleanup off by default and persists opting in", async () => {
+    const screen = await render(<WorktreesSettingsPanel active />);
+    const toggle = screen.getByRole("switch", { name: "Remove archived worktrees after merge" });
+    await expect.element(toggle).not.toBeChecked();
+    await toggle.click();
+    await vi.waitFor(() =>
+      expect(harness.updateSettings).toHaveBeenCalledWith({ worktrees: { pruneAfterMerge: true } }),
+    );
+    expect(harness.setQueryData).toHaveBeenCalledWith(["settings"], {
+      worktrees: { pruneAfterMerge: true },
+    });
   });
 
   it("uses one association rule for direct and associated worktree paths", async () => {
@@ -103,6 +144,7 @@ describe("ConversationStorageSettingsPanels", () => {
     expect(document.body.textContent).toContain("Direct link");
     expect(document.body.textContent).toContain("Associated link");
     expect(document.body.textContent).not.toContain("Other worktree");
+    await page.screenshot({ path: "node_modules/.cache/worktree-settings-after.png" });
   });
 
   it("sorts archived threads once and keeps orphaned projects visible", async () => {

@@ -117,6 +117,8 @@ export interface TerminalCloseOpenedAtOrBeforeInput {
  * TerminalManagerShape - Service API for terminal session lifecycle operations.
  */
 export interface TerminalManagerShape {
+  /** Conservative protection for automatic worktree removal. */
+  readonly hasLiveSessionsForThread?: (threadId: string) => Effect.Effect<boolean>;
   /**
    * Open or attach to a terminal session.
    *

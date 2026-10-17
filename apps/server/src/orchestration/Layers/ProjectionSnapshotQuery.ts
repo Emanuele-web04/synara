@@ -163,6 +163,8 @@ const ProjectionManagedWorktreeThreadRowSchema = Schema.Struct({
   deletedAt: ProjectionThread.fields.deletedAt,
   worktreePath: ProjectionThread.fields.worktreePath,
   associatedWorktreePath: ProjectionThread.fields.associatedWorktreePath,
+  lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+  busy: Schema.Number,
 });
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
@@ -1153,7 +1155,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           archived_at AS "archivedAt",
           deleted_at AS "deletedAt",
           worktree_path AS "worktreePath",
-          associated_worktree_path AS "associatedWorktreePath"
+          associated_worktree_path AS "associatedWorktreePath",
+          last_known_pr_json AS "lastKnownPr",
+          EXISTS (
+            SELECT 1 FROM projection_thread_sessions AS sessions
+            WHERE sessions.thread_id = projection_threads.thread_id
+              AND (sessions.active_turn_id IS NOT NULL OR sessions.status IN ('starting', 'running'))
+          ) OR EXISTS (
+            SELECT 1 FROM projection_turns AS turns
+            WHERE turns.thread_id = projection_threads.thread_id
+              AND turns.turn_id = projection_threads.latest_turn_id AND turns.state = 'running'
+          ) OR EXISTS (
+            SELECT 1 FROM orchestration_event_deliveries AS deliveries
+            WHERE deliveries.thread_id = projection_threads.thread_id
+              AND deliveries.state IN ('inflight', 'retry', 'uncertain', 'dead')
+          ) AS busy
         FROM projection_threads
         WHERE worktree_path IS NOT NULL
            OR associated_worktree_path IS NOT NULL
@@ -3204,6 +3220,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               deletedAt: row.deletedAt ?? null,
               worktreePath: row.worktreePath ?? null,
               associatedWorktreePath: row.associatedWorktreePath ?? null,
+              lastKnownPr: row.lastKnownPr,
+              busy: row.busy !== 0,
             }),
           ),
         ),

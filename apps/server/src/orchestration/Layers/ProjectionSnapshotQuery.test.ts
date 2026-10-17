@@ -37,6 +37,37 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("blocks cleanup for every unresolved durable delivery state", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-11T20:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('cleanup-delivery-project', 'Cleanup', '/tmp/cleanup', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO orchestration_consumer_state (consumer_name, last_acked_sequence, created_at, updated_at)
+        VALUES ('cleanup-test-consumer', 0, ${now}, ${now})`;
+      for (const [index, state] of [
+        "inflight",
+        "retry",
+        "uncertain",
+        "dead",
+        "succeeded",
+      ].entries()) {
+        const threadId = asThreadId(`cleanup-delivery-${state}`);
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, worktree_path, created_at, updated_at)
+          VALUES (${threadId}, 'cleanup-delivery-project', 'Cleanup', '{"provider":"codex","model":"gpt-5"}', ${`/tmp/cleanup/${state}`}, ${now}, ${now})`;
+        yield* sql`INSERT INTO orchestration_event_deliveries (consumer_name, event_sequence, thread_id, state, updated_at)
+          VALUES ('cleanup-test-consumer', ${index + 1}, ${threadId}, ${state}, ${now})`;
+      }
+      const rows = yield* query.listManagedWorktreeThreads();
+      for (const state of ["inflight", "retry", "uncertain", "dead", "succeeded"]) {
+        assert.equal(
+          rows.find((row) => row.id === `cleanup-delivery-${state}`)?.busy,
+          state !== "succeeded",
+        );
+      }
+    }),
+  );
   it.effect("retains durable task state beyond the detail activity window", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -3603,6 +3634,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const threads = yield* snapshotQuery.listManagedWorktreeThreads();
       assert.deepEqual(threads, [
         {
+          lastKnownPr: null,
+          busy: false,
           id: asThreadId("thread-worktree-active"),
           archivedAt: null,
           deletedAt: null,
@@ -3610,6 +3643,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreePath: null,
         },
         {
+          lastKnownPr: null,
+          busy: false,
           id: asThreadId("thread-worktree-deleted"),
           archivedAt: "2026-07-24T00:00:08.000Z",
           deletedAt: "2026-07-24T00:00:09.000Z",

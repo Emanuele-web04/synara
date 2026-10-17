@@ -10,11 +10,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { ArchiveIcon } from "~/lib/icons";
 import { deleteArchivedThreadsFromClient } from "~/lib/archivedThreadDelete";
 import { formatRelativeTime } from "~/lib/relativeTime";
-import { serverQueryKeys, serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverQueryKeys,
+  serverWorktreesQueryOptions,
+  serverSettingsQueryOptions,
+} from "~/lib/serverReactQuery";
 import { unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
@@ -46,7 +51,51 @@ function WorktreesStatus(props: { children: string; error?: boolean }) {
   );
 }
 
+function WorktreeMergeCleanupSetting() {
+  const queryClient = useQueryClient();
+  const settings = useQuery(serverSettingsQueryOptions());
+  const update = useMutation({
+    mutationFn: (enabled: boolean) =>
+      ensureNativeApi().server.updateSettings({ worktrees: { pruneAfterMerge: enabled } }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(serverQueryKeys.settings(), next);
+    },
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: "Could not update worktree cleanup",
+        description: error.message,
+      }),
+  });
+  return (
+    <SettingsSection title="Automatic cleanup">
+      <SettingsListRow
+        title="Remove archived worktrees after merge"
+        description="Reclaim clean, inactive worktrees only when their current commit matches a merged pull request. Keep a recovery snapshot."
+        actions={
+          <Switch
+            aria-label="Remove archived worktrees after merge"
+            checked={settings.data?.worktrees.pruneAfterMerge ?? false}
+            disabled={!settings.data || update.isPending}
+            onCheckedChange={(value) => update.mutate(Boolean(value))}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function WorktreesSettingsPanel({ active }: { readonly active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="space-y-6">
+      <WorktreeMergeCleanupSetting />
+      <WorktreesInventoryPanel active />
+    </div>
+  );
+}
+
+function WorktreesInventoryPanel({ active }: { readonly active: boolean }) {
   const queryClient = useQueryClient();
   const worktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
