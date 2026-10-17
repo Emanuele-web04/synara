@@ -4777,37 +4777,67 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("pulls behind branch and then reports up-to-date", () =>
-      Effect.gen(function* () {
-        const remote = yield* makeTmpDir();
-        const source = yield* makeTmpDir();
-        const clone = yield* makeTmpDir();
-        yield* git(remote, ["init", "--bare"]);
+    for (const pullRebase of ["false", "true"]) {
+      it.effect(
+        `fast-forwards without rebasing or losing unrelated edits (pull.rebase=${pullRebase})`,
+        () =>
+          Effect.gen(function* () {
+            const remote = yield* makeTmpDir();
+            const source = yield* makeTmpDir();
+            const clone = yield* makeTmpDir();
+            yield* git(remote, ["init", "--bare"]);
 
-        yield* initRepoWithCommit(source);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
-        yield* git(source, ["remote", "add", "origin", remote]);
-        yield* git(source, ["push", "-u", "origin", initialBranch]);
+            yield* initRepoWithCommit(source);
+            const initialBranch = (yield* (yield* GitCore).listBranches({
+              cwd: source,
+            })).branches.find((branch) => branch.current)!.name;
+            yield* git(source, ["remote", "add", "origin", remote]);
+            yield* git(source, ["push", "-u", "origin", initialBranch]);
 
-        yield* git(clone, ["clone", remote, "."]);
-        yield* git(clone, ["config", "user.email", "test@test.com"]);
-        yield* git(clone, ["config", "user.name", "Test"]);
-        yield* writeTextFile(path.join(clone, "CHANGELOG.md"), "remote change\n");
-        yield* git(clone, ["add", "CHANGELOG.md"]);
-        yield* git(clone, ["commit", "-m", "remote update"]);
-        yield* git(clone, ["push", "origin", initialBranch]);
+            yield* git(clone, ["clone", remote, "."]);
+            yield* git(clone, ["config", "user.email", "test@test.com"]);
+            yield* git(clone, ["config", "user.name", "Test"]);
+            yield* writeTextFile(path.join(clone, "CHANGELOG.md"), "remote change\n");
+            yield* git(clone, ["add", "CHANGELOG.md"]);
+            yield* git(clone, ["commit", "-m", "remote update"]);
+            yield* git(clone, ["push", "origin", initialBranch]);
 
-        const core = yield* GitCore;
-        const pulled = yield* core.pullCurrentBranch(source);
-        expect(pulled.status).toBe("pulled");
-        expect((yield* core.statusDetails(source)).behindCount).toBe(0);
+            yield* git(source, ["config", "pull.rebase", pullRebase]);
+            yield* writeTextFile(path.join(source, "local-only.txt"), "keep local edits\n");
+            yield* writeTextFile(path.join(source, "README.md"), "unrelated local modification\n");
+            const core = yield* GitCore;
+            const pulled = yield* core.pullCurrentBranch(source);
+            expect(pulled.status).toBe("pulled");
+            expect((yield* core.statusDetails(source)).behindCount).toBe(0);
 
-        const skipped = yield* core.pullCurrentBranch(source);
-        expect(skipped.status).toBe("skipped_up_to_date");
-      }),
-    );
+            const skipped = yield* core.pullCurrentBranch(source);
+            expect(skipped.status).toBe("skipped_up_to_date");
+            expect(yield* readTextFile(path.join(source, "local-only.txt"))).toBe(
+              "keep local edits\n",
+            );
+
+            expect(yield* readTextFile(path.join(source, "README.md"))).toBe(
+              "unrelated local modification\n",
+            );
+
+            // Divergence still fails: --no-rebase must not turn --ff-only into a merge.
+            yield* writeTextFile(path.join(source, "README.md"), "local commit\n");
+            yield* git(source, ["add", "README.md"]);
+            yield* git(source, ["commit", "-m", "local divergence"]);
+            yield* writeTextFile(path.join(clone, "CHANGELOG.md"), "second remote change\n");
+            yield* git(clone, ["add", "CHANGELOG.md"]);
+            yield* git(clone, ["commit", "-m", "remote divergence"]);
+            yield* git(clone, ["push", "origin", initialBranch]);
+            const beforeSha = yield* git(source, ["rev-parse", "HEAD"]);
+            const diverged = yield* Effect.result(core.pullCurrentBranch(source));
+            expect(diverged._tag).toBe("Failure");
+            expect(yield* git(source, ["rev-parse", "HEAD"])).toBe(beforeSha);
+            expect(yield* readTextFile(path.join(source, "local-only.txt"))).toBe(
+              "keep local edits\n",
+            );
+          }),
+      );
+    }
 
     it.effect("top-level pullGitBranch rejects when no upstream exists", () =>
       Effect.gen(function* () {
@@ -4821,38 +4851,41 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("explains local changes that block pull", () =>
-      Effect.gen(function* () {
-        const remote = yield* makeTmpDir();
-        const source = yield* makeTmpDir();
-        const clone = yield* makeTmpDir();
-        yield* git(remote, ["init", "--bare"]);
+    for (const pullRebase of ["false", "true"]) {
+      it.effect(`explains local changes that block pull (pull.rebase=${pullRebase})`, () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          const clone = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
 
-        yield* initRepoWithCommit(source);
-        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
-          (branch) => branch.current,
-        )!.name;
-        yield* git(source, ["remote", "add", "origin", remote]);
-        yield* git(source, ["push", "-u", "origin", initialBranch]);
+          yield* initRepoWithCommit(source);
+          const initialBranch = (yield* (yield* GitCore).listBranches({
+            cwd: source,
+          })).branches.find((branch) => branch.current)!.name;
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", initialBranch]);
 
-        yield* git(clone, ["clone", remote, "."]);
-        yield* git(clone, ["config", "user.email", "test@test.com"]);
-        yield* git(clone, ["config", "user.name", "Test"]);
-        yield* writeTextFile(path.join(clone, "README.md"), "remote change\n");
-        yield* git(clone, ["add", "README.md"]);
-        yield* git(clone, ["commit", "-m", "remote update"]);
-        yield* git(clone, ["push", "origin", initialBranch]);
+          yield* git(clone, ["clone", remote, "."]);
+          yield* git(clone, ["config", "user.email", "test@test.com"]);
+          yield* git(clone, ["config", "user.name", "Test"]);
+          yield* writeTextFile(path.join(clone, "README.md"), "remote change\n");
+          yield* git(clone, ["add", "README.md"]);
+          yield* git(clone, ["commit", "-m", "remote update"]);
+          yield* git(clone, ["push", "origin", initialBranch]);
 
-        yield* writeTextFile(path.join(source, "README.md"), "local change\n");
+          yield* git(source, ["config", "pull.rebase", pullRebase]);
+          yield* writeTextFile(path.join(source, "README.md"), "local change\n");
 
-        const result = yield* Effect.result((yield* GitCore).pullCurrentBranch(source));
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure.detail).toContain("Local changes block pull");
-          expect(result.failure.detail).toContain("README.md");
-        }
-      }),
-    );
+          const result = yield* Effect.result((yield* GitCore).pullCurrentBranch(source));
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") {
+            expect(result.failure.detail).toContain("Local changes block pull");
+            expect(result.failure.detail).toContain("README.md");
+          }
+        }),
+      );
+    }
 
     it.effect("lists branches when recency lookup fails", () =>
       Effect.gen(function* () {
