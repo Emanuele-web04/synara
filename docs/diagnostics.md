@@ -17,8 +17,8 @@ process type and reason without the log tail; an update failure keeps its step w
 the message. Handled issues keep their fixed code and reason. While sharing is off,
 no activity breadcrumbs or memory samples are kept, and after it is turned back on, a
 usage snapshot is relayed only once its 24-hour window starts after that moment.
-The Beta diagnostics module is only constructed
-when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
+The diagnostics module is constructed only
+when the packaged build's `synaraDesktopFlavor` field equals `"beta"` or `"remote"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
 source is bundled into the shared desktop code, but in a stable build it is
 never instantiated: no UI, environment variable, or IPC can enable it.)

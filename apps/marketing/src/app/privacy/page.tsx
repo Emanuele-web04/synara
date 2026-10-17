@@ -5,7 +5,7 @@
 // Depends on: Navbar, SiteFooter, react-icons/lu
 // Note: Claims verified against the synara codebase. Keep them in sync with the
 //       app: local workspaces, optional account features, explicit feedback,
-//       opt-in product analytics and separate Beta diagnostics.
+//       product analytics choices and separate Beta/Remote diagnostics.
 
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -17,17 +17,17 @@ import { SITE_URL, breadcrumbJsonLd, jsonLdScript, pageMetadata } from "@/lib/se
 export const metadata = pageMetadata({
   title: "Privacy — Synara",
   description:
-    "Synara's security and privacy boundary: local workspaces, optional account features, opt-in product analytics and separate Beta diagnostics.",
+    "Synara's security and privacy boundary: local workspaces, optional account features, product analytics choices and separate Beta/Remote diagnostics.",
   path: "/privacy",
 });
 
-const LAST_UPDATED = "October 5, 2026";
+const LAST_UPDATED = "October 17, 2026";
 
-const RECEIVED_IF_OPTED_IN = [
-  "Fixed event names for app opens, selected features, connection outcomes and chat requests",
-  "A random installation identifier, event identifier and timestamp; unrelated to your account",
+const RECEIVED_WHEN_SHARED = [
+  "Fixed event names, built-in command categories, connection outcomes and failure categories",
+  "A random installation identifier, event identifier and timestamp; a pseudonymous account hash while signed in",
   "Your app version, release channel, app surface and platform",
-  "Bounded durations and available token counts; no model names or conversation content",
+  "Bounded durations, token counts and host turn aggregates by provider, catalogued model, effort, mode and origin",
 ];
 
 const NEVER_COLLECTED = [
@@ -44,9 +44,9 @@ const PRIVACY_JSONLD = [
     "@id": `${SITE_URL}/privacy#webpage`,
     name: "Synara privacy",
     url: `${SITE_URL}/privacy`,
-    dateModified: "2026-10-05",
+    dateModified: "2026-10-17",
     description:
-      "Synara privacy details covering local workspaces, optional account features, opt-in product analytics and separate Beta diagnostics.",
+      "Synara privacy details covering local workspaces, optional account features, product analytics choices and separate Beta/Remote diagnostics.",
   },
   breadcrumbJsonLd([
     { name: "Synara", path: "/" },
@@ -72,9 +72,10 @@ export default function PrivacyPage() {
         </h1>
         <p className="mt-5 text-[14px] leading-[1.7] text-[var(--text-secondary)] sm:text-[15px]">
           Synara stores workspace history on the computer running the workspace. Optional account
-          features, connections and mobile access use additional services as described below.
-          Product analytics are off by default. Synara Beta has separate, always-on crash and
-          release diagnostics; the product analytics switch does not disable those diagnostics.
+          features, connections and mobile access use additional services as described below. Stable
+          and Beta product analytics are off by default. Synara Remote from .18 and iPhone/iPad from
+          build 139 share limited usage data by default, with a local switch to turn it off. Synara
+          Beta has separate, always-on crash and release diagnostics.
         </p>
 
         <Section title="Where your data lives">
@@ -108,30 +109,42 @@ export default function PrivacyPage() {
           </p>
         </Section>
 
-        <Section title="Product analytics — off by default">
+        <Section title="Product analytics and Remote diagnostics">
           <p>
-            Desktop Stable, Beta and the native mobile apps can send limited product events to our
-            Cloudflare service when you enable <strong>Share product analytics</strong> in Settings.
-            Consent is local to each installation, off by default, and independent of your account
-            or another connected device. The random installation identifier allows events from that
-            consenting installation to be grouped; it is not your account identity.
+            Stable and Beta product analytics are off by default. Synara Remote from version
+            1.0.6-remote.18 and the native iPhone/iPad apps from build 139 share limited usage data
+            by default. Settings → Privacy →<strong> Share usage and diagnostics</strong> turns
+            sharing off on that installation; an existing off choice is preserved. On Remote desktop
+            this switch also controls crash and error diagnostics. Another computer or account does
+            not change your local choice.
           </p>
-
+          <p className="mt-6">
+            While signed in, events include a one-way hash of your Synara account identifier so that
+            your devices can count as one person. The identifier itself, name and email are not
+            sent. This hash is pseudonymous, not anonymous: an operator holding the account list
+            could recompute it. We do not use advertising, cross-app tracking or data brokers.
+          </p>
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <DataCard
               tone="receive"
-              title="If you opt in, we receive"
-              items={RECEIVED_IF_OPTED_IN}
+              title="When sharing is enabled, we receive"
+              items={RECEIVED_WHEN_SHARED}
             />
             <DataCard tone="never" title="Analytics never receives" items={NEVER_COLLECTED} />
           </div>
-
           <p className="mt-6">
-            Events are stored in a separate Cloudflare D1 table with a 30-day raw-data retention
-            policy and an authenticated dashboard. Turning collection off clears unsent events,
-            cancels uploads where possible and removes the local analytics identifier. It cannot
-            retract events already received. Re-enabling creates a new identifier. Usage counters
-            are best-effort observations, not billing records or complete account usage totals.
+            Raw product events are stored in Cloudflare D1 for up to 30 days behind an authenticated
+            dashboard. Local queues are bounded to 500 events and seven days. Turning sharing off
+            clears unsent events, cancels active sends and removes the local analytics identifier;
+            it cannot recall data already received. Usage counters are best-effort observations, not
+            billing records or complete account totals. Custom model and command names are reduced
+            to fixed categories rather than sent as free text.
+          </p>
+          <p className="mt-6">
+            Remote desktop diagnostics keep known error categories, numeric source locations,
+            process/release health and aggregate usage counters. They exclude error messages,
+            function/file names, log excerpts and raw crash memory dumps. Diagnostic reports have
+            separate, indefinite retention; the 30-day product-event cleanup does not remove them.
           </p>
         </Section>
 
