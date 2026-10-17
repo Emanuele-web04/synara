@@ -1,0 +1,42 @@
+name: PR1878 source-versus-main semantic conflict inventory
+on:
+  push:
+    branches: [qa/pr1878-conflicts-snapshot-20261017]
+permissions:
+  contents: read
+jobs:
+  conflicts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: c6312c042ddab5e1f2ae9587d50264511dfecb13
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Acquire exact current upstream main without changing checkout
+        run: |
+          git fetch --no-tags https://github.com/Emanuele-web04/synara.git df87a48b9f2d403e3d2785ef11502f2ce2922f5b
+          test "$(git rev-parse FETCH_HEAD)" = df87a48b9f2d403e3d2785ef11502f2ce2922f5b
+      - name: Compute clean, read-only merge-tree without modifying sources
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/integration"
+          git rev-parse HEAD FETCH_HEAD > "$RUNNER_TEMP/integration/commits.txt"
+          git merge-base HEAD FETCH_HEAD > "$RUNNER_TEMP/integration/merge-base.txt"
+          set +e
+          git merge-tree --write-tree HEAD FETCH_HEAD > "$RUNNER_TEMP/integration/merge-tree.txt" 2>&1
+          rc=$?
+          set -e
+          echo "merge-tree exit: $rc"
+          grep -E '^(CONFLICT|Auto-merging)' "$RUNNER_TEMP/integration/merge-tree.txt" | tail -120 || true
+          git diff --numstat HEAD FETCH_HEAD | tail -25 || true
+          echo "merge-tree output preserved. No real checkout merge, no branch changes."
+      - name: Save merge conflict details
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-upstream-conflict-inventory
+          path: ${{ runner.temp }}/integration
+          retention-days: 14
