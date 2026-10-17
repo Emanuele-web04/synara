@@ -5,16 +5,24 @@
 ### Added
 
 - iPhone and iPad can inspect, check and download an official update for their connected Remote Mac, then explicitly confirm Restart & Install from Computers. This requires companion build 143 and a packaged macOS Synara Remote host. Restart is refused while chats, background tasks, approvals, questions or automation runs still need the host.
+- Companion build 143 registers ordinary completion alerts for an exact account-owned host turn, alongside Live Activities. The separate account API keeps device notification tokens distinct from ActivityKit tokens and reuses the existing host reporter. Alerts contain a generic completion message and thread routing identifiers, without uploading conversation text.
 
 ### Fixed
 
 - A downloaded update no longer stops automatic update checks. The existing four-hour cadence continues, and a newer release replaces the pending download. Older or unchanged feeds and failed checks preserve an eligible downloaded update; stale download callbacks cannot make an older release ready to install.
 - macOS installs wait for the current verified update archive. A failed native handoff reports that Synara must be relaunched before retrying, and a delayed completion cannot install after recovery.
 
+### Companion iPhone and iPad
+
+- The separate universal iOS/iPadOS 0.1 (143) build fixes answers to multiple agent questions, gives background commands compact status, output details and an owner-routed Stop action, and keeps the Git toolbar stable during refreshes.
+- Recent and previously revealed conversation history stays visible during streaming, including complete large live turns. Accepted keyboard suggestions and rapid edits remain authoritative when sending.
+- Sent-photo thumbnails load without opening the viewer, and an unzoomed image supports swiping down to close. Install the mobile build to receive these native changes; they are not part of the desktop binary.
+
 ### Verification
 
-- Companion universal iOS/iPadOS 0.1 (143) separately fixes answers to multiple agent questions, gives background commands compact status, output details and an owner-routed Stop action, and keeps the Git toolbar stable during refreshes. Install that mobile build to receive those native changes; they are not part of the desktop binary.
-- Remote continues to target macOS Apple Silicon, Windows x64 and Linux x64 with separate identities, homes and updater feeds. Phone-triggered Restart & Install is available only for the packaged Remote Mac. No account-service deployment, database migration or pairing reset is required.
+- Remote continues to target macOS Apple Silicon, Windows x64 and Linux x64 with separate identities, homes and updater feeds. Phone-triggered Restart & Install is available only for the packaged Remote Mac.
+- Ordinary completion alerts use the separately deployed account API and additive migration 0023. The desktop updater itself needs no database migration or pairing reset. Physical-device ordinary APNs delivery, final swipe interaction and the mobile build's distribution are not established by the desktop checks.
+- A real Mac mini update passed from the signed feature build 1.0.6-remote.19 to published .20 through the iPhone control: checking with .20 already downloaded retained its ready state, explicit idle Restart & Install replaced both app and server, and the existing account and conversation history recovered. Live companion checks also covered multiple-question answers, background output and Stop, Git refreshes, and sent-photo thumbnails on iPhone and iPad.
 - Local checks and one publication workflow on the final tag SHA must qualify the candidate. Public notes record actual signing, notarization, startup, Windows Defender and provenance results after they complete. Windows retains the exact-version unsigned policy and may show SmartScreen; synthetic checks do not establish an installed-app upgrade or live-provider success.
 
 ## 1.0.6-remote.20 — 2026-10-17

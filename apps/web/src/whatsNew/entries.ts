@@ -43,7 +43,15 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "native-companion-143",
         title: "Companion build 143",
         description:
-          "The separate iPhone and iPad update fixes answers to multiple agent questions, adds background command status, output and Stop, and stabilizes the Git toolbar during refreshes. Install the mobile build to get these changes.",
+          "The separate iPhone and iPad update fixes answers to multiple questions, adds background command output and Stop, and stabilizes the Git toolbar. History stays visible during streaming, and sending uses your latest keyboard edits.",
+        details:
+          "Build 143 also restores sent-photo thumbnails and lets you swipe down to close an unzoomed image. Install the mobile build to get these native changes.",
+      },
+      {
+        id: "ordinary-completion-alerts",
+        title: "Completion alerts on iPhone and iPad",
+        description:
+          "Companion build 143 adds ordinary completion alerts alongside Live Activities. This requires the separate account API update; the desktop updater does not change your pairing or database.",
       },
     ],
   },
