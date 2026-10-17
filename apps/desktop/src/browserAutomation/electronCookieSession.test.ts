@@ -19,7 +19,7 @@ function createSurface() {
     close: ReturnType<typeof vi.fn>;
   }> = [];
   const surface: CookieSessionElectronSurface = {
-    createViewContents: vi.fn(() => {
+    createView: vi.fn(() => {
       const view = {
         destroyed: false,
         attach: vi.fn(),
@@ -32,11 +32,13 @@ function createSurface() {
       };
       views.push(view);
       return {
-        loadURL: vi.fn(async () => undefined),
-        isDestroyed: () => view.destroyed,
-        close: view.close,
-        debugger: { attach: view.attach, sendCommand: view.sendCommand },
-      } as unknown as ReturnType<CookieSessionElectronSurface["createViewContents"]>;
+        webContents: {
+          loadURL: vi.fn(async () => undefined),
+          isDestroyed: () => view.destroyed,
+          close: view.close,
+          debugger: { attach: view.attach, sendCommand: view.sendCommand },
+        },
+      } as unknown as ReturnType<CookieSessionElectronSurface["createView"]>;
     }),
     cookies: () => cookieEvents,
   };
@@ -57,7 +59,7 @@ describe("createCookieSessionBackend", () => {
     cookieEvents.emit("changed");
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(surface.createViewContents).not.toHaveBeenCalled();
+    expect(surface.createView).not.toHaveBeenCalled();
     backend.dispose();
     expect(cookieEvents.listenerCount("changed")).toBe(0);
   });
@@ -70,7 +72,7 @@ describe("createCookieSessionBackend", () => {
     await backend.restore([{ name: "sid" }]);
     await expect(backend.read()).resolves.toEqual([{ name: "sid" }]);
 
-    expect(surface.createViewContents).toHaveBeenCalledTimes(1);
+    expect(surface.createView).toHaveBeenCalledTimes(1);
     expect(views[0]?.attach).toHaveBeenCalledWith("1.3");
     expect(views[0]?.sendCommand).toHaveBeenCalledWith("Network.setCookies", {
       cookies: [{ name: "sid" }],
@@ -81,7 +83,7 @@ describe("createCookieSessionBackend", () => {
     expect(views[0]?.close).toHaveBeenCalledTimes(1);
 
     await backend.read();
-    expect(surface.createViewContents).toHaveBeenCalledTimes(2);
+    expect(surface.createView).toHaveBeenCalledTimes(2);
     backend.dispose();
     expect(views[1]?.close).toHaveBeenCalledTimes(1);
   });
@@ -96,13 +98,13 @@ describe("createCookieSessionBackend", () => {
 
     expect(views[0]?.close).toHaveBeenCalledTimes(1);
     await expect(backend.read()).rejects.toThrow("Browser cookie session is closed.");
-    expect(surface.createViewContents).toHaveBeenCalledTimes(1);
+    expect(surface.createView).toHaveBeenCalledTimes(1);
   });
 
   it("retries with a fresh view after a failed open", async () => {
     const { surface, views } = createSurface();
     const backend = createCookieSessionBackend("persist:test", surface);
-    vi.mocked(surface.createViewContents).mockImplementationOnce(() => {
+    vi.mocked(surface.createView).mockImplementationOnce(() => {
       const failing = {
         loadURL: vi.fn(async () => {
           throw new Error("load failed");
@@ -111,7 +113,9 @@ describe("createCookieSessionBackend", () => {
         close: vi.fn(),
         debugger: { attach: vi.fn(), sendCommand: vi.fn() },
       };
-      return failing as unknown as ReturnType<CookieSessionElectronSurface["createViewContents"]>;
+      return { webContents: failing } as unknown as ReturnType<
+        CookieSessionElectronSurface["createView"]
+      >;
     });
 
     await expect(backend.read()).rejects.toThrow("load failed");

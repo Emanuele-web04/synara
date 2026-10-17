@@ -2873,7 +2873,18 @@ it.layer(TestLayer)("git integration", (it) => {
         lateNul[8999] = 10;
         yield* fileSystem.writeFile(path.join(tmp, "late-nul.txt"), lateNul);
         yield* writeTextFile(path.join(tmp, "locked.lock"), "a\nb\n");
-        yield* writeTextFile(path.join(tmp, ".gitattributes"), "*.lock -diff\n");
+        yield* fileSystem.writeFile(
+          path.join(tmp, "forced-text.txt"),
+          new Uint8Array([97, 0, 10, 98, 10]),
+        );
+        yield* fileSystem.writeFile(path.join(tmp, "driver-text.txt"), new Uint8Array([97, 0, 10]));
+        yield* writeTextFile(path.join(tmp, "driver-binary.txt"), "a\nb\n");
+        yield* writeTextFile(
+          path.join(tmp, ".gitattributes"),
+          "*.lock -diff\nforced-text.txt diff\ndriver-text.txt diff=customtext\ndriver-binary.txt diff=custombinary\n",
+        );
+        yield* git(tmp, ["config", "diff.customtext.binary", "false"]);
+        yield* git(tmp, ["config", "diff.custombinary.binary", "true"]);
         yield* git(tmp, ["add", ".gitattributes"]);
         yield* git(tmp, ["commit", "-m", "attributes"]);
         yield* Effect.promise(() => fs.symlink("text.txt", path.join(tmp, "link")));
@@ -2897,6 +2908,9 @@ it.layer(TestLayer)("git integration", (it) => {
         const expected = new Map([
           ["binary.bin", "-\t-"],
           ["empty.txt", "0\t0"],
+          ["forced-text.txt", "2\t0"],
+          ["driver-text.txt", "1\t0"],
+          ["driver-binary.txt", "-\t-"],
           ["late-nul.txt", "1\t0"],
           ["link", "1\t0"],
           ["locked.lock", "-\t-"],
@@ -2915,12 +2929,36 @@ it.layer(TestLayer)("git integration", (it) => {
         commands.length = 0;
 
         expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
-          additions: 0 + 1 + 1 + 2 + 3,
+          additions: 0 + 1 + 1 + 2 + 3 + 2 + 1,
           deletions: 0,
           fileCount: expected.size,
         });
-        expect(commands.some((args) => args.includes("--no-index"))).toBe(false);
+        expect(
+          commands.filter((args) => args.includes("--no-index")).map((args) => args.at(-1)),
+        ).toEqual(["driver-binary.txt", "driver-text.txt", "forced-text.txt", "locked.lock"]);
         expect(commands.filter((args) => args[0] === "check-attr")).toHaveLength(1);
+      }),
+    );
+
+    it.effect("honors a configured Git large-file threshold for untracked totals", () =>
+      Effect.gen(function* () {
+        const core = yield* GitCore;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "core.bigFileThreshold", "1"]);
+        yield* writeTextFile(path.join(tmp, "large.txt"), "one\ntwo\n");
+        const raw = yield* core.execute({
+          operation: "test.noIndexNumstat",
+          cwd: tmp,
+          args: ["diff", "--no-index", "--numstat", "--", "/dev/null", "large.txt"],
+          allowNonZeroExit: true,
+        });
+        expect(raw.stdout).toBe("-\t-\t/dev/null => large.txt\n");
+        expect(yield* core.readDiffStats(tmp, "unstaged")).toEqual({
+          additions: 0,
+          deletions: 0,
+          fileCount: 1,
+        });
       }),
     );
 

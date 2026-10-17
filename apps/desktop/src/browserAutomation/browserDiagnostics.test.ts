@@ -104,9 +104,8 @@ describe("browser diagnostics store", () => {
       "Runtime.discardConsoleEntries",
       "Log.clear",
     ]);
-    expect(listenerCount()).toBe(0);
-    // Nothing reaches the store while quiesced.
-    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "while-idle" }] });
+    expect(listenerCount()).toBe(1);
+    // Runtime/Log are disabled, but the shared listener keeps capturing Network.
 
     sendCommand.mockClear();
     const output = await diagnostics.read(runtime, {
@@ -154,6 +153,55 @@ describe("browser diagnostics store", () => {
     }
   });
 
+  it("keeps network capture and in-flight metadata through an idle quiesce", async () => {
+    vi.useFakeTimers();
+    const { runtime, emit } = createRuntime();
+    const diagnostics = new BrowserDiagnosticsStore();
+    try {
+      await diagnostics.observe(runtime);
+      emit("Network.requestWillBeSent", {
+        requestId: "before-idle",
+        request: { url: "https://example.test/before", method: "POST" },
+      });
+      await vi.advanceTimersByTimeAsync(BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS);
+      emit("Network.responseReceived", {
+        requestId: "before-idle",
+        response: { url: "https://example.test/before", status: 201 },
+      });
+      emit("Network.requestWillBeSent", {
+        requestId: "while-idle",
+        request: { url: "https://example.test/idle", method: "PATCH" },
+      });
+      emit("Network.loadingFailed", { requestId: "while-idle", errorText: "fixture failure" });
+      const output = await diagnostics.read(runtime, {
+        includeConsole: false,
+        includeNetwork: true,
+        limit: 100,
+      });
+      expect(output.entries).toMatchObject([
+        { kind: "network", phase: "request", requestId: "before-idle", method: "POST" },
+        {
+          kind: "network",
+          phase: "response",
+          requestId: "before-idle",
+          method: "POST",
+          status: 201,
+        },
+        { kind: "network", phase: "request", requestId: "while-idle", method: "PATCH" },
+        {
+          kind: "network",
+          phase: "failure",
+          requestId: "while-idle",
+          method: "PATCH",
+          url: "https://example.test/idle",
+        },
+      ]);
+    } finally {
+      diagnostics.dispose(runtime);
+      vi.useRealTimers();
+    }
+  });
+
   it("skips disable commands when the debugger already detached", async () => {
     const { runtime, sendCommand, listenerCount, setAttached } = createRuntime();
     const diagnostics = new BrowserDiagnosticsStore();
@@ -164,7 +212,7 @@ describe("browser diagnostics store", () => {
     await diagnostics.quiesce(runtime);
 
     expect(sendCommand).not.toHaveBeenCalled();
-    expect(listenerCount()).toBe(0);
+    expect(listenerCount()).toBe(1);
     diagnostics.dispose(runtime);
   });
 

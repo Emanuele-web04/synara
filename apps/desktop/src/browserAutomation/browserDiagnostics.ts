@@ -346,8 +346,8 @@ export class BrowserDiagnosticsStore {
       });
     const disableCapture = async (): Promise<void> => {
       if (disposed || active || runtime.webContents.isDestroyed()) return;
-      stopListening();
-      state.requests.clear();
+      // Network has no replay buffer. Keep its listener and in-flight metadata
+      // live while the console domains sleep, including across the idle timer.
       const send = (method: string): Promise<void> =>
         runtime.webContents.isDestroyed() || !debuggerSession.isAttached()
           ? Promise.resolve()

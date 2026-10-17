@@ -17,7 +17,7 @@ type CookieChangeListener = () => void;
 
 /** The Electron surface this backend needs; injectable so tests can fake it. */
 export interface CookieSessionElectronSurface {
-  createViewContents(partition: string): CookieViewContents;
+  createView(partition: string): { readonly webContents: CookieViewContents };
   cookies(partition: string): {
     on(event: "changed", listener: CookieChangeListener): unknown;
     removeListener(event: "changed", listener: CookieChangeListener): unknown;
@@ -25,7 +25,7 @@ export interface CookieSessionElectronSurface {
 }
 
 const electronSurface: CookieSessionElectronSurface = {
-  createViewContents: (partition) =>
+  createView: (partition) =>
     // This never navigates to a website, joins the UI, or accepts agent commands.
     new WebContentsView({
       webPreferences: {
@@ -34,7 +34,7 @@ const electronSurface: CookieSessionElectronSurface = {
         contextIsolation: true,
         nodeIntegration: false,
       },
-    }).webContents,
+    }),
   cookies: (partition) => electronSession.fromPartition(partition).cookies,
 };
 
@@ -44,7 +44,9 @@ export function createCookieSessionBackend(
 ): CookieSessionBackend {
   const changedListeners = new Set<CookieChangeListener>();
   let disposed = false;
-  let contents: CookieViewContents | undefined;
+  // WebContentsView owns the contents; retain the owner across async operations
+  // and the idle grace so GC cannot destroy an in-use cookie target.
+  let view: ReturnType<CookieSessionElectronSurface["createView"]> | undefined;
   let ready: Promise<CookieViewContents> | undefined;
   let users = 0;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -57,16 +59,16 @@ export function createCookieSessionBackend(
 
   const closeView = (): void => {
     clearIdleTimer();
-    const current = contents;
-    contents = undefined;
+    const current = view?.webContents;
+    view = undefined;
     ready = undefined;
     if (current && !current.isDestroyed()) current.close();
   };
 
   const openView = (): Promise<CookieViewContents> => {
     if (ready) return ready;
-    const created = surface.createViewContents(partition);
-    contents = created;
+    view = surface.createView(partition);
+    const created = view.webContents;
     const opening = (async () => {
       created.debugger.attach("1.3");
       await created.loadURL("about:blank");
@@ -88,7 +90,7 @@ export function createCookieSessionBackend(
       return await operation(await openView());
     } finally {
       users -= 1;
-      if (users === 0 && !disposed && contents) {
+      if (users === 0 && !disposed && view) {
         idleTimer = setTimeout(() => {
           idleTimer = undefined;
           if (users === 0) closeView();

@@ -2055,9 +2055,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       );
     };
 
-    // Paths whose `diff` attribute is unset (`binary`, `-diff`), which Git's numstat
-    // reports as `-\t-` regardless of content. One `check-attr` per argument budget.
-    const readDiffUnsetPaths = (
+    // Keep explicit attributes for the fallback: drivers and forced text override
+    // Git's default NUL sniff. One `check-attr` per argument budget.
+    const readDiffAttributes = (
       cwd: string,
       operationPrefix: string,
       files: ReadonlyArray<string>,
@@ -2077,7 +2077,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           batchBytes += bytes;
         }
         if (batch.length > 0) batches.push(batch);
-        const unset = new Set<string>();
+        const attributes = new Map<string, string>();
         for (const paths of batches) {
           const result = yield* executeGit(
             `${operationPrefix}.untrackedAttributes`,
@@ -2088,10 +2088,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           // `-z` output is `<path>\0<attribute>\0<value>\0` per path.
           const fields = result.stdout.split("\0");
           for (let index = 0; index + 2 < fields.length; index += 3) {
-            if (fields[index + 2] === "unset") unset.add(fields[index]!);
+            if (fields[index + 2] !== "unspecified") {
+              attributes.set(fields[index]!, fields[index + 2]!);
+            }
           }
         }
-        return unset;
+        return attributes;
       });
 
     // Numstat records for untracked files, equal to `git diff --no-index --numstat -z
@@ -2111,11 +2113,57 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         Effect.flatMap((untrackedFiles) =>
           Effect.gen(function* () {
             if (untrackedFiles.length === 0) return [];
-            const diffUnset = yield* readDiffUnsetPaths(cwd, operationPrefix, untrackedFiles);
+            const diffAttributes = yield* readDiffAttributes(cwd, operationPrefix, untrackedFiles);
+            const threshold = yield* executeGit(
+              `${operationPrefix}.untrackedThreshold`,
+              cwd,
+              ["config", "--get", "core.bigFileThreshold"],
+              { allowNonZeroExit: true, timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+            );
+            if (threshold.code !== 0 && threshold.code !== 1) {
+              return yield* createGitCommandError(
+                `${operationPrefix}.untrackedThreshold`,
+                cwd,
+                ["config", "--get", "core.bigFileThreshold"],
+                threshold.stderr.trim() || "Could not read Git's large-file threshold.",
+              );
+            }
             const records = yield* Effect.forEach(
               untrackedFiles,
-              (filePath) =>
-                Effect.tryPromise({
+              (filePath) => {
+                // Defer configured semantics to Git rather than approximating
+                // every diff driver or size setting in the fast path.
+                if (threshold.code === 0 || diffAttributes.has(filePath)) {
+                  const operation = `${operationPrefix}.untrackedNumstat`;
+                  const args = [
+                    "diff",
+                    "--no-index",
+                    "--numstat",
+                    "-z",
+                    "--",
+                    "/dev/null",
+                    filePath,
+                  ];
+                  return executeGit(operation, cwd, args, {
+                    allowNonZeroExit: true,
+                    timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                  }).pipe(
+                    Effect.flatMap((result) =>
+                      isSuccessfulNoIndexDiff(result)
+                        ? Effect.succeed(result.stdout)
+                        : Effect.fail(
+                            createGitCommandError(
+                              operation,
+                              cwd,
+                              args,
+                              result.stderr.trim() ||
+                                `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                            ),
+                          ),
+                    ),
+                  );
+                }
+                return Effect.tryPromise({
                   try: () => readUntrackedNumstatLines(nodePath.join(cwd, filePath)),
                   catch: (cause) =>
                     createGitCommandError(
@@ -2127,14 +2175,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     ),
                 }).pipe(
                   Effect.map((lines) =>
-                    lines === null
-                      ? null
-                      : formatUntrackedNumstatRecord(
-                          filePath,
-                          diffUnset.has(filePath) ? "binary" : lines,
-                        ),
+                    lines === null ? null : formatUntrackedNumstatRecord(filePath, lines),
                   ),
-                ),
+                );
+              },
               { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
             );
             return records.filter((record): record is string => record !== null);
