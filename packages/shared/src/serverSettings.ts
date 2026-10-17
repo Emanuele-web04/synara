@@ -96,6 +96,7 @@ export function providerStartOptionsFromServerSettings(
         ? { shadowHomePath: selectedCodexAccount.shadowHomePath }
         : {}),
       ...(selectedCodexAccount ? { accountId: selectedCodexAccount.id } : {}),
+      ...(providers.codex.launchArgs.trim() ? { launchArgs: providers.codex.launchArgs } : {}),
     },
     claudeAgent: {
       ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),

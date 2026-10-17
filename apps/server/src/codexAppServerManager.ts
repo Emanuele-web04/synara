@@ -892,6 +892,7 @@ function spawnCodexAppServer(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly launchArgs?: string;
 }): ChildProcessWithoutNullStreams {
   const sourceHomePath = input.env.CODEX_SQLITE_HOME?.trim();
   if (!sourceHomePath) {
@@ -899,7 +900,11 @@ function spawnCodexAppServer(input: {
   }
   return spawnProcess(
     input.binaryPath,
-    [...buildCodexAppServerArgs(sourceHomePath), "--config", "thread_unload_delay_secs=0"],
+    [
+      ...buildCodexAppServerArgs(sourceHomePath, input.launchArgs),
+      "--config",
+      "thread_unload_delay_secs=0",
+    ],
     {
       lowerPriority: input.lowerPriority,
       requireExecutable: true,
@@ -1455,6 +1460,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexLaunchArgs = codexOptions.launchArgs;
       const codexShadowHomePath = codexOptions.shadowHomePath;
       const codexAccountId = codexOptions.accountId;
       const codexEnvironment = codexOptions.environment;
@@ -1492,6 +1498,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
+        ...(codexLaunchArgs ? { launchArgs: codexLaunchArgs } : {}),
       });
 
       context = {
@@ -2483,6 +2490,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexLaunchArgs = codexOptions.launchArgs;
       const codexShadowHomePath = codexOptions.shadowHomePath;
       const codexAccountId = codexOptions.accountId;
       const codexEnvironment = codexOptions.environment;
@@ -2525,6 +2533,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
+        ...(codexLaunchArgs ? { launchArgs: codexLaunchArgs } : {}),
       });
 
       context = {
@@ -5628,6 +5637,7 @@ function readCodexProviderOptions(input: {
 }): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly launchArgs?: string;
   readonly shadowHomePath?: string;
   readonly accountId?: string;
   readonly environment?: Readonly<Record<string, string>>;
@@ -5642,6 +5652,7 @@ function readCodexProviderOptions(input: {
     ...(options.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
     ...(options.accountId ? { accountId: options.accountId } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
+    ...(options.launchArgs?.trim() ? { launchArgs: options.launchArgs } : {}),
   };
 }
 
