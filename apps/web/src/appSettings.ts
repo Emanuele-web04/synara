@@ -24,6 +24,7 @@ import {
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
+  ThreadAutoArchive,
   SourceControlWritingStyle,
   SourceControlCustomInstructions,
   type ProviderStartOptions,
@@ -450,6 +451,10 @@ export const AppSettingsSchema = Schema.Struct({
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
   // Server-backed: how long an idle side chat stays usable before it expires.
   sidechatExpiry: SidechatExpiry.pipe(withDefaults(() => "1h" as const satisfies SidechatExpiry)),
+  // Server-backed: how long a thread sits idle before the server archives it.
+  threadAutoArchive: ThreadAutoArchive.pipe(
+    withDefaults(() => "7d" as const satisfies ThreadAutoArchive),
+  ),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showGroupsSection` controls the
@@ -1571,6 +1576,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     sidechatExpiry: settings.sidechatExpiry,
+    threadAutoArchive: settings.threadAutoArchive,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     keepAwakeMode: settings.keepAwakeMode,
@@ -1732,6 +1738,14 @@ export function appSettingsPatchToServerSettingsPatch(
     patch.sidechatExpiry === "never"
   ) {
     serverPatch.sidechatExpiry = patch.sidechatExpiry;
+  }
+  if (
+    patch.threadAutoArchive === "7d" ||
+    patch.threadAutoArchive === "14d" ||
+    patch.threadAutoArchive === "30d" ||
+    patch.threadAutoArchive === "never"
+  ) {
+    serverPatch.threadAutoArchive = patch.threadAutoArchive;
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
@@ -2812,7 +2826,10 @@ export function useAppSettings() {
     await invalidateProviderUsageQueries(queryClient).catch(() => undefined);
   };
 
-  const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
+  const updateSettingsAndWait = async (
+    patch: Partial<AppSettings>,
+    options?: { readonly throwOnError?: boolean },
+  ): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
     // The pending migration ref retains the one plaintext snapshot that still
@@ -2844,7 +2861,7 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
-      } catch {
+      } catch (error) {
         if (providerInstancesBeforePatch !== undefined) {
           setSettings((prev) => {
             const restored = normalizeAppSettings({
@@ -2862,6 +2879,9 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
+        // Existing onboarding callers use best-effort writes. A combined action
+        // can opt in to persistence errors when it must report partial success.
+        if (options?.throwOnError) throw error;
       }
     });
   };

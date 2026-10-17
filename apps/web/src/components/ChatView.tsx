@@ -638,7 +638,7 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings, updateSettings } = useAppSettings();
+  const { settings, updateSettings, updateSettingsAndWait } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -2389,9 +2389,12 @@ export default function ChatView({
         decision: decision === "never" ? "continue" : decision,
         createdAt: new Date().toISOString(),
       });
-      if (decision === "never") updateSettings({ claudeConfirmColdCacheResume: false });
     },
-    [threadId, updateSettings],
+    [threadId],
+  );
+  const onStopAskingClaudeCacheReview = useCallback(
+    () => updateSettingsAndWait({ claudeConfirmColdCacheResume: false }, { throwOnError: true }),
+    [updateSettingsAndWait],
   );
   const activeRootBranch = useMemo(
     () =>
@@ -6251,6 +6254,7 @@ export default function ChatView({
                   compactDisabledReason={claudeCompactDisabledReason}
                   isCompactionRequest={cacheReviewIsCompactionRequest}
                   onRespond={onRespondToClaudeCacheReview}
+                  onStopAsking={onStopAskingClaudeCacheReview}
                 />
               </div>
             ) : null}
