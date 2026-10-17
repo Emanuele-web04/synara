@@ -41,6 +41,7 @@ version, release notes and lockfile are final.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
+  - A `remote` prerelease identifier (`vX.Y.Z-remote.N`) selects **Synara Remote**, a separate early-access app and `remote` update lane. From Remote .14, publication requires macOS ARM64, Windows x64 and Linux x64 artifacts and the three `remote` manifests, with no `latest` aliases. Windows has a dedicated NSIS GUID and Linux a dedicated executable/window class. These releases never become Latest, publish the CLI or alter Stable/Beta data. See [Remote identity](../BETA.md#synara-remote-early-access).
   - Stable clean-lane releases are GitHub Latest; the 0.4.x compatibility release remains historical.
 - Publishes default `latest*.yml` metadata plus byte-identical `synara*.yml` aliases on every stable release so existing packaged binaries keep working.
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.

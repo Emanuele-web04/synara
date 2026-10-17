@@ -1,4 +1,5 @@
 import "./httpRuntime";
+import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
 import { BackendIssueDetector } from "./backendIssueDetector";
 import { attachAppSubframeNavigationGuard } from "./subframeNavigationGuard";
@@ -7,6 +8,8 @@ import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
+import { ProductAnalytics } from "./productAnalytics";
+import { attachProductAnalyticsIpc } from "./productAnalyticsIpc";
 import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
@@ -40,6 +43,7 @@ import {
   nativeTheme,
   protocol,
   powerMonitor,
+  powerSaveBlocker,
   screen,
   safeStorage,
   session,
@@ -80,6 +84,7 @@ import {
   canOverrideDesktopSmokeUserData,
   resolveSynaraDesktopRuntimeFlavor,
   synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
@@ -321,6 +326,12 @@ import {
   writeAgentCursorPreference,
 } from "./agentCursorPreference";
 import {
+  createKeepAwakeController,
+  type KeepAwakeController,
+  readKeepAwakePreference,
+  writeKeepAwakePreference,
+} from "./keepAwake";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -398,13 +409,17 @@ const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
   allowDevelopmentOverride: isSourceDesktopBuild,
 });
-const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
-// Beta never honors SYNARA_HOME: a globally exported stable home would make
-// beta open (and migrate) stable's database.
+const desktopIdentity = isSourceDesktopBuild
+  ? synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor))
+  : synaraDesktopIdentity(desktopFlavor);
+// Beta and Remote ignore SYNARA_HOME so a globally exported Stable home
+// cannot make a parallel app open (and migrate) Stable's database.
 const BASE_DIR =
-  (desktopFlavor === "beta"
-    ? process.env.SYNARA_BETA_HOME?.trim()
-    : process.env.SYNARA_HOME?.trim()) ||
+  (desktopFlavor === "remote"
+    ? process.env.SYNARA_REMOTE_HOME?.trim()
+    : desktopFlavor === "beta"
+      ? process.env.SYNARA_BETA_HOME?.trim()
+      : process.env.SYNARA_HOME?.trim()) ||
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
@@ -413,6 +428,7 @@ const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title
 // Written by the renderer-mirrored agent cursor colors; read at each driver
 // session open so a persisted custom cursor survives app restarts.
 const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
+const KEEP_AWAKE_PREFERENCE_PATH = Path.join(STATE_DIR, "keep-awake.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -425,6 +441,7 @@ const BACKEND_LOG_FILE_NAME = "server-child.log";
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
+const PRODUCT_ANALYTICS_STARTUP_AT = performance.now();
 const DESKTOP_BACKEND_SHUTDOWN_TOKEN = Crypto.randomBytes(32).toString("hex");
 const DESKTOP_BROWSER_HOST_CAPABILITY = Crypto.randomBytes(32).toString("base64url");
 const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
@@ -434,14 +451,28 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
 
-// Beta-only diagnostics: constructed solely when the baked build flavor is
-// "beta", so production binaries never run a collection path. The payload
-// schema is an allowlist; error text may still contain fragments of user data,
-// and Electron crash dumps are raw process memory.
+// Remote shares usage and diagnostics by default; Settings turns both off.
+// Stable stays opt-in for product events and never runs diagnostics.
+const productAnalytics = new ProductAnalytics({
+  homeDir: BASE_DIR,
+  channel: desktopFlavor === "beta" ? "beta" : desktopFlavor === "remote" ? "remote" : "stable",
+  appVersion: app.getVersion(),
+  platform: process.platform,
+  defaultEnabled: desktopFlavor === "remote",
+});
+
+// Diagnostics are constructed only for the Beta and Remote build flavors, so
+// production binaries never run a collection path. The payload schema is an
+// allowlist; error text may still contain fragments of user data. Remote follows
+// the sharing switch and never uploads raw crash dumps (process memory).
 const betaDiagnostics =
-  desktopFlavor === "beta"
+  desktopFlavor === "beta" || desktopFlavor === "remote"
     ? new BetaDiagnostics({
         homeDir: BASE_DIR,
+        flavor: desktopFlavor,
+        ...(desktopFlavor === "remote"
+          ? { isEnabled: () => productAnalytics.getState().enabled }
+          : {}),
         appVersion: app.getVersion(),
         platform: process.platform,
         arch: process.arch,
@@ -468,8 +499,11 @@ const betaDiagnostics =
         },
       })
     : null;
-
-if (betaDiagnostics) {
+productAnalytics.onChange((enabled) => {
+  if (enabled) betaDiagnostics?.resumeSharing();
+  else betaDiagnostics?.discardQueue();
+});
+if (betaDiagnostics && desktopFlavor === "beta") {
   crashReporter.start({
     productName: APP_DISPLAY_NAME,
     companyName: "Synara",
@@ -535,7 +569,7 @@ const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
 const POSIX_BACKEND_FORCE_KILL_DELAY_MS = 18_000;
 const POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS = 20_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
-const DESKTOP_UPDATE_ALLOW_PRERELEASE = desktopFlavor === "beta";
+const DESKTOP_UPDATE_ALLOW_PRERELEASE = desktopFlavor === "beta" || desktopFlavor === "remote";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 // User keybindings mirrored onto View menu items. Every window reports the same
@@ -1221,6 +1255,16 @@ function armInstallWatchdog(): void {
 }
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: REMOTE_RESOURCE_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
   {
     scheme: DESKTOP_SCHEME,
     privileges: {
@@ -4063,6 +4107,7 @@ function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
   const migrationDivergenceConsent = migrationConsentHandoff.take();
+  const accountUrl = process.env.SYNARA_ACCOUNT_URL?.trim() || desktopIdentity.defaultAccountUrl;
   const env: NodeJS.ProcessEnv = {
     ...resolveBrowserHostPipeBackendEnv(
       process.env,
@@ -4089,6 +4134,20 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    // Remote must reach its account service on a normal Finder/Explorer launch;
+    // an explicit self-hosted URL still wins and saved sessions keep their issuer.
+    ...(accountUrl ? { SYNARA_ACCOUNT_URL: accountUrl } : {}),
+    ...(app.isPackaged
+      ? {
+          SYNARA_CLOUDFLARED_PATH: Path.join(
+            process.resourcesPath,
+            "cloudflared",
+            process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
+          ),
+        }
+      : process.env.SYNARA_CLOUDFLARED_PATH
+        ? { SYNARA_CLOUDFLARED_PATH: process.env.SYNARA_CLOUDFLARED_PATH }
+        : {}),
   };
   // The backend runs the same login-shell probe at startup and does not begin listening
   // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
@@ -4539,7 +4598,9 @@ async function restartBackendAfterCrash(
   // when the renderer window survived the crash.
   backendInitialWindowOpenInFlight = null;
   try {
-    await reserveBackendEndpoint("backend restart");
+    // Existing renderer transports pin this endpoint. Keep it across restarts
+    // so they reconnect without reloading the window or losing drafts.
+    if (backendPort === 0) await reserveBackendEndpoint("backend restart");
   } catch (error) {
     scheduleBackendRestart(
       `failed to reserve restart port after ${reason}: ${formatErrorMessage(error)}`,
@@ -4605,6 +4666,9 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     env: {
       ...backendEnv(),
+      // A file read stuck behind a macOS privacy prompt holds a libuv worker. More
+      // workers keep DNS and crypto, and so remote authorization, moving meanwhile.
+      UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || "16",
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
       SYNARA_DESKTOP_PARENT_STDIN: "1",
@@ -4871,6 +4935,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
         trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
         await betaDiagnostics.dispose().catch(() => undefined);
       }
+      productAnalytics.dispose();
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
       // Release the persistent log descriptors. close() is idempotent and a
@@ -5010,10 +5075,12 @@ function requestGracefulAppQuit(reason: string): void {
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
 
+  attachProductAnalyticsIpc(productAnalytics, () => mainWindow?.webContents ?? null);
+
   ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
   ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
     event.returnValue = Boolean(
-      betaDiagnostics &&
+      betaDiagnostics?.isCollecting() &&
       event.sender === mainWindow?.webContents &&
       event.senderFrame === event.sender.mainFrame,
     );
@@ -5302,6 +5369,23 @@ function registerIpcHandlers(): void {
     return getDesktopCustomTitleBarState();
   });
 
+  ipcMain.removeHandler(IPC.keepAwake.getState);
+  ipcMain.handle(IPC.keepAwake.getState, async () => getKeepAwakeController().getState());
+
+  ipcMain.removeHandler(IPC.keepAwake.setEnabled);
+  ipcMain.handle(IPC.keepAwake.setEnabled, async (_event, rawEnabled: unknown) =>
+    typeof rawEnabled === "boolean"
+      ? getKeepAwakeController().setEnabled(rawEnabled)
+      : getKeepAwakeController().getState(),
+  );
+
+  ipcMain.removeHandler(IPC.keepAwake.setRemoteAccessAllowed);
+  ipcMain.handle(IPC.keepAwake.setRemoteAccessAllowed, async (_event, rawAllowed: unknown) =>
+    typeof rawAllowed === "boolean"
+      ? getKeepAwakeController().setRemoteAccessAllowed(rawAllowed)
+      : getKeepAwakeController().getState(),
+  );
+
   ipcMain.removeHandler(IPC.customTitleBarRelaunch);
   ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
     app.relaunch();
@@ -5417,14 +5501,7 @@ function registerIpcHandlers(): void {
     platform: process.platform,
     homeDir: OS.homedir(),
     betaHomeDir: resolveBetaHomeDir(),
-    flavor:
-      desktopFlavor === "beta"
-        ? "beta"
-        : desktopFlavor === "canary"
-          ? "canary"
-          : desktopFlavor === "cua"
-            ? "cua"
-            : "production",
+    flavor: desktopFlavor === "development" ? "production" : desktopFlavor,
     feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
     installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
     expectedTeamId: ownAppTeamId(),
@@ -5659,6 +5736,20 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
   });
   customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
   return frameOptions;
+}
+
+let keepAwakeController: KeepAwakeController | undefined;
+
+/** Created on first use after `app` is ready, which `powerMonitor` requires. */
+function getKeepAwakeController(): KeepAwakeController {
+  keepAwakeController ??= createKeepAwakeController({
+    monitor: powerMonitor,
+    blocker: powerSaveBlocker,
+    load: () => readKeepAwakePreference(KEEP_AWAKE_PREFERENCE_PATH),
+    save: (preference) => writeKeepAwakePreference(KEEP_AWAKE_PREFERENCE_PATH, preference),
+    onError: (error) => safeConsoleError("[desktop] keep-awake preference write failed", error),
+  });
+  return keepAwakeController;
 }
 
 function getDesktopCustomTitleBarState() {
@@ -6154,6 +6245,21 @@ async function bootstrap(): Promise<void> {
   }
 
   registerIpcHandlers();
+  // Apply the saved keep-awake preference at launch, before any window reports.
+  getKeepAwakeController();
+  app.once("will-quit", () => {
+    keepAwakeController?.dispose();
+    keepAwakeController = undefined;
+  });
+  const disposeRemoteResources = registerRemoteResourceBroker({
+    trustedRenderer: () =>
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+    trustedOrigin: () =>
+      isDevelopment ? process.env.VITE_DEV_SERVER_URL! : desktopIdentity.entryUrl,
+    backendWsUrl: () =>
+      normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env),
+  });
+  app.once("will-quit", disposeRemoteResources);
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
     await ensureBrowserHostPipeServer();
@@ -6254,6 +6360,16 @@ if (hasSingleInstanceLock) {
     .whenReady()
     .then(() => {
       writeDesktopLogHeader("app ready");
+      productAnalytics.start();
+      productAnalytics.track({ event: "app.open", outcome: "succeeded" });
+      productAnalytics.track({
+        event: "performance.startup",
+        outcome: "succeeded",
+        durationMs: Math.min(
+          86_400_000,
+          Math.round(performance.now() - PRODUCT_ANALYTICS_STARTUP_AT),
+        ),
+      });
       if (betaDiagnostics) {
         betaDiagnostics.start();
         const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());

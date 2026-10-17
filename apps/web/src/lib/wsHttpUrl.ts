@@ -1,3 +1,27 @@
+import type { RemoteResource } from "@synara/contracts";
+import { remoteResourceRoute, REMOTE_RESOURCE_LOCAL_PREFIX } from "@synara/shared/remoteResources";
+import { readExecutionContext } from "./hosts/executionContext";
+
+export function resolveExecutionResource(resource: RemoteResource): string {
+  const context = readExecutionContext();
+  if (!context?.remote) return resolveWsHttpUrl(remoteResourceRoute(resource).path);
+  if (!context.remoteHostId) throw new Error("Remote execution identity is unavailable");
+  const reference = { environmentId: context.execution.environmentId, resource };
+  if (window.desktopBridge) {
+    const url = window.desktopBridge.remoteResourceUrl?.(context.remoteHostId, reference);
+    if (!url) throw new Error("Remote resources require the updated desktop bridge");
+    return url;
+  }
+  // The browser uses its same-origin HttpOnly owner session. No credential is
+  // returned to this resolver or copied from the controller WebSocket URL.
+  const url = new URL(
+    `${REMOTE_RESOURCE_LOCAL_PREFIX}${encodeURIComponent(context.remoteHostId)}`,
+    window.location.origin,
+  );
+  url.searchParams.set("reference", JSON.stringify(reference));
+  return url.toString();
+}
+
 // FILE: wsHttpUrl.ts
 // Purpose: Resolves server HTTP URLs from the active WebSocket bridge so desktop <img>/download
 // requests carry the same legacy startup token already used for the WS connection.
@@ -11,6 +35,8 @@
 // request without touching cookies.
 export function resolveWsHttpUrl(rawPath: string): string {
   if (typeof window === "undefined") return rawPath;
+  if (readExecutionContext()?.remote)
+    throw new Error("Remote execution resources must use a typed reference");
   const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
   const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
   const wsCandidate =
@@ -39,6 +65,12 @@ export function resolveWsHttpUrl(rawPath: string): string {
 }
 
 export function toAttachmentPreviewUrl(rawUrl: string): string {
+  if (rawUrl.startsWith("/attachments/") && readExecutionContext()?.remote) {
+    const attachmentId = rawUrl.slice("/attachments/".length);
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(attachmentId))
+      throw new Error("Unsupported remote attachment reference");
+    return resolveExecutionResource({ kind: "attachment", attachmentId });
+  }
   if (rawUrl.startsWith("/")) {
     return resolveWsHttpUrl(rawUrl);
   }

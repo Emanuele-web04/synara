@@ -7464,6 +7464,8 @@ describe("ProviderCommandReactor", () => {
       outcome: "safe_retry",
       state: "succeeded",
     });
+    // This provider still reports a live turn, so the authorized retry must
+    // interrupt it before rolling the conversation back.
     await waitFor(() => harness.interruptTurn.mock.calls.length === 4);
     expect(harness.interruptTurn.mock.calls.map(([request]) => request.threadId)).toEqual([
       ThreadId.makeUnsafe("thread-1"),
@@ -17671,55 +17673,58 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
+  it("applies spawn-fixed Claude selection changes when the next turn starts", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
     });
     const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const startTurn = (id: string, extra: { modelSelection?: ModelSelection } = {}) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`user-message-${id}`),
+            role: "user",
+            text: id,
+            attachments: [],
+          },
+          ...extra,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-bootstrap"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-claude-bootstrap"),
-          role: "user",
-          text: "bootstrap claude session",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
+    await startTurn("claude-bootstrap");
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      modelSelection: {
-        provider: "claudeAgent",
-        model: "claude-opus-4-7",
-      },
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
     });
     harness.startSession.mockClear();
 
-    // A context override is spawn-fixed and resumes the same conversation.
+    // A stored pick never restarts the idle session on its own.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-1m"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         modelSelection: {
           provider: "claudeAgent",
           model: "claude-opus-4-7",
-          options: {
-            contextWindow: "1m",
-          },
+          options: { contextWindow: "1m" },
         },
       }),
     );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
 
+    // The next turn applies it: a context override is spawn-fixed and resumes
+    // the same conversation.
+    await startTurn("claude-1m");
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       resumeCursor: { opaque: "resume-1" },
@@ -17729,37 +17734,148 @@ describe("ProviderCommandReactor", () => {
         options: { contextWindow: "1m" },
       },
     });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     harness.startSession.mockClear();
 
-    // Effort is fixed at subprocess spawn, so an effort change still restarts.
+    // Effort is fixed at subprocess spawn, so an effort change restarts at the next turn.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         modelSelection: {
           provider: "claudeAgent",
           model: "claude-opus-4-7",
-          options: {
-            effort: "max",
-          },
+          options: { effort: "max" },
         },
       }),
     );
-
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    await startTurn("claude-max");
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-7",
-        options: {
-          effort: "max",
-        },
+        options: { effort: "max" },
       },
     });
   });
 
-  it("restarts a directly started Claude session when spawn-fixed options change", async () => {
+  it("applies a stored pick to a turn that names no selection on a restart-only provider", async () => {
+    const harness = await createHarness({ sessionModelSwitch: "restart-session" });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const startTurn = (id: string, extra: { modelSelection?: ModelSelection } = {}) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-${id}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`user-message-${id}`),
+            role: "user",
+            text: id,
+            attachments: [],
+          },
+          ...extra,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+    await startTurn("restart-only-bootstrap");
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-meta-restart-only-pick"),
+        threadId,
+        modelSelection: { provider: "codex", model: "gpt-5.5" },
+      }),
+    );
+    await harness.drain();
+    // No idle restart: the session would publish `starting` without a turn.
+    expect(harness.startSession.mock.calls.length).toBe(1);
+
+    // A goal continuation or an older client sends no selection; the stored pick
+    // still decides the model the session restarts on.
+    await startTurn("restart-only-follow-up");
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+    });
+  });
+
+  it("keeps a model change for the next turn while the runtime still runs one", async () => {
+    const harness = await createHarness({ sessionModelSwitch: "restart-session" });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-live-model-change"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-live-model-change"),
+          role: "user",
+          text: "start a long turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The runtime has started the turn; the projection has not caught up yet.
+    const sessions = await Effect.runPromise(harness.listSessions());
+    harness.listSessions.mockReturnValue(
+      Effect.succeed(
+        sessions.map((session) => ({
+          ...session,
+          status: "running" as const,
+          activeTurnId: asTurnId("turn-live-model-change"),
+        })),
+      ),
+    );
+    expect((await readHarnessThread(harness))?.session?.activeTurnId).toBeNull();
+
+    const change = await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-meta-live-model-change"),
+        threadId,
+        modelSelection: { provider: "codex", model: "gpt-5.5" },
+      }),
+    );
+    await waitFor(async () => {
+      const state = await Effect.runPromise(
+        harness.deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER),
+      );
+      return state.pipe(Option.getOrThrow).lastAckedSequence >= change.sequence;
+    });
+
+    // The live turn keeps running; the change waits on the thread for the next turn.
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+    const thread = await readHarnessThread(harness);
+    expect(thread?.modelSelection.model).toBe("gpt-5.5");
+    expect(thread?.session?.lastError ?? null).toBeNull();
+  });
+
+  it("restarts a directly started Claude session at the next turn when spawn-fixed options change", async () => {
     const initialSelection: ModelSelection = {
       provider: "claudeAgent",
       model: "claude-opus-4-7",
@@ -17810,6 +17926,27 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+
+    // The next turn compares the stored pick with the spawn profile learned from
+    // thread.created, even though the reactor did not start this session.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-direct-claude-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-direct-claude"),
+          role: "user",
+          text: "continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: importedSession.updatedAt,
+      }),
+    );
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
@@ -18077,7 +18214,7 @@ describe("ProviderCommandReactor", () => {
     expect(session.lastError).toBeNull();
   });
 
-  it("seeds imported Droid selection before handling idle metadata updates", async () => {
+  it("seeds imported Droid selection and applies a stored effort at the next turn", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "droid",
@@ -18139,6 +18276,25 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-imported-droid"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-imported-droid"),
+          role: "user",
+          text: "continue on droid",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       resumeCursor: { opaque: "resume-synthetic" },
@@ -19343,14 +19499,11 @@ describe("ProviderCommandReactor", () => {
         modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
       }),
     );
-    // The stored update rebinds the live session eagerly — the bound provider
-    // is now claudeAgent.
-    await waitFor(() => harness.startSession.mock.calls.length === 2);
-    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
-      provider: "claudeAgent",
-    });
+    // The stored update waits for the next turn, which rebinds the session.
+    await harness.drain();
+    expect(harness.startSession.mock.calls.length).toBe(1);
 
-    // An explicit turn naming the new bound provider keeps running on it.
+    // An explicit turn naming the stored provider rebinds to it.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -19370,6 +19523,9 @@ describe("ProviderCommandReactor", () => {
     );
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     expect(harness.startSession.mock.calls.length).toBe(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+    });
     expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
       modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
     });
@@ -21828,6 +21984,64 @@ describe("ProviderCommandReactor", () => {
       );
     },
   );
+
+  it("does not settle a replacement turn when an earlier interrupt finishes", async () => {
+    const interrupted = Promise.withResolvers<void>();
+    const harness = await createHarness({
+      interruptTurn: () => Effect.promise(() => interrupted.promise),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    const setProjectedTurn = (turnId: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`cmd-session-${turnId}`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId(turnId),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    await setProjectedTurn("turn-interrupted");
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "running",
+      activeTurnId: asTurnId("turn-interrupted"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-interrupt-before-replacement"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+
+    // The next runtime turn already finished, but its terminal event is still
+    // pending. Absence of a live turn alone must not settle its projection.
+    await setProjectedTurn("turn-replacement");
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    interrupted.resolve();
+    await harness.drain();
+
+    expect((await readHarnessThread(harness))?.session).toMatchObject({
+      status: "running",
+      activeTurnId: "turn-replacement",
+    });
+    expect((await readHarnessThread(harness))?.latestTurn).toMatchObject({
+      turnId: "turn-replacement",
+      state: "running",
+    });
+  });
 
   it.each(["ready", "missing-child-shell", "missing-parent-shell"] as const)(
     "serializes child interrupts with earlier parent-session side effects in owner FIFO with %s projection",

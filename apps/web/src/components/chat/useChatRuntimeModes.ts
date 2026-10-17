@@ -49,6 +49,7 @@ export function useChatRuntimeModes({
   scheduleComposerFocus,
 }: ChatRuntimeModesInput) {
   const setComposerDraftRuntimeMode = useComposerDraftStore((state) => state.setRuntimeMode);
+  const setStickyRuntimeMode = useComposerDraftStore((state) => state.setStickyRuntimeMode);
   const setDraftThreadContext = useComposerDraftStore((state) => state.setDraftThreadContext);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (state) => state.setInteractionMode,
@@ -144,9 +145,12 @@ export function useChatRuntimeModes({
   );
   const handleRuntimeModeChange = useCallback(
     (mode: RuntimeMode) => {
-      void persistRuntimeModeChange(mode);
+      void persistRuntimeModeChange(mode).then((persisted) => {
+        // A new chat's pick is the access mode every client starts new chats in.
+        if (persisted && isLocalDraftThread) setStickyRuntimeMode(mode);
+      });
     },
-    [persistRuntimeModeChange],
+    [isLocalDraftThread, persistRuntimeModeChange, setStickyRuntimeMode],
   );
 
   useEffect(() => {
@@ -160,12 +164,13 @@ export function useChatRuntimeModes({
         activeProviderStatus?.supportsAutoRuntimeMode === false ||
         (selectedProvider === "claudeAgent" && selectedRuntimeModel?.supportsAutoMode === false))
     ) {
-      handleRuntimeModeChange("approval-required");
+      // A fallback, not the user's pick: the shared new-chat default keeps Auto.
+      void persistRuntimeModeChange("approval-required");
     }
   }, [
     activeProviderStatus,
     activeThread,
-    handleRuntimeModeChange,
+    persistRuntimeModeChange,
     runtimeMode,
     selectedProvider,
     selectedRuntimeModel,

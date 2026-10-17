@@ -6,24 +6,54 @@ import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import { formatModelDisplayName } from "@synara/shared/model";
 import { memo } from "react";
 
+import {
+  readAvailableWorkspaceNavigation,
+  useWorkspaceSessions,
+} from "../../lib/hosts/workspaceSessions";
 import type { WorkLogSynaraThreadCreation } from "../../session-logic";
 import { ProviderIcon } from "../ProviderIcon";
-import { SynaraLogo } from "../SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { Button } from "../ui/button";
 
-function threadMeta(thread: WorkLogSynaraThreadCreation["threads"][number]): string {
+function threadMeta(
+  thread: WorkLogSynaraThreadCreation["threads"][number],
+  hostName: string | undefined,
+): string {
   const model = formatModelDisplayName(thread.model) ?? thread.model;
   const environment = thread.environment === "worktree" ? "Worktree" : "Local";
-  return `${PROVIDER_DISPLAY_NAMES[thread.provider]} · ${model} · ${environment}`;
+  const meta = `${PROVIDER_DISPLAY_NAMES[thread.provider]} · ${model} · ${environment}`;
+  return hostName ? `${meta} · on ${hostName}` : meta;
+}
+
+/** Threads on another computer open in its connected workspace, never as local ids. */
+function useCreatedThreadOpener(
+  creation: WorkLogSynaraThreadCreation,
+  onOpenThread: ((threadId: string) => void) | undefined,
+): ((threadId: string) => void) | undefined {
+  const sessions = useWorkspaceSessions();
+  if (!onOpenThread || creation.environmentId === undefined) return onOpenThread;
+  const session = sessions.find(
+    (entry) =>
+      entry.host.executionScope.environmentId === creation.environmentId &&
+      readAvailableWorkspaceNavigation(entry),
+  );
+  if (!session) return undefined;
+  return (threadId) => {
+    // Loaded on click: the transcript must not create the app history at import.
+    void import("../../lib/hosts/workspaceCommands").then(({ openWorkspacePath }) =>
+      openWorkspacePath(session, `/${threadId}`),
+    );
+  };
 }
 
 export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
   creation,
-  onOpenThread,
+  onOpenThread: onOpenLocalThread,
 }: {
   readonly creation: WorkLogSynaraThreadCreation;
   readonly onOpenThread?: (threadId: string) => void;
 }) {
+  const onOpenThread = useCreatedThreadOpener(creation, onOpenLocalThread);
   const singleThread = creation.threads.length === 1 ? creation.threads[0] : undefined;
   const title = singleThread ? "Thread created" : `${creation.createdCount} threads created`;
   const summary = singleThread
@@ -47,7 +77,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
           {singleThread ? (
             <div className="mt-1 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/52">
               <ProviderIcon provider={singleThread.provider} className="size-3 shrink-0" />
-              <span className="truncate">{threadMeta(singleThread)}</span>
+              <span className="truncate">{threadMeta(singleThread, creation.hostName)}</span>
             </div>
           ) : null}
         </div>
@@ -77,7 +107,7 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
                   {thread.title}
                 </p>
                 <p className="truncate font-system-ui text-ui-xs text-muted-foreground/52">
-                  {threadMeta(thread)}
+                  {threadMeta(thread, creation.hostName)}
                 </p>
               </div>
               {onOpenThread ? (

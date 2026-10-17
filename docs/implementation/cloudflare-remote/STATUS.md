@@ -1,0 +1,1785 @@
+# Cloudflare Remote — execution state
+
+## Remote .19 and companion 140 delivered — 2026-10-17
+
+[Synara Remote 1.0.6-remote.19](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.19)
+is public for macOS ARM64, Windows x64 and Linux x64. Immutable tag source
+`7b303029a4c0cf82e1af4d67bff2a3c0811fe45f` includes main through
+`4cd66c35d897a98aa61ffd075607e08a6c46e4cf`: #1962, #1963, #1770, #1797,
+#1848, #1964 and #1965. PR #1966 was open at integration and is excluded.
+The source branch merge is `2febfa9`; the candidate version stays off main.
+
+- **Main integration:** narrower/bounded long-turn work and incremental Markdown,
+  Devin/Grok model-switch recovery, durable workspace rescue before edit replay,
+  OpenCode stopped-session recovery and installation status, rotated connector
+  token reuse, Windows teardown observers and missing-working-directory errors.
+  The only conflict was an obsolete ASCII composer-mask browser test; the
+  existing requested background and its current tests are preserved. The visible
+  release changes are the merged fixes and curated What's new/history entry.
+- **Checks:** format, lint, typecheck, identity, release smoke, Windows runtime
+  and migration lineage checks pass. Focused suites pass: 1,816 server, 329 web,
+  59 desktop, 72 shared and 12 browser tests. The single
+  [exact-tag publication run](https://github.com/Emanuele-web04/synara/actions/runs/39059832632)
+  succeeds, including all configured quality/server suites, three-platform
+  packaged startup, macOS signing/notarization and Windows Defender.
+- **Public distribution:** all 11 asset hashes, updater sizes/SHA-512 and
+  exact-source/lockfile provenance match. The pristine Mac updater app passes
+  strict signature, Gatekeeper and stapled-ticket validation. The real
+  electron-updater provider discovers .19 from .18 on all three platforms without
+  consulting foreign channels. Stable Latest v1.0.6 and historical v0.4.2 remain
+  unchanged. The temporary Windows unsigned exception is restored to its previous
+  `1.0.6` value; Windows may still show SmartScreen.
+- **iPhone and iPad:** TestFlight **0.1 (140)**, archive source `88537a5`, includes
+  the three native fixes through `5bc848b`: Terminal back navigation, accepted
+  keyboard suggestions and reading position on rotation. All 198 focused
+  simulator tests and the universal archive pass. App/widget signatures, device
+  families, disabled debugging, production APNs and Apple sign-in are independently
+  verified. The upload reuses the same certificate, team and app profile as 139.
+  Both existing tester groups show **Test in corso** with notes saved and automatic
+  notifications enabled; membership and older builds are preserved.
+- **Configuration and documentation:** no contract/API schema, backend deployment
+  or database migration is needed. Existing accounts, pairing and analytics
+  choices remain compatible. Main's MCP/Windows guides and release notes are
+  included. The production website has no Remote-specific installer/changelog
+  snapshot to update; Stable/Beta downloads stay unchanged, and the policy's
+  existing "from .18/build 139" wording remains accurate.
+- **Limits:** this run does not establish a new live-provider turn, physical
+  TestFlight push delivery or manual desktop installation/upgrade. Build 140
+  launches on the iPhone/iPad simulators, but their saved live pairings are offline
+  or need renewal; the three native interactions were not manually retested during
+  a live remote conversation. No physical phone, account change, new pairing,
+  API key, certificate creation/revocation or paid service was used.
+
+Install Remote **.19** and TestFlight **0.1 (140)**. Private proofs are retained in
+`/private/tmp/synara-remote19-checkpoint.json`,
+`/private/tmp/synara-public-1.0.6-remote.19/verified.json` and
+`/private/tmp/synara-ios140-distribution-proof.json`.
+
+## Remote .18 and companion 139 delivered — 2026-10-17
+
+[Synara Remote 1.0.6-remote.18](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.18)
+is public for macOS ARM64, Windows x64 and Linux x64. Immutable tag source
+`d586357deee7209080f012d5849ec8b0b3b4bebc` integrates reviewed analytics source
+`1f81242` and the additional technical-only error sanitizer in `7cc0b2e`.
+Remote usage sharing is enabled by default while preserving explicit opt-outs;
+Stable/Beta product collection stays opt-in and Stable diagnostics stay disabled.
+
+- **Receiver first:** protected D1 exports were saved outside the checkout. The
+  original export contains literal NULs in old logs; a separate portable copy
+  preserves them with `char(0)` and restores successfully. Migration 0006 ran,
+  and a full before/after comparison preserves every old row and common column.
+  Worker version `2bcbb1de-c02f-4a02-9744-c1f641a165fa` was deployed with
+  `--keep-vars`, retaining dashboard authentication and existing bindings.
+- **Live ingestion:** synthetic desktop/iPhone/iPad Remote events, Beta
+  compatibility, deduplication, account hashes, fixed commands/failure reasons,
+  technical-only errors and usage-turn categories/tokens pass against production
+  D1. The unauthenticated dashboard still returns 401. Only the identified
+  synthetic fixture rows were removed after verification.
+- **Desktop qualification:** local final checks and the
+  [single exact-source release workflow](https://github.com/Emanuele-web04/synara/actions/runs/39054643680)
+  pass, including all server shards, three packaged-startup checks, macOS
+  signing/notarization and Windows Defender. All 11 public assets match their
+  digests, provenance and updater checksums. The public Mac ZIP independently
+  passes strict/deep signatures, Gatekeeper and staple validation. The real
+  updater provider discovers .18 from .17 on all three platforms. Stable Latest
+  and legacy `v0.4.2` remain unchanged; the Windows exception is restored to
+  `1.0.6`. Windows may still show SmartScreen.
+- **Mobile:** universal **0.1 (139)** is uploaded from `761ff54` with user source
+  `0ab4258`. App/widget signatures, iPhone/iPad families, production APNs and
+  disabled debugging are independently verified in the exported uploaded IPA.
+  Both existing TestFlight groups show **Test in corso** (one internal and 21
+  external testers). Notes and automatic notifications are saved; membership and
+  older builds are preserved. App Store privacy is published for the ten manifest
+  categories, with Analytics for linked identifiers, Product Interaction and
+  Performance Data and no tracking. Existing cloud signing was reused after
+  refreshing profiles; no API key or new certificate was required.
+- **Public policy:** website privacy PR #14,
+  merge `5441ab0`, is deployed by Vercel and verified at
+  [trysynara.com/privacy](https://www.trysynara.com/privacy). The maintained mirror
+  agrees. Contract, sponsorship, lint, types, links and builds pass on the Mini;
+  Linux browser functional, accessibility, performance and all 11 visual checks
+  pass. Nine stale golden images were identical between unchanged main and the
+  privacy candidate and were refreshed in a separate test-only commit. Hosted
+  website CI could not start because of GitHub billing; a 2 GB Linux build exited
+  137 and its sponsorship subprocess failed without assertion details, so the
+  successful Mini checks and Linux browser gates are reported separately.
+
+The authorized visible changes are Remote analytics/dashboard controls, privacy
+text, release history and matching mobile disclosures; the delivery work adds no
+unrelated UI redesign. New live provider turns, manual .18 upgrades on every OS
+and physical-device APNs delivery remain unverified. The phones were not used.
+
+## Remote .17 and companion 138 delivered — 2026-10-17
+
+[Synara Remote 1.0.6-remote.17](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.17)
+is public for macOS ARM64, Windows x64 and Linux x64. Tag source
+`56d6b7691fe66f93a1035c8db74ab79ee80dce99` integrates `8502ff8`.
+Claude's discovered effort ladder retains its model default; the composer also
+recovers it from older hosts. An explicit host default or user choice is preserved.
+The authorized visible changes are the corrected effort selection and curated
+release-history entry; no unrelated UI changes were made.
+
+Local formatting, lint, typecheck, brand, frozen install and release smoke pass,
+along with 296 affected adapter/composer/release-history tests. The
+[same exact-source workflow](https://github.com/Emanuele-web04/synara/actions/runs/39047673920)
+passes all quality/server gates: **18,267 tests passed, 298 skipped**. Native
+packaged startup passes on all three platforms; macOS signing/notarization and
+Windows Defender pass. Attempt 1's Windows Defender service was unavailable
+(`0x800106ba`), so no scan result was established. Attempt 2 restored the same
+candidate, reverified identity/digests and passed Defender, startup and upload;
+successful tests and platform builds were retained.
+
+All 11 public assets match GitHub digests, exact-source provenance and updater
+checksums. The public Mac ZIP independently passes strict/deep signature,
+Gatekeeper and staple checks with the Remote identity and .17 version. The actual
+electron-updater provider discovers .17 from .16 on macOS, Windows and Linux,
+without consulting Stable/Beta feeds. Stable Latest remains `v1.0.6`; historical
+`v0.4.2` assets are unchanged. The Windows unsigned exception was restored to its
+previous exact value `1.0.6`; the installer may still show SmartScreen. Remote
+identity, local data and account/pairing/migration behavior are unchanged. Existing
+setup/recovery guides remain valid; the general website's Stable/Beta downloads
+were not changed for this separate Remote release.
+
+Universal iOS/iPadOS **0.1 (138)**, source `3eff4fa` with fix `8a41c51`, passes all
+10 catalog tests, archive and Organizer upload. The exported uploaded IPA passes
+strict app/widget signatures, matching 138 versions and iPhone/iPad families,
+debugging disabled, and the app's production APNs/Apple sign-in entitlements.
+App Store Connect build `a87aadaf-3a88-48e7-8696-e4dbc423f7ad` is **Test in corso**
+in the existing internal and external groups; testing notes and automatic
+notifications are saved. Earlier builds and tester membership remain available.
+No new credential, API key, payment or physical device was needed. These are
+catalog/contract, packaged-startup and distribution proofs, not new live Claude
+turns, manual installed upgrades on every OS or physical-device push delivery.
+
+## Remote .16 published / companion 137 on TestFlight — 2026-10-17
+
+[Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)
+is public for macOS ARM64, Windows x64 and Linux x64. Tag source
+`2b7a1d92406de58e7d59c6744f5c5013248e2f52` integrates feature source `f8a058e`.
+The [single exact-tag workflow](https://github.com/Emanuele-web04/synara/actions/runs/39037141011)
+passed quality, all three server shards, all three packaged startup checks,
+macOS signing/notarization and Windows Defender: **18,264 tests passed, 298 skipped**.
+Local qualification also passed formatting, lint, typecheck, release smoke,
+Windows process-boundary and migration-lineage checks, plus 43 focused tests.
+
+Transient proof/API failures no longer revoke all approved devices; admission
+still closes when the current authorization lease expires. Known ownership
+denials pause admission immediately and retire trust only after repeated checks
+spanning five minutes. Successful authorization resets that window; explicit
+revocation remains immediate. Proof timestamps follow key import, backend worker
+capacity defaults to 16, and source-launched Remote/Beta have separate development
+bundle identities. An already-revoked pairing still needs normal fresh QR pairing.
+
+All 11 public assets were downloaded and hashed against GitHub digests,
+exact-source provenance and updater checksums. The public Mac ZIP independently
+passed strict/deep signature, Gatekeeper and staple validation with the Remote
+bundle ID and .16 version. The actual electron-updater provider, using a fetch
+HTTP adapter, discovers .16 from .15 on all three platforms without consulting
+Stable/Beta feeds. Stable Latest stays `v1.0.6`; historical `v0.4.2` assets are
+unchanged. The exact-version Windows exception was restored to its previous
+value `1.0.6`. No production website downloads or installed app data were changed.
+These are public artifact/discovery and packaged startup proofs, not manual
+installed upgrades or new real-provider turns on all operating systems.
+
+Companion iOS source `f7be4ea` (`919042f` connection changes), version **0.1 (137)**,
+passes eight focused connection-supervisor tests. Its universal archive was reused.
+CLI upload still failed after the owner restored Xcode login, but the supported
+Organizer flow fetched the app record and **uploaded 0.1 (137) successfully** using
+the existing cloud-managed Apple Distribution certificate. Version/build management
+and internal-only distribution were disabled. The exported uploaded IPA passed
+strict app/widget signature checks, matching build 137 and iPhone/iPad device
+families, debugging disabled and production APNs on the app.
+**TestFlight distribution is complete:** after the owner restored the browser login,
+Apple processing was confirmed, test notes were saved and the build was assigned
+to both existing internal/external groups. Both groups show **Test in corso** for
+0.1 (137), with automatic tester notifications enabled. Existing tester membership
+and build 136 remain available. No public invitation link or API key was created,
+physical device used or new live simulator pass claimed for this source.
+
+The Mini's idle system sleep is already disabled (`sleep = 0`), its display timeout
+is ten minutes, and installed Synara Remote holds a keep-awake assertion. These
+settings were inspected, not changed. Screen lock prevents native UI control but
+does not itself put the Mini to sleep; the prior locked transport evidence below
+remains separate from physical-iPhone identity/reconnect qualification.
+Windows remains explicitly unsigned, and a real production GitHub consent/callback
+is still unverified. No new permissions or paid services were enabled.
+
+## Remote .15 published — 2026-10-17
+
+[Synara Remote 1.0.6-remote.15](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.15)
+is public for macOS ARM64, Windows x64 and Linux x64. The tag names exact source
+`113bd45b0d408bae5e600bb3e887bb6cfb3f9efb`, prepared from feature source `31cae11`
+in the separate release worktree. All 11 installers, provenance documents and
+Remote updater manifests are present; Stable/Beta identities remain separate.
+The [exact-tag workflow](https://github.com/Emanuele-web04/synara/actions/runs/38990068434)
+passed quality, all three server shards, all three packaged startup gates,
+macOS signing/notarization and Windows Defender. CI recorded 18,258 passed tests
+and 298 skipped tests. These packaged checks are not manual installed upgrades
+or a real provider conversation on every operating system.
+
+Public verification downloaded and hashed all 11 assets against GitHub digests,
+exact-source provenance and updater SHA-512 metadata. The published Mac ZIP also
+passed an independent strict/deep signature check, Gatekeeper notarized Developer
+ID assessment and staple validation with the Remote bundle ID and .15 version.
+The real electron-updater GitHub provider, with a fetch HTTP adapter, discovers
+.15 from .14 for Mac, Windows and Linux without selecting Stable/Beta feeds.
+This is discovery evidence, not an installed-app upgrade test. GitHub Latest
+remains Stable `v1.0.6`; the historical `v0.4.2` compatibility release is unchanged.
+The exact-version Windows signing exception was restored to its prior value
+`1.0.6` after the successful run. No production website downloads were changed.
+
+The real production GitHub consent/callback remains unverified. Provider
+configuration and the seven-case Chromium sign-in UI suite pass; publication
+was explicitly requested without waiting for new GitHub account consent.
+No new account permissions or paid services were enabled for this publication.
+Remote distribution uses its own GitHub release/feed rather than replacing
+Stable website downloads. No new iPhone/iPad binary is needed for these host fixes.
+
+### Locked Mini investigation
+
+The installed .14 app's keep-awake blocker was active, system idle sleep was
+disabled, and the backend and Cloudflare connector stayed alive while locked.
+Local health, connector readiness and the current host's public health returned
+200, with four active Cloudflare connections. Host authorization succeeded with
+no account-level revoked devices. A Node probe opened the pinned TLS and inner
+RPC WebSocket over the public tunnel while the screen stayed locked; it did not
+approve a device or send a chat. The OS registry independently confirmed the screen-lock flag. The initial Bun
+probe was unsupported by that runtime; the Node rerun is the transport evidence.
+
+The same account also retains an older, differently identified Mini registration
+with the same display name and an offline endpoint (HTTP 530). Which identity
+the physical iPhone selected is unverified: the screenshot does not identify its
+paired root. Do not merge those trust roots, delete old records or attribute the
+failure to screen lock from the display name alone. A read-only SQLite inspection
+was blocked by the live database's exclusive lock; the database was left intact.
+
+## Enrollment refusal recovery — 2026-10-17
+
+The hosted API still has public Remote access enabled for every authenticated
+account, without an account allowlist or paid plan. A fresh live probe with the
+separate account outside the old test list succeeds both on owner grant and the
+exact pairing-code publication route shown in the tester screenshot. The host
+authorization snapshot also succeeds; the temporary invitation was cancelled
+without approving a device. The previous Remote account endpoint still proxies
+to the current API. Remote .14 can use these backend changes without a download.
+
+A separate desktop recovery defect was reproduced: its authorization poll treated
+the old enrollment refusal (403 `not_host_owner` with the specific enrollment
+message) as permanent host revocation. That disabled the local scope, revoked
+approved device trust and stopped polling, so later server enrollment alone could
+not revive that host. The repair refuses admission immediately but keeps polling
+without destroying trust for this one enrollment response. Proof refusal, owner
+removal and every other 401/403/404 retain their permanent fence. Re-admission
+still requires a fresh successful snapshot and durable revocation application.
+This runtime repair ships in Remote .15; it does not retroactively restore trust
+already revoked by an older app.
+
+The built-browser E2E run also reproduced a Remote .14 workspace crash: opening
+the remote home (`/`) with existing threads passed an empty string to the branded
+thread-ID constructor. The sidebar now treats that route as having no selected
+thread. The existing E2E scenarios cover both that home route and subsequent
+chat navigation; no new controls, layout or styling were added.
+
+The pairing E2E was still waiting for controls from the previous Connections UI
+and a manual approval step. It now uses the shipped Add dialogs and verifies that
+the owner's grant records exactly the requesting device key with `enrolledVia:
+"qr"` before connecting. Manual-approval fallback remains covered by the gateway
+and control-plane tests; no authentication or approval policy changed.
+
+For a .14 client left on the old enrollment error, fully quit the application
+and reopen it before requesting a fresh code. Closing only its window may leave
+the old host process alive. If the previous denial already revoked local device
+trust, use normal pairing again. Reinstalling the same .14 neither repairs the
+workspace bug nor restores revoked trust; do not erase the app's data directory.
+
+Verification on the combined candidate (macOS arm64, Node 24.21.0 / Bun 1.4.2):
+
+| Check                                                                                 | Result                                                                                                                            |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Final built E2E, disposable PostgreSQL and separate host/controller homes             | 18/18 passed in 133.07 seconds, including QR retry, exact-device enrollment, chat/automation recovery and remote-home navigation. |
+| Final authorization/ingress/connectivity tests                                        | 16/16 passed. The enrollment regression fails on the old implementation for the permanent-revocation callback.                    |
+| Final web suite                                                                       | 5,669 passed / 3 skipped.                                                                                                         |
+| Formatting, lint, typecheck and desktop build                                         | Passed; lint has 0 errors / 1,011 existing warnings, typecheck 12/12 tasks.                                                       |
+| Repository suite after the enrollment repair, before the additional remote-home guard | 18,278 passed / 278 skipped, 11/11 tasks. The final E2E run separately enables its database/build opt-ins.                        |
+
+Both failures were reproduced before correction. The final E2E uses a local
+Cloudflare-boundary proxy and fixture WorkOS/provider processes, with production
+inner TLS, account coordinator, persistence, RPC and reconnect paths. The public
+API grant/QR/authorization probe above is separate live evidence; this does not
+claim a new signed release or a test on every tester's physical computer. The
+new production diff is two files, +14/-2 lines; three test files are +89/-18.
+No migrations, dependencies, credentials or production deployment changed in
+this recovery batch. No changes were made to installed app data.
+
+## Public beta enrollment — 2026-10-16
+
+The operator authorized remote beta enrollment for every authenticated account.
+`REMOTE_BETA_ACCESS_ENABLED=true` now admits accounts outside the internal test
+list at all five enrollment gates. The deployment setting defaults to closed and
+rejects malformed values. Host ownership, fresh membership, device proof, pairing
+consent, revocation and rate limits remain authoritative; no identity mappings,
+existing lists or subscription checks were changed.
+
+All 374 API tests pass against disposable PostgreSQL, including the new unlisted
+owner's tunnel, pairing publication/redemption and grant, with foreign-account,
+unregistered-device and membership-revocation controls. The full workspace suite
+passes 18,276 tests (278 skipped; the 222 PostgreSQL cases skipped by that command
+are covered in the separate API run). Formatting, lint and typecheck pass.
+
+Worker `c47de4c3-12dc-470a-9cae-147c0d89b04a` and Container image
+`4767b8d17cb21018fc92907cea5f34c63a6f7dfc9d4a11c62911f492b2beef16` are deployed,
+with existing Worker secrets preserved. Supabase already matches migration 0022;
+no new migration was required. The first live grant still returned the old
+enrollment refusal because the running Container had not loaded the new startup
+environment. Managed rollout `53328200-c9e9-4b42-9a9c-f44dd102e792` subsequently
+completed, moving container version 22 to 23 with the same image and resource
+limits. It applied only `REMOTE_BETA_ACCESS_ENABLED=true`; the Worker idle policy
+remained 30 minutes. No temporary short-timeout Worker or administrative endpoint
+was deployed.
+
+The separate real account outside the old allowlist now receives a signed grant
+(HTTP 200). The same route rejects anonymous requests (401) and an unregistered
+device key (403 `device_not_registered`). This qualifies the live enrollment
+repair; it does not replace full tester pairing/chat or physical TestFlight push
+verification. A downloaded desktop update or new mobile binary is not required
+for this backend change. Remote .14 users can retry their connection. Existing
+Mac identities, account mappings and user databases were not changed.
+
+## Main Codex reliability sync — 2026-10-16
+
+Also integrated the subsequent main `7cfd65d` commit preparing Stable 1.0.6:
+package/lockfile versions, release notes and provider/runtime documentation.
+Identity, migration lineage, What's New logic, marketing documentation, formatting,
+lint and workspace typecheck checks pass after that metadata update. This operation
+does not publish Stable or create a new Remote release.
+
+Integrated the six commits through main `612aff6d8fdcdb9e849d8c8750a8683e7e2dca81`
+without rewriting the shared branch. Live adapter-owned turns survive runtime
+reconciliation; stale work is paged fairly; handoff outcomes settle durably without
+replaying native work; internal Codex moderation metadata stays out of activity.
+Also included canonical Git diff prefixes, temporary degraded model catalogs and
+separate Remote migration-lineage validation. The only conflict appended tests in
+AgentGateway; both remote authorization coverage and new lifecycle coverage remain.
+
+The eight focused server files qualify 740 cases: 738 passed in the first run;
+the two process integration cases could not prove child exit inside the sandbox
+and both passed when rerun with process inspection available. Workspace typecheck,
+formatting, lint, Windows boundary and migration lineage checks pass. This is a
+source integration, not an installed desktop update or a new TestFlight build.
+The optional provider-discovery field is compatible with the current native
+decoder; server-owned turn and activity fixes apply to remote mobile clients.
+
+## GitHub Production sign-in follow-up — 2026-10-16
+
+GitHub OAuth is enabled and validated in WorkOS Production. The existing Synara
+GitHub OAuth app now includes the exact WorkOS callback alongside its existing
+Supabase callback; both use exact matching. An additional client secret is stored
+only in WorkOS. The old secret and callback remain intact. The flow requests
+`user:email`, without repository scopes or provider-token return to Synara.
+
+The source restores the existing GitHub button for Remote through the same SSO
+handler as Google and Apple. The common provider/cancellation/recovery browser
+suite passes (7 tests), as do formatting, lint, twelve-package typecheck and the
+desktop source build. Existing lint warnings remain. The hosted instance and
+GitHub authorize API respond successfully. The live source app reaches GitHub's
+consent page; final consent and callback verification are still pending. No new
+release or tag has been published.
+
+The live probe uses a disposable Synara home and Electron profile. GitHub's own
+account email differs from the existing Mac login, so the test must remain a
+separate identity: do not relink or merge the existing Mac account to make it
+pass. No existing account, chat history or cloud identity mapping was modified.
+
+## Remote .14 delivery — 2026-10-16
+
+Version **1.0.6-remote.14**, source
+`55ded6c1543a98679f8ac503c447d19cfb3906e9`, is
+[public](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14).
+[Exact-tag CI](https://github.com/Emanuele-web04/synara/actions/runs/38939586124)
+passes every required quality, server shard, Mac ARM64, Windows x64 and Linux x64
+packaging/startup gate, including Windows Defender. The release contains eleven
+assets and three separate Remote updater feeds. Stable Latest remains v1.0.5;
+v0.4.2 asset identities, hashes and sizes are unchanged.
+
+The fresh-install sign-in failure came from Remote inheriting the generic account
+API default. Operator environment overrides on the test Macs hid the missing
+packaged default. Remote now supplies the working hosted API itself; explicit
+overrides and saved account issuers still win. The packaged smoke drops inherited
+account URL configuration. Remote's existing account/profile sync also works
+without a shell opt-in, while explicit opt-out and Stable/Beta policy remain.
+Hosted Remote offers only the configured Google, Apple and email flows.
+
+The first unpublished .14 candidate failed Windows TLS smoke because `stat.mode`
+reports DOS attributes rather than POSIX permissions. The correction limits that
+POSIX assertion to POSIX platforms; the Windows TLS/SDK smoke, key persistence,
+Defender and packaged-startup gates remain required and now pass. NTFS ACLs and
+live provider execution on testers' Windows/Linux machines are not qualified by
+that smoke. Windows uses the exact-version unsigned release policy and may show
+SmartScreen. macOS still requires Developer ID signing and Apple notarization.
+
+App Store Connect now shows universal **0.1 (136)** waiting for external Beta
+Review, superseding the earlier Ready to Submit checkpoint below. Its tester
+instructions now link to .14. The compiled account URL and iPhone/iPad device
+families were checked; this desktop fix does not require another mobile binary.
+Account enrollment for remote access is still separate from downloading or a
+TestFlight invitation. Physical-device TestFlight APNs delivery remains open.
+
+The [analytics audit](PRODUCT-ANALYTICS-AUDIT.md) distinguishes account usage from
+default-off product telemetry. The live Cloudflare receiver and authenticated
+aggregate reads work. Native provider/token/terminal-turn coverage is still
+incomplete; client observations are not globally unique execution counts. No
+private metrics, credentials or new paid services are included in this release.
+
+All eleven public assets match their published sizes and SHA-256 digests. Each
+platform receipt matches the exact tag, commit and lockfile; Remote feed aliases
+match the packaged manifests. The downloaded Mac app/DMG pass Developer ID
+signature, Gatekeeper and stapled notarization checks. A verified .14 copy was
+launched with a disposable home, database and Electron profile and no account URL
+override. After the Mini was unlocked, its real sign-in dialog displayed Google,
+Apple and email and successfully sent an email code through the default service,
+reaching **Check your email** without the obsolete-service error. The code was
+not redeemed: this proves the packaged request path, not a completed fresh login.
+The temporary app was closed; installed apps and their account data were not
+replaced for this isolated probe. Final handoff checks pass formatting and brand
+identity; code qualification remains the exact-tag CI above.
+
+## Pairing follow-up — 2026-10-15, evening
+
+- A concurrent token refresh could make an older successful `/me` response report
+  signed out even though the account credentials were still valid. Status now
+  accepts a rotated token only for the same verified user, organization and
+  account authority; legacy identity backfills still require the original token.
+  The regression failed before the change and passes now. Logout, user changes
+  and authority changes remain fenced; 110 focused account/pairing tests pass.
+  Workspace formatting, lint and twelve-package typecheck pass (existing lint
+  warnings remain). This fix is not in the installed Remote .2 apps yet.
+- The iPad PR #2 was merged into the existing iOS remote-connections branch,
+  without merging that branch into main. iPad sidebar/rotation and two iPhone
+  workspace UI flows pass. Native sign-in consent now displays Synara; the light
+  icon uses the current vector at the dark icon's scale. No paid WorkOS custom
+  domain or service was enabled.
+- Real-account simulator sign-in and fresh-code enrollment to the installed
+  Mini succeeded. The first remote enrollment exposed a separate mobile bug:
+  successful trust installation did not mark onboarding complete or resume
+  foreground reconnect. The mobile fix is being verified before upload.
+  MacBook account directory/grant and pinned TLS/inner pairing channel passed;
+  actual simulator enrollment to that host remains to be checked. None of this
+  establishes production TestFlight APNs delivery on a physical iPhone.
+
+## Installed-app qualification follow-up — 2026-10-15
+
+- Synara Remote was installed beside the existing apps on both Macs. Read-only
+  snapshots and message-by-message comparisons verified the imported local
+  histories; account credentials and host/device identities were not copied.
+  Both apps completed normal same-account Google sign-in and a real Codex reply.
+  The Mini also passed Stop, follow-up and renderer reload with preserved history.
+- The Mini's manual import initially put its usage checkpoint under `userdata`,
+  causing an unintended historical backfill under the new installation identity.
+  Account reporter state belongs directly under the packaged app's base directory
+  (`usage-sync`), or under `dev` when a dev URL is configured. The duplicate target
+  counters were backed up and zeroed within their verified account/environment
+  scope; source counters and local history were preserved. A private disposable
+  replay reproduced the misplaced-checkpoint backfill and verified no upload
+  across repeated reporter starts with the correctly placed checkpoint. New real
+  activity then uploaded without another historical backfill. This operator
+  repair does not add per-account local conversation ownership; see [account
+  switching semantics](../../../BETA.md#synara-remote-early-access).
+- A controlled backend restart in installed version **1.0.6-remote.1** exposed a
+  separate recovery defect: the replacement backend chose a new port while the
+  renderer retained its pinned endpoint. The desktop now keeps its reserved port
+  throughout the app lifetime. The existing fresh-profile Electron smoke now
+  terminates only its own backend, waits for a replacement PID and healthy HTTP
+  endpoint, and asserts that the port is unchanged. It failed on the old code for
+  the changed endpoint and passed after the repair. No transport unpinning or
+  renderer reload was added. The signed, notarized **1.0.6-remote.2** candidate
+  (`a556ebf4238206ccf033158056027d86580fe45b`) passed
+  [all build gates](https://github.com/Emanuele-web04/synara/actions/runs/38783573115)
+  and is installed on both Macs, with the previous app retained for rollback.
+  Both installed apps survived a controlled backend restart in the same window:
+  replacement PID, unchanged port, preserved unsent draft, automatic reconnect
+  and a real Codex reply without renderer reload. All 207 original Mini messages
+  and 1,733 original MacBook messages remain unchanged; the Mini's 213 messages
+  present immediately before this update also compare identically. Subsequent
+  cloud reads show unchanged historical counters and only the new test activity.
+  Account and host/environment identities were preserved across the update.
+  This remains a build-only candidate, without a public release or updater feed.
+- The final local workspace run passed **18,188 tests / 275 skips** across all
+  eleven test tasks. A first parallel run hit one five-second web test timeout;
+  that case passed in isolation and the second full run passed unchanged.
+  Formatting, lint, twelve-package typecheck and Windows runtime checks passed.
+- Apple Developer inspection found the Synara APNs key is topic-specific and
+  **Sandbox only**. The deployed `both` gateway setting does not expand its
+  authorization. The API now accepts an optional, separately validated
+  `APNS_PRODUCTION_PRIVATE_KEY` / `APNS_PRODUCTION_KEY_ID` pair, forwards both
+  Worker secrets, and keeps JWT signing/cache separate by token environment.
+  The real-signature transport regression and configuration/forwarding checks
+  failed before the fix and passed afterward. All **370 API tests** passed on
+  a new disposable PostgreSQL database; lint/typecheck/format also passed.
+  No schema change is required. With explicit operator approval, the separate
+  topic-specific Production key is now created and installed in the two Worker
+  secrets; all 23 previous secret names remain present (25 total). Existing
+  Sandbox credentials are unchanged. The protected local key copy stays outside
+  Git and Downloads; a scan of 9,684 repository files found no matching material.
+  Worker `7793d785-432d-4c88-927b-7d1863a4ce2f` and Container version 21 now run
+  image `sha256:cee7fc90fa39e989303a904b9494a3c59c95bdf86bcdd06412594ac58f7a02a1`.
+  The new instance is running and its protected Live Activity route returns 401
+  without credentials. All 23 database migrations are unchanged.
+  An APNs Production probe using a nonexistent synthetic device token returned
+  `400 BadDeviceToken` with the valid signer and `403 InvalidProviderToken` with
+  an intentionally invalid signature. This verifies the Production credential,
+  not device delivery. Visible background update/end on TestFlight remains the
+  physical-device qualification step; no new mobile build is required.
+
+## Early access delivery — 2026-10-15
+
+- Qualified desktop source `8505590cfe40c58660171a3a778976ef6cccdd39` is pushed.
+  The final workspace run passed 18,396 tests with 43 skips; format, lint (zero
+  errors), twelve-package typecheck and migration lineage checks also passed.
+- Published the API Container image
+  `sha256:b731a83aac3af2abc4215fdf7c1ce6f72c6250521dd7fe2c83b768b4b58f64dc`.
+  Live startup returned the expected unauthenticated 401. Supabase now records
+  23 Drizzle migrations, including additive `0022_account_deletions`; its new
+  table has RLS enabled and no SELECT grant for `anon` or `authenticated`.
+  All 23 Worker secret names were preserved. No real account deletion was run.
+- API proof expiry fix `d8c84fa` passed 369 tests against a fresh disposable
+  PostgreSQL database plus format, lint and twelve-package typecheck. Deployed
+  image `sha256:6ff0b90add17f7cae58ce3f25496554f60d45f8f3ca814228d8cb2183258a735`
+  as Worker version `73ec6657-61a8-4680-938c-fc194ee1d4a3`; live startup again
+  returned the expected unauthenticated 401. `APNS_ENVIRONMENT=both` was installed
+  before this rollout. Actual TestFlight APNs delivery remains unverified;
+  deployment and startup are not delivery proof.
+- Universal iOS/iPadOS version 0.1 (130) was exported with Cloud Managed Apple
+  Distribution and uploaded successfully with the ordinary Xcode Apple ID.
+  App Store Connect shows **Ready to Test**. The internal **Synara Early Access**
+  group has manual distribution, version 0.1 (130) attached and one explicitly
+  authorized internal tester. App Store Connect confirms that tester is **Invited**.
+  No App Store Connect API key was created. External Beta review remains pending.
+- Both native branches are pushed and validate all 86 fixtures against this
+  desktop source. The final retained native checks passed 116 cases (one skip)
+  on each simulator; the iPad docked-sidebar flow passed twice. The broader
+  legacy native suite is not green; see the mobile handoff for retained gaps.
+- GitHub Actions for the private SynaraIOS repository refuses hosted jobs before
+  execution because of account payment/spending limits; iOS qualification and
+  upload ran on the Mini. This does not block the public desktop repository's
+  standard runners. The obsolete build-only Beta candidate was cancelled after
+  the user requested a distinct app named **Synara Remote**. Its separate flavor,
+  data home and updater lane are implemented through the existing signing
+  workflow. Remote qualification passed 259 affected tests, twelve-package
+  typecheck, lint (zero errors), formatting, Windows boundary and release smoke.
+  The exact candidate `fa1c5e6db6904ee3c694fd9a495d4292f1571a8f`, version
+  **1.0.6-remote.1**, passed [all CI gates](https://github.com/Emanuele-web04/synara/actions/runs/38767031101):
+  18,168 tests passed and 295 were skipped by their existing CI routing; the
+  database-backed API cases passed separately in the 369-test Mini run above.
+  Developer ID signing, Apple notarization of the app/DMG, artifact provenance
+  and packaged Mac ARM64 startup smoke all passed. The qualified installer and
+  updater ZIP were downloaded on the Mini: source/lockfile provenance, all file
+  hashes, Remote bundle/display identity, DMG signature, stapled Apple ticket
+  and Gatekeeper acceptance passed locally. They are available in the [30-day workflow artifact](https://github.com/Emanuele-web04/synara/actions/runs/38767031101/artifacts/11990746436).
+  This is a build-only candidate: no public release/update feed has been published.
+  No new paid plan or spending limit was enabled.
+  No desktop tag, main merge, signed Remote publication or external TestFlight
+  review is claimed.
+
+Updated 2026-09-29. Original base `42aa8fb4f093f78fe7a1f7be5525f67571086ebf` verified clean; existing isolated worktree `a816/synara`, branch `codex/cloudflare-remote-mvp`. Git emits known AppleDouble index warnings; branch creation succeeded (exit 0) after granting Git metadata access. No pack repair.
+
+## Completion levels
+
+- Implementation: complete.
+- Local qualification: complete. See [QUALIFICATION.md](QUALIFICATION.md) for commands, evidence and limits.
+- Live qualification: in progress. Real service configuration, same-account
+  login, managed provisioning, two-Mac pairing and remote file reading have
+  passed with a process-scoped DNS override during propagation. Controller
+  restart and connector crash recovery now pass without manual reconnect.
+  Normal DNS, live revocation and unattended qualification remain pending.
+  See the dated entries.
+
+## Phase ledger
+
+| Phase                   | State                              | Evidence / remaining                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0 owners and references | complete                           | Upstream comparison at `d15210cd3da79f9a1a495a6309d912d76362a046`, official Cloudflare API and limits; owner map below.                                                                                                                                                                                                                                                                                                                    |
+| 1 account coordination  | implemented                        | Additive 0013/0014, immutable allocations, HostProof-only tokens, SQL leases/checkpoints, retryable cleanup and hourly retired-name sweep, same-account code rendezvous. API suite 318/318 passed, including delayed allocation-disable regression. Fresh WorkOS membership bypasses cache for provisioning/polling.                                                                                                                       |
+| 2 connector             | implemented, Mac smoke passed      | Pinned official 2026.9.3, SHA256, dedicated loopback ingress, real readiness, cancellable provisioning/download, isolated home/config, shared process teardown. Actual binary launched/stopped from Electron app.asar (43.4.1 / Node 24.18.1). Focused tests and final browser E2E passed.                                                                                                                                                 |
+| 3 dialer                | implemented                        | Explicit Cloudflare contract/labels and directory endpoint; no runtime relay fallback. HTTPS fixture transports pinned TLS, 512KiB hash/Range, RPC, resources and 4MiB backpressure burst. Substituted-root negative case passed in final E2E.                                                                                                                                                                                             |
+| 4 revocation            | implemented                        | 10s jittered fresh snapshots, 60s lease; closes before durable tombstone/ACK. Real API device revocation tested through fixture. Async setup/teardown fencing; targeted allocation retirement prevents delayed cleanup affecting the next allocation.                                                                                                                                                                                      |
+| 5 code pairing          | implemented, browser passed        | Atomic registered-device claim, budgets, expiration, same-account/org scope, preview stays server-side, compare full root and approve exact device. Browser flow passes on both screens. CLI private invitation remains available.                                                                                                                                                                                                         |
+| 6 UI                    | implemented, visual evidence saved | Existing settings/button/input/checkbox primitives reused. Screenshots copied to durable task artifacts; see QUALIFICATION.md. No new UI primitives. First-use missing root no longer misleadingly requests repair.                                                                                                                                                                                                                        |
+| 7 relay removal         | complete                           | Removed server/desktop relay config/fallback and Docker deployment workflow. Production API no longer exposes legacy relay credentials/tickets. Retired relay runtime, ticket/control contracts and API polling feed removed; ADR 0016 and operations guide replace old instructions.                                                                                                                                                      |
+| 8 local qualification   | final pass                         | Final E2E 16/16, API 318/318, focused lifecycle 13/13, build 10/10, typecheck 13/13, lint 792 existing warnings / 0 errors, Windows boundary and migration lineage passed. Root rerun passed 11/11 tasks: 13,914 tests passed / 246 skipped; database and E2E cases passed separately. The discovered signal-exit / Effect shutdown interaction was corrected. The built test now verifies connector PID exit and rejects forced shutdown. |
+| 9 live                  | not run                            | No real resources provisioned; needs secure test configuration and two-Mac access after local completion. Commercial rollout still blocked by absence of real subscription authority (explicit test allowlist only).                                                                                                                                                                                                                       |
+
+## Owner map and implementation order
+
+WorkOS login and host link (`accountAuth`, API `hostKeyRegistry`) → host-proof authenticated allocation (`apps/api`, PostgreSQL) → dedicated loopback ingress + cloudflared (`hostConnectivity`, shared platform process boundary) → account directory exposes managed hostname only → authenticated code rendezvous → existing exact-JKT owner approval and SQLite trust → API grant + pinned TLS host mint → session registry/RPC/resources → API authorization snapshot polling, tombstones and ACK.
+
+Keep public Cloudflare TLS separate from host P-256 TLS1.3. Never forward local admin routes or controller credentials. Pairing cloud delivery changes the out-of-band trust assumption: code lookup alone cannot confirm a root. Existing environment/account/generation fences and server Beta/Stable policy remain authoritative. No new provider/model, account stack, iOS app, production deployment or commercial entitlement system.
+
+## Active local services and next action
+
+Disposable PostgreSQL is stopped. It used `/private/tmp/synara-cloudflare-postgres/data`, 127.0.0.1:58433. Personal instance 7265 was preserved. Final E2E process inspection found no fixture connector/server remnants. Git AppleDouble warnings remain unchanged.
+
+During qualification, the final process audit found connectors surviving a signal-induced Node exit. The existing Effect patch now keeps signal ownership during asynchronous finalization. A subprocess regression and built-workspace PID assertions cover the correction. Older fixture remnants were explicitly terminated. No operator process was targeted.
+
+Logs: `/private/tmp/synara-cloudflare-{tests,api,e2e,all-types,build,format,lint,windows,migrations,electron,shutdown}.log`. Durable screenshots and compact checks: `/Users/emanueledipietro-macmini/.codex/visualizations/2026/09/28/01a0e737-6f66-7340-a97d-eada9d6c3680/cloudflare-remote/`.
+
+Delivery: implementation commit `39784a61da783548060a1ed062b4ed6d9a314e8d` is published on `origin/codex/cloudflare-remote-mvp`. Final format and frozen patch-install verification passed; the installed-runtime regression passed 11/11. Live phase 9 needs secure test-environment setup and access to both Macs; no live success is claimed. No main merge, release, production deployment or commercial rollout.
+
+## Follow-up readiness review — 2026-09-28
+
+Reviewed the completed task against the first real two-Mac setup, including the WorkOS token contract, managed tunnel allocation/ingress, connector packaging and lifecycle, pairing, revocation and deployment instructions. The current WorkOS application/session-token documentation confirms the required `client_id` claim; no authentication boundary was relaxed.
+
+The review reproduced and fixed controller pairing recovery defects:
+
+- A transient account-directory or tunnel failure discarded a redeemed preview before success. The server now retains it until success, cancellation/forgetting, account change or expiry; the public code remains single-use and exact identity approval is unchanged.
+- Forgetting/cancelling did not release the pending preview. It now clears the local preview and the UI directs the user to a fresh code.
+- Concurrent setup could run before the per-host guard, and cancellation could race an unfinished trust import. The guard now owns the entire setup, and forgetting waits for its cancelled operation to settle before deleting trust.
+
+Four focused regressions cover retries, cancellation/preview capacity, identity/account/expiry checks and concurrent setup cancellation. The browser qualification now deliberately stops the connector after code lookup, observes the failed attempt, restores connectivity and completes pairing with the same reviewed preview. Existing settings primitives are reused.
+
+Checks: focused regressions 4/4; PostgreSQL API 318/318; rebuilt desktop/server 5/5 build tasks; typecheck 13/13; lint 0 errors / 792 existing warnings; format passed. Full Node 24 E2E passed 16/16 in 79.53 seconds. The first E2E attempt ran under the shell's Node 26 and was refused by the intended runtime gate; it was rerun on Node 24.21.0 without weakening that gate. Final full repository suite passed with Node 24 and cache bypass: 11/11 tasks, 13,918 tests passed / 246 skipped, 305.53 seconds. Database/build-dependent skipped cases passed in the separate API/E2E runs above.
+
+The disposable PostgreSQL instance has been stopped again. This review used logs `/private/tmp/synara-remote-review-*` and browser evidence `/private/tmp/synara-remote-review-evidence`. No external credentials were configured, no real tunnel was provisioned and no live/signed/two-Mac qualification is claimed.
+
+Follow [Configure the remote MVP](READINESS.md) for the remaining service setup and live test. API hosting is still required alongside WorkOS, PostgreSQL and Cloudflare. Internal test enrollment remains distinct from commercial paid-entitlement enforcement.
+
+## Supabase database selection — 2026-09-28
+
+The selected stack is WorkOS AuthKit for identity, Supabase PostgreSQL for account
+metadata, and Cloudflare Tunnel for remote transport. WorkOS tokens and session
+flows are unchanged. The API continues using `pg`/Drizzle with a server-only
+`DATABASE_URL`; no Supabase Auth, client SDK or third-party JWT bridge is needed.
+
+Migration `0015_account_table_rls` enables default-deny RLS on all 15 account API
+tables. This prevents untrusted database roles with table grants (such as
+Supabase's Data API roles) from reading or changing rows outside Synara's API.
+The database-owner runtime remains authoritative for WorkOS-scoped checks. The
+new PostgreSQL regression verifies table coverage, denied reads/writes and
+preserved access for a non-superuser table owner. No historical migration was
+changed; the generated snapshot adds only RLS flags.
+
+The API README, environment example and readiness checklist now cover Supabase
+direct/session-pooler URLs, verified TLS/project CA, disabled Data API, database
+ownership and isolation from automated-test fixtures. Future migration to another
+standard PostgreSQL host remains possible.
+
+Validation uses a disposable local PostgreSQL instance, not the connected
+Supabase project. The first parallel API run raced while creating the empty
+Drizzle migration table; applying migrations once before the test run resolved
+that fixture bootstrap race. The full API suite passed 319/319. Workspace
+checks and migration lineage are recorded with the completion report. Live
+Supabase TLS, WorkOS and Cloudflare qualification remains pending service setup;
+no hosted database or authentication settings were changed.
+
+## Shared account service update — 2026-09-29
+
+The profiles trial now has a deployed Cloudflare account API, verified Supabase
+TLS/database role and hosted synthetic privacy checks. See
+[profiles qualification](../cloudflare-profiles/READINESS.md) for current service
+state; earlier no-resource statements describe the preceding remote-only work.
+Real WorkOS login and the migrated account session have now been verified on
+`synara-account-api-trial.synara-orgs.workers.dev`. Tunnel provisioning, remote
+enrollment and two-Mac acceptance remain unverified. This deployment does not
+mark remote access complete.
+
+## Remote deployment review — 2026-09-29
+
+The Worker was missing the five optional remote runtime bindings, so setting
+them in Cloudflare would not configure the API Container. Its explicit
+forwarding list now includes the four `CLOUDFLARE_*` tunnel settings and
+`REMOTE_TEST_USER_IDS`. Container configuration tests cover forwarding and
+the unconfigured case; unrelated Worker bindings remain excluded. The API's
+existing config tests cover rejection of incomplete tunnel settings.
+
+Live inspection found no zones or tunnels in Synara Orgs and none of those five
+bindings on the API. The operator chose `trysynara.com` and deferred its DNS
+move from Vercel. The website can remain hosted on Vercel. The
+[readiness checklist](READINESS.md) records the remaining DNS preparation,
+runtime token/enrollment, Container restart and two-Mac acceptance steps.
+No live remote connection is claimed, and this code correction is not itself
+a deployment or DNS change.
+
+### Live Quick Tunnel transport proof
+
+A disposable test on the Mac Mini successfully routed through a real Cloudflare
+Quick Tunnel using the branch's `startCloudflareIngress`, `RemoteTlsServer`,
+host gateway and `dialHost`. It exchanged an authenticated, native-TLS-encrypted
+synthetic application frame. An incorrect pinned host identity and an
+unapproved device were rejected; public admin paths returned 404. The connector
+was stopped and fixture state cleaned up afterward.
+
+The test used ephemeral fixture account grants and approvals, not a real
+WorkOS session, and ran both endpoints on one Mac through Cloudflare's public
+edge. It does not qualify the two-Mac UI flow, managed provisioning, pairing-code
+delivery or unattended recovery. The normal app still needs managed tunnel
+configuration; Quick Tunnel support is not wired into its pairing flow.
+
+Initial attempts failed resolving the newly allocated hostname. Public DNS over
+HTTPS returned the Cloudflare address while the Mac's normal resolver returned
+NXDOMAIN. The passing test waited for public DNS publication and used that
+resolution only inside its own process, with TLS verification enabled. No OS
+DNS settings or domain nameservers changed. A user-facing temporary-tunnel test
+also needs hostname resolution verified on the controller's network.
+
+The forwarding fix passed workspace formatting, lint (zero errors; existing
+warnings) and typecheck, plus 29 focused API tests and 19 server remote tests.
+The live Quick Tunnel transport check passed separately. PostgreSQL-dependent
+API tests and the two-Mac acceptance suite were not rerun for this deployment
+binding change.
+
+## Managed DNS activation — 2026-09-29
+
+After the operator approved the exact nameserver change, Namecheap saved
+`cecelia.ns.cloudflare.com` and `eric.ns.cloudflare.com` for `trysynara.com`.
+The registry confirms the delegation and Cloudflare reports the zone active in
+Synara Orgs. The full ten-record Vercel inventory was copied before switching;
+website records remain DNS-only and point to the original Vercel destinations.
+HTTPS checks returned 200 from Vercel and its project Analytics history remained
+present. No DNSSEC DS delegation existed. No interruption was observed in these
+checks; they are not continuous uptime monitoring or a mail-delivery test.
+
+The zone's Free website plan is separate from the account's verified Workers
+Paid plan. Some resolver caches initially retained the Vercel nameservers.
+Direct DNS requests from this Mac returned recursive, not authoritative,
+responses; do not treat them as direct checks of Cloudflare nameservers.
+
+The tested Worker forwarding fix was deployed as version
+`e4641bcd-79ef-43e5-93c4-5f54af5f1e89`, preserving the existing API Container
+image and runtime secrets. Remote token creation, installation of all five
+remote bindings, Container restart and real two-Mac acceptance remain pending.
+
+## Remote service configured — 2026-09-29
+
+The operator explicitly approved creating `synara-remote-tunnels-trial` with
+no expiration, cloudflared connector write in Synara Orgs and DNS write limited
+to `trysynara.com`. The token was stored outside the repository with private
+filesystem permissions and in the account API's Worker secrets. A single bulk
+secret update installed all four Cloudflare settings plus the one-user trial
+allowlist, preserving unrelated secrets. Runtime-token verification, tunnel
+listing and DNS listing succeeded; the DNS baseline still contained the ten
+preserved website/mail records and there were no tunnels before testing.
+
+Container rollout `e3b5f8d2-4e2d-46d4-8e4c-0a25987f7f9c` completed with one
+healthy instance and no reported rollout errors. Public API discovery and JWKS
+checks returned 200. This verifies deployment health, not managed provisioning
+or a real remote connection.
+
+The current branch's CLI and web build passed (four build tasks). A separate
+Node 24 test instance runs on loopback port 4775 with its own home, after the
+dev runner dry-run and IPv4/IPv6 listener checks. The older profiles test and
+the regular Synara instance were left running. The new instance uses the
+Synara Orgs API directly. The operator completed a fresh WorkOS login, the
+machine linked successfully, and Hosts & devices exposes the pairing controls.
+The new login selected a different WorkOS identity than the earlier profiles
+test. After verifying it through `/api/v1/me`, the allowlist was replaced with
+only the current Mini user; rollout `5ff927a9-475c-4a50-85a5-21aa798ee595`
+completed and API discovery returned 200. The older profile session is still
+bound to the legacy API URL, so it was not silently rewritten or copied to the
+new installation.
+
+The operator requested coordination with Codex on the connected MacBook. A
+separate MacBook task prepared an isolated worktree at commit
+`20b8f71b342f11532cc7caee4ef03a04fd6e7f52`, matching the Mini's application
+sources, and passed the frozen-lockfile install and CLI/web build. Its Node
+24.21.0 server listens only on `127.0.0.1:4776`, with a separate test home.
+The MacBook task verified local UI and API discovery HTTP 200. The operator
+completed login, and both machines' WorkOS user and organization IDs match.
+The MacBook device thumbprint was independently recomputed from its public key
+and matched the registered device. The operator explicitly approved pairing
+that exact device with the isolated Mini instance.
+
+Creating a pairing code through the Mini UI initialized its remote identity.
+Synara automatically provisioned one named Cloudflare tunnel and its proxied
+DNS record; Cloudflare reported healthy with four connector connections. The
+ten existing website/mail records remained present. Cloudflare and Google
+DNS-over-HTTPS resolved the generated hostname to Cloudflare, but the Mini's
+system resolver still returned the old Vercel wildcard destination. A probe
+using the public DNS result only within that process, with normal TLS
+validation, returned 200 for `/health` and 404 for `/` and `/api/v1/instance`.
+The normal system-resolution probe reached Vercel instead. This is a DNS
+propagation limitation, not a passing normal-path remote connection. No OS
+DNS setting or certificate validation was changed. The MacBook's normal DNS
+path also reached Vercel. Its first code lookup returned the exact Mini root
+and expected controller thumbprint, but UI navigation discarded the preview
+before the access request. That invitation was cancelled on the Mini.
+
+To continue transport qualification during propagation, a temporary preload
+outside the repository limits a DNS override to the exact generated hostname
+inside the MacBook test process. The Cloudflare address came from public
+DNS-over-HTTPS; the MacBook's independent HTTPS probe returned 200 with normal
+certificate validation. This workaround is test-only and does not qualify
+ordinary DNS resolution.
+
+A fresh code then completed the real two-Mac UI flow: the MacBook compared
+every Mini identity group, the Mini approved the exact operator-confirmed
+device thumbprint, and the MacBook reported successful pairing and connection.
+The Mini displayed the authenticated MacBook session with Cloudflare transport.
+From the MacBook editor, the operator's coordination task opened a disposable
+project and read the exact random proof value from a file created only on the
+Mini. No provider request was sent. Approval survived a Mini page reload.
+After that read, the MacBook renderer remained on `Connecting…` and the Mini's
+active RPC session disappeared before any intentional connector interruption.
+The unchanged connector and public health endpoint remained healthy. A separate
+authenticated controller bridge remained open for 60 seconds, with successful
+requests at 0, 20, 40 and 60 seconds. Wire evidence identified the cause: the
+remote renderer subscribed to `device.subscribeEvents` and
+`computer.subscribeEvents`, which the host correctly rejects as local-only.
+Those stream failures triggered a global renderer reconnect. The controller
+observed `Renderer detached` closures, without a transport error. The web
+adapter now skips these two subscriptions in remote execution while retaining
+them locally and preserving the server-side denial. The regression failed
+before the change, and all 90 focused adapter/transport tests pass after it.
+The rebuilt MacBook UI remained connected for over a minute, with no further
+renderer-detached loop. The controlled connector interruption then exposed a
+second defect: cloudflared restarted automatically, but the MacBook remained
+connecting beyond the 120-second observation window. Its durable desired host
+and connection view were `stopped`; a temporarily missing published route had
+been classified as terminal. Missing routes now use bounded reconnect backoff,
+while revocation, identity, authentication and compatibility failures retain
+their existing handling. A supervisor/registry regression fails before this
+change and passes after it.
+
+The controller restart check found a separate lifecycle defect. Runtime
+instrumentation showed its remote supervisor starting and stopping two
+milliseconds apart: `Effect.provide` closed the handler layer when the HTTP
+factory returned. Handler provisioning now belongs to the router layer, whose
+scope lasts until server shutdown. After rebuilding and restarting the
+isolated MacBook controller, the existing page reconnected automatically and
+read the Mini's proof file again, with no reload, `hosts.connect`, or pairing.
+The built-workspace E2E now waits for restored connections before any manual
+action and no longer reloads the page after controller restart; it passes.
+
+A second live interruption forcibly terminated only the isolated Mini's
+cloudflared process at 11:57:58.574 UTC. Synara replaced it automatically.
+The MacBook recorded socket closure at 11:58:04.343 and a restored connection
+at 11:58:07.715: approximately 9.1 seconds from termination and 3.4 seconds
+from the observed close. A subsequent authenticated file read matched the
+Mini's proof. No retry button, page reload, manual connection, or new pairing
+was used. These timings are one measured trial, not a recovery guarantee.
+
+Final checks: format, lint (792 warnings, zero errors), typecheck (13 tasks),
+CLI/web build (4 tasks), 90 adapter/transport tests, 55 lifecycle/auth/host
+tests, and the strengthened built-workspace E2E passed. The first full suite
+passed all 12 tasks; subsequent full runs on the recovery changes passed 11
+of 12, failing the unchanged `accountCredentialLock.test.ts` real-process
+contention test with `ENOTEMPTY`. Its isolated rerun passed 3/3; the final
+full suite is therefore not reported as green. Database/E2E cases skipped by
+the ordinary root run are not included in its passing count. The E2E used a
+disposable local PostgreSQL cluster, now stopped.
+
+Live revocation has not been performed: automatic approval review required
+separate operator consent for interrupting the approved device. The key
+remains approved. Ordinary DNS, sleep/wake, authorization-outage behavior and
+long unattended qualification also remain incomplete. This is not a signed
+distribution or an unattended reliability result.
+
+The newly installed official `cf` CLI (`1.0.0-beta.5`) is authenticated to
+Synara Orgs with read-only OAuth scopes. A DNS listing through this CLI matched
+all ten baseline records exactly, including DNS-only website CNAMEs. Runtime
+tunnel writes use the separate scoped service token, and deployment operations
+use the existing authorized deployment credentials.
+
+## Multi-host navigation — 2026-09-29
+
+The previous whole-window host selection is replaced by a local controller shell with a combined
+project/chat sidebar. Each verified remote environment retains a separate application runtime;
+chat navigation changes the visible pane, not the destination of pending operations. The built
+Chromium test passes with identical IDs on both servers, separate local/remote drafts, approval
+routing, connector and controller restart, and local use after remote refusal. This uses the
+deterministic provider fixture, not a real provider account.
+
+The existing transport/pairing and per-environment storage boundaries are reused. The sidebar
+uses the shared sidebar, button, disclosure and status components. A remote workspace is a
+same-origin frame loading the bundled app; no provider/repository content creates frames.
+File-backed Electron and large numbers of connected hosts remain separate qualification steps.
+The MacBook browser UI result is recorded below. No DNS, Cloudflare, trust, provider-choice or database change is
+part of this renderer update.
+
+Validation: root formatting passed; lint reports 0 errors and the unchanged 792 warnings;
+typecheck passed 13/13 tasks; desktop/server build passed 5/5 tasks. The complete repository
+test run passed 12/12 tasks with the isolated PostgreSQL database. The separately built browser
+workflow passed in 22.42 seconds, including new-chat buttons on both projects and keeping the
+local composer usable during the remote connector outage. A first unfiltered build encountered
+the sandbox's port-binding restriction in the unrelated profiles/Turbopack build; the relevant
+desktop/server build above completed.
+
+### Two-Mac project/chat navigation follow-up
+
+The MacBook browser test initially exposed a creation race: activating a hidden remote pane at
+its previous Home route could supersede creation in the selected remote project. Commit
+`59922f0` returns the exact destination from the owning workspace and only then opens that route.
+Catalog project opening uses the same ordering; late completion after an account/connection
+change cannot select a stale workspace. Ready panes no longer leave an obscured "Opening…"
+status in the outer accessibility tree, and connection failures name the affected computer.
+
+After rebuilding the isolated MacBook controller at `59922f0`, the live browser check passed:
+local chat → remote new-project "+" → correct project heading → Mini README, without using the
+inner project picker. A fresh disposable Mini project had no existing chats/drafts before the
+check. Separate local/remote drafts survived navigation in both directions. Earlier reads also
+verified distinct README contents for the same filesystem path on the two computers. The
+controller retained login/pairing and served the verified rebuilt index. No real provider prompt
+was sent and the approved device was not revoked.
+
+Follow-up validation: formatting, lint (0 errors / 792 existing warnings), typecheck (13 tasks),
+desktop/server build (5 tasks), and 38 focused tests passed. The strengthened built Chromium
+workflow passed in 17.96 seconds, including remote creation from an active local draft, Files
+in the selected remote project, distinct drafts, streaming/approval fixtures and connector/
+controller recovery. The full repository run preceding this focused follow-up passed 12/12
+tasks. The disposable test PostgreSQL instance is stopped. The live MacBook controller continues
+to use its process-scoped DNS override; ordinary DNS and signed Electron distribution are not
+qualified by these browser checks.
+
+### Computer and project pickers — 2026-09-29
+
+The first combined sidebar lacked an explicit destination picker for a new chat, a project-name
+field, and source-folder browsing in a browser. The follow-up adds a shared computer picker in
+unsent chat controls and Create project, reusing existing menus, dialog fields, folder browser,
+project-create recovery and ownership boundaries. Local/remote drafts remain separate. The source
+folder resets when the selected computer changes; unavailable connections cannot silently fall back.
+A remote create uses its host's settings and an explicit unassigned Space rather than local IDs.
+
+The built browser workflow passes (23.37 seconds): choose a computer in both directions, preserve
+project drafts, browse/select a remote folder, create a custom-named project, verify it exists only
+on the remote server, then run the existing streaming, approval and recovery fixtures. It exposed
+and covered two additional UX defects: deferred composer focus closing a newly opened computer
+menu, and a slow initial folder listing overwriting a manually entered path. Eight focused browser
+tests pass, including the delayed-listing regression. Final repository and physical MacBook results
+are recorded after this entry. These changes add no provider prompts, secrets or infrastructure.
+
+Automated final pass at `9163d31`: full repository suite 12/12 tasks passed in 321.9 seconds;
+web suite 4,262 passing tests; formatting passed; lint 0 errors / 791 existing warnings;
+typecheck 13/13 tasks; desktop/server build 5/5 tasks. The eight focused Chromium tests and
+23.37-second two-server workflow passed separately. The updated E2E source also typechecks.
+The disposable PostgreSQL cluster is stopped. No Windows process boundary or migration changed.
+
+The physical MacBook browser check also passed at `9163d31`: Run on selected the Mini and returned
+to This computer; both menus stayed usable. Create project accepted a custom name, browsed a
+folder present only on the Mini, and opened its README with the expected proof marker. A separate
+read-only RPC check on the Mini confirmed that project's name and canonical folder. The existing
+paired connection briefly showed Reconnecting during startup and recovered without intervention.
+No enrollment, DNS, provider prompt or device-revocation change was needed. The browser preview
+is left on the new Mini project; this is not a signed desktop release. The existing process-scoped
+DNS override remains in use, so this check does not qualify ordinary DNS resolution.
+
+A controlled unsent-draft check on the MacBook retained a harmless test marker on the same
+local route through MacBook → Mini → MacBook and a normal browser reload. Returning from a
+project-specific draft via Run on selects the destination computer's home draft; it does not
+move that project's text. The earlier observation of an empty composer was a different draft,
+not a reproduced loss. GitHub cloning still targets the local computer; remote project creation
+uses a source folder on the selected computer.
+
+One live reconnect limitation remains: after the controlled reload the Mini pane briefly reported
+`fetch failed` although Settings subsequently showed Connected over Cloudflare. The existing Retry
+action restored the project and its README without restarting or pairing again. Its cause was not
+diagnosed; the picker and draft results above do not establish seamless live reconnect on every reload.
+
+### Unified sidebar follow-up — 2026-09-29
+
+The earlier combined runtime still appended a separate section for each computer, including empty
+remote folders and technical Home/Studio containers. Projects now share one list across computers,
+with environment-qualified manual order and the existing date sorting. Chats, Studio, Pinned, and
+Activity merge their respective remote rows. Empty remote folders stay out unless pinned or active.
+Same IDs, paths, or names on different hosts do not merge ownership. Revealed subagent families stay
+together and respect the existing pinned-parent exception.
+
+The project row content is extracted from the existing local row and reused remotely. Thread rows,
+provider icons, status glyphs, disclosure motion, and paging reuse existing components. Redundant
+server icons, the footer/global host control, and the remote “Local chats” bar are removed. The
+computer name appears on a project or top-level chat and in the active chat header. Embedded panes
+share only the controller's sidebar controls, so the collapse/reopen button is unique and operates
+the real sidebar; execution clients and stores remain isolated.
+
+The reference review used the installed Codex bundle's sidebar/device-picker components and
+the recorded upstream main `d2c9281b81`. Both retain host-qualified identities while allowing a combined
+project/task view. No external source code was copied into Synara. Synara retains its own classic
+and Activity views. Remote mutation menus and cross-host keyboard cycling remain follow-ups; the
+outer remote rows expose navigation and project chat creation, and never invoke local mutations.
+
+During validation, the built browser caught an empty-path branded-ID failure at remote Home; the
+publisher now guards the empty route. The compiler regression caught an incompatible manual memo;
+the paging derivation now allows React Compiler to manage its memoization. Neither issue was left
+as an accepted failure.
+
+Validation for `65021d0`: formatting passes; lint has 0 errors and 790 existing warnings; typecheck
+passes 13/13 tasks; the complete repository suite passes 12/12 tasks with disposable PostgreSQL.
+The sidebar compiler guard and ten Chromium component regressions pass. The final built two-server
+browser flow passes in 24.22 seconds, covering unified rows, Activity routing, same-ID isolation,
+independent drafts, remote files/terminal/attachments, approvals, connector/controller restart,
+refused remote access, local recovery, and sidebar collapse/reopen from the remote pane. These
+provider checks use a deterministic fixture. The disposable database has been stopped.
+
+A small rendering follow-up keeps the new remote row components eligible for React Compiler and
+adds them to the existing compiler regression guard. The sidebar-control bridge publishes after
+layout commit instead of writing its ref during render. Formatting/lint/typecheck and the compiler
+guards pass; the rebuilt two-server workflow passes again in 23.01 seconds. No runtime API or data
+schema changed in this follow-up.
+
+Physical MacBook status: the isolated controller was rebuilt at `eae747b`; its served HTML matches
+the freshly built web/server artifacts and its health/projection checks pass. The existing account
+session had a durable uncertain-refresh marker predating this rebuild, so it correctly reports
+signed out. Credentials and device pairing were not reset or bypassed. The Mini remains signed in.
+The normal sign-in dialog is ready on the MacBook. Mixed-host navigation on this exact live build
+still requires the operator to complete sign-in; the passing two-server fixture is not a substitute
+for that remaining physical-device check. The installed app and primary checkouts were untouched.
+
+### Internal agent MCP routing — 2026-09-29
+
+Implementation `ac27fd7` closes the gap between the combined sidebar and the provider-session
+MCP gateway. `synara_list_connections` discovers the executing server and its paired outgoing
+connections. Existing project/thread tools accept an explicit `environmentId`; local remains
+the default. Results and wait/read continuations retain the owning environment. Remote calls
+reuse paired TLS, caller runtime/worktree limits, and durable creation/recovery; no provider
+bearer is forwarded. External MCP integration grants remain local and unchanged. See the
+[agent-tool boundary](../../remote-connections-v2.md#agent-tools-across-computers) for supported
+operations and cross-computer completion/automation limitations.
+
+Validation: formatting passed; lint 0 errors / 790 existing warnings; workspace typecheck 13/13;
+final full repository tests 12/12 tasks (server 6,778 passed, 26 intentionally skipped). Focused
+provider-policy and delegation regressions passed 337/337, and the JSON contract checks passed
+12/12. The final rebuilt two-server browser flow passed in 26.33 seconds, including actual
+provider-scoped MCP discovery, listing, reading, provider discovery, idempotent creation,
+rename, message dispatch and wait over the paired transport. It keeps a colliding local ID
+untouched and verifies test-turn cleanup. The provider in this fixture is deterministic.
+The disposable PostgreSQL server is stopped.
+
+Both isolated physical-Mac servers were rebuilt/restarted at `ac27fd7` after confirming no active
+chats, preserving their homes, login and approved pairing. The MacBook now reports signed in;
+the earlier sign-in prerequisite above has been satisfied. A read-only `agentGateway.call` from
+the MacBook over the existing Mini bridge listed three threads and read the existing test chat
+successfully. This physical check used the real local caller's metadata and read capability;
+it did not submit a new model prompt, create a task, or alter messages. One bridge negotiation
+returned HTTP 503; a fresh negotiation succeeded without reconnecting or re-pairing the host.
+That transient transport failure remains an observation, not a claim of seamless reconnect.
+The physical RPC check and provider-fixture MCP check establish different parts of the path;
+they do not qualify a signed release or every live provider.
+
+### Automation and remote surface audit — 2026-10-09
+
+Six focused read-only audits reviewed tasks/boards, automation scheduling, projects/Git,
+runtime tools, Hubs/Inbox/reviews and the agent gateway. The implementation reuses the
+existing computer picker and per-owner workspace frames:
+
+- Automation creation selects the execution host; its project, model and persisted scheduler
+  stay on that host. The combined automation panel retains owner-qualified navigation.
+- Tasks, Kanban, Inbox and Code review expose a computer selector. Selection opens that
+  owner's overview, without copying foreign project/thread IDs or filters. List/board
+  navigation preserves ownership; existing tasks are not transferred.
+- Remote MCP creation no longer attempts a host-local principal lookup for the foreign
+  replay identity. The source server still checks coordinator/worker restrictions;
+  destination project, privilege, active-turn and replay checks remain in force.
+- The Codex fixture now reads its thread-scoped MCP credential from the private protocol
+  config, not a removed environment variable. Credentials are not logged or re-exported.
+
+Qualification uses two built servers, disposable PostgreSQL, Chromium and deterministic
+provider/Cloudflare/WorkOS fixtures. All three browser scenarios pass in their final runs:
+remote chats (33.45 s), automations, and Tasks/Kanban surfaces. The last two explicitly
+finish host-owned work after the controller process exits. Project IDs deliberately
+collide across the servers. The surface test fails on the previous build at the missing
+picker, and the real MCP creation test failed before the principal-lookup repair.
+
+The long chat scenario also required updating a stale folder-button accessible name in
+the test; no production UI was changed to make that assertion pass. Direct web/server
+builds, formatting, lint (950 warnings, zero errors) and all 12 typecheck tasks pass.
+The repository-wide test command remains recorded as failed: a desktop driver test hit
+its two-second timeout and interrupted the server package. That exact desktop test
+passes alone (518 ms); the completed web package passed 5,286 tests. The separate full
+server run passes all 8,372 tests (609 files, 27 tests intentionally skipped) in
+480.41 seconds. These follow-up passes do not rewrite the original full-command failure.
+
+No production migration, deployment, signed build or physical-Mac installation is part
+of this audit. The temporary PostgreSQL server is stopped. Remaining feature gaps are
+documented in [Remote surface audit](../../cloudflare-remote.md#remote-surface-audit-2026-10-09):
+remote GitHub provisioning, aggregate Hub status/navigation, tracked dev-server preview,
+native computer/browser/device control, and remote MCP automation/Kanban delegation.
+
+## 2026-10-09 — APNs development implementation and qualification boundary
+
+Scope: ActivityKit updates/end for an already-started iOS activity while the app
+is suspended, including subscribed turns on multiple owned hosts. Not ordinary
+notification delivery or push-to-start. Local implementation is on
+`codex/cloudflare-remote-mvp`; matching clients are in the existing iPhone and iPad
+worktrees. No new UI primitives, model changes, key material in Git, physical
+phone use, or destructive database operations.
+
+MacBook configuration handoff reports all five APNs secrets installed on
+`synara-account-api-trial` in Synara Orgs, with all 16 pre-existing secrets
+preserved. Configuration is Sandbox only. The replacement key remains outside
+Git; the unused exposed key was revoked by that chat with specific user consent.
+This ledger deliberately contains no private key/token values.
+
+Implementation: authenticated ActivityKit registration/rotation, session/device
+and host-generation fences, two additive default-deny RLS tables (migration
+0021), durable coalesced APNs delivery, exact-turn host reporting, HTTP/2 ES256
+sender, Worker-to-container secret forwarding. Background payloads use generic
+titles. iOS transport suspension does not itself mean turn completion. Existing
+account, identity, activity renderer and native lifecycle code are reused.
+
+Checks so far: iPhone and iPad Debug simulator builds passed; four existing iOS
+Display Island lifecycle tests executed and passed. iPhone app launch and Inbox
+rendering verified on the Mini simulator using Device Hub. The unsigned test
+build initially could not read Keychain; rebuilding with ad-hoc simulator signing
+restored the existing account without a new login. The simulator and current
+Mini Dev use different accounts, so their remote access remains isolated. The optional browser
+mirror download failed TLS certificate validation; no verification was disabled.
+
+With explicit operator approval, migration 0021 was applied to the live Synara
+Supabase project on 2026-10-09. Both tables are owned by `synara_account_api`,
+have RLS enabled and deny public client roles; the original Drizzle hash and
+timestamp were verified. Worker/container deployment completed as version
+`a9611fbf-fa9c-4298-b53d-4bcb7459ae69`, image digest
+`sha256:c6287a5f3bbfafbbe448cdc13b59ee09d3563f1b01fbb0c2db029a777f3cbb33`.
+After the asynchronous container rollout, `/health` returns 200; unauthenticated
+`PUT /api/v1/live-activities` and host watch requests return 401, proving that
+the configured routes are live and protected (not the former 404). The deployed
+activity table still has zero registrations: actual Apple delivery, background
+push rendering/end, Production key and TestFlight remain unqualified. Mini
+Wrangler's TLS failure was isolated to local Node 26; Node 24 LTS refreshed the
+existing Keychain-backed OAuth session and deployed without disabling TLS. Local PostgreSQL checks use only the
+throwaway database on port 58439. Secret installation and HTTP health alone must
+not be presented as APNs success. See the operations guide for poll intervals,
+expiry, retry limits and the separate live qualification steps.
+
+Final local evidence for this pass: root `bun run test` passed all 11 packages
+(server 8,375; web 5,286; desktop 1,413; API initially 358). The final API pass
+after widget-state and expiry regressions passed 361 tests against disposable
+PostgreSQL; reporter tests passed 3/3. The widget-state regression failed first
+on lowercase host protocol states, then passed after mapping to the actual Swift
+ContentState values. `fmt:check`, `lint` (zero errors), `typecheck` (12/12), and
+`migrations:check` passed; both mobile diffs pass whitespace checks. Existing
+skips and lint warnings remain. These are local checks, not production/APNs proof.
+
+### 2026-10-10 — Real Sandbox delivery on the Mini simulator
+
+The earlier account/enrollment blocker is resolved. With operator approval, the
+simulator signed in with the Mini's account and paired through the Cloudflare
+tunnel after comparing its pinned root fingerprint. Existing trial accounts were
+preserved using the optional cumulative `REMOTE_TEST_ADDITIONAL_USER_IDS` binding.
+Worker `bee3ac73-c7fa-486f-8355-9278336d158a` and container image
+`sha256:f815437c085f016b0f5bada7f9a597dca7a28a6ac3bf717730530b014d251fce`
+are deployed. A second rolling restart was needed to load the new environment;
+the Mini test instance also restarted after its earlier authorization denial.
+
+Both mobile targets now include their existing APNs entitlements in simulator
+builds as well as device builds. Both Debug builds pass. On iPhone 18 Pro / iOS
+27 Simulator, a real provider turn requested only `sleep 45`; approval was given
+from desktop while iOS stayed in the background. ActivityKit registered a real
+update token, the live outbox recorded accepted APNs updates, and simulator
+`liveactivitiesd` recorded Apple push reception at 00:19:47, 00:19:56, 00:20:34
+and 00:21:22 CEST. At 00:21:22 ActivityKit processed the remote end event and the
+lock screen visibly changed from approval needed to Ready without reopening
+Synara. The activity disappeared automatically after the configured 60-second
+dismissal. No `simctl push`, database state injection, or physical iPhone was used.
+
+This qualifies the single-host Sandbox path, not Production/TestFlight,
+multi-host concurrent activities, revocation during delivery or network-loss
+recovery. Low-priority intermediate pushes may be coalesced by Apple; acceptance
+does not establish instant visible delivery of every intermediate state.
+The final cumulative-enrollment Worker tests pass 12/12; final `fmt:check`,
+`lint` (zero errors) and `typecheck` (12/12 packages) pass.
+
+## 2026-10-15 — Early-access preparation and test audit
+
+Integrated desktop main `566efb1` through merge `e2c1c19`. The account API and
+clients now contain confirmed self-service erasure: an additive private queue
+(`0022_account_deletions.sql`), immediate access/host fencing, retried provider
+and account-scoped cloud cleanup, and preservation of local computer history.
+Desktop confirmation pins both the user and account authority. A regression
+with the same user/email at another authority first reproduced one unwanted
+request, then passed after rejecting the stale confirmation before network I/O.
+All 70 account-session/RPC cases pass. No real account was deleted.
+
+APNs configuration supports `both` alongside the existing single-environment
+modes. Registrations still store exactly Sandbox or Production and delivery
+selects the fixed matching Apple gateway. SQL-backed restart tests and HTTP/2
+boundary tests pass; they are not live Production delivery proof. Deploy the
+compatible API before changing the current Sandbox setting.
+
+The audit retained security, migration and transport recovery contracts. It
+strengthened two weak API tests (same-user cross-organization uniqueness and
+non-enumerable error redaction) and replaced the migration fixture's pooled
+connection with an awaited dedicated connection before dropping its temporary
+database. This fixes a reproduced unhandled teardown error without ignoring it.
+The final root suite passes all 11 packages: 18,396 tests passed, 43 skipped.
+Format, lint (zero errors; 1,009 existing warnings), typecheck (12 packages) and
+released migration lineage checks pass. Tests used disposable local PostgreSQL.
+
+The phone/universal audit removes 640 net production lines, 42 obsolete native
+cases and two nonfunctional performance cases. Unreachable transport helpers,
+synthetic image ingress, retired loading state and an unused mention parser
+are removed. Live reasoning/punctuation regressions are fixed; the shipping
+file-mention tokenizer is unchanged after checking its rendering consumer.
+The Core suite passes 313 cases; final focused native coverage passes 116 cases
+(one fixture skip); current workspace UI flows and iPad docked-sidebar tests
+have separate simulator evidence. All 86 Swift/desktop fixtures match. The broad
+native suite still requires old Git/skill/composer fixtures to move to modern
+owners; it is not represented as fully green. See the mobile handoff.
+
+Publication boundary: these changes are branch code, not a new cloud deployment
+or distributed app. Migration 0022 is not applied live; Production APNs, Apple
+upstream token revocation, and provider-side personal-organization retention
+remain unqualified. App Store Connect now has the Synara mobile app entry, but
+the local Release archive is development-signed and App Store export requires
+ordinary Apple-ID distribution signing. No App Store Connect API key was
+created. No main merge, Beta tag, TestFlight upload or physical-phone update
+was performed in this pass.
+
+## 2026-10-15 evening — Pairing recovery and universal TestFlight 131
+
+An installed Remote `.2` session could show signed out while its persisted
+credential still authenticated successfully. A delayed account-status request
+was rejected when a concurrent refresh rotated the access token. The fix accepts
+the refreshed credential only when the already-known user, organization and
+account authority still match; logout and identity changes remain fenced.
+The regression failed before the fix; 110 focused account/auth/device/pairing
+tests, format, lint (zero errors) and twelve-package typecheck pass.
+
+Remote `1.0.6-remote.3`, source `56c90173152bf15fa22a1282f1166d7f4b65054a`,
+passed [the complete release-candidate workflow](https://github.com/Emanuele-web04/synara/actions/runs/38794054496),
+including signing, notarization and packaged startup. This is a build-only run;
+no public release, tag or update feed was published. Standard public-repository
+runners were used; no billing or spending setting changed.
+
+The iPad branch was merged into the mobile feature branch through mobile PR #2;
+mobile PR #1 remains separate from main. The native authentication consent names
+Synara, and the light icon is rendered from the current vector at the scale of
+the existing dark/custom icons. WorkOS keeps its existing domain and email
+sender; no paid branding service was activated.
+
+A real-account iPhone simulator completed fresh short-code enrollment to both
+Macs after comparing their host identity pins. Both connections coexist: eleven
+projects, 36 visible Mini chats and 24 visible MacBook chats. Existing transcripts
+open from both computers. This also exposed a first-pair completion defect:
+remote trust installation now finishes onboarding and enables foreground
+reconnect, matching the local-pair completion path. Installing simulator build
+131 over the existing app and relaunching preserved the account and both hosts.
+The original phone screenshot failure was not reproduced with fresh invites;
+a camera QR scan and cellular network were not tested.
+
+Universal TestFlight `0.1 (131)` finished processing and is attached to the
+existing internal Synara Early Access group. App and widget retain their bundle
+IDs, include device families 1 and 2, have valid distribution signatures and
+disable debugging; the app carries production APNs entitlement. Eight QR
+classification tests, two iPhone navigation UI cases and one iPad docked-sidebar
+selection/collapse/rotation case pass. The UI cases use fixtures; real remote
+enrollment and transcript reads were checked separately on the simulator.
+External Beta Review and physical TestFlight background push delivery remain
+unverified. No physical iPhone was used in this pass.
+
+Remote `.3` is installed and open on both Macs after local provenance,
+package hash, Developer ID, Gatekeeper and stapled-ticket verification. MacBook:
+102 threads and 1,737 messages have identical full-table fingerprints before and
+after installation. Mini: all 46 thread identities and all 215 complete message
+rows are preserved, with unchanged project/thread/message counts. Account scope,
+environment ID and host/device/TLS identity files are unchanged. Both hosts
+restored their existing account and simulator trust without another login or
+pairing. On the final simulator build, switching between the two computers and
+opening each existing smoke transcript passed. These were reads, not fresh
+provider turns. Remote `.2` and private database backups remain available for
+rollback; Stable/Beta installations and their data homes were not changed.
+
+### Follow-up — Codex runtime warnings and copy controls
+
+The MacBook's new Codex conversation completed its turns but displayed 59
+`process/stderr` events as generic runtime warnings. The actual payloads were
+single-line JSON diagnostics: WARN-level skill/credential/memory/analytics
+notices and ERROR-level OAuth failures for MCP servers from the user's external
+Codex configuration. The existing classifier understood text logs only.
+
+Classification now shares one pure implementation between server ingestion and
+historical web replay, recognizes both text and complete JSON log envelopes
+(including `fields.error` without `fields.message`), and retains unknown errors,
+Synara-owned connector failures and explicit retry feedback. Ignored external
+MCP OAuth failures keep their existing bounded host-log notice. Historical
+records are filtered when rendered, not deleted or rewritten. A remaining real
+runtime notice uses its readable message instead of the generic row title.
+The regressions failed before the repair; final focused server coverage passes
+285 tests with two fixture skips, and the web/clipboard/row/font checks pass
+205 tests. The initial sandbox run could not prove synthetic-process teardown;
+repeating with OS process inspection available passed all three server files.
+
+The requested UI change reuses CopyTextButton: a compact icon copies the exact
+root fingerprint in both comparison dialogs, and Copy code copies the live
+short pairing code. The shared button gains an icon-only variant with the same
+accessible label and copied-state feedback; its existing callers are unchanged.
+The expired code has no copy action. No new package dependency or account/trust
+change is introduced. The twelve existing browser Connections cases also pass.
+Manual copy/paste checks with the actual shared controls preserve both the raw
+64-character fingerprint and the short code exactly, with copied-state feedback.
+The installed Mini app also exposes Copy code and shows Copied code after a
+real click. TestFlight 131 is not replaced by this desktop change.
+
+Remote `1.0.6-remote.4`, source `922f21bdc385b404639b8e0a4e685f5fa9340197`,
+passed [the complete candidate workflow](https://github.com/Emanuele-web04/synara/actions/runs/38800710107)
+and is installed and open on both Macs. This remains a build-only artifact:
+no public tag, release or update-feed publication. Local artifact hashes,
+provenance, Developer ID, Gatekeeper and stapled-ticket checks passed before
+installation. Private database backups and the previous app bundles remain
+available for rollback.
+
+Mini: all 46 chats and 215 complete message rows are preserved. MacBook: all
+103 chats and 1,745 message rows are preserved, with identical messages. Both
+accounts, machine identities and existing pairing approvals are unchanged; the
+simulator reconnected to both computers after restart without another login or
+pairing. Existing smoke messages from both computers load on the simulator. The actual
+MacBook conversation now renders without generic runtime-warning rows while
+retaining its real failed-tool activity. All 101 historical warning records,
+including the 59 investigated events, remain in the database. Replaying those
+59 original payloads through the exact classifier returned 53 ignored diagnostics,
+six external MCP OAuth notices and no conversation notices. The external Stripe
+and Polar credentials themselves were not refreshed or changed.
+
+These checks did not start new provider turns, use the physical iPhone, test
+cellular delivery or qualify TestFlight production background pushes. Stable and
+Beta homes remain untouched. No paid service or billing setting was enabled.
+
+### Follow-up — Recovery ownership after a client disconnects
+
+A post-install read found a separate MacBook thread stuck on Starting Codex:
+the native resume completed, but the runtime's generation differed from the
+coordinator and its ready events were discarded. The existing logs prove that
+mismatch, not the operation that changed the generation. A model-list refresh
+timeout also predates Remote `.4`; it is not attributed to this update.
+
+A focused regression reproduces a concrete ownership gap: cancelling the
+prewarm request during adapter startup used to cancel recovery and abandon
+its generation. Prewarm now runs in the existing provider-service scope;
+clients may stop waiting while recovery finishes binding persistence. Service
+shutdown still owns the job, deduplication and idle cleanup are retained, and
+the stale-event checks are unchanged. No new orchestration abstraction, timeout
+policy or provider choice is introduced. The regression failed before the fix
+and passes afterwards, including acceptance of the recovered runtime's ready
+event. All 397 provider service/coordinator/adapter/ingestion tests pass, as do
+format, lint (zero errors), twelve-package typecheck and Windows runtime guards.
+The recovery change is not in the installed `.4` package yet.
+
+Remote `.5` (source `27bc3d7431b2b56062c678cac22736b0cb0b2a9a`) subsequently
+passed [the complete signed-candidate workflow](https://github.com/Emanuele-web04/synara/actions/runs/38806243530)
+and is installed on both Macs. Mini retains 46 chats and 215 complete messages;
+MacBook retains 103 chats, 1,745 complete messages and 357 turn rows. Account,
+machine identity and device approvals are unchanged. Both simulator connections
+recovered without pairing again. Opening the existing MacBook x-limiter chat
+from the simulator produced starting, ready and session.started at
+21:28:18.253Z–21:28:19.019Z with the runtime's matching generation, and no
+post-restart stale-generation drops or new runtime warnings in the checked
+window. The Mini smoke runtime also reached ready with session.started. These
+were existing-transcript reads, not new turns or a deliberate live cancellation.
+Rollback `.4` remains available. The temporary transfer exposed only the verified
+public ZIP over the existing private mesh; its listener is now confirmed closed.
+
+### Latest main and pairing-dialog update
+
+The user requested another candidate with main through `1c72bae` (history-read
+performance, refetch-storm reduction and client-side RPC queues), plus the
+updated pairing dialog from `892e3c7`. The merge retains controller-frame routing,
+remote server-generation callbacks, product-event handling and settings-change
+filtering; it adopts main's removal of the server-busy popup and expensive
+keep-awake snapshot seed. Both shared subpath exports remain available.
+
+Focused integration checks pass: 970 server tests, 156 web unit tests and 60
+browser cases, format, lint with zero errors, twelve-package typecheck and Windows
+runtime guards. The separate opt-in history benchmark was not run. The new QR
+uses the same pairing-link payload and keeps dark modules on a light tile. Apple
+CoreImage decoded the actual component's screenshots at 196px and 120px module
+area sizes, matching the complete synthetic payload; the tiles included the
+component's normal quiet-zone padding. Browser coverage includes pending
+approvals and renewal/expired/used-code behavior. The synthetic preview used a
+separate home and ports; its file, browser tabs and both listeners were removed
+or closed after verification. This does not claim a physical camera test.
+
+No wire-schema change requires a native mobile rebuild for these updates.
+TestFlight 131 remains the mobile build; the next desktop candidate must still
+pass signed packaging and installation qualification before replacing `.5`.
+
+The subsequent user UI commit `a26c1e8` is also included: capsule/button
+segmented-control variants and plain Add actions in Connections. The pairing
+illustrations now use the existing UI typography tokens so they follow the font
+setting. The final UI pass passed format, lint, twelve-package typecheck, four
+typography/selector guards and 26 browser cases covering Connections, inline
+visual blocks and the preview toolbar. No test threshold was relaxed.
+
+### Synara Remote .6 qualification
+
+Build-only CI [38811340707](https://github.com/Emanuele-web04/synara/actions/runs/38811340707)
+passed all gates for candidate `11094322e38de4dcef5c4f4997506202821b3125`. Remote
+`1.0.6-remote.6` is installed and open on both Macs, with `.5` retained for
+rollback. The Mini verified the full GitHub artifact digest, provenance and
+lockfile; both Macs verified the ZIP hash, Developer ID signature, Gatekeeper and
+notarization. The temporary single-file transfer listener is confirmed closed.
+
+The Mini preserves 46 chats, 215 message rows and 91 turns; the MacBook preserves
+all original 103 chats, 1,745 messages, 357 turns, 16 projects, 57 attachments and
+seven icons. Account, machine identity and approvals remain unchanged. Separate
+user activity added two chats, four messages and two completed turns on the
+MacBook after the initial comparison; no original row was lost. The MacBook
+also logged two model-catalog refresh timeouts on other chats; this qualification
+does not claim those were repaired.
+
+The installed Mini dialog passed Phone/Computer switching and Copy code / Copy
+fingerprint feedback. Connections tab switching was also verified on the
+MacBook; the invite/copy actions were not repeated there. The existing iOS
+simulator build 131 reconnected to both Macs and read their existing transcripts
+without pairing again or sending new turns. MacBook x-limiter reached ready and
+session.started with a consistent runtime generation at 00:02:55 CEST on
+16 October. No physical phone was used. This is desktop candidate qualification,
+not public publication, a physical-camera test or a TestFlight background-push
+test. A subsequent user request to improve mobile first-send titles/provider
+icons is separate native work and is not included in build 131.
+
+### 2026-10-16 — Packaged desktop workspace startup
+
+The `.6` subframe navigation guard admitted only `about:blank` and
+`about:srcdoc`, blocking the application's own workspace document. MacBook →
+Mini pairing completed, but the pane stayed blank and never reported ready.
+The previous qualification covered desktop dialogs and mobile-to-Mac RPC,
+not this packaged desktop workspace startup path.
+
+The guard now permits the main app to initialize a fresh direct child with its
+exact shell document, and that initialized workspace to reload the same document
+for recovery. Inline visuals, foreign initiators, other app identities and URL
+data remain blocked. No pairing, account or transport policy was changed.
+Nineteen guard tests pass, including regressions that fail before the fix.
+A real Electron fixture also confirms initial loading, retry/reload and continued
+containment of an inline visual. Signed installation and MacBook → Mini live
+qualification are the remaining candidate checks.
+
+The `.7` candidate also includes main `d9f1f41`, which makes the installed
+Claude CLI authoritative for effort, adaptive-thinking and fast-mode controls.
+The previous unpublished candidate was cancelled before installation and
+replaced by `6fcae61` (build-only workflow `38824651629`); no public tag or update
+feed was changed. Local checks pass: formatting, lint, typecheck, brand,
+release smoke and Windows runtime boundaries, plus 445 affected adapter,
+composer, shared-model and browser tests.
+
+Native iPhone/iPad branches both include `2e1d75a`: explicit Claude metadata,
+including empty effort lists, overrides fallback controls, and selecting
+Default (CLI) clears the outgoing effort override. Existing stored outbox
+commands are untouched. Both regressions failed before repair; all 314 Core
+tests and 14 model-selection simulator tests pass. Universal build `0.1 (133)`
+passed archive/export and app/widget signing checks with production APNs
+entitlements. Apple processed the upload and the build is available to the
+existing internal Synara Early Access group, with test notes saved. No physical
+phone was used; production push delivery remains unverified on a real device.
+
+Workflow `38824651629` completed successfully on the exact `.7` candidate.
+The downloaded GitHub archive digest, inner artifact hashes, source commit and
+lockfile matched provenance; Developer ID Team `HR24WHR326`, strict signing,
+Gatekeeper notarization and the stapled ticket also passed local verification.
+The Mini was normally quit and updated with `.6` retained for rollback. Its
+existing transcript reopened, and all 47 original threads, 218 messages and 92
+turns were preserved unchanged, together with account and host/device identities.
+
+After the Codex connection was restored, the MacBook independently verified the
+same ZIP, saved a fresh integrity-checked backup (105 chats, 1,753 messages and
+zero active turns), and installed `.7` with `.6` retained for rollback. Its
+account restored without pairing again. The Mini workspace frame now loads,
+the remote projects appear and the client reports Connected; the Mini also
+observed this MacBook reconnect. The temporary single-file transfer endpoint
+was closed and its listener checked.
+
+Reading an actual message inside a remote transcript and recovery after reload
+remain unverified. Window changes interrupted the first UI attempt, and the
+Codex task/control channel subsequently stalled despite the user's confirmation
+to leave the window steady. The completed `after` snapshot command exited
+successfully, but its detailed comparison report has not yet been retrieved.
+No force quit, trust reset or data replacement was used to work around these
+verification blockers.
+
+### 2026-10-16 — Computer identity during reconnect and Remote .8
+
+The mobile computer list previously depended on a machine id learned after a
+successful connection. Local and account routes for the same saved server could
+therefore appear separately during reconnect, and cached snapshot recency could
+prefer an expired pairing. The existing presentation owner now also uses the
+verified server identity already saved with each route and prefers a usable
+connection. Conflicting known physical ids remain distinct, including copied
+server identities. Same-named expired pairings without physical evidence remain
+in Previous connections while a current route connects; this does not establish
+physical identity or transfer trust, cached messages, outbox commands or command
+ownership. No pairing, account API or migration changes are needed on desktop.
+
+Both native branches include `ccd8fed`. The initial duplicate regression failed
+before repair, and an additional unidentified earlier-install case also failed
+before its follow-up. All 314 Core tests and 28 simulator checks pass; one real
+two-desktop integration case remains skipped because its isolated fixtures were
+not running. On the iPhone simulator, Activity lists the Mini and MacBook once
+each, the Mini's existing transcript opens and app restart preserves account and
+connections. The MacBook's public tunnel currently returns HTTP 530 / Cloudflare
+1033, so fresh live reading from that computer remains unverified. No physical
+iPhone was used. Universal build 134 uploaded but remains unassigned; final
+build 135 includes the extra earlier-install repair and has passed archive,
+export, app/widget signing, device-family and production APNs entitlement checks.
+Apple processed build 135; it is available to the existing internal Synara Early
+Access group (one tester), with test notes saved. Physical-device production push
+delivery remains unverified.
+
+Desktop main `f2614e5` is merged as `779dbdf`. Remote candidate `5ec191d`, tag
+`v1.0.6-remote.8`, includes the three new Claude effort-control fixes and curated
+release notes. The native catalog also removes synthetic Default options from
+older cached Claude catalogs; that regression failed before repair. Local Node
+24 checks pass: format, lint, twelve-package typecheck, brand, release smoke and
+413 affected adapter/model/composer/browser tests. Publication workflow
+`38833509163` completed successfully, including all quality/server gates, signed
+macOS ARM64 packaging and packaged startup qualification. The public ZIP, DMG and
+Remote feed matched GitHub asset digests, source provenance and the exact lockfile;
+Developer ID, strict signatures, Gatekeeper and app/DMG stapled tickets passed
+local verification. [Remote .8](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.8)
+is a prerelease with curated notes; GitHub Latest remains Stable `v1.0.5`. The
+installed Macs were not replaced during this publication. Remote retains its
+separate identity/data/feed;
+Stable/Beta download pages do not need a change for this tester-only lane.
+
+### 2026-10-16 — Remote .9 includes the feature-branch updates
+
+The final desktop branch push exposed three pre-existing commits not included
+in the `.8` cut: `6341df0` (compact remote Activity metadata), `e85ab15` (clear
+read chats from Priority), and `c33a532` (created-thread cards for remote chat
+creation). They were merged normally with the latest main and local delivery
+notes as `802b7f1`; no ref or existing public release was overwritten. The `.9`
+candidate `41bd27e` contains all three, main `f2614e5` and the workspace startup
+repair. The remote feature-branch head was checked before tagging.
+
+All 447 affected gateway, work-log, timeline and browser checks pass with Node
+24, along with format, lint, twelve-package typecheck, brand and release smoke.
+All 86 shared Swift fixtures validate against this desktop; there is no new
+WebSocket method/schema or migration. The existing native work-log handles the
+recap summary, and Clear read from Priority already exists in its Activity menu.
+TestFlight 135 remains the current compatible iPhone/iPad build; no additional
+mobile binary is needed for these desktop updates.
+
+Publication workflow `38835973834` completed successfully: all quality and server
+gates, signed/notarized macOS ARM64 packaging and packaged startup qualification.
+The public ZIP, DMG, provenance and Remote feed match GitHub asset digests, source
+`41bd27e` and its exact lockfile. Strict app/DMG signatures, Developer ID,
+Gatekeeper and both stapled tickets passed independent local verification.
+[Remote .9](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.9)
+is public with curated notes and its own updater feed; GitHub Stable Latest stays
+`v1.0.5`. The installed desktop bundles were not replaced. The final MacBook
+tunnel availability probe still failed (HTTP 502, after the earlier Cloudflare
+1033); fresh two-Mac transcript/reload qualification remains open. Native branches
+are aligned with TestFlight 135 and the release handoff. No account, application
+database, pairing trust or physical-phone state was reset.
+
+### 2026-10-16 — Remote .9 installed on both Macs and live-qualified
+
+Both Macs now run the signed/notarized `.9` bundle, with `.7` retained for
+rollback. The Mini was quit normally with zero active turns; its private backup
+passed integrity checks. All 49 original chat ids, 224 message rows, 95 turn rows,
+eight projects and the existing plan remain intact. After the two harmless smoke
+chats it has 51 chats, 228 messages and 97 turns. Original message/turn/project
+rows, host/device identities and pairing trust match the backup; the only change
+to an original chat is `updated_at`. The MacBook's comparison retained all 107
+original chats, 1,761 messages and 362 turns, plus account, identities, attachments
+and authorizations. The later native smoke follow-up adds a new turn to its
+existing test chat, rather than replacing any original history.
+
+The existing MacBook tunnel recovered after the normal app restart; its public
+`/health` returns HTTP 200, independently confirmed from the Mini. No new tunnel
+identity, enrollment, credentials or account login was needed. A Mini local Codex
+turn completed in 4.4 seconds and remained readable after reload. The MacBook
+created a new chat on the Mini, received its real response and reopened it; its
+own existing local transcript also opens. The native build 135 simulator shows
+one Mini and one MacBook, both Connected, reads the newly created Mini response
+and the MacBook history, and successfully sends/receives a harmless MacBook
+follow-up. The temporary simulator mirror was stopped. No physical iPhone or
+production APNs delivery test was performed.
+
+The subsequent user push adds `8db6bbf` (Activity status/hover cards) and `95aa0f5`
+(ASCII pattern beneath the composer) on the feature branch; main is still
+`f2614e5`. The checkout fast-forwards to these commits without altering the public
+`.9` tag or installed apps. All 34 affected browser tests and 47 unit/guard tests,
+lint and twelve-package typecheck pass. These web presentation changes do not
+change native contracts or require another iPhone/iPad build. They require a
+separate desktop package to reach installed apps; `.9` does not contain them.
+
+### 2026-10-16 — Remote .10 published and installed on both Macs
+
+[Remote .10](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.10),
+source `6b47f9a`, includes `8db6bbf` and `95aa0f5`. Exact-source workflow
+`38898538739` passed every quality/server gate, signed/notarized macOS ARM64
+packaging and packaged startup. Independent verification matched all four public
+asset digests, provenance, lockfile, version and Remote feed; strict app/DMG
+signatures, Developer ID, Gatekeeper and stapled tickets passed. Stable Latest
+remains `v1.0.5`; the tester lane has no website download snapshot change.
+
+Both Macs were normally quit and upgraded from `.9`, with fresh private backups
+and their `.9` bundles retained for rollback. Account, host/device identities,
+pairing trust and original chat content remain intact. The Mini retains all 51
+original chats, 228 messages, 97 turns, eight projects, its plan and 14,579
+orchestration events. Two harmless smoke chats bring it to 53 chats, 232 messages
+and 99 turns; only `updated_at` changed on an original chat and connection times
+advanced on existing trust rows. The MacBook retains all 107 chats, 1,763 messages,
+363 turns and attachment bytes. Its internal runtime-event retention removed one
+older diagnostic event; user history and durable activities remain unchanged.
+
+A real local Mini turn returned `SYNARA_REMOTE10_MINI_OK` in 5.2 seconds and
+survived reload and app restart. MacBook → Mini created chat
+`f9361dba-3cd3-4e5b-8357-dfc320b6e14d`, received
+`SYNARA_REMOTE10_MACBOOK_TO_MINI_OK`, and retained it after reopen and reload.
+The existing MacBook tunnel responds HTTP 200. The build 135 simulator shows one
+Mini and one MacBook, both Connected, and reads this fresh remote reply. Both
+desktop apps remain running; temporary simulator preview and its listener are
+closed. No physical phone, new login, re-pairing or production APNs test was used.
+No permanent tunnel root-cause fix is claimed: the earlier interruption correlates
+with sleep/app lifecycle, but retained logs do not establish cloudflared's cause.
+
+TestFlight 135 remains compatible; these web presentation commits require no
+native binary or API change. The later user push `43d11d5` arrived after `.10`
+publication and is synchronized on the feature branch, not in the immutable
+public package. It escapes remote hover-anchor selectors and adds the existing
+hover card to classic remote rows; distributing it requires a subsequent desktop
+release. The `.10` tag and artifacts were not overwritten.
+The post-tag branch passes 115 affected unit/guard tests, 35 browser tests,
+formatting, lint and twelve-package typecheck; this is source verification,
+not qualification or installation of a package containing `43d11d5`.
+
+### 2026-10-16 — Remote .11 published and installed on both Macs
+
+[Remote .11](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.11),
+source `94d1a95`, now includes `43d11d5`. Quoted/bracketed remote chat identifiers
+are escaped before hover-anchor lookup, and classic Projects, Pinned and Chats
+reuse the existing local/Activity preview. The candidate passes 121 unit/guard
+and 35 browser tests plus formatting, lint, twelve-package typecheck, brand and
+release smoke. Workflow `38902469458` passed every quality/server gate,
+signed/notarized macOS ARM64 packaging and packaged startup. All four public
+asset digests, provenance, source and lockfile match; strict app/DMG signatures,
+Developer ID, Gatekeeper and stapled tickets pass independent verification.
+Stable Latest stays `v1.0.5`, and historical `v0.4.2` release metadata is unchanged.
+No Stable/Beta website download snapshot changes are needed for the Remote lane.
+
+The Mini runs `.11` after a normal shutdown and a fresh `.10` backup, with the
+`.10` bundle retained for rollback. All 53 original chats, 232 messages, 99 turns,
+eight projects, its plan and 14,667 orchestration events remain intact. The local
+smoke adds one chat, two messages and one turn; its exact reply
+`SYNARA_REMOTE11_MINI_OK` completes in 4.4 seconds, survives Reload and is persisted
+after normal quit. Identity bytes and trust authorizations are unchanged; only
+an original chat's `updated_at` and a trust connection timestamp advanced.
+
+After the user unlocked the MacBook, its independently verified `.11` package
+was installed after a normal quit, with a new consistent `.10` backup and
+rollback bundle. All 107 chats, 1,763 messages, 363 turns, attachments, account,
+identity bytes and pairing authorizations are retained. Three older events were
+removed by the bounded runtime log and internal checkpoints advanced; these are
+recorded separately from the unchanged user history. Both desktop apps are left
+running.
+
+MacBook reconnects to Mini over Cloudflare and creates chat
+`0bad5420-971e-48af-b44f-88cd416c05ff`. Its exact reply
+`SYNARA_REMOTE11_MACBOOK_TO_MINI_OK` survives reopening and is independently read
+from the Mini. The first MacBook Reload encountered a handshake error and
+recovered with the existing Retry action; the second Reload succeeded without
+intervention. The cause of the first failure is not established, so this is not
+an unconditional reload-reliability claim. MacBook tunnel health is HTTP 200,
+also independently verified from Mini after installation.
+
+The browser hover regression passes, including remote ids containing quotes and
+brackets. Manual hover remains unverified because the available computer-use
+controls expose no hover action; no unsupported input or JavaScript injection
+was used. No force quit, new login, trust reset or physical-phone operation was
+needed. Native contracts and APIs are unchanged, so TestFlight 135 remains
+compatible and no additional iPhone/iPad build was uploaded for this fix.
+
+### Native composer update — build 136 available in TestFlight
+
+The later iOS commits `6823429` and `4909297` add the runtime capsule and
+connector/plugin/file mention discovery. Both native branches now include them
+and the cancellation/reconnect footer repair in `6270958`. Universal version
+`0.1 (136)` passed archive, distribution signing, iPhone/iPad device-family and
+production APNs checks; Xcode uploaded it successfully and Apple's email confirms
+processing completed at 14:57:51 UTC. After the user restored the Apple browser
+login, build 136 was assigned to the existing Synara Early Access internal group
+(one tester), with test notes saved. App Store Connect confirms the assignment:
+install `0.1 (136)` in TestFlight on iPhone or iPad. No new tester, App Store
+Connect API key, paid service or agreement was added. External Beta Review remains
+separate.
+
+Core: 319 tests pass; desktop contracts: 86 fixtures pass. The iPad simulator
+focused pass has 41 passes and one isolated-fixture skip. The extended iPhone
+pass has 62 passes, one skip and five failing legacy connection cases (six
+assertions), recorded explicitly in the native handoff. The two repaired footer
+regressions pass. A real paired iPhone simulator reconnects to both Macs,
+discovers and selects README from the Mini, and receives `SYNARA136_IPHONE_OK`.
+iPad launch/onboarding was checked, but that simulator has no real host paired.
+No physical iPhone or production push-delivery test was performed.
+
+The native connector list needs desktop `d322f6e`, which is newer than installed
+Remote `.11`. Older hosts omit connector suggestions safely. No new desktop
+release was published as part of this native build.
+
+### Remote .12 two-Mac completion and Vercel renewal finding
+
+Remote .12 (`5d0471a`, CI 38922338763) is public, signed/notarized, independently
+verified against public hashes and provenance, and installed on both Macs. Stable
+Latest v1.0.5 and the v0.4.2 compatibility assets are unchanged. The Mini's fresh
+backup retained every original row across the checked history/trust tables, both
+identities and attachments: 55 pre-upgrade chats, 238 messages and 102 turns. The
+MacBook retained 107 chats, 1,763 messages and 363 turns. Backups and .11 rollback
+bundles remain on each machine. MacBook-to-Mini thread
+`dbdedc8a-8f11-43fd-8051-3b46b61d35a0` returned
+`SYNARA_REMOTE12_MACBOOK_TO_MINI_OK`, retained after reopen and Reload without Retry.
+
+Build 136's simulator still omits Vercel because the actual connector is now
+needs-auth on both Macs. The Mini's old grant has only `openid`, no refresh token,
+and expired at 14:30:54 UTC. Public Vercel documentation and its advertised scopes
+confirm that `offline_access` is required for a refresh token. No live token was
+printed or transferred. The pending OAuth attempt timed out without authorization
+and its stale browser tab was closed. Project-scope consent remains with the user.
+
+Source fix `22c3591` requests renewable access only for the official Vercel MCP
+origin and preserves the server-requested scopes. A real MCP OAuth SDK regression
+fails on the old scope and passes after the fix, including persisted reload,
+simulated expiry and refresh. All 108 focused tests pass; the first broader
+sandbox run could not open fixture loopback listeners (EPERM), and the qualified
+rerun passes. Formatting, lint, twelve-package typecheck and brand checks pass.
+
+Remote .13 is prepared with this follow-up fix, curated notes, frozen dependencies,
+release smoke and final local checks passed, but is not published: the user has
+been asked for specific .13 publication/install authorization. Live Vercel renewal,
+@ suggestion and read-only tool use remain unverified pending that delivery and
+project-scope consent. iPhone/iPad TestFlight 0.1 (136) remains compatible and no
+new mobile binary has been built. No paid service, API key or physical iPhone action.
+
+### Remote .13 delivered; live Vercel on iPhone and iPad
+
+The user authorized publication and installation of `.13` on both Macs. Version
+`1.0.6-remote.13`, source `16c6b1c37e4478e75149f5806309816340536bea`, is
+[public](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.13).
+Exact-source release CI 38929539712 passes every required quality, server,
+packaging and packaged-startup gate. Public asset hashes, source/tag/lockfile
+provenance, Remote feed, Developer ID signature, Gatekeeper and app/DMG staples
+were independently verified. Stable Latest remains v1.0.5; historical v0.4.2
+asset identities and recorded hashes are unchanged.
+
+Both Macs run `.13`, with fresh closed-app backups and `.12` rollback bundles.
+The Mini retains every original checked row, both identities and attachments:
+56 original chats, 240 messages and 103 turns; after three smoke conversations,
+59 chats, 248 messages and 106 turns. Integrity is `ok`; only expected thread
+timestamps and trust last-connected timestamps changed. The MacBook retains
+107 chats, 1,763 messages, 363 turns, identities, pairing and attachments. Its
+bounded runtime log rotated three events, recorded separately from retained user
+history. MacBook-to-Mini chat `a758138a-5af4-4591-ad4d-7c4c3e5d614f`
+returns `SYNARA_REMOTE13_MACBOOK_TO_MINI_OK` after reopen and Reload without Retry;
+the Mini independently displays that reply. MacBook tunnel health is HTTP 200.
+
+The user completed the Mini's fresh Vercel consent. The saved grant is connected,
+has scope `openid offline_access` and a refresh token; only these metadata were
+inspected, never token values. Vercel remains connected after a full desktop
+restart. The MacBook's separate Vercel grant was not renewed or copied.
+
+The existing build-136 iPhone simulator reconnects. A newly signed-in iPad
+simulator was explicitly authorized, paired to the Mini and loaded real projects
+and conversations. Both simulators discover and select `@vercel`, insert the
+connector chip, create a new chat and complete real read-only Vercel
+`list_projects` calls. Both report 51 accessible projects. Completed tool
+activities are present in the native UI and host history. The iPad turn settles
+in 16 seconds and the iPhone turn in 19 seconds; these are single smoke timings,
+not a performance benchmark. No deployment, settings mutation or file edit was
+requested. No new native binary, paid service, API key or physical-phone action.
+
+**Tester distribution:** the signed Remote ARM64 DMG can be downloaded now.
+Cloudflare remote enrollment still requires each tester's account in
+`REMOTE_TEST_USER_IDS` (or its additive Worker setting); downloading alone does
+not enroll an arbitrary account. App Store Connect shows universal 0.1 (136) in
+the existing internal group with one tester and external state Ready to Submit.
+There is no verified public TestFlight invite or approved external Beta Review
+for this build. Physical TestFlight APNs delivery, other live connectors and
+actual refresh after vendor-token expiry were not tested in this pass. The
+earlier five failing native legacy connection cases remain recorded separately.

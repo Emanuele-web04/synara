@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: composerDraftAttachments.ts
 // Purpose: Owns composer attachment identity, blob lifetime, persistence verification, and hydration.
 // Exports: Attachment transitions used by persistence and action construction.
@@ -18,7 +19,6 @@ import {
   type ComposerThreadDraftState,
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
-import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { deleteComposerImageBlob } from "./lib/composerImageBlobStore";
 import {
   normalizeComposerImageSource,
@@ -313,7 +313,7 @@ function asUnknownRecord(value: unknown): Record<string, unknown> | null {
 
 function readPersistedComposerDraftsRecord(): Record<string, unknown> | null {
   const persisted = asUnknownRecord(
-    getLocalStorageItem(COMPOSER_DRAFT_STORAGE_KEY, Schema.Unknown),
+    JSON.parse(executionStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY) ?? "null"),
   );
   if (!persisted || persisted.version !== COMPOSER_DRAFT_STORAGE_VERSION) return null;
   const state = asUnknownRecord(persisted.state);

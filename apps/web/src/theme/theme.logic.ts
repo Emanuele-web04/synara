@@ -787,6 +787,14 @@ export function resolveThemePack(state: ThemeState, variant: ThemeVariant): Them
   };
 }
 
+/** Publish the raw chrome accent for both appearances, normalized to six-digit hex. */
+export function resolveProfileThemeAccent(state: ThemeState): { light: string; dark: string } {
+  return {
+    light: resolveThemePack(state, "light").theme.accent,
+    dark: resolveThemePack(state, "dark").theme.accent,
+  };
+}
+
 export function areThemePacksEqual(left: ThemePack, right: ThemePack): boolean {
   return (
     left.codeThemeId === right.codeThemeId &&

@@ -1,0 +1,238 @@
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
+import { runMigrations } from "../db/migrate";
+import { createLiveActivityService } from "./service";
+import type { ActivityDelivery, ApnsResult } from "./apns";
+import type { RegisterLiveActivity } from "@synara/contracts";
+
+const databaseUrl = process.env.TEST_DATABASE_URL;
+describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  beforeAll(async () => {
+    await runMigrations(databaseUrl!);
+  });
+  beforeEach(async () => {
+    await pool.query("DELETE FROM live_activities");
+  });
+  afterAll(async () => {
+    await pool.end();
+  });
+  async function fixture(
+    environment: "sandbox" | "production" = "sandbox",
+    deployment: "sandbox" | "both" = "sandbox",
+  ) {
+    const owner = { userId: randomUUID(), orgId: randomUUID(), sessionId: randomUUID() };
+    const deviceId = randomUUID();
+    const jkt = randomUUID();
+    const hosts = [0, 1].map(() => ({
+      id: randomUUID(),
+      environmentId: randomUUID(),
+      ownerUserId: owner.userId,
+      ownerOrgId: owner.orgId,
+      keyGeneration: 1,
+      publicKeyJwk: null,
+      discoverable: true,
+    }));
+    await pool.query(
+      `INSERT INTO devices(id,user_id,public_key_jwk,jkt,display_name,platform) VALUES($1,$2,'{}',$3,'Test','ios')`,
+      [deviceId, owner.userId, jkt],
+    );
+    await pool.query(
+      "INSERT INTO device_account_sessions(device_id,user_id,session_id) VALUES($1,$2,$3)",
+      [deviceId, owner.userId, owner.sessionId],
+    );
+    for (const host of hosts)
+      await pool.query(
+        `INSERT INTO hosts(id,owner_user_id,owner_org_id,environment_id,name,platform,kind,public_key_jwk,key_generation)
+      VALUES($1,$2,$3,$4,'Test','darwin','local','{}',1)`,
+        [host.id, owner.userId, owner.orgId, host.environmentId],
+      );
+    const request: RegisterLiveActivity = {
+      activityId: randomUUID(),
+      deviceJkt: jkt,
+      revision: 1,
+      token: (environment === "production" ? "c" : "a").repeat(64),
+      environment,
+      sources: hosts.map((host) => ({
+        hostId: host.id,
+        threadId: randomUUID(),
+        turnId: randomUUID(),
+        displayId: randomUUID(),
+      })),
+    };
+    const sent: ActivityDelivery[] = [];
+    let result: ApnsResult = "delivered";
+    let member = true;
+    const service = () =>
+      createLiveActivityService({
+        pool,
+        environment: deployment,
+        isMember: async () => member,
+        send: async (delivery) => {
+          sent.push(delivery);
+          return result;
+        },
+      });
+    const live = service();
+    const publish = async (
+      index: number,
+      sequence: number,
+      state: "running" | "ready" | "failed" | "stopped",
+    ) => {
+      const source = request.sources[index]!;
+      await live.publish(hosts[index]!, {
+        sequence,
+        turns: [{ threadId: source.threadId, turnId: source.turnId, state, startedAt: 1790000000 }],
+      });
+    };
+    const due = () =>
+      pool.query("UPDATE live_activities SET next_attempt_at=now() WHERE id=$1", [
+        request.activityId,
+      ]);
+    return {
+      owner,
+      deviceId,
+      hosts,
+      request,
+      sent,
+      live,
+      service,
+      publish,
+      due,
+      setResult: (value: ApnsResult) => {
+        result = value;
+      },
+      revokeMembership: () => {
+        member = false;
+      },
+    };
+  }
+  it("preserves each APNs environment through durable registration and restart", async () => {
+    for (const environment of ["sandbox", "production"] as const) {
+      const f = await fixture(environment, "both");
+      await f.live.register(f.owner, f.request);
+      await f.publish(0, 1, "running");
+      await f.service().flush();
+      expect(f.sent.at(-1)).toMatchObject({ environment, event: "update" });
+    }
+  });
+  it("aggregates two computers, rejects old snapshots, and ends only after both turns finish across restart", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    await f.publish(0, 10, "ready");
+    await f.publish(1, 10, "running");
+    await f.live.flush();
+    expect(f.sent.at(-1)?.event).toBe("update");
+    expect(f.sent.at(-1)?.contentState).toMatchObject({
+      runningConversations: [
+        { id: f.request.sources[1]!.displayId, state: "Running", runningStartedAt: 811692800 },
+      ],
+      completedConversations: [{ id: f.request.sources[0]!.displayId, state: "Ready" }],
+    });
+    expect(JSON.stringify(f.sent)).not.toContain("threadId");
+    await f.publish(1, 9, "ready");
+    await f.live.flush();
+    expect(f.sent).toHaveLength(1);
+    await f.publish(1, 11, "failed");
+    await f.due();
+    await f.service().flush();
+    expect(f.sent.at(-1)?.event).toBe("end");
+    expect(f.sent.at(-1)?.timestamp).toBeGreaterThan(f.sent[0]!.timestamp);
+    await expect(f.live.register(f.owner, { ...f.request, revision: 2 })).rejects.toThrow("ended");
+  });
+  it("fences token rotation, refuses foreign sessions/hosts, and tombstones removal", async () => {
+    const f = await fixture();
+    await expect(
+      f.live.register({ ...f.owner, sessionId: randomUUID() }, f.request),
+    ).rejects.toThrow();
+    await expect(
+      f.live.register(f.owner, { ...f.request, environment: "production" }),
+    ).rejects.toThrow();
+    const other = await fixture();
+    await expect(
+      f.live.register(f.owner, { ...f.request, sources: other.request.sources }),
+    ).rejects.toThrow();
+    await f.live.register(f.owner, f.request);
+    await f.live.register(f.owner, { ...f.request, revision: 3, token: "b".repeat(64) });
+    await f.live.register(f.owner, { ...f.request, revision: 2 });
+    await f.publish(0, 1, "running");
+    await f.publish(1, 1, "running");
+    await f.live.flush();
+    expect(f.sent.at(-1)?.token).toBe("b".repeat(64));
+    await f.live.remove(f.owner, f.request.activityId);
+    await expect(f.live.register(f.owner, { ...f.request, revision: 4 })).rejects.toThrow();
+  });
+  it.each(["device", "session", "host", "generation", "membership"])(
+    "checks %s revocation before delivery",
+    async (kind) => {
+      const f = await fixture();
+      await f.live.register(f.owner, f.request);
+      if (kind === "device")
+        await pool.query("UPDATE devices SET revoked_at=now() WHERE id=$1", [f.deviceId]);
+      if (kind === "session")
+        await pool.query("UPDATE device_account_sessions SET revoked_at=now() WHERE device_id=$1", [
+          f.deviceId,
+        ]);
+      if (kind === "host")
+        await pool.query("UPDATE hosts SET public_key_jwk=NULL,key_generation=2 WHERE id=$1", [
+          f.hosts[0]!.id,
+        ]);
+      if (kind === "generation")
+        await pool.query("UPDATE hosts SET key_generation=2 WHERE id=$1", [f.hosts[0]!.id]);
+      if (kind === "membership") f.revokeMembership();
+      await f.live.flush();
+      expect(f.sent).toHaveLength(0);
+    },
+  );
+  it.each(["stale-host", "expired"])(
+    "ends %s activities without inventing completion",
+    async (reason) => {
+      const f = await fixture();
+      await f.live.register(f.owner, f.request);
+      await f.publish(0, 1, "running");
+      await f.publish(1, 1, "running");
+      if (reason === "expired") {
+        await pool.query(
+          "UPDATE live_activities SET expires_at=now()-interval '1 second' WHERE id=$1",
+          [f.request.activityId],
+        );
+      } else {
+        await pool.query(
+          "UPDATE live_activities SET created_at=now()-interval '2 minutes' WHERE id=$1",
+          [f.request.activityId],
+        );
+        await pool.query(
+          "UPDATE live_activity_hosts SET updated_at=now()-interval '2 minutes' WHERE host_id=ANY($1::uuid[])",
+          [f.hosts.map((host) => host.id)],
+        );
+      }
+      await f.live.flush();
+      expect(f.sent.at(-1)).toMatchObject({
+        event: "end",
+        contentState: { runningConversations: [], completedConversations: [] },
+      });
+      await expect(f.live.register(f.owner, { ...f.request, revision: 2 })).rejects.toThrow(
+        "ended",
+      );
+    },
+  );
+  it("persists retries without replaying an obsolete update, and retires an invalid token", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    await f.publish(0, 1, "running");
+    await f.publish(1, 1, "running");
+    f.setResult("retry");
+    await f.live.flush();
+    await f.publish(0, 2, "stopped");
+    await f.publish(1, 2, "ready");
+    await f.due();
+    f.setResult("invalid-token");
+    await f.service().flush();
+    expect(f.sent.at(-1)?.event).toBe("end");
+    const count = f.sent.length;
+    await f.due();
+    await f.live.flush();
+    expect(f.sent).toHaveLength(count);
+  });
+});

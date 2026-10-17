@@ -15,7 +15,7 @@ import { pluralize } from "@synara/shared/text";
 
 import type { ProviderUsageProgressTrackProps } from "~/lib/providerUsageDisplay";
 import { formatClockDuration } from "../../session-logic";
-import { formatCompact, formatNumber } from "../profile/profileFormatting";
+import { formatCompact, formatNumber } from "@synara/profile-ui/formatting";
 import {
   compareWithYesterday,
   modelIconProvider,

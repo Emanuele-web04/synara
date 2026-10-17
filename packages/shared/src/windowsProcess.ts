@@ -5,12 +5,12 @@
 
 import * as Path from "node:path";
 
-import { resolveExecutable } from "./executable";
+import { resolveExecutable } from "./executable.ts";
 import {
   resolveWindowsComSpec,
   resolveWindowsSystemRoot,
   resolveWindowsWslExecutable,
-} from "./platformEnvironment";
+} from "./platformEnvironment.ts";
 
 export interface WindowsSafeProcessInput {
   readonly platform?: NodeJS.Platform | undefined;

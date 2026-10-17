@@ -6426,6 +6426,46 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect("keeps the catalog default on native CLI effort ladders", () => {
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => {
+        const query = new FakeClaudeQuery();
+        setSupportedModels(query, [
+          {
+            value: "claude-fable-5-1",
+            displayName: "Claude Fable 5.1",
+            description: "Fixture",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+            supportsAdaptiveThinking: true,
+            supportsFastMode: false,
+          },
+        ]);
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const catalog = yield* adapter.listModels!({ provider: "claudeAgent", cwd: "/tmp/project" });
+      const effort = catalog.models[0]!.optionDescriptors?.find(
+        (descriptor) => descriptor.id === "effort",
+      );
+      assert.equal(effort?.type, "select");
+      if (effort?.type !== "select") return;
+      assert.deepEqual(
+        effort.options.filter((option) => option.isDefault).map((option) => option.id),
+        ["high"],
+      );
+      assert.equal(effort.currentValue, "high");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect(
     "uses native CLI effort metadata for discovery, default spawn and live dispatch",
     () => {

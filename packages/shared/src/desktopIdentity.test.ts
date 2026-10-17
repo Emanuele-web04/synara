@@ -1,3 +1,4 @@
+// Protects packaged app identity, immutable flavor routing and separate storage contracts.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,7 +21,9 @@ import {
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
+  SYNARA_REMOTE_BUNDLE_ID,
   synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
 } from "./desktopIdentity";
 
 describe("desktopIdentity", () => {
@@ -29,6 +32,23 @@ describe("desktopIdentity", () => {
     expect(SYNARA_DEVELOPMENT_BUNDLE_ID).toBe("com.emanueledipietro.synara.dev");
     expect(synaraDesktopIdentity("production").bundleId).toBe(SYNARA_PRODUCTION_BUNDLE_ID);
     expect(synaraDesktopIdentity("development").bundleId).toBe(SYNARA_DEVELOPMENT_BUNDLE_ID);
+  });
+
+  it("keeps source Beta and Remote launches off the installed apps' privacy identity", () => {
+    const remote = synaraSourceDesktopIdentity(synaraDesktopIdentity("remote"));
+    expect(remote).toEqual({
+      ...synaraDesktopIdentity("remote"),
+      displayName: "Synara Remote (Source)",
+      bundleId: `${SYNARA_REMOTE_BUNDLE_ID}.source`,
+    });
+    expect(synaraSourceDesktopIdentity(synaraDesktopIdentity("beta")).bundleId).toBe(
+      `${SYNARA_BETA_BUNDLE_ID}.source`,
+    );
+    for (const flavor of ["development", "canary", "cua"] as const) {
+      expect(synaraSourceDesktopIdentity(synaraDesktopIdentity(flavor))).toEqual(
+        synaraDesktopIdentity(flavor),
+      );
+    }
   });
 
   it("uses the exact packaged renderer origin and entry URL", () => {
@@ -42,6 +62,7 @@ describe("desktopIdentity", () => {
 
   it("matches the beta update channel to prerelease tags and keeps synara otherwise", () => {
     expect(desktopUpdateChannel("beta")).toBe("beta");
+    expect(desktopUpdateChannel("remote")).toBe("remote");
     expect(desktopUpdateChannel("production")).toBe(SYNARA_DESKTOP_UPDATE_CHANNEL);
     expect(desktopUpdateChannel("canary")).toBe(SYNARA_DESKTOP_UPDATE_CHANNEL);
     expect(desktopUpdateChannel("development")).toBe(SYNARA_DESKTOP_UPDATE_CHANNEL);
@@ -98,6 +119,25 @@ describe("desktopIdentity", () => {
     });
   });
 
+  it("gives Remote its own app, account service, protocol, storage and updater identity", () => {
+    expect(synaraDesktopIdentity("remote")).toEqual({
+      flavor: "remote",
+      displayName: "Synara Remote",
+      bundleId: "com.emanueledipietro.synara.remote",
+      scheme: "synara-remote",
+      origin: "synara-remote://app",
+      entryUrl: "synara-remote://app/index.html",
+      userDataDirectoryName: "synara-remote",
+      defaultHomeDirectoryName: ".synara-remote",
+      defaultAccountUrl: "https://synara-account-api-trial.synara-orgs.workers.dev",
+      usesScriptedUpdates: false,
+    });
+    expect(SYNARA_REMOTE_BUNDLE_ID).toBe("com.emanueledipietro.synara.remote");
+    expect(resolveSynaraDesktopFlavor({ isDevelopment: false, requestedFlavor: "remote" })).toBe(
+      "remote",
+    );
+  });
+
   it("selects explicit source flavors without changing packaged Stable", () => {
     expect(resolveSynaraDesktopFlavor({ isDevelopment: false })).toBe("production");
     expect(resolveSynaraDesktopFlavor({ isDevelopment: true })).toBe("development");
@@ -140,7 +180,7 @@ describe("desktopIdentity", () => {
     expect(synaraDesktopIdentity("production").defaultHomeDirectoryName).toBe(".synara");
   });
 
-  it.each(["production", "canary", "cua", "beta"] as const)(
+  it.each(["production", "canary", "cua", "beta", "remote"] as const)(
     "uses the immutable %s package flavor despite inherited source settings",
     (packagedFlavor) => {
       expect(
@@ -199,6 +239,7 @@ describe("desktopIdentity", () => {
   it("isolates smoke profiles only for source launches or isolated packages", () => {
     expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "cua" })).toBe(true);
     expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "beta" })).toBe(true);
+    expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "remote" })).toBe(true);
     expect(
       canOverrideDesktopSmokeUserData({
         sourceBuildMarker: SYNARA_SOURCE_DESKTOP_BUILD_MARKER,

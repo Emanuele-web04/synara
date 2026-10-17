@@ -2189,6 +2189,111 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("prewarms a stopped runtime from its binding and leaves a live one alone", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-prewarm");
+      const prewarm = provider.prewarmSession!;
+
+      assert.strictEqual(yield* prewarm({ threadId }), false);
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const startsAfterLaunch = routing.codex.startSession.mock.calls.length;
+      assert.strictEqual(yield* prewarm({ threadId }), false);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, startsAfterLaunch);
+
+      // An idle stop leaves the binding behind; opening the chat resumes it.
+      yield* routing.codex.stopSession(threadId);
+      assert.strictEqual(yield* prewarm({ threadId }), true);
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, startsAfterLaunch + 1);
+      const prewarmStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(prewarmStart?.threadId, threadId);
+      assert.deepStrictEqual(prewarmStart?.resumeCursor, { opaque: `resume-${threadId}` });
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("finishes prewarm recovery when its requesting client disconnects", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-prewarm-disconnected");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const originalStart = routing.codex.startSession.getMockImplementation();
+      assert.isDefined(originalStart);
+      let recoveryGeneration: string | undefined;
+      routing.codex.startSession.mockImplementationOnce((input) => {
+        recoveryGeneration = input.lifecycleGeneration;
+        return Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(originalStart!(input)),
+        );
+      });
+
+      const request = yield* provider.prewarmSession!({ threadId }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(request);
+      yield* Deferred.succeed(release, undefined);
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                Option.exists((binding) => binding.lifecycleGeneration === recoveryGeneration),
+              ),
+            ),
+        500,
+        20,
+        "prewarm recovery remains owned after request cancellation",
+      );
+
+      // A ready event from the recovered runtime must still reach durable state.
+      const eventId = asEventId("evt-prewarm-after-disconnect");
+      routing.codex.emit({
+        type: "session.state.changed",
+        eventId,
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: recoveryGeneration,
+        createdAt: new Date().toISOString(),
+        payload: { state: "ready" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.map(
+                Option.exists(
+                  (binding) =>
+                    binding.status === "running" &&
+                    asRuntimePayloadRecord(binding.runtimePayload).lastRuntimeEvent ===
+                      "session.state.changed",
+                ),
+              ),
+            ),
+        500,
+        20,
+        "recovered runtime ready event accepted",
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("carries autoApproveSynaraTools through session recovery", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

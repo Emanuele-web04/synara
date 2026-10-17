@@ -33,18 +33,12 @@ export function EnvironmentEditorSection({
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
-  const {
-    options,
-    preferredEditor,
-    primaryOption,
-    openFavoriteShortcutLabel,
-    setDefaultEditor,
-    openInEditor,
-  } = useEditorLaunchers({
-    keybindings,
-    availableEditors,
-    openInTarget,
-  });
+  const { options, preferredEditor, primaryOption, openFavoriteShortcutLabel, openInEditor } =
+    useEditorLaunchers({
+      keybindings,
+      availableEditors,
+      openInTarget,
+    });
 
   // Render the section whenever there is at least one entry to show — the in-app
   // editor view, an external editor, or both.
@@ -81,10 +75,7 @@ export function EnvironmentEditorSection({
             />
           </MenuTrigger>
           <ComposerPickerMenuPopup align="start" side="bottom" className="w-44 min-w-44">
-            <MenuRadioGroup
-              value={preferredEditor ?? ""}
-              onValueChange={(value) => setDefaultEditor(value as EditorId)}
-            >
+            <MenuRadioGroup value={preferredEditor ?? ""}>
               {options.map(({ label, Icon, value }) => (
                 <MenuRadioItem
                   key={value}

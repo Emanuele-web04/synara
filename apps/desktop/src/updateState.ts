@@ -1,3 +1,4 @@
+// Owns updater admission and progress policy; package lanes must never replace one another.
 import type { DesktopUpdateState } from "@synara/contracts";
 import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
@@ -81,7 +82,11 @@ type ParsedUpdateVersion = {
 };
 
 function parseUpdateVersion(version: string): ParsedUpdateVersion | null {
-  const match = version.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/);
+  const match = version
+    .trim()
+    .match(
+      /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    );
   if (!match?.[1] || !match[2] || !match[3]) {
     return null;
   }
@@ -140,7 +145,7 @@ export function isUpdateVersionNewer(currentVersion: string, candidateVersion: s
  * installing it would silently swap the app to a different flavor and home
  * directory. Flavors are install identities, not in-place channels: a beta
  * only updates to `*-beta.*` releases and a production build only takes stable
- * ones; upgrading lanes always happens by installing the other app.
+ * ones; Remote takes only `*-remote.*` releases. Upgrading lanes always happens by installing the other app.
  */
 export function isUpdateVersionAllowedForFlavor(
   candidateVersion: string,
@@ -148,13 +153,15 @@ export function isUpdateVersionAllowedForFlavor(
 ): boolean {
   const candidate = parseUpdateVersion(candidateVersion);
   if (!candidate) {
-    // Beta and production fail closed: an unparseable version can never be
+    // Beta, Remote and production fail closed: an unparseable version can never be
     // proven to be on the right lane, so it is not offered. Canary/cua keep
     // the pre-existing "differs means newer" behavior.
-    return flavor !== "beta" && flavor !== "production";
+    return flavor !== "beta" && flavor !== "remote" && flavor !== "production";
   }
-  if (flavor === "beta") {
-    return candidate.prerelease === "beta" || (candidate.prerelease?.startsWith("beta.") ?? false);
+  if (flavor === "beta" || flavor === "remote") {
+    return (
+      candidate.prerelease === flavor || (candidate.prerelease?.startsWith(`${flavor}.`) ?? false)
+    );
   }
   if (flavor === "production") {
     return candidate.prerelease === null;

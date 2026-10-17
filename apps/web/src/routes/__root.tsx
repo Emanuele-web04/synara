@@ -1,3 +1,6 @@
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { subscribeWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
+import { onControllerStateChange } from "../lib/hosts/connectionClients";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
@@ -47,7 +50,11 @@ import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportA
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
+import { NewThreadDefaultsSyncCoordinator } from "../components/NewThreadDefaultsSyncCoordinator";
+import { settingsChangedBeyondNewThreadDefaults } from "@synara/shared/serverSettings";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
+import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -63,6 +70,7 @@ import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
+import { invalidateAccountStatus } from "../lib/accountReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   invalidateProviderUsageQueries,
@@ -167,6 +175,7 @@ import {
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useComputerEventBridge } from "../hooks/useComputerEventBridge";
 import { useDeviceEventBridge } from "../hooks/useDeviceEventBridge";
+import { useProductAnalyticsAccount } from "../hooks/useProductAnalyticsAccount";
 import {
   PROVIDER_AUTH_REFRESH_MIN_INTERVAL_MS,
   useProviderAuthRefreshOnFocus,
@@ -373,18 +382,27 @@ function RootRouteView() {
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
+          <GlobalAccountDialogs />
+          {/* Mounted globally because the host it asks about registers itself
+              at sign-in, wherever the user happens to be in the app. */}
+          {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
+          {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
-          <BetaWelcomeDialog />
-          <SafariAccessOnboarding startup>
-            <AppSnapWelcomeDialog>
-              <FeatureTourDialog />
-            </AppSnapWelcomeDialog>
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
+          <NewThreadDefaultsSyncCoordinator />
+          {!readWorkspaceFrame() && (
+            <>
+              {/* Beta welcome resolves the first-run gate while Safari is queued. */}
+              <BetaWelcomeDialog />
+              <SafariAccessOnboarding startup>
+                <AppSnapWelcomeDialog>
+                  <FeatureTourDialog />
+                </AppSnapWelcomeDialog>
+              </SafariAccessOnboarding>
+              <GlobalOnboardingDialog />
+              <ProjectImportAnnouncementDialog />
+            </>
+          )}
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
@@ -1242,6 +1260,7 @@ function releaseOrphanedThreadDetail(input: {
 function EventRouter() {
   useDeviceEventBridge();
   useComputerEventBridge();
+  useProductAnalyticsAccount();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
@@ -2682,6 +2701,10 @@ function EventRouter() {
     // onServerConfigUpdated replays the latest cached value synchronously
     // during subscribe. Skip the toast for that replay so effect re-runs
     // don't produce duplicate toasts.
+    const unsubWorkspaceKeybindings = subscribeWorkspaceKeybindings(
+      queryClient,
+      serverQueryKeys.config(),
+    );
     let subscribed = false;
     const unsubServerConfigUpdated = onServerConfigUpdated((payload) => {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
@@ -2752,6 +2775,9 @@ function EventRouter() {
         });
       }
     });
+    const unsubControllerState = onControllerStateChange((state) => {
+      if (state === "open") void invalidateAccountStatus(queryClient).catch(() => undefined);
+    });
     const unsubWsTransportState = addWsTransportStateListener(
       (state) => {
         if (state !== "open") return;
@@ -2773,9 +2799,16 @@ function EventRouter() {
         // Another window toggled it; the local patch path already invalidates its own.
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
-      void queryClient.invalidateQueries({
-        queryKey: serverSettingsQueryOptions().queryKey,
-      });
+      // A composer pick only moves the shared new-chat defaults, which the push
+      // already carries whole; refetching on each one would only add load.
+      if (
+        previousSettings === undefined ||
+        settingsChangedBeyondNewThreadDefaults(previousSettings, payload.settings)
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: serverSettingsQueryOptions().queryKey,
+        });
+      }
     });
     subscribed = true;
     void ensureScopedSubscriptions();
@@ -2916,8 +2949,10 @@ function EventRouter() {
       unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubWorkspaceKeybindings?.();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
+      unsubControllerState();
       unsubTransportOpenCount();
       unsubServerSettingsUpdated();
     };

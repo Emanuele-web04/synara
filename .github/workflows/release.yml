@@ -16,7 +16,7 @@ on:
         default: false
         type: boolean
       platform:
-        description: "Build-only platform scope (publication requires all)"
+        description: "Platform scope (Remote: Mac ARM64; Stable/Beta publication requires all)"
         type: choice
         default: all
         options: [all, mac-arm64, mac-x64, linux-x64, win-x64]
@@ -94,6 +94,12 @@ jobs:
             echo "Build-only validation enabled; no release or package will be published."
           fi
 
+      - id: release_meta
+        name: Resolve release policy
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+        run: node scripts/resolve-release-update-policy.ts "$RELEASE_VERSION"
+
       - id: scope
         name: Validate build scope
         env:
@@ -101,13 +107,8 @@ jobs:
           BUILD_STAGE: ${{ inputs.stage || 'artifact' }}
           PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
           CUA_BENCHMARK_BASELINE: ${{ inputs.cua_benchmark_baseline }}
+          DESKTOP_FLAVOR: ${{ steps.release_meta.outputs.desktop_flavor }}
         run: node scripts/resolve-release-build-scope.ts
-
-      - id: release_meta
-        name: Resolve release policy
-        env:
-          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
-        run: node scripts/resolve-release-update-policy.ts "$RELEASE_VERSION"
 
       - id: source_provenance
         name: Verify exact release source
@@ -492,7 +493,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.build.result == 'success' && (needs.build_server_tarball.result == 'success' || (needs.preflight.outputs.build_server == 'false' && needs.build_server_tarball.result == 'skipped')) }}
     needs: [preflight, quality, server_tests, build, build_server_tarball]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -517,12 +518,14 @@ jobs:
           path: release-assets
 
       - name: Download server tarball
+        if: needs.preflight.outputs.build_server == 'true'
         uses: actions/download-artifact@v8
         with:
           name: server-tarball
           path: release-assets
 
       - name: Merge macOS updater manifests
+        if: needs.preflight.outputs.desktop_flavor != 'remote'
         run: |
           node scripts/merge-mac-update-manifests.ts \
             release-assets/latest-mac.yml \
@@ -611,6 +614,7 @@ jobs:
           fi
 
       - name: Publish release
+        if: needs.preflight.outputs.desktop_flavor != 'remote'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
@@ -628,6 +632,30 @@ jobs:
             release-assets/*.yml
             release-assets/*.provenance.json
             release-assets/*.tar.gz
+          fail_on_unmatched_files: true
+
+      - name: Publish Synara Remote prerelease
+        if: needs.preflight.outputs.desktop_flavor == 'remote'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          name: Synara Remote v${{ needs.preflight.outputs.version }}
+          generate_release_notes: true
+          prerelease: true
+          make_latest: false
+          files: |
+            release-assets/Synara-Remote-*.dmg
+            release-assets/Synara-Remote-*.zip
+            release-assets/Synara-Remote-*.exe
+            release-assets/Synara-Remote-*.exe.blockmap
+            release-assets/Synara-Remote-*.AppImage
+            release-assets/remote-mac.yml
+            release-assets/remote.yml
+            release-assets/remote-linux.yml
+            release-assets/artifact-mac-arm64.provenance.json
+            release-assets/artifact-win-x64.provenance.json
+            release-assets/artifact-linux-x64.provenance.json
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed

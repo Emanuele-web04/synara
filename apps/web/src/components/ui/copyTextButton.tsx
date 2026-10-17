@@ -7,10 +7,12 @@ export function CopyTextButton({
   text,
   label,
   className,
+  iconOnly = false,
 }: {
   text: string;
   label: string;
   className?: string;
+  iconOnly?: boolean;
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const title = isCopied ? `Copied ${label}` : `Copy ${label}`;
@@ -19,12 +21,12 @@ export function CopyTextButton({
       aria-label={title}
       title={title}
       className={className}
-      size="xs"
+      size={iconOnly ? "icon-xs" : "xs"}
       variant="ghost"
       onClick={() => copyToClipboard(text, undefined)}
     >
       {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      <span>{isCopied ? "Copied" : `Copy ${label}`}</span>
+      {iconOnly ? null : <span>{isCopied ? "Copied" : `Copy ${label}`}</span>}
     </Button>
   );
 }

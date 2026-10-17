@@ -14,14 +14,13 @@ import {
   type ProjectColor,
 } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
-import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
+import { resolveExecutionResource } from "~/lib/wsHttpUrl";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 
 const projectFaviconPresence = new Map<string, boolean>();
 
 function resolveProjectFaviconUrl(cwd: string): string {
-  const params = new URLSearchParams({ cwd, fallback: "none" });
-  return resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
+  return resolveExecutionResource({ kind: "project-favicon", cwd });
 }
 
 function colorStyle(color: ProjectColor | null): CSSProperties | undefined {

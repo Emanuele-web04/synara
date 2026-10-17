@@ -1,4 +1,8 @@
 import {
+  classifyCodexStderr,
+  normalizeCodexUserVisibleErrorMessage,
+} from "@synara/shared/codexStderr";
+import {
   type ComputerPermission,
   type ComputerBuildSignature,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
@@ -269,6 +273,9 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+  /** Paired computer that owns the threads; absent when they live on this one. */
+  environmentId?: string;
+  hostName?: string;
 }
 
 export interface WorkLogSynaraWorkerNoticeThread {
@@ -521,6 +528,20 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
+    .filter((activity) => {
+      if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
+      const payload = asRecord(activity.payload);
+      if (
+        payload?.willRetry === true ||
+        asRecord(payload?.data)?.willRetry === true ||
+        payload?.nativeEventType === "monitor_event" ||
+        payload?.nativeEventType === "background_tasks_changed"
+      )
+        return true;
+      const message = asTrimmedString(payload?.message);
+      return !message || classifyCodexStderr(message)?.kind === "notice";
+    })
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
@@ -1347,7 +1368,15 @@ function extractWorkLogSynaraThreadCreation(
     typeof payload.createdCount === "number" && Number.isInteger(payload.createdCount)
       ? payload.createdCount
       : threads.length;
-  return { operationId, requestedCount, createdCount, threads };
+  const environmentId = asTrimmedString(payload.environmentId);
+  const hostName = asTrimmedString(payload.hostName);
+  return {
+    operationId,
+    requestedCount,
+    createdCount,
+    threads,
+    ...(environmentId ? { environmentId, ...(hostName ? { hostName } : {}) } : {}),
+  };
 }
 
 function extractWorkLogSynaraWorkerNotice(
@@ -1797,11 +1826,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activity.kind === "runtime.warning" &&
     typeof payload?.message === "string" &&
     payload.message.trim().length > 0
-      ? stripTerminalControlSequences(payload.message).trim()
+      ? normalizeCodexUserVisibleErrorMessage(payload.message)
       : undefined;
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
+    if (entry.label === "Runtime warning") entry.label = runtimeWarningMessage;
     if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
       entry.label = "Provider retrying";
     }

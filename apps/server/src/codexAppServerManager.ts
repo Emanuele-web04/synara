@@ -104,7 +104,12 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
-import { MCP_CONNECTOR_SERVER_NAME_SUFFIX } from "@synara/shared/mcpConnectors";
+import {
+  classifyCodexStderr,
+  normalizeCodexProcessLine,
+  isIgnorableCodexProcessLine,
+  normalizeCodexUserVisibleErrorMessage,
+} from "@synara/shared/codexStderr";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
   CodexAppServerTransportError,
@@ -421,29 +426,8 @@ const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
  */
 const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
 
-const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
-const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
-const CODEX_STDERR_LOG_REGEX =
-  /^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+\S+:\s+(.*)$/;
-const BENIGN_ERROR_LOG_SNIPPETS = [
-  "state db missing rollout path for thread",
-  "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
-];
-const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
-// Codex's MCP client failing OAuth for a server from the user's own
-// config.toml (e.g. an expired Stripe grant). That is the user's Codex setup,
-// not this chat, so it stays out of the transcript; Synara's own server and
-// connectors never use Codex OAuth.
-const CODEX_MCP_OAUTH_LOG_REGEX = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/;
 const loggedUserMcpOAuthServers = new Set<string>();
 
-function userConfiguredMcpOAuthServer(line: string): string | null {
-  const server = CODEX_MCP_OAUTH_LOG_REGEX.exec(line)?.[1];
-  if (!server) return null;
-  return server === SYNARA_MCP_SERVER_NAME || server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX)
-    ? null
-    : server;
-}
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -483,19 +467,6 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function normalizeCodexProcessLine(rawLine: string): string {
-  return (
-    rawLine.includes(ANSI_ESCAPE_CHAR) ? rawLine.replaceAll(ANSI_ESCAPE_REGEX, "") : rawLine
-  ).trim();
-}
-
-function isIgnorableCodexProcessLine(line: string): boolean {
-  if (!line) {
-    return true;
-  }
-  return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
-}
-
 function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
   if (typeof value.method === "string") {
     return true;
@@ -514,20 +485,6 @@ function logIgnoredCodexStdout(rawLine: string, line: string, reason: string): v
     preview: line.slice(0, 160),
     length: rawLine.length,
   });
-}
-
-function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
-  const message = normalizeCodexProcessLine(rawMessage);
-
-  const duplicateFunctionArgMatch = message.match(
-    /failed to parse function arguments: duplicate field `([^`]+)`/i,
-  );
-  if (duplicateFunctionArgMatch) {
-    const fieldName = duplicateFunctionArgMatch[1];
-    return `Tool call failed because the same argument was sent twice${fieldName ? ` (${fieldName})` : ""}.`;
-  }
-
-  return message;
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -1069,37 +1026,19 @@ export function parseCodexUserInputQuestions(
   return parsedQuestions.length > 0 ? parsedQuestions : undefined;
 }
 
+// The same classifier also filters diagnostics persisted by older hosts in the web transcript.
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const line = normalizeCodexProcessLine(rawLine);
-  if (isIgnorableCodexProcessLine(line)) {
+  const diagnostic = classifyCodexStderr(rawLine);
+  if (diagnostic?.kind === "user-mcp-oauth") {
+    if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
+      loggedUserMcpOAuthServers.add(diagnostic.server);
+      log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
+        server: diagnostic.server,
+      });
+    }
     return null;
   }
-
-  const match = line.match(CODEX_STDERR_LOG_REGEX);
-  if (match) {
-    const level = match[1];
-    if (level && level !== "ERROR") {
-      return null;
-    }
-
-    const isBenignError = BENIGN_ERROR_LOG_SNIPPETS.some((snippet) => line.includes(snippet));
-    if (isBenignError) {
-      return null;
-    }
-
-    const userMcpServer = userConfiguredMcpOAuthServer(line);
-    if (userMcpServer) {
-      if (!loggedUserMcpOAuthServers.has(userMcpServer)) {
-        loggedUserMcpOAuthServers.add(userMcpServer);
-        log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
-          server: userMcpServer,
-        });
-      }
-      return null;
-    }
-  }
-
-  return { message: normalizeCodexUserVisibleErrorMessage(line) };
+  return diagnostic ? { message: diagnostic.message } : null;
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {

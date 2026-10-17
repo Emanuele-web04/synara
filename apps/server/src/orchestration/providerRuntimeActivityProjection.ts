@@ -1357,7 +1357,7 @@ export function projectProviderRuntimeActivities(
           summary,
           payload: toActivityPayload({
             state,
-            ...(event.provider === "claudeAgent" ? { provider: event.provider } : {}),
+            provider: event.provider,
             ...(event.payload.tokenAccountingVersion === 1
               ? {
                   tokenAccountingVersion: 1,

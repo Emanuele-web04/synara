@@ -1,3 +1,5 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { REMOTE_NATIVE_UNAVAILABLE } from "@synara/shared/remoteCapabilities";
 // FILE: ComputerSettingsPanel.tsx
 // Purpose: Own the Computer use settings panel: one surface for the control toggle,
 //          the honest attention-only status line, cursor colors, and the preview.
@@ -162,7 +164,19 @@ function CursorColorField({
   );
 }
 
-export function ComputerSettingsPanel({
+export function ComputerSettingsPanel(props: AppSettingsBinding & { readonly active: boolean }) {
+  return readExecutionContext()?.remote ? (
+    props.active ? (
+      <p className="text-ui text-muted-foreground">
+        {REMOTE_NATIVE_UNAVAILABLE} Return to this computer to manage its permissions.
+      </p>
+    ) : null
+  ) : (
+    <LocalComputerSettingsPanel {...props} />
+  );
+}
+
+function LocalComputerSettingsPanel({
   settings,
   defaults,
   updateSettings,

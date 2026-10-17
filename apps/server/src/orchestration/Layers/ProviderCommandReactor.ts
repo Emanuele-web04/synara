@@ -1740,6 +1740,7 @@ const make = Effect.gen(function* () {
   const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
+    readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     const session = thread?.session;
@@ -1751,6 +1752,7 @@ const make = Effect.gen(function* () {
     }
     yield* setThreadSession({
       threadId: input.threadId,
+      expectedSession: input.expectedSession ?? session,
       session: {
         ...session,
         threadId: input.threadId,
@@ -3302,6 +3304,20 @@ const make = Effect.gen(function* () {
     const registerPriorTranscriptBootstrapOnFreshStart =
       selectedProvider === "opencode" &&
       listPriorTranscriptMessages(thread, transcriptBoundaryMessageId).length > 0;
+    // Clients store composer picks as they happen and the session takes them at
+    // its next turn. A turn that names no selection (a goal continuation, an
+    // older client) still runs the stored pick; a restart-only provider would
+    // otherwise keep the model it was spawned with while the chat shows the new
+    // one. A stored switch to another account stays with the rebind path.
+    const spawnedSelection = threadSessionModelSelections.get(input.threadId);
+    const sessionModelSelection =
+      input.modelSelection ??
+      (spawnedSelection !== undefined &&
+      resolveModelSelectionInstanceId(spawnedSelection) ===
+        resolveModelSelectionInstanceId(thread.modelSelection) &&
+      !isDeepStrictEqual(spawnedSelection, thread.modelSelection)
+        ? thread.modelSelection
+        : undefined);
     const {
       activeSessionBeforeEnsure,
       activeSession,
@@ -3312,7 +3328,7 @@ const make = Effect.gen(function* () {
       forkComputerControl,
     } = yield* awaitClaudeCompactionPreparation(
       ensureSessionForThread(input.threadId, input.createdAt, {
-        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(sessionModelSelection !== undefined ? { modelSelection: sessionModelSelection } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         ...(input.dispatchMode === "steer" ? {} : { enableComputerControl }),
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
@@ -3427,8 +3443,8 @@ const make = Effect.gen(function* () {
         return;
       }
     }
-    if (input.modelSelection !== undefined) {
-      threadSessionModelSelections.set(input.threadId, input.modelSelection);
+    if (sessionModelSelection !== undefined) {
+      threadSessionModelSelections.set(input.threadId, sessionModelSelection);
     }
     if (input.dispatchMode !== "steer" && computerControlRestartDeferred !== true) {
       // A fork provisions the parent-derived flag, not this turn's resolved
@@ -6149,17 +6165,18 @@ const make = Effect.gen(function* () {
       }),
     });
     if (result._tag === "ok") {
-      // ProviderService retires a parent runtime after interrupting it, and a
-      // turn the provider had already ended (its terminal event still queued
-      // behind the stream) has nothing left to interrupt. Once no provider
-      // turn is live, a retired generation's exit is dropped, so waiting for
-      // a terminal event leaves Stop looking dead. Settle now; a terminal
-      // event still in flight applies on top of this state.
-      if (!(yield* hasLiveProviderTurn(input.threadId))) {
-        yield* settleInterruptedProviderTurn({
-          threadId: input.threadId,
-          createdAt: input.createdAt,
-        });
+      // An accepted Stop can retire the runtime before its final event arrives.
+      // Settle only that session, never a replacement started during the interrupt.
+      const current = yield* resolveThread(input.threadId);
+      const currentTurnId = current?.latestTurn?.turnId;
+      if (
+        current?.session &&
+        (currentTurnId === thread.latestTurn?.turnId || currentTurnId === turnId) &&
+        (current.session.activeTurnId !== null ||
+          current.session.updatedAt === thread.session?.updatedAt) &&
+        !(yield* hasLiveProviderTurn(input.threadId))
+      ) {
+        yield* settleInterruptedProviderTurn({ ...input, expectedSession: current.session });
       }
       return;
     }
@@ -7320,11 +7337,10 @@ const make = Effect.gen(function* () {
               createdAt: event.payload.updatedAt,
             });
           }
-          if (event.payload.modelSelection === undefined) {
-            return;
-          }
-
-          if (event.payload.providerHandoff !== undefined) {
+          if (
+            event.payload.modelSelection !== undefined &&
+            event.payload.providerHandoff !== undefined
+          ) {
             yield* applyProviderHandoff({
               handoffKey: event.commandId ?? event.eventId,
               threadId: event.payload.threadId,
@@ -7333,38 +7349,14 @@ const make = Effect.gen(function* () {
               targetModelSelection: event.payload.modelSelection,
               stopBackgroundTasks: event.payload.providerHandoff.stopBackgroundTasks === true,
             });
-            return;
           }
-
-          if (!thread?.session || thread.session.status === "stopped") {
-            // No live session applies the selection now: it stays on the
-            // thread while the session-selection cache keeps the provider the
-            // stopped session was actually spawned with. Overwriting that
-            // record here would make the next turn read the new provider as
-            // already bound — no rebind, no transcript carry.
-            return;
-          }
-
-          if (
-            thread.session.activeTurnId !== null ||
-            Array.from(pendingClaudeCacheResponses.values()).some(
-              (response) => response.threadId === event.payload.threadId,
-            )
-          ) {
-            // The current runtime still owns the previous spawn profile. The
-            // projected thread now carries the desired selection; compare them
-            // when the next turn ensures the session.
-            return;
-          }
-
-          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
-            modelSelection: event.payload.modelSelection,
-            ...(cachedProviderOptions !== undefined
-              ? { providerOptions: cachedProviderOptions }
-              : {}),
-          });
-          threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          // A plain selection change stays on the projected thread and the next
+          // turn that ensures the session applies it, as for an access-mode change.
+          // Clients store composer picks as they happen, so applying one here would
+          // restart an idle session on every pick (publishing `starting` without a
+          // turn, ending its background tasks, applying a pending access mode early).
+          // The session-selection cache keeps what the live session was spawned
+          // with, so that turn sees the difference.
           return;
         }
         case "thread.runtime-mode-set":

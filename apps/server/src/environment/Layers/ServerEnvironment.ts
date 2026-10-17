@@ -1,10 +1,16 @@
+import {
+  accountProfileSyncUnavailableReason,
+  remoteConnectionsUnavailableReason,
+} from "../../remoteFeaturePolicy";
+import { desktopFlavorFromBundleId } from "@synara/shared/betaFeatures";
 import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@synara/contracts";
 import { Effect, FileSystem, Layer, Path, Random } from "effect";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import { ServerConfig } from "../../config";
-import { writeFileStringAtomically } from "../../atomicWrite";
+import { createFileStringExclusively } from "../../atomicWrite";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment";
+import { readMachineId } from "../machineId";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel";
 
 function platformOs(): ExecutionEnvironmentDescriptor["platform"]["os"] {
@@ -48,25 +54,41 @@ export const makeServerEnvironment = Effect.fn(function* () {
     return raw.length > 0 ? raw : null;
   });
 
-  const persistEnvironmentId = (value: string) =>
-    Effect.gen(function* () {
-      yield* writeFileStringAtomically({
-        filePath: serverConfig.environmentIdPath,
-        contents: `${value}\n`,
-      });
-    });
-
   const environmentIdRaw = yield* Effect.gen(function* () {
     const persisted = yield* readPersistedEnvironmentId;
     if (persisted) return persisted;
 
+    // Exclusive create: `synara auth` can race first startup on the same
+    // file, and both minting different UUIDs would leave one process
+    // registered under an id that was never persisted. The loser reads the
+    // winner's id instead.
     const generated = yield* Random.nextUUIDv4;
-    yield* persistEnvironmentId(generated);
-    return generated;
+    const created = yield* createFileStringExclusively({
+      filePath: serverConfig.environmentIdPath,
+      contents: `${generated}\n`,
+    });
+    if (created) return generated;
+
+    const winner = yield* readPersistedEnvironmentId;
+    if (!winner) {
+      return yield* Effect.die(
+        new Error(`environment-id file exists but is empty: ${serverConfig.environmentIdPath}`),
+      );
+    }
+    return winner;
   });
 
   const environmentId = EnvironmentId.makeUnsafe(environmentIdRaw);
+  const machineId = yield* Effect.promise(() => readMachineId());
+  const remoteUnavailableReason = remoteConnectionsUnavailableReason(serverConfig.stateDir);
+  const flavor = desktopFlavorFromBundleId(process.env.SYNARA_DESKTOP_BUNDLE_ID);
   const descriptor: ExecutionEnvironmentDescriptor = {
+    channel:
+      flavor === "production"
+        ? "stable"
+        : flavor === "beta" || flavor === "canary"
+          ? flavor
+          : "dev",
     environmentId,
     label: resolveServerEnvironmentLabel({ cwdBaseName: path.basename(serverConfig.cwd) }),
     platform: {
@@ -76,7 +98,12 @@ export const makeServerEnvironment = Effect.fn(function* () {
     serverVersion: packageJson.version,
     capabilities: {
       repositoryIdentity: true,
+      accountProfileSync: accountProfileSyncUnavailableReason() === undefined,
+      remoteConnections: remoteUnavailableReason === undefined,
+      remoteResources: remoteUnavailableReason === undefined,
+      ...(remoteUnavailableReason ? { remoteUnavailableReason } : {}),
     },
+    ...(machineId ? { machineId } : {}),
   };
 
   return {

@@ -8,6 +8,7 @@ import {
   SYNARA_CUA_BUNDLE_ID,
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
+  SYNARA_REMOTE_BUNDLE_ID,
   type SynaraDesktopFlavor,
 } from "./desktopIdentity";
 
@@ -23,6 +24,13 @@ export const GROUPS_BETA_FEATURE = "groups";
 
 /** Inbox (Stable and Beta): the Inbox page and its `stats.getRecap` RPC. */
 export const INBOX_BETA_FEATURE = "inbox";
+
+/**
+ * Account-saved Inbox history (Beta only): automatic private recap upload to
+ * the account and the saved-recap RPCs. Separate from the local Inbox so its
+ * Stable promotion stays an explicit decision.
+ */
+export const ACCOUNT_INBOX_BETA_FEATURE = "accountInbox";
 
 /**
  * Audio trail (Stable and Beta): the chat message trail moves with the Mac's
@@ -46,11 +54,16 @@ export const INLINE_VISUALS_BETA_FEATURE = "inline-visuals";
  */
 export const MCP_CONNECTORS_BETA_FEATURE = "mcp-connectors";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [MCP_CONNECTORS_BETA_FEATURE];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  "remoteConnections",
+  "accountProfileSync",
+  ACCOUNT_INBOX_BETA_FEATURE,
+  MCP_CONNECTORS_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable
- * (production) desktop build turns them off: Beta, Cua, Canary, development
+ * (production) desktop build turns them off: Beta, Remote, Cua, Canary, development
  * and non-desktop hosts (flavor "unknown") keep them.
  */
 export function isBetaFeatureEnabled(
@@ -73,6 +86,8 @@ export function desktopFlavorFromBundleId(
       return "canary";
     case SYNARA_CUA_BUNDLE_ID:
       return "cua";
+    case SYNARA_REMOTE_BUNDLE_ID:
+      return "remote";
     case SYNARA_BETA_BUNDLE_ID:
       return "beta";
     default:
@@ -91,6 +106,8 @@ export function desktopFlavorFromProtocol(
   isDevBuild: boolean,
 ): SynaraDesktopFlavor | "unknown" {
   switch (protocol) {
+    case "synara-remote:":
+      return "remote";
     case "synara-beta:":
       return "beta";
     case "synara-canary:":
@@ -103,3 +120,6 @@ export function desktopFlavorFromProtocol(
       return "unknown";
   }
 }
+
+/** Deferred features retain their data but have no active consumers. */
+export const HOST_SECRETS_SYNC_ENABLED = false;

@@ -216,6 +216,8 @@ export function createFreshDraftThreadSeed(input: {
   entryPoint: ThreadPrimarySurface;
   options: NewThreadOptions | undefined;
   defaultEnvMode?: DraftThreadEnvMode;
+  // The shared new-chat access mode, when the user has picked one.
+  defaultRuntimeMode?: RuntimeMode;
 }): Omit<DraftThreadState, "projectId" | "interactionMode"> {
   return {
     createdAt: input.createdAt,
@@ -225,7 +227,7 @@ export function createFreshDraftThreadSeed(input: {
     envMode:
       input.options?.envMode ??
       (input.options?.worktreePath ? "worktree" : (input.defaultEnvMode ?? "local")),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
+    runtimeMode: input.defaultRuntimeMode ?? DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
     ...(input.options?.temporary ? { isTemporary: true } : {}),
   };

@@ -1,8 +1,8 @@
 // FILE: ThreadHoverCardContent.tsx
 // Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
 //          the title with a relative time on the header line, then project,
-//          source folder, git branch, worktree identity, pull request, and the chat's current
-//          model rows when available, plus an excerpt of any unsent draft.
+//          source folder, the remote computer, git branch, worktree identity, pull request,
+//          and the chat's current model rows when available, plus an excerpt of any unsent draft.
 // Layer: Sidebar UI component
 // Exports: ThreadHoverCardContent
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
@@ -14,7 +14,7 @@ import type { MouseEvent, ReactNode } from "react";
 
 import { useThreadDraftPreviewText } from "~/composerDraftStore";
 import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
-import { GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
+import { GitBranchIcon, GlobeIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { providerModelsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
@@ -57,10 +57,14 @@ export type ThreadHoverCardContentProps = {
   modelCatalogQueryOptions: ReturnType<typeof providerModelsQueryOptions>;
   /** Current live/actionable state, shown as text so compact row glyphs stay discoverable. */
   status: ThreadStatusPill | null;
+  /** Computer a remote chat runs on: the row's connection globe, repeated on the card. */
+  hostName?: string | null;
 };
 
 const META_ROW_CLASS_NAME = `${SIDEBAR_HOVER_CARD_ROW_CLASS_NAME} text-foreground/80`;
 const META_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground/75";
+// Same sky globe the sidebar rows use to mark a chat on another computer.
+const REMOTE_GLOBE_CLASS_NAME = "size-3.5 shrink-0 text-sky-600 dark:text-sky-400";
 
 function MetaRow({ icon, children }: { icon: ReactNode; children: string }) {
   return (
@@ -132,10 +136,12 @@ export function ThreadHoverCardContent({
   model,
   modelCatalogQueryOptions,
   status,
+  hostName = null,
 }: ThreadHoverCardContentProps) {
   const hasMeta =
     Boolean(projectName) ||
     Boolean(sourceProjectName) ||
+    Boolean(hostName) ||
     Boolean(branch) ||
     Boolean(worktreeName) ||
     Boolean(pullRequest) ||
@@ -149,6 +155,12 @@ export function ThreadHoverCardContent({
       <div className={SIDEBAR_HOVER_CARD_ROW_CLASS_NAME}>
         <span className="min-w-0 flex-1 whitespace-normal font-medium leading-tight text-foreground">
           {title}
+          {hostName ? (
+            <GlobeIcon
+              className={cn(REMOTE_GLOBE_CLASS_NAME, "ml-1.5 inline-block align-[-0.15em]")}
+              aria-hidden
+            />
+          ) : null}
         </span>
         {timeLabel ? (
           <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground/55">
@@ -196,6 +208,13 @@ export function ThreadHoverCardContent({
             <MetaRow icon={<FolderIcon className={META_ICON_CLASS_NAME} aria-hidden />}>
               {sourceProjectName}
             </MetaRow>
+          ) : null}
+          {hostName ? (
+            <span className={META_ROW_CLASS_NAME}>
+              <GlobeIcon className={REMOTE_GLOBE_CLASS_NAME} aria-hidden />
+              <span className="sr-only">Computer:</span>
+              <span className="min-w-0 truncate">{hostName}</span>
+            </span>
           ) : null}
           {branch ? (
             <MetaRow icon={<GitBranchIcon className={META_ICON_CLASS_NAME} aria-hidden />}>

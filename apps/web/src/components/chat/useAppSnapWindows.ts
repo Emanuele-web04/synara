@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 // FILE: useAppSnapWindows.ts
 // Purpose: Subscribes to AppSnap desktop state and lists capturable windows while a picker is open.
 // Layer: Chat composer state
@@ -45,7 +46,7 @@ export function useAppSnapWindows(input: {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const bridge = window.desktopBridge?.appSnap;
+  const bridge = readExecutionContext()?.remote ? undefined : window.desktopBridge?.appSnap;
   const threadId = input.threadId;
   const available = Boolean(threadId && bridge);
 
@@ -125,7 +126,7 @@ export function useAppSnapWindows(input: {
   }, [bridge, input.open]);
 
   const captureWindow = (windowId: number) => {
-    const activeBridge = window.desktopBridge?.appSnap;
+    const activeBridge = readExecutionContext()?.remote ? undefined : window.desktopBridge?.appSnap;
     if (!activeBridge || !threadId || busy) return;
     setBusy(true);
     void activeBridge

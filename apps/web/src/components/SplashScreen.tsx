@@ -2,8 +2,8 @@
 // Purpose: Render the branded startup face while the app is still booting a route or session.
 // Layer: Shared app loading presentation
 
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
-import { SynaraLogo } from "~/components/SynaraLogo";
 
 export function SplashScreen({
   errorMessage,

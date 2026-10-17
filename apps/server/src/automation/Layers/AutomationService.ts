@@ -63,7 +63,10 @@ import {
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  ServerSettingsService,
+  withoutNewThreadDefaultsOnlyChanges,
+} from "../../serverSettings.ts";
 import {
   GROUPS_BETA_ONLY_MESSAGE,
   isServerGroupsEnabled,
@@ -2215,7 +2218,7 @@ export const AutomationServiceLive = Layer.effect(
       ),
     );
 
-    yield* serverSettings.streamChanges.pipe(
+    yield* withoutNewThreadDefaultsOnlyChanges(serverSettings.streamChanges).pipe(
       Stream.runForEach(() =>
         enqueuePendingCompletionEvaluations().pipe(
           Effect.catch((error) =>

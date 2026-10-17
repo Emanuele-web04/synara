@@ -72,6 +72,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   getClaudeContextWindowSuffix,
+  getDefaultEffort,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
@@ -1178,12 +1179,16 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 function claudeModelCapabilities(model: ModelInfo): ModelCapabilities {
   const base = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
   const apiEfforts = model.supportsEffort === false ? [] : model.supportedEffortLevels;
+  // The CLI lists levels without its default. Keep the catalog default, which an unset
+  // effort resolves to, or menus show the first level while the default is dropped.
+  const defaultEffort = getDefaultEffort(base);
   const nativeEfforts: EffortOption[] | undefined = apiEfforts?.map((value) => ({
     value,
     label:
       base.reasoningEffortLevels.find((level) => level.value === value)?.label ??
       (value === "xhigh" ? "Extra High" : value.charAt(0).toUpperCase() + value.slice(1)),
     controlSource: "api-effort",
+    ...(value === defaultEffort ? { isDefault: true as const } : {}),
   }));
   const modes = nativeEfforts?.length
     ? base.reasoningEffortLevels.filter((level) =>
@@ -6097,6 +6102,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   : {}),
               },
             });
+            return;
+          case "commands_changed":
+            // A refreshed slash-command list. supportedCommands() already returns the
+            // latest push, and commands are read on demand, so there is nothing to show.
             return;
           case "background_tasks_changed": {
             // REPLACE semantics: the payload is the full live background set.

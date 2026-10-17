@@ -56,6 +56,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   PubSub,
@@ -5122,6 +5123,45 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    // A client opening a chat starts its stopped runtime through the same
+    // recovery a turn send runs, so the first message after an idle stop finds
+    // the provider and its tools already up. A live runtime only restarts its
+    // idle countdown; either way the idle stop still reaps an unused one.
+    const prewarmsInFlight = new Set<ThreadId>();
+    const prewarmSession: NonNullable<ProviderServiceShape["prewarmSession"]> = (input) =>
+      Effect.suspend(() => {
+        if (prewarmsInFlight.has(input.threadId)) return Effect.succeed(false);
+        prewarmsInFlight.add(input.threadId);
+        return Effect.gen(function* () {
+          const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+          if (
+            !binding ||
+            !hasResumeCursor(binding.resumeCursor) ||
+            runtimeActiveTurnId(binding.runtimePayload) !== undefined
+          ) {
+            return false;
+          }
+          return yield* runIdleSensitiveProviderWork(
+            input.threadId,
+            Effect.gen(function* () {
+              if ((yield* findLiveSession(input.threadId)) !== null) return false;
+              yield* resolveRoutableSession({
+                threadId: input.threadId,
+                operation: "ProviderService.prewarmSession",
+                allowRecovery: true,
+              });
+              return true;
+            }),
+            { scheduleIdleStopOnSuccess: true },
+          );
+        }).pipe(Effect.ensuring(Effect.sync(() => prewarmsInFlight.delete(input.threadId))));
+      }).pipe(
+        // A client can close its view while a native startup Promise continues.
+        // Keep recovery and its generation owned until binding persistence ends.
+        Effect.forkIn(runtimeEventProducerScope),
+        Effect.flatMap(Fiber.join),
+      );
+
     const runStopAll = () =>
       Effect.gen(function* () {
         const stoppedAt = new Date().toISOString();
@@ -5271,6 +5311,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       cancelClaudeCompactionDiscovery,
       rollbackConversation,
       compactThread,
+      prewarmSession,
       closeRuntimeEvents,
       getRuntimeEventPumpHealth: () => Effect.sync(runtimeEventPumpHealth.snapshot),
       // Each access creates a fresh PubSub subscription so that multiple

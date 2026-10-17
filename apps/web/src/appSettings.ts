@@ -1,3 +1,4 @@
+import { claimLegacyExecutionStorage } from "./lib/hosts/executionStorage";
 // FILE: appSettings.ts
 // Purpose: Normalizes persisted UI settings and maps them to server/provider options.
 // Layer: Web settings state
@@ -2756,7 +2757,12 @@ export function useAppSettings() {
   }, [setSettings]);
 
   useEffect(() => {
-    if (!serverSettingsQuery.data || serverSettingsMigrationInFlight) {
+    if (
+      !serverSettingsQuery.data ||
+      serverSettingsMigrationInFlight ||
+      !globalThis.localStorage ||
+      !claimLegacyExecutionStorage(globalThis.localStorage)
+    ) {
       return;
     }
     if (hasCompletedServerSettingsMigration()) {

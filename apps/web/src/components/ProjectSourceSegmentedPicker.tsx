@@ -12,6 +12,7 @@ export function ProjectSourceSegmentedPicker(props: {
   readonly value: ProjectSource;
   readonly disabled: boolean;
   readonly githubAvailable: boolean;
+  readonly githubUnavailableReason?: string;
   readonly onValueChange: (value: ProjectSource) => void;
   readonly className?: string;
 }) {
@@ -35,7 +36,11 @@ export function ProjectSourceSegmentedPicker(props: {
           disabled: !props.githubAvailable,
           ...(props.githubAvailable
             ? {}
-            : { title: "Update the Synara server to add GitHub projects." }),
+            : {
+                title:
+                  props.githubUnavailableReason ??
+                  "Update the Synara server to add GitHub projects.",
+              }),
         },
       ]}
     />
