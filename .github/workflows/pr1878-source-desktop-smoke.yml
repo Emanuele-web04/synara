@@ -1,0 +1,62 @@
+name: PR 1878 source desktop smoke on real macOS and Windows
+on:
+  push:
+    branches: [qa/pr1878-desktop-macos-windows-smoke-20261017]
+permissions:
+  contents: read
+env:
+  QA_SOURCE: e6c8014794d70314eeb460d327f79443d12afb1f
+  NODE_OPTIONS: --max-old-space-size=4096
+jobs:
+  desktop:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 32
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: cmdr-chara/synara
+          ref: ${{ env.QA_SOURCE }}
+          persist-credentials: false
+      - name: Source identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$QA_SOURCE"
+          mkdir -p "$RUNNER_TEMP/pr1878-desktop"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/pr1878-desktop/source.txt"
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+          electron: "true"
+      - name: Build actual application source and native desktop bundle
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run build:desktop 2>&1 | tee "$RUNNER_TEMP/pr1878-desktop/build.log"
+      - name: Run source Electron startup and backend readiness smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test:desktop-smoke 2>&1 | tee "$RUNNER_TEMP/pr1878-desktop/smoke.log"
+      - name: Verify native platform HTTP and clipboard regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run --cwd apps/desktop test src/httpRuntime.test.ts src/clipboardPermissions.test.ts \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/pr1878-desktop/targeted.json" \
+            2>&1 | tee "$RUNNER_TEMP/pr1878-desktop/targeted.log"
+      - name: Confirm source not rewritten
+        shell: bash
+        run: git diff --exit-code
+      - name: Preserve results and source identity
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr1878-desktop-${{ matrix.os }}
+          path: ${{ runner.temp }}/pr1878-desktop/
+          if-no-files-found: warn
+          retention-days: 14
