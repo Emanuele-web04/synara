@@ -33,7 +33,7 @@ const turn = TurnId.makeUnsafe("human-turn");
 const toolText = (result: { readonly content: readonly { readonly type: string }[] }) =>
   result.content
     .filter((entry) => entry.type === "text")
-    .map((entry) => (entry as { readonly text: string }).text)
+    .map((entry) => (entry as unknown as { readonly text: string }).text)
     .join("\n");
 const source = {
   id: MessageId.makeUnsafe("human-message"),
@@ -462,7 +462,8 @@ tests("Hub work gateway integration", (it) => {
     }),
   );
 
-  it.effect("keeps explicit old sources separate from implicit current sources in one batch", () =>    Effect.gen(function* () {
+  it.effect("keeps explicit old sources separate from implicit current sources in one batch", () =>
+    Effect.gen(function* () {
       const h = yield* harness("mixed-context");
       const older = {
         ...source,

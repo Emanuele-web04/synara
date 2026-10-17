@@ -32,6 +32,7 @@ The initial local browser run passed 230 cases and failed three ChatView cases: 
 
 The exact tag workflow's full quality suite, three server shards, four native installers and public-asset verification remain publication gates. Signed/notarized macOS, Windows Defender/startup and updater-feed evidence will be recorded after publication. Manual installed-app upgrades and live-provider sessions are not claimed.
 
+
 ## 1.0.2 — 2026-10-11
 
 **Hubs comes to Stable, with visible subagents, chat-managed Tasks and faster reopening of long conversations.**

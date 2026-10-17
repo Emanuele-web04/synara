@@ -75,7 +75,9 @@ Each message you send ends up in one of three places:
 - **Answered in place**: quick questions, status checks, and short explanations.
 - **Sent to an existing thread**: a follow-up for a thread already working in that area, instead
   of a duplicate.
-- **Started as new threads**: one thread per independent task, started in parallel.
+- **Started as new threads**: one thread per independent task, started in parallel. Each of these
+  gets a short task key, so a retry after a crash or a coordinator wake resumes the same task
+  instead of starting a second one (see [Task identity and retries](#task-identity-and-retries)).
 
 When a request could mean either "do it now" or "just suggest", the coordinator proposes a short
 list of suggested threads (title, repository, one-line brief) and waits for your confirmation.
@@ -142,6 +144,24 @@ workspace. An explicit environment choice still applies. Repeating the same dele
 coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
 a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
 finish, the task retains its reserved slot until startup recovery confirms cleanup.
+
+### Task identity and retries
+
+Every delegated task has a key that identifies it inside its request: the Hub, the original human
+messages the request was decided from, and a short `taskKey` such as `login-fix`. The coordinator
+proposes the key; the Hub normalizes and freezes it with the first decision, and later retries are
+matched against that frozen decision:
+
+- retrying or restarting with the same key reuses the same task card and worker instead of creating
+  a second one, even from a new coordinator wake or after a crash;
+- reusing a key for a different plan is refused, so a regenerated key cannot quietly fork the work;
+- a new key from the same original message adds another task and leaves existing tasks untouched;
+- a task without a key keeps its original position as its identity, which is how earlier Hubs are
+  still replayed correctly.
+
+A per-turn limit applies only to genuinely new tasks, so a replay of work that is already stored
+still returns its cards instead of failing on the limit. Unkeyed requests follow the same rules, but
+a message can only carry the tasks of its original plan until the coordinator gives them keys.
 
 The sidebar's attention indicator includes the Hub's owned workers in linked repositories and
 workers whose recovery needs your help. For a closed Hub, recovery attention refreshes on return
