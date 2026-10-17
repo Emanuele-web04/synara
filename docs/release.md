@@ -38,6 +38,7 @@ version, release notes and lockfile are final.
   `candidate-desktop-PLATFORM-ARCH` for 30 days. A retry of the same run and SHA
   can restore that verified candidate and skip packaging; see
   [release recovery](#resume-a-failed-release) for the limits.
+- Stable macOS DMG names `Synara-${version}-${arch}.dmg` are the proposed Homebrew Cask download contract. Its renderer shares the production macOS artifact identity from `scripts/lib/desktop-artifact-identity.ts`; Beta, Canary and Cua keep their distinct identities and filenames.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
@@ -481,6 +482,22 @@ full subject distinguished name.
 8. Verify public downloads and the authorized website deployment. Report packaged
    startup proof separately from manual installation, installed-app updates and
    live-provider behavior; do not claim checks that were not performed.
+
+9. Refresh the proposed Homebrew Cask source with `bun run homebrew:cask -- --from-github --write`. Review the generated version, both architecture digests and the actual DMGs' minimum macOS requirement before proposing a cask update. The renderer accepts only complete published Stable releases with canonical asset names and download URLs; it rejects drafts, prereleases, missing or duplicate assets, and mixed manual/API inputs before writing.
+
+### Homebrew Cask maintenance
+
+`packaging/homebrew/Casks/synara.rb` is the source for a submission to [homebrew/cask](https://github.com/Homebrew/homebrew-cask). Checking it into this repository does not make `brew install --cask synara` available: upstream acceptance is a separate step. Keep the public download page on the working DMG path until the official cask resolves.
+
+The checked-in v1.0.1 cask requires macOS Ventura (13). The [read-only inspection of both published DMGs](https://github.com/Emanuele-web04/synara/actions/runs/38163962883) found macOS 12.0 for the application and Electron, but their bundled Claude and Cua executables carry a 13.0 Mach-O deployment target. The cask keeps the higher floor for the complete bundle; this metadata inspection does not establish runtime behavior on the oldest supported OS. Recheck the packaged binaries when refreshing the cask, rather than inferring its requirement from the app plist alone.
+
+The renderer prints the cask unless `--write` is supplied. For manually verified release hashes, use:
+
+```bash
+bun run homebrew:cask -- --version X.Y.Z --sha256-arm64 ARM64_SHA256 --sha256-x64 X64_SHA256
+```
+
+After acceptance, Homebrew's `livecheck` detects newer GitHub Latest versions; it does not itself publish this repository's cask changes. Submit or review the corresponding Homebrew cask updates and keep the Stable DMG filename contract unchanged. `auto_updates true` preserves Synara's own updater. The `uninstall quit:` action requests a normal quit, and optional `zap` paths cover only Stable data, including its updater cache.
 
 ### Resume a failed release
 

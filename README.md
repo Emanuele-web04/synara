@@ -119,6 +119,14 @@ Configure the shell to match the way you work with light and dark themes, typogr
 
 Download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or visit [trysynara.com](https://www.trysynara.com/).
 
+On macOS, the [proposed Homebrew Cask](packaging/homebrew/Casks/synara.rb) uses the same signed Stable DMG. The public command becomes available only after Homebrew accepts the cask and `brew info --cask synara` resolves it:
+
+```bash
+brew install --cask synara
+```
+
+Until then, use the `.dmg` from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or the [download page](https://www.trysynara.com/install).
+
 Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
 
 Workspace Git features require [Git 2.29 or newer](https://github.com/git/git/blob/v2.29.0/Documentation/RelNotes/2.29.0.txt). Background refreshes preserve the FETCH_HEAD used by explicit fetch workflows. Ahead/behind counts use local refs and can update on the next status poll, up to 60 seconds after a successful background refresh; status reads do not wait for the remote.
