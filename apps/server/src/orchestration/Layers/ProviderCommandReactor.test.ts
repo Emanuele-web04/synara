@@ -8244,10 +8244,11 @@ describe("ProviderCommandReactor", () => {
         ).toHaveLength(0);
         // The failure activity and session error are separate durable updates.
         // Observing the activity does not imply the session update has committed.
-        await waitFor(async () =>
-          (await readHarnessThread(harness))?.session?.lastError?.includes(
-            PROVIDER_DELIVERY_BLOCK_SUMMARY,
-          ) === true,
+        await waitFor(
+          async () =>
+            (await readHarnessThread(harness))?.session?.lastError?.includes(
+              PROVIDER_DELIVERY_BLOCK_SUMMARY,
+            ) === true,
         );
         expect((await readHarnessThread(harness))?.session?.lastError).toContain(
           PROVIDER_DELIVERY_BLOCK_SUMMARY,
