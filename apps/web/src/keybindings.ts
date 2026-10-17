@@ -358,6 +358,26 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("s"),
     whenAst: whenNotTerminalFocus,
   },
+  // In-app code editor; mirrors the server defaults. F-keys take no `mod`, so they are
+  // the same chord on every platform. Go to symbol and Show problems ship unassigned.
+  ...(
+    [
+      ["editor.commands", "f1", false],
+      ["editor.rename", "f2", false],
+      ["editor.goToDefinition", "f12", false],
+      ["editor.findReferences", "f12", true],
+      ["editor.debug.start", "f5", false],
+      ["editor.debug.stop", "f5", true],
+      ["editor.debug.toggleBreakpoint", "f9", false],
+      ["editor.debug.stepOver", "f10", false],
+      ["editor.debug.stepInto", "f11", false],
+      ["editor.debug.stepOut", "f11", true],
+    ] as const
+  ).map(([command, key, shiftKey]) => ({
+    command,
+    shortcut: commandShortcut(key, { shiftKey, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  })),
 ];
 
 const TERMINAL_WORD_BACKWARD = "\u001bb";
@@ -846,6 +866,41 @@ export function isEditorFileSaveShortcut(
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "editor.file.save", options);
+}
+
+/** The built-in commands the in-app code editor runs from its own keydown handler. */
+export const EDITOR_SHORTCUT_COMMANDS = [
+  "editor.commands",
+  "editor.rename",
+  "editor.goToDefinition",
+  "editor.findReferences",
+  "editor.goToSymbol",
+  "editor.problems",
+  "editor.debug.start",
+  "editor.debug.stop",
+  "editor.debug.toggleBreakpoint",
+  "editor.debug.stepOver",
+  "editor.debug.stepInto",
+  "editor.debug.stepOut",
+] as const satisfies readonly KeybindingCommand[];
+export type EditorShortcutCommand = (typeof EDITOR_SHORTCUT_COMMANDS)[number];
+
+const EDITOR_SHORTCUT_COMMAND_SET: ReadonlySet<string> = new Set(EDITOR_SHORTCUT_COMMANDS);
+
+/**
+ * The code-editor command a key press runs, or null when it runs nothing or a command
+ * outside the editor. Resolves across every binding, so a chord another command holds
+ * stays with that command.
+ */
+export function resolveEditorShortcutCommand(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): EditorShortcutCommand | null {
+  const command = resolveShortcutCommand(event, keybindings, options);
+  return command !== null && EDITOR_SHORTCUT_COMMAND_SET.has(command)
+    ? (command as EditorShortcutCommand)
+    : null;
 }
 
 export function isTerminalClearShortcut(event: ShortcutEventLike): boolean {

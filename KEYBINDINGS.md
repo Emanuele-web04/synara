@@ -153,7 +153,17 @@ Shortcuts follow the character your layout types: on AZERTY, the key labelled A 
   { "key": "meta+ctrl+p", "command": "git.commitAndPush", "when": "!terminalFocus && isMac" },
   { "key": "ctrl+alt+p", "command": "git.commitAndPush", "when": "!terminalFocus && !isMac" },
   { "key": "mod+o", "command": "editor.openFavorite" },
-  { "key": "mod+s", "command": "editor.file.save", "when": "!terminalFocus" }
+  { "key": "mod+s", "command": "editor.file.save", "when": "!terminalFocus" },
+  { "key": "f1", "command": "editor.commands", "when": "!terminalFocus" },
+  { "key": "f2", "command": "editor.rename", "when": "!terminalFocus" },
+  { "key": "f12", "command": "editor.goToDefinition", "when": "!terminalFocus" },
+  { "key": "shift+f12", "command": "editor.findReferences", "when": "!terminalFocus" },
+  { "key": "f5", "command": "editor.debug.start", "when": "!terminalFocus" },
+  { "key": "shift+f5", "command": "editor.debug.stop", "when": "!terminalFocus" },
+  { "key": "f9", "command": "editor.debug.toggleBreakpoint", "when": "!terminalFocus" },
+  { "key": "f10", "command": "editor.debug.stepOver", "when": "!terminalFocus" },
+  { "key": "f11", "command": "editor.debug.stepInto", "when": "!terminalFocus" },
+  { "key": "shift+f11", "command": "editor.debug.stepOut", "when": "!terminalFocus" }
 ]
 ```
 
@@ -234,8 +244,19 @@ The command identifiers are defined by [`STATIC_KEYBINDING_COMMANDS`](packages/c
 | `threadTab.next`, `threadTab.previous`                   | Select the next or previous open thread tab.                                                         |
 | `editor.openFavorite`                                    | Open the current project or worktree in the last-used editor.                                        |
 | `editor.file.save`                                       | Save the focused file editor's unsaved changes.                                                      |
+| `editor.commands`                                        | Open the editor command picker for the focused code editor.                                          |
+| `editor.rename`                                          | Rename the symbol under the cursor across the workspace.                                             |
+| `editor.goToDefinition`, `editor.findReferences`         | Jump to the definition of, or list references to, the symbol under the cursor.                       |
+| `editor.goToSymbol`                                      | Jump to a symbol in the open file; no default binding.                                               |
+| `editor.problems`                                        | List diagnostics for the open file; no default binding.                                              |
+| `editor.debug.start`, `editor.debug.stop`                | Start or continue debugging the open file, or stop the debug session.                                |
+| `editor.debug.toggleBreakpoint`                          | Add or remove a breakpoint on the cursor line.                                                       |
+| `editor.debug.stepOver`                                  | Run the next statement without entering calls.                                                       |
+| `editor.debug.stepInto`, `editor.debug.stepOut`          | Enter the next call, or run until the current call returns.                                          |
 | `git.commitAndPush`                                      | Commit pending changes and push the active thread's repository.                                      |
 | `script.{id}.run`                                        | Run a project script, for example `script.test.run`.                                                 |
+
+The in-app code editor runs `editor.commands` through `editor.debug.stepOut` while it has focus. Their defaults are F-keys, which keep the same chord on every platform; on macOS, F11 is Show Desktop unless you change it in System Settings. `editor.goToSymbol` and `editor.problems` ship unassigned because Mod+Shift+O and Mod+Shift+M already add a project and open the model picker.
 
 The legacy identifiers `terminal.split`, `terminal.splitRight`, `terminal.splitLeft`, `terminal.splitDown`, and `terminal.splitUp` remain accepted by the schema for old files. They have no defaults, are omitted from Settings, and the dispatcher ignores them so they cannot consume terminal input.
 
@@ -267,6 +288,7 @@ Examples:
 - `mod+shift+d`
 - `ctrl+l`
 - `cmd+k`
+- `f5`, `shift+f12` (function keys need no modifier)
 
 ### `when` Conditions
 

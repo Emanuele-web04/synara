@@ -343,6 +343,70 @@ const WORKSPACE_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
 ] as const;
 
+// Run by the in-app code editor while it has focus; listed in their own sheet section.
+const CODE_EDITOR_DEFINITIONS: readonly ShortcutDefinition[] = [
+  {
+    command: "editor.commands",
+    label: "Editor commands",
+    description: "Open the editor command picker for the focused code editor.",
+  },
+  {
+    command: "editor.rename",
+    label: "Rename symbol",
+    description: "Rename the symbol under the cursor across the workspace.",
+  },
+  {
+    command: "editor.goToDefinition",
+    label: "Go to definition",
+    description: "Jump to the definition of the symbol under the cursor.",
+  },
+  {
+    command: "editor.findReferences",
+    label: "Find references",
+    description: "List references to the symbol under the cursor.",
+  },
+  {
+    command: "editor.goToSymbol",
+    label: "Go to symbol in file",
+    description: "Jump to a symbol in the open file.",
+  },
+  {
+    command: "editor.problems",
+    label: "Show problems",
+    description: "List diagnostics for the open file.",
+  },
+  {
+    command: "editor.debug.start",
+    label: "Start or continue debugging",
+    description: "Launch the debugger for the open file, or continue a paused session.",
+  },
+  {
+    command: "editor.debug.stop",
+    label: "Stop debugging",
+    description: "Stop the current debug session.",
+  },
+  {
+    command: "editor.debug.toggleBreakpoint",
+    label: "Toggle breakpoint",
+    description: "Add or remove a breakpoint on the cursor line.",
+  },
+  {
+    command: "editor.debug.stepOver",
+    label: "Step over",
+    description: "Run the next statement without entering calls.",
+  },
+  {
+    command: "editor.debug.stepInto",
+    label: "Step into",
+    description: "Enter the next call.",
+  },
+  {
+    command: "editor.debug.stepOut",
+    label: "Step out",
+    description: "Run until the current call returns.",
+  },
+] as const;
+
 const SIDEBAR_TOGGLE_DEFINITION: ShortcutDefinition = {
   command: "sidebar.toggle",
   label: "Toggle sidebar",
@@ -392,6 +456,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
           !spaceJumpCommands.has(definition.command as KeybindingCommand),
       ),
     ),
+    ...singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS),
     ...singleCommandEditorDefinitions(WORKSPACE_DEFINITIONS),
     {
       id: "thread.jump",
@@ -431,6 +496,7 @@ export function shortcutSheetCommandLabel(command: KeybindingCommand): string | 
   for (const definitions of [
     [SIDEBAR_TOGGLE_DEFINITION],
     AVAILABLE_NOW_DEFINITIONS,
+    CODE_EDITOR_DEFINITIONS,
     WORKSPACE_DEFINITIONS,
     THREAD_JUMP_DEFINITIONS,
   ]) {
@@ -587,6 +653,23 @@ export function buildShortcutSheetSections(
       title: "Project scripts",
       description: "Custom shortcuts defined for the active project's scripts.",
       entries: projectScriptEntries,
+    });
+  }
+
+  // The editor runs these only while it has focus, which the terminal then does not.
+  const codeEditorEntries = definitionsToEntries(
+    CODE_EDITOR_DEFINITIONS,
+    options.keybindings,
+    options.platform,
+    { ...options.context, terminalFocus: false },
+  );
+  if (codeEditorEntries.length > 0) {
+    sections.push({
+      id: "code-editor",
+      title: "Code editor",
+      description: "Available while a code editor has focus.",
+      tone: "muted",
+      entries: codeEditorEntries,
     });
   }
 
