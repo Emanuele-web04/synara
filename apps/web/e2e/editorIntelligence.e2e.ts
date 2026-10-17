@@ -183,7 +183,9 @@ async function position(page: Page, text: string, delta = 0) {
 }
 async function capture(page: Page, info: TestInfo, name: string) {
   const target = info.outputPath(`${name}.png`);
-  await page.screenshot({ path: target, fullPage: true });
+  // The app fills the viewport, and a full-page capture resizes it, which
+  // dismisses the open command picker before the next step clicks into it.
+  await page.screenshot({ path: target });
   await info.attach(name, { path: target, contentType: "image/png" });
 }
 async function command(page: Page, name: string) {
