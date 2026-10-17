@@ -17,6 +17,11 @@ const MAX_TRACKED_REQUESTS = 2_048;
 // dialog events without turning a successful diagnostics read into an invalid
 // response.
 const MAX_LOG_OUTPUT_BYTES = 320 * 1_024;
+// Browser tools have a published 30 second deadline. Once a tab has gone this
+// long without an automation acquisition, stop console/log capture so idle warm
+// tabs no longer stream every console call to the main process. The next
+// acquisition re-enables capture; V8 replays console messages logged meanwhile.
+export const BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS = 60_000;
 
 interface TrackedRequest {
   readonly url: string;
@@ -34,6 +39,11 @@ interface DiagnosticsState {
   initialized: Promise<void>;
   readonly onMessage: (_event: unknown, method: string, params: unknown) => void;
   readonly dispose: () => void;
+  /** Re-enables capture after quiescing; a no-op while capture is active. */
+  readonly activate: (signal?: AbortSignal) => Promise<void>;
+  /** Disables console/log capture until the next activation. Idempotent. */
+  readonly quiesce: () => Promise<void>;
+  readonly armIdleQuiesce: () => void;
 }
 
 const boundedUtf8 = (value: unknown, maximumBytes: number, fallback = ""): string => {
@@ -137,8 +147,9 @@ export class BrowserDiagnosticsStore {
     const existing = this.stateByWebContents.get(runtime.webContents);
     if (existing) {
       if (existing.threadId === runtime.threadId && existing.tabId === runtime.tabId) {
-        await existing.initialized;
+        await existing.activate(signal);
         throwIfAborted(signal);
+        existing.armIdleQuiesce();
         return;
       }
       existing.dispose();
@@ -283,16 +294,114 @@ export class BrowserDiagnosticsStore {
       removeListener?: (event: "destroyed", listener: () => void) => void;
     };
     let disposed = false;
+    let listening = false;
+    let active = true;
+    let quiescing: Promise<void> = Promise.resolve();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearIdleTimer = (): void => {
+      if (idleTimer === null) return;
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    };
+    const listen = (): void => {
+      if (listening) return;
+      debuggerSession.on("message", onMessage);
+      listening = true;
+    };
+    const stopListening = (): void => {
+      if (!listening) return;
+      debuggerSession.removeListener("message", onMessage);
+      listening = false;
+    };
     const dispose = (): void => {
       if (disposed) return;
+      clearIdleTimer();
       if (!runtime.webContents.isDestroyed()) {
-        debuggerSession.removeListener("message", onMessage);
+        stopListening();
         lifecycle.removeListener?.("destroyed", dispose);
       }
       disposed = true;
       this.stateByWebContents.delete(runtime.webContents);
       state.entries.length = 0;
       state.requests.clear();
+    };
+    const enableDomains = async (enableSignal?: AbortSignal): Promise<void> => {
+      await sendCdpCommand(runtime, "Runtime.enable", {}, enableSignal);
+      await sendCdpCommand(runtime, "Log.enable", {}, enableSignal);
+      await sendCdpCommand(
+        runtime,
+        "Network.enable",
+        {
+          maxTotalBufferSize: 1_048_576,
+          maxResourceBufferSize: 262_144,
+          maxPostDataSize: 0,
+        },
+        enableSignal,
+      );
+    };
+    const startEnabling = (enableSignal?: AbortSignal): Promise<void> =>
+      enableDomains(enableSignal).catch((error) => {
+        dispose();
+        throw error;
+      });
+    const disableCapture = async (): Promise<void> => {
+      if (disposed || active || runtime.webContents.isDestroyed()) return;
+      stopListening();
+      state.requests.clear();
+      const send = (method: string): Promise<void> =>
+        runtime.webContents.isDestroyed() || !debuggerSession.isAttached()
+          ? Promise.resolve()
+          : debuggerSession.sendCommand(method, {}).then(
+              () => undefined,
+              () => undefined,
+            );
+      // Captured entries stay readable. Dropping the page-side buffers keeps
+      // the next Runtime.enable/Log.enable from replaying them as duplicates,
+      // while messages logged after this point are replayed on re-enable.
+      // Network stays enabled: the navigation tracker shares this debugger
+      // session and depends on the domain for in-flight request tracking.
+      await send("Runtime.disable");
+      await send("Log.disable");
+      await send("Runtime.discardConsoleEntries");
+      await send("Log.clear");
+    };
+    const quiesce = (): Promise<void> => {
+      clearIdleTimer();
+      if (disposed || !active) return quiescing;
+      active = false;
+      // Let an in-flight enable settle so a late Runtime.enable cannot land
+      // after the disable commands.
+      quiescing = state.initialized.catch(() => undefined).then(disableCapture);
+      return quiescing;
+    };
+    const activate = async (activateSignal?: AbortSignal): Promise<void> => {
+      if (!active) {
+        clearIdleTimer();
+        active = true;
+        const pendingQuiesce = quiescing;
+        state.initialized = (async () => {
+          await pendingQuiesce;
+          throwIfAborted(activateSignal);
+          if (disposed) throw new Error("Browser diagnostics are unavailable.");
+          listen();
+          await enableDomains(activateSignal);
+        })().catch((error: unknown) => {
+          // Keep the captured history; the next acquisition retries enabling.
+          active = false;
+          quiescing = disableCapture();
+          throw error;
+        });
+      }
+      await state.initialized;
+    };
+    const armIdleQuiesce = (): void => {
+      if (disposed || !active) return;
+      clearIdleTimer();
+      idleTimer = setTimeout(() => {
+        idleTimer = null;
+        void quiesce();
+      }, BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS);
+      idleTimer.unref?.();
     };
     state = {
       threadId: runtime.threadId,
@@ -303,30 +412,26 @@ export class BrowserDiagnosticsStore {
       droppedCount: 0,
       onMessage,
       dispose,
+      activate,
+      quiesce,
+      armIdleQuiesce,
       initialized: Promise.resolve(),
     };
     this.stateByWebContents.set(runtime.webContents, state);
-    debuggerSession.on("message", onMessage);
+    listen();
     lifecycle.once?.("destroyed", dispose);
-    state.initialized = (async () => {
-      await sendCdpCommand(runtime, "Runtime.enable", {}, signal);
-      await sendCdpCommand(runtime, "Log.enable", {}, signal);
-      await sendCdpCommand(
-        runtime,
-        "Network.enable",
-        {
-          maxTotalBufferSize: 1_048_576,
-          maxResourceBufferSize: 262_144,
-          maxPostDataSize: 0,
-        },
-        signal,
-      );
-    })().catch((error) => {
-      dispose();
-      throw error;
-    });
+    state.initialized = startEnabling(signal);
     await state.initialized;
     throwIfAborted(signal);
+    armIdleQuiesce();
+  }
+
+  /**
+   * Stops console/log capture for a tab no longer driven by automation. Already
+   * captured entries remain readable; the next `observe` re-enables capture.
+   */
+  quiesce(runtime: BrowserAutomationVisibleRuntime): Promise<void> {
+    return this.stateByWebContents.get(runtime.webContents)?.quiesce() ?? Promise.resolve();
   }
 
   async read(

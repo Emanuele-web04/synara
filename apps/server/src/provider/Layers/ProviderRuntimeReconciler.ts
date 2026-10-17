@@ -13,7 +13,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Schedule, Semaphore } from "effect";
+import { Cause, Duration, Effect, Layer, Option, Schedule, Semaphore } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
@@ -257,7 +257,12 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       if (candidateThreadIds.length === 0) return;
       const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
         [
-          directory.listBindings(),
+          // The planner reads bindings only for candidate threads. Point reads
+          // keep a tick bounded by the candidate page instead of decoding every
+          // binding row ever written (stopped rows are never deleted).
+          Effect.forEach(candidateThreadIds, (threadId) => directory.getBinding(threadId), {
+            concurrency: 1,
+          }).pipe(Effect.map((found) => found.flatMap(Option.toArray))),
           providerService.listSessions(),
           providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
           runtimeEvents.hasPendingEventsForThreads({

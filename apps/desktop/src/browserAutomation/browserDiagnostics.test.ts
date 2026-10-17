@@ -5,7 +5,7 @@ import type { WebContents } from "electron";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
-import { BrowserDiagnosticsStore } from "./browserDiagnostics";
+import { BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS, BrowserDiagnosticsStore } from "./browserDiagnostics";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-diagnostics");
 const TAB_ID = "025aa711-edf6-4c63-b957-d7c96a3fdabb";
@@ -14,11 +14,12 @@ const OTHER_TAB_ID = "ff0ba38f-6df8-48bf-b419-a0f8185e6e3b";
 const createRuntime = () => {
   const events = new EventEmitter();
   const sendCommand = vi.fn(async (_method: string, _params: unknown) => ({}));
+  let attached = true;
   const webContents = {
     isDestroyed: () => false,
     once: vi.fn(),
     debugger: {
-      isAttached: () => true,
+      isAttached: () => attached,
       attach: vi.fn(),
       sendCommand,
       on: events.on.bind(events),
@@ -33,8 +34,15 @@ const createRuntime = () => {
     } satisfies BrowserAutomationVisibleRuntime,
     emit: (method: string, params: unknown) => events.emit("message", {}, method, params),
     sendCommand,
+    listenerCount: () => events.listenerCount("message"),
+    setAttached: (value: boolean) => {
+      attached = value;
+    },
   };
 };
+
+const sentMethods = (sendCommand: ReturnType<typeof createRuntime>["sendCommand"]): string[] =>
+  sendCommand.mock.calls.map(([method]) => method);
 
 const createDestroyableRuntime = (options?: { readonly removeListenerError?: Error }) => {
   const lifecycleEvents = new EventEmitter();
@@ -78,6 +86,97 @@ const createDestroyableRuntime = (options?: { readonly removeListenerError?: Err
 };
 
 describe("browser diagnostics store", () => {
+  it("quiesces capture on release, keeps history, and re-enables on the next acquisition", async () => {
+    const { runtime, emit, sendCommand, listenerCount } = createRuntime();
+    const diagnostics = new BrowserDiagnosticsStore();
+    await diagnostics.observe(runtime);
+    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "before-release" }] });
+
+    await diagnostics.quiesce(runtime);
+    await diagnostics.quiesce(runtime);
+
+    expect(sentMethods(sendCommand)).toEqual([
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "Runtime.disable",
+      "Log.disable",
+      "Runtime.discardConsoleEntries",
+      "Log.clear",
+    ]);
+    expect(listenerCount()).toBe(0);
+    // Nothing reaches the store while quiesced.
+    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "while-idle" }] });
+
+    sendCommand.mockClear();
+    const output = await diagnostics.read(runtime, {
+      includeConsole: true,
+      includeNetwork: true,
+      limit: 100,
+    });
+    expect(sentMethods(sendCommand)).toEqual(["Runtime.enable", "Log.enable", "Network.enable"]);
+    expect(listenerCount()).toBe(1);
+    expect(output.entries.map((entry) => entry.kind === "console" && entry.text)).toEqual([
+      "before-release",
+    ]);
+
+    emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "after-reacquire" }] });
+    const next = await diagnostics.read(runtime, {
+      includeConsole: true,
+      includeNetwork: false,
+      limit: 100,
+    });
+    expect(next.entries.map((entry) => entry.kind === "console" && entry.text)).toEqual([
+      "before-release",
+      "after-reacquire",
+    ]);
+    diagnostics.dispose(runtime);
+  });
+
+  it("quiesces after the idle window following the last acquisition", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runtime, sendCommand } = createRuntime();
+      const diagnostics = new BrowserDiagnosticsStore();
+      await diagnostics.observe(runtime);
+      await vi.advanceTimersByTimeAsync(BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS - 1_000);
+      // A new acquisition restarts the idle window.
+      await diagnostics.observe(runtime);
+      await vi.advanceTimersByTimeAsync(BROWSER_DIAGNOSTICS_IDLE_QUIESCE_MS - 1_000);
+      expect(sentMethods(sendCommand)).not.toContain("Runtime.disable");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sentMethods(sendCommand)).toContain("Runtime.disable");
+      expect(sentMethods(sendCommand)).toContain("Runtime.discardConsoleEntries");
+      diagnostics.dispose(runtime);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips disable commands when the debugger already detached", async () => {
+    const { runtime, sendCommand, listenerCount, setAttached } = createRuntime();
+    const diagnostics = new BrowserDiagnosticsStore();
+    await diagnostics.observe(runtime);
+    sendCommand.mockClear();
+    setAttached(false);
+
+    await diagnostics.quiesce(runtime);
+
+    expect(sendCommand).not.toHaveBeenCalled();
+    expect(listenerCount()).toBe(0);
+    diagnostics.dispose(runtime);
+  });
+
+  it("does not touch the debugger when quiescing after WebContents is destroyed", async () => {
+    const { runtime, destroy } = createDestroyableRuntime();
+    const diagnostics = new BrowserDiagnosticsStore();
+    await diagnostics.observe(runtime);
+    destroy();
+
+    await expect(diagnostics.quiesce(runtime)).resolves.toBeUndefined();
+  });
+
   it("does not access the debugger after WebContents is destroyed", async () => {
     const { runtime, destroy, debuggerListenerCount, lifecycleListenerCount } =
       createDestroyableRuntime();

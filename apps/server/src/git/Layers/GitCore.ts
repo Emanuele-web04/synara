@@ -141,6 +141,13 @@ const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const BLAME_LINE_TIMEOUT_MS = 10_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+// Git's `buffer_is_binary` sniffs this many leading bytes for a NUL.
+const GIT_BINARY_SNIFF_BYTES = 8000;
+// Default `core.bigFileThreshold`: Git diffs larger blobs as binary.
+const GIT_BIG_FILE_THRESHOLD_BYTES = 512 * 1024 * 1024;
+const UNTRACKED_NUMSTAT_READ_CHUNK_BYTES = 64 * 1024;
+// Budget for paths passed on one `check-attr` command line (Windows caps at 32K chars).
+const CHECK_ATTR_ARGUMENT_BUDGET_BYTES = 16 * 1024;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
@@ -204,6 +211,74 @@ function hasNodeErrorCode(cause: unknown, code: string): boolean {
     "code" in cause &&
     (cause as { code?: unknown }).code === code
   );
+}
+
+const isVanishedPathError = (cause: unknown) =>
+  hasNodeErrorCode(cause, "ENOENT") || hasNodeErrorCode(cause, "ENOTDIR");
+
+/**
+ * Line count Git's `diff --no-index --numstat /dev/null <path>` reports for an
+ * untracked path, read in fixed-size chunks so a large file is never held whole.
+ * Returns "binary" where Git prints `-\t-` and null when the path vanished.
+ * A symbolic link counts its target string, as Git diffs links without following them.
+ */
+async function readUntrackedNumstatLines(absolutePath: string): Promise<number | "binary" | null> {
+  const stat = await nodeFs.lstat(absolutePath).catch((cause: unknown) => {
+    if (isVanishedPathError(cause)) return null;
+    throw cause;
+  });
+  if (stat === null) return null;
+  if (stat.isSymbolicLink()) {
+    const target = await nodeFs
+      .readlink(absolutePath, { encoding: "buffer" })
+      .catch((cause: unknown) => {
+        if (isVanishedPathError(cause)) return null;
+        throw cause;
+      });
+    return target === null ? null : countTextFileLines(new Uint8Array(target));
+  }
+  if (!stat.isFile()) {
+    // Git cannot diff a directory (e.g. an untracked nested repository) against /dev/null.
+    throw new Error(`Could not access '${absolutePath}': not a regular file`);
+  }
+  if (stat.size > GIT_BIG_FILE_THRESHOLD_BYTES) return "binary";
+  const handle = await nodeFs.open(absolutePath, "r").catch((cause: unknown) => {
+    if (isVanishedPathError(cause)) return null;
+    throw cause;
+  });
+  if (handle === null) return null;
+  try {
+    const buffer = Buffer.allocUnsafe(UNTRACKED_NUMSTAT_READ_CHUNK_BYTES);
+    let offset = 0;
+    let lineFeeds = 0;
+    let lastByte = -1;
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      if (
+        offset < GIT_BINARY_SNIFF_BYTES &&
+        chunk.subarray(0, GIT_BINARY_SNIFF_BYTES - offset).includes(0)
+      ) {
+        return "binary";
+      }
+      for (let index = chunk.indexOf(10); index >= 0; index = chunk.indexOf(10, index + 1)) {
+        lineFeeds += 1;
+      }
+      lastByte = chunk[bytesRead - 1]!;
+      offset += bytesRead;
+    }
+    if (offset === 0) return 0;
+    return lastByte === 10 ? lineFeeds : lineFeeds + 1;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** One `diff --no-index --numstat -z` record, byte-for-byte as Git prints it. */
+function formatUntrackedNumstatRecord(filePath: string, lines: number | "binary"): string {
+  const counts = lines === "binary" ? "-\t-" : `${lines}\t0`;
+  return `${counts}\t\0/dev/null\0${filePath}\0`;
 }
 
 /** Returns the longest UTF-8 prefix that fits without splitting a code point. */
@@ -1980,10 +2055,50 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       );
     };
 
-    // `git diff --no-index` exits 1 both when it found differences (the expected
-    // outcome for an untracked file vs /dev/null) and when it could not read the
-    // path (e.g. the file vanished between `ls-files` and the diff). Only the former
-    // may be treated as success: it produces a numstat record.
+    // Paths whose `diff` attribute is unset (`binary`, `-diff`), which Git's numstat
+    // reports as `-\t-` regardless of content. One `check-attr` per argument budget.
+    const readDiffUnsetPaths = (
+      cwd: string,
+      operationPrefix: string,
+      files: ReadonlyArray<string>,
+    ) =>
+      Effect.gen(function* () {
+        const batches: string[][] = [];
+        let batch: string[] = [];
+        let batchBytes = 0;
+        for (const filePath of files) {
+          const bytes = Buffer.byteLength(filePath) + 1;
+          if (batch.length > 0 && batchBytes + bytes > CHECK_ATTR_ARGUMENT_BUDGET_BYTES) {
+            batches.push(batch);
+            batch = [];
+            batchBytes = 0;
+          }
+          batch.push(filePath);
+          batchBytes += bytes;
+        }
+        if (batch.length > 0) batches.push(batch);
+        const unset = new Set<string>();
+        for (const paths of batches) {
+          const result = yield* executeGit(
+            `${operationPrefix}.untrackedAttributes`,
+            cwd,
+            ["check-attr", "-z", "diff", "--", ...paths],
+            { timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS },
+          );
+          // `-z` output is `<path>\0<attribute>\0<value>\0` per path.
+          const fields = result.stdout.split("\0");
+          for (let index = 0; index + 2 < fields.length; index += 3) {
+            if (fields[index + 2] === "unset") unset.add(fields[index]!);
+          }
+        }
+        return unset;
+      });
+
+    // Numstat records for untracked files, equal to `git diff --no-index --numstat -z
+    // -- /dev/null <file>` but computed in-process (one Git process per file cost
+    // ~1 s of CPU per call with 200 untracked files). A file that vanished after
+    // listing has nothing to count and is skipped; any other read failure surfaces
+    // instead of undercounting.
     const readUntrackedNumstats = (
       cwd: string,
       operationPrefix: string,
@@ -1994,35 +2109,36 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         : listUntrackedFiles(cwd, operationPrefix);
       return resolveFiles.pipe(
         Effect.flatMap((untrackedFiles) =>
-          Effect.forEach(
-            untrackedFiles,
-            (filePath) => {
-              const operation = `${operationPrefix}.untrackedNumstat`;
-              const args = ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", filePath];
-              return executeGit(operation, cwd, args, {
-                allowNonZeroExit: true,
-                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-              }).pipe(
-                Effect.flatMap((result) => {
-                  const stderr = result.stderr.trim();
-                  if (isSuccessfulNoIndexDiff(result)) {
-                    return Effect.succeed(result.stdout);
-                  }
-                  return Effect.fail(
+          Effect.gen(function* () {
+            if (untrackedFiles.length === 0) return [];
+            const diffUnset = yield* readDiffUnsetPaths(cwd, operationPrefix, untrackedFiles);
+            const records = yield* Effect.forEach(
+              untrackedFiles,
+              (filePath) =>
+                Effect.tryPromise({
+                  try: () => readUntrackedNumstatLines(nodePath.join(cwd, filePath)),
+                  catch: (cause) =>
                     createGitCommandError(
-                      operation,
+                      `${operationPrefix}.untrackedNumstat`,
                       cwd,
-                      args,
-                      stderr.length > 0
-                        ? stderr
-                        : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+                      ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", filePath],
+                      `Could not read untracked file '${filePath}': ${cause instanceof Error ? cause.message : String(cause)}`,
+                      cause,
                     ),
-                  );
-                }),
-              );
-            },
-            { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
-          ),
+                }).pipe(
+                  Effect.map((lines) =>
+                    lines === null
+                      ? null
+                      : formatUntrackedNumstatRecord(
+                          filePath,
+                          diffUnset.has(filePath) ? "binary" : lines,
+                        ),
+                  ),
+                ),
+              { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
+            );
+            return records.filter((record): record is string => record !== null);
+          }),
         ),
       );
     };

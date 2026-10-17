@@ -83,6 +83,17 @@ export interface ProjectionThreadCheckpointContextOptions {
   readonly includeFileChangeActivityPayloads?: boolean;
 }
 
+/**
+ * What a live provider turn diff needs to update its placeholder: the thread's
+ * highest checkpoint turn count and this turn's checkpoint row, under the same
+ * completed-checkpoint filter as `ProjectionThreadCheckpointContext.checkpoints`.
+ */
+export interface ProjectionThreadTurnDiffContext {
+  /** 0 when the thread has no completed checkpoint. */
+  readonly maxCheckpointTurnCount: number;
+  readonly checkpoint: OrchestrationCheckpointSummary | null;
+}
+
 export interface ProjectionGeneratedImageActivityRecord {
   readonly kind: string;
   readonly payload: unknown;
@@ -238,6 +249,16 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     options?: ProjectionThreadCheckpointContextOptions,
   ) => Effect.Effect<Option.Option<ProjectionThreadCheckpointContext>, ProjectionRepositoryError>;
+
+  /**
+   * Read only what a live turn diff placeholder needs (see
+   * ProjectionThreadTurnDiffContext) without decoding every checkpoint's file
+   * list. None when the thread is missing or deleted.
+   */
+  readonly getThreadTurnDiffContext: (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadTurnDiffContext>, ProjectionRepositoryError>;
 
   /**
    * Read the durable generated-image records for one turn. This narrow query is
