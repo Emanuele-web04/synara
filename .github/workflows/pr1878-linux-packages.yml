@@ -74,9 +74,20 @@ jobs:
           assert len([f for f in fs if f.name=='latest-linux.yml'])==1,fs
           print('Validated three nonempty artifact types and one updater manifest.')
           PY
+          cp release-publish/latest-linux.yml "$RUNNER_TEMP/pr1878-native/generated-latest-linux.yml"
+          bun -e 'const f=await Bun.file("release-publish/latest-linux.yml").text(); const m=Bun.YAML.parse(f); console.log("Updater entry names:", JSON.stringify((m.files||[]).map(v=>v.url)))'
           sha256sum release-publish/* > "$RUNNER_TEMP/pr1878-native/artifacts-sha256.txt"
           dpkg-deb --field release-publish/*.deb Package Version Architecture > "$RUNNER_TEMP/pr1878-native/deb-metadata.txt"
           rpm -qpi release-publish/*.rpm > "$RUNNER_TEMP/pr1878-native/rpm-metadata.txt"
+      # Independent native startup evidence is collected before provenance fails closed.
+      - name: Run unchanged packaged startup checks for all three formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-packaged-desktop-startup.ts \
+            --assets-dir release-publish --platform linux --arch x64 \
+            --target AppImage,deb,rpm --version 1.0.3 \
+            --executable-name synara 2>&1 | tee "$RUNNER_TEMP/pr1878-native/packaged-startup.log"
       - name: Verify canonical provenance without publication or signing
         shell: bash
         run: |
@@ -90,14 +101,6 @@ jobs:
             --publication false --signed false --allow-unsigned-windows-publication false \
             --expected-mac-team-id "" --expected-windows-publisher "" \
             --expected-windows-subject-dn ""
-      - name: Run unchanged packaged startup checks for all three formats
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/verify-packaged-desktop-startup.ts \
-            --assets-dir release-publish --platform linux --arch x64 \
-            --target AppImage,deb,rpm --version 1.0.3 \
-            --executable-name synara 2>&1 | tee "$RUNNER_TEMP/pr1878-native/packaged-startup.log"
       - name: Retain compact checks and exact package identities
         if: always()
         uses: actions/upload-artifact@v6
