@@ -1,5 +1,52 @@
 # Cloudflare Remote — execution state
 
+## Remote .16 published / companion 137 archived — 2026-10-17
+
+[Synara Remote 1.0.6-remote.16](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.16)
+is public for macOS ARM64, Windows x64 and Linux x64. Tag source
+`2b7a1d92406de58e7d59c6744f5c5013248e2f52` integrates feature source `f8a058e`.
+The [single exact-tag workflow](https://github.com/Emanuele-web04/synara/actions/runs/39037141011)
+passed quality, all three server shards, all three packaged startup checks,
+macOS signing/notarization and Windows Defender: **18,264 tests passed, 298 skipped**.
+Local qualification also passed formatting, lint, typecheck, release smoke,
+Windows process-boundary and migration-lineage checks, plus 43 focused tests.
+
+Transient proof/API failures no longer revoke all approved devices; admission
+still closes when the current authorization lease expires. Known ownership
+denials pause admission immediately and retire trust only after repeated checks
+spanning five minutes. Successful authorization resets that window; explicit
+revocation remains immediate. Proof timestamps follow key import, backend worker
+capacity defaults to 16, and source-launched Remote/Beta have separate development
+bundle identities. An already-revoked pairing still needs normal fresh QR pairing.
+
+All 11 public assets were downloaded and hashed against GitHub digests,
+exact-source provenance and updater checksums. The public Mac ZIP independently
+passed strict/deep signature, Gatekeeper and staple validation with the Remote
+bundle ID and .16 version. The actual electron-updater provider, using a fetch
+HTTP adapter, discovers .16 from .15 on all three platforms without consulting
+Stable/Beta feeds. Stable Latest stays `v1.0.6`; historical `v0.4.2` assets are
+unchanged. The exact-version Windows exception was restored to its previous
+value `1.0.6`. No production website downloads or installed app data were changed.
+These are public artifact/discovery and packaged startup proofs, not manual
+installed upgrades or new real-provider turns on all operating systems.
+
+Companion iOS source `f7be4ea` (`919042f` connection changes), version **0.1 (137)**,
+passes eight focused connection-supervisor tests. A new universal Release archive
+on the Mini succeeded with matching app/widget builds and both iPhone/iPad device
+families. CLI export/upload failed with `Failed to Use Accounts` / App Store Connect
+access required for the existing Xcode team. The archive is retained; after the
+owner reauthenticates the existing Xcode account, rerun export/upload only.
+**137 is not uploaded or assigned to TestFlight yet.** No API key was created,
+physical device used or new live simulator pass claimed for this source.
+
+The Mini's idle system sleep is already disabled (`sleep = 0`), its display timeout
+is ten minutes, and installed Synara Remote holds a keep-awake assertion. These
+settings were inspected, not changed. Screen lock prevents native UI control but
+does not itself put the Mini to sleep; the prior locked transport evidence below
+remains separate from physical-iPhone identity/reconnect qualification.
+Windows remains explicitly unsigned, and a real production GitHub consent/callback
+is still unverified. No new permissions or paid services were enabled.
+
 ## Remote .15 published — 2026-10-17
 
 [Synara Remote 1.0.6-remote.15](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.15)
