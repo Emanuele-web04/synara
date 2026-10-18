@@ -12,6 +12,7 @@ import {
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
+import { NATIVE_EDITOR_ON } from "./betaFeatures";
 import { isMacPlatform } from "./lib/utils";
 import { formatShortcutLabel, resolveKeybindingForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";
@@ -466,7 +467,7 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
           !spaceJumpCommands.has(definition.command as KeybindingCommand),
       ),
     ),
-    ...singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS),
+    ...(NATIVE_EDITOR_ON ? singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS) : []),
     ...singleCommandEditorDefinitions(WORKSPACE_DEFINITIONS),
     {
       id: "thread.jump",
@@ -485,8 +486,16 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
   ];
 
   const covered = new Set(definitions.flatMap((definition) => definition.commands));
+  // The native editor's commands are Beta-only; Stable has nothing that runs them.
+  const hidden = new Set(
+    NATIVE_EDITOR_ON
+      ? []
+      : singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS).flatMap((d) => d.commands),
+  );
   for (const command of STATIC_KEYBINDING_COMMANDS) {
-    if (covered.has(command) || command.startsWith("terminal.split")) continue;
+    if (covered.has(command) || hidden.has(command) || command.startsWith("terminal.split")) {
+      continue;
+    }
     definitions.push({
       id: command,
       label: command,
@@ -667,8 +676,9 @@ export function buildShortcutSheetSections(
   }
 
   // The editor runs these only while it has focus, which the terminal then does not.
+  // Stable edits with the Pierre engine, which has none of these commands.
   const codeEditorEntries = definitionsToEntries(
-    CODE_EDITOR_DEFINITIONS,
+    NATIVE_EDITOR_ON ? CODE_EDITOR_DEFINITIONS : [],
     options.keybindings,
     options.platform,
     { ...options.context, terminalFocus: false },

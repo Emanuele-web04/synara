@@ -1,5 +1,6 @@
 import { EditorDebugService } from "./editor/debugService";
 import { EditorLanguageService } from "./editor/languageService";
+import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -1784,7 +1785,8 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to create local file preview grant",
           ),
         [WS_METHODS.editorDebugStart]: (input, { clientId }) =>
-          requireWsOwnerSession.pipe(
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
             Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
             Effect.andThen((cwd) =>
               rpcEffect(
@@ -1798,7 +1800,8 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [WS_METHODS.editorDebugAction]: (input, { clientId }) =>
-          requireWsOwnerSession.pipe(
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
             Effect.andThen(() =>
               rpcEffect(
                 Effect.tryPromise({
@@ -1811,7 +1814,8 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [WS_METHODS.editorDebugPoll]: (input, { clientId }) =>
-          requireWsOwnerSession.pipe(
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
             Effect.andThen(() =>
               rpcEffect(
                 Effect.try({
@@ -1824,7 +1828,8 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [WS_METHODS.editorIntelligence]: (input, { clientId }) =>
-          requireWsOwnerSession.pipe(
+          requireNativeEditor.pipe(
+            Effect.andThen(() => requireWsOwnerSession),
             Effect.andThen(() => canonicalizeProjectWorkspaceRoot(input.cwd)),
             Effect.andThen((cwd) =>
               rpcEffect(

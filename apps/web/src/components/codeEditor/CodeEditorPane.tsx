@@ -1,36 +1,41 @@
 // FILE: CodeEditorPane.tsx
 // Purpose: The editable file surface: lazy engine load with a plain-text
 //          fallback, the configured save chord, and the shared props contract
-//          used by the preview, file editor and diff editor panes.
+//          used by the preview, file editor and diff editor panes. Beta edits
+//          with the native (Code OSS) engine; Stable keeps the Pierre engine.
 // Layer: Web editor UI
 // Exports: CodeEditorPane, CodeEditorPaneProps, EditorSurfaceBoundary,
-//          useCodeEditorSaveKeyDownHandler
+//          EditorSurfaceRetry, PierreEnginePane, useCodeEditorSaveKeyDownHandler
 
-import {
-  Component,
-  lazy,
-  Suspense,
-  useCallback,
-  useRef,
-  type KeyboardEvent,
-  type ReactNode,
-  type RefObject,
-} from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ResolvedKeybindingsConfig } from "@synara/contracts";
+import { Component, lazy, Suspense, useRef, type ReactNode, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { isBrowserSaveChord } from "~/hooks/useWorkspaceFileEditorShortcuts";
-import { isEditorFileSaveShortcut } from "~/keybindings";
+import { NATIVE_EDITOR_ON } from "~/betaFeatures";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
 import { reloadEditorAfterSave } from "./editorRecovery";
+import { useCodeEditorSaveKeyDownHandler } from "./editorSaveShortcut";
+
+export { useCodeEditorSaveKeyDownHandler };
 
 const EditorSurface = lazy(() => import("./MonacoEditorSurface"));
 export type EditorSurfaceComponent = typeof EditorSurface;
+// Stable's engine. Loaded on demand so Beta never ships the Pierre edit code.
+const PierreFilePane = lazy(() =>
+  import("./PierreEditorPanes").then((module) => ({ default: module.PierreCodeEditorPane })),
+);
+const PierreDiffPane = lazy(() =>
+  import("./PierreEditorPanes").then((module) => ({ default: module.PierreCodeDiffEditorPane })),
+);
+export const PIERRE_ENGINE_PANES = { file: PierreFilePane, diff: PierreDiffPane } as const;
+
+/** Mounts the Pierre pane behind the same loading message as the native surface. */
+export function PierreEnginePane(props: { loading: ReactNode; children: ReactNode }) {
+  return <Suspense fallback={props.loading}>{props.children}</Suspense>;
+}
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
@@ -42,33 +47,6 @@ export interface CodeEditorPaneProps {
   onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
-}
-
-const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-
-// Capture-phase save handling: the engine hosts its own key handling, so saves
-// are dispatched from the container. The chord is matched against the
-// configured `editor.file.save` binding (not hard-coded Mod+S) so rebinds are
-// honored, while the browser save dialog stays suppressed for the default chord.
-export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
-  return useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (isBrowserSaveChord(event)) {
-        event.preventDefault();
-      }
-      if (!isEditorFileSaveShortcut(event, keybindings)) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      onSaveRef.current();
-    },
-    [keybindings],
-  );
 }
 
 class EditorSurfaceErrorBoundary extends Component<
@@ -131,17 +109,25 @@ export function EditorSurfaceRetry(props: { message: string; onRetry: () => void
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+  const loading = (
+    <PanelStateMessage density="compact" fill="flex">
+      <p>Loading editor…</p>
+    </PanelStateMessage>
+  );
+  if (!NATIVE_EDITOR_ON) {
+    return (
+      <PierreEnginePane loading={loading}>
+        <PierreFilePane {...props} />
+      </PierreEnginePane>
+    );
+  }
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onKeyDownCapture={saveKeyDownHandler}
     >
       <EditorSurfaceBoundary
-        loading={
-          <PanelStateMessage density="compact" fill="flex">
-            <p>Loading editor…</p>
-          </PanelStateMessage>
-        }
+        loading={loading}
         fallback={(retry) => (
           <>
             <EditorSurfaceRetry

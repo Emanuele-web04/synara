@@ -6,11 +6,14 @@
 
 import type { RefObject } from "react";
 
+import { NATIVE_EDITOR_ON } from "~/betaFeatures";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
 import {
   EditorSurfaceBoundary,
   EditorSurfaceRetry,
+  PIERRE_ENGINE_PANES,
+  PierreEnginePane,
   useCodeEditorSaveKeyDownHandler,
 } from "./CodeEditorPane";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
@@ -33,17 +36,26 @@ export interface CodeDiffEditorPaneProps {
 
 export function CodeDiffEditorPane(props: CodeDiffEditorPaneProps) {
   const saveKeyDownHandler = useCodeEditorSaveKeyDownHandler(props.onSave);
+  const loading = (
+    <PanelStateMessage density="compact" fill="flex">
+      <p>Loading diff editor…</p>
+    </PanelStateMessage>
+  );
+  if (!NATIVE_EDITOR_ON) {
+    const PierreDiffPane = PIERRE_ENGINE_PANES.diff;
+    return (
+      <PierreEnginePane loading={loading}>
+        <PierreDiffPane {...props} />
+      </PierreEnginePane>
+    );
+  }
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onKeyDownCapture={saveKeyDownHandler}
     >
       <EditorSurfaceBoundary
-        loading={
-          <PanelStateMessage density="compact" fill="flex">
-            <p>Loading diff editor…</p>
-          </PanelStateMessage>
-        }
+        loading={loading}
         fallback={(retry) => (
           <EditorSurfaceRetry
             message="The diff editor could not load. Your draft is preserved."

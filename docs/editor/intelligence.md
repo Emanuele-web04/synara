@@ -1,5 +1,7 @@
 # Native editor intelligence
 
+**Beta only.** The native editor is listed in `BETA_ONLY_FEATURES` (`native-editor`, see [BETA.md](../../BETA.md)). Synara Stable keeps the Pierre editing engine for the file editor, editable diffs and editable previews, its server refuses the `editor.*` RPCs, and the editor commands below do not appear in its Shortcuts sheet or Settings → Keybindings. Everything that follows describes Synara Beta, Canary and development builds.
+
 Synara keeps its Files, Changes, file headers, chat, search, Git, terminal, and document sessions. Editable previews, file editors, docked editors, and editable diffs use the native document session as their shared buffer. Monaco-backed surfaces share one text model for that session. There is no Code-OSS workbench, alternate IDE mode, new explorer, extension host, or second disk writer in this change.
 
 ## Supported operations

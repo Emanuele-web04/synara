@@ -79,7 +79,8 @@ import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
-import { CodeEditorPane, useCodeEditorSaveKeyDownHandler } from "./codeEditor/CodeEditorPane";
+import { CodeEditorPane } from "./codeEditor/CodeEditorPane";
+import { useCodeEditorSaveKeyDownHandler } from "./codeEditor/editorSaveShortcut";
 
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
 
