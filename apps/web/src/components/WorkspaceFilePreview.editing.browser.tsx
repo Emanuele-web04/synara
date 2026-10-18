@@ -19,6 +19,7 @@ import { render, cleanup } from "vitest-browser-react";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
 import { monaco } from "./codeEditor/editorRuntime";
+import { editorEntry } from "./codeEditor/editorModels";
 
 /** Mirrors the Source control pane: a mounted observer of the unstaged patch. */
 function UnstagedChangesObserver(props: { cwd: string }) {
@@ -46,8 +47,11 @@ function installNativeApi(api: NativeApi): () => void {
   };
 }
 
+const queryClients: QueryClient[] = [];
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClients.push(client);
+  return client;
 }
 
 function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectReadFileResult {
@@ -108,6 +112,14 @@ function pressKeyboardSave(element: Element): void {
 
 afterEach(async () => {
   await cleanup();
+  // Warm workspace models retain their native writer after React unmounts.
+  // Stop them before the next test installs a different nativeApi mock.
+  for (const model of monaco.editor.getModels()) {
+    const entry = editorEntry(model);
+    entry?.session?.pause();
+    entry?.dispose();
+  }
+  for (const client of queryClients.splice(0)) client.clear();
 });
 
 it("requests only the resolved preview file for gutters and refreshes it on file events", async () => {

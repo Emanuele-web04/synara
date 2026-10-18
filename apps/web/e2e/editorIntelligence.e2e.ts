@@ -3,9 +3,17 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { NativeApi } from "@synara/contracts";
+import type { EditorDebugStore } from "../src/components/codeEditor/editorDebugStore";
 
-// This drives the real web client, real server RPCs, real compiler, native save path,
-// and real debugger. No service worker, response interception, or mocked native API.
+declare global {
+  interface Window {
+    editorRaceProbe?: { store: EditorDebugStore; restore: () => void };
+  }
+}
+
+// These journeys drive the real web client, compiler, native saves and debugger.
+// Recovery cases explicitly inject one chunk failure or one native write failure.
 let workspace: string;
 let threadId: string;
 // One project per workspace: the server rejects a second registration of the same root.
@@ -61,7 +69,7 @@ test.afterAll(async () => {
 async function dismissStartupSurfaces(page: Page) {
   for (let round = 0; round < 6; round++) {
     let dismissed = false;
-    for (const label of ["Not now", "Skip tour", "Dismiss toast"]) {
+    for (const label of ["Skip setup", "Not now", "Skip tour", "Dismiss toast"]) {
       for (const button of await page.getByRole("button", { name: label, exact: true }).all()) {
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 2_000 }).catch(() => undefined);
@@ -146,7 +154,7 @@ async function editorVisible(page: Page, relativePath: string) {
   await expect(input).toBeAttached();
   await expect(page.locator(".monaco-editor").filter({ has: input })).toBeVisible();
 }
-async function open(page: Page, relativePath = "main.ts") {
+async function beginEditing(page: Page, relativePath: string) {
   await page.goto(`/${threadId}?view=editor&editorFilePath=${encodeURIComponent(relativePath)}`);
   // A startup surface (feature tour) can open over the route; role queries skip
   // the page behind a modal, so clear it before looking for the preview control.
@@ -157,7 +165,18 @@ async function open(page: Page, relativePath = "main.ts") {
     await page.waitForTimeout(500);
   }
   // File navigation opens Synara's read-only preview; enter editing via its native control.
-  await editFile.click();
+  const input = page.getByRole("textbox", { name: `Edit ${relativePath}`, exact: true });
+  // A cold route can finish initializing its pane after the first click. Check
+  // the editing result before another click so an already-open editor is kept.
+  await expect(async () => {
+    await dismissStartupSurfaces(page);
+    if (await input.count()) return;
+    await editFile.click({ timeout: 5_000 });
+    await expect(input).toBeAttached({ timeout: 5_000 });
+  }).toPass({ timeout: 30_000 });
+}
+async function open(page: Page, relativePath = "main.ts") {
+  await beginEditing(page, relativePath);
   await editorVisible(page, relativePath);
 }
 async function position(page: Page, text: string, delta = 0) {
@@ -379,4 +398,149 @@ test("edits a changed file as a diff with collapsed regions and symbol breadcrum
   ).toBeVisible();
   await capture(page, info, "after-diff-breadcrumbs");
   expect(errors).toEqual([]);
+});
+
+test("retries a failed editor import with a fresh document after saving the fallback draft", async ({
+  page,
+}, info) => {
+  const fileName = "retry-recovery.ts";
+  const draft = "export const savedFallbackDraft = 2;\n";
+  await writeFile(path.join(workspace, fileName), "export const original = 1;\n");
+  await seed(page);
+  let requests = 0;
+  await page.route("**/src/components/codeEditor/MonacoEditorSurface.tsx*", async (route) => {
+    if (++requests === 1) await route.abort("failed");
+    else await route.continue();
+  });
+  await beginEditing(page, fileName);
+  const fallback = page.getByRole("textbox", { name: `Edit ${fileName}`, exact: true });
+  await expect(fallback).toBeVisible();
+  await fallback.fill(draft);
+  // Retry must flush the native session, even before its autosave timer fires.
+  await Promise.all([
+    page.waitForEvent("framenavigated", (frame) => frame === page.mainFrame()),
+    page.getByRole("button", { name: "Retry", exact: true }).click(),
+  ]);
+  await expect.poll(() => readFile(path.join(workspace, fileName), "utf8")).toBe(draft);
+  // Reload can restore the editing mode or return to the saved file preview.
+  const editFile = page.getByRole("button", { name: "Edit file", exact: true });
+  await expect
+    .poll(async () => {
+      await dismissStartupSurfaces(page);
+      return (
+        (await editFile.isVisible()) || (await page.locator(".monaco-editor").first().isVisible())
+      );
+    })
+    .toBe(true);
+  if (await editFile.isVisible()) await editFile.click();
+  await editorVisible(page, fileName);
+  expect(requests).toBeGreaterThan(1);
+  await expect(page.locator(".monaco-editor .view-lines").first()).toContainText(
+    "savedFallbackDraft",
+  );
+  await capture(page, info, "after-editor-retry-restores-saved-draft");
+});
+
+test("keeps the fallback draft open when saving before Retry fails", async ({ page }, info) => {
+  const fileName = "retry-blocked.ts";
+  const original = "export const original = 1;\n";
+  const draft = "export const unsavedFallbackDraft = 2;\n";
+  await writeFile(path.join(workspace, fileName), original);
+  await seed(page);
+  let requests = 0;
+  await page.route("**/src/components/codeEditor/MonacoEditorSurface.tsx*", async (route) => {
+    if (++requests === 1) await route.abort("failed");
+    else await route.continue();
+  });
+  await beginEditing(page, fileName);
+  await page.evaluate(async () => {
+    const modulePath = "/src/nativeApi.ts";
+    const { ensureNativeApi } = (await import(
+      /* @vite-ignore */ modulePath
+    )) as typeof import("../src/nativeApi");
+    const api: NativeApi = ensureNativeApi();
+    api.projects.writeFile = async () => {
+      throw new Error("QA write blocked");
+    };
+  });
+  const fallback = page.getByRole("textbox", { name: `Edit ${fileName}`, exact: true });
+  await fallback.fill(draft);
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Could not reload the editor", { exact: true })).toBeVisible();
+  await expect(fallback).toHaveValue(draft);
+  expect(await readFile(path.join(workspace, fileName), "utf8")).toBe(original);
+  expect(requests).toBe(1);
+  await capture(page, info, "after-editor-retry-preserves-blocked-draft");
+});
+
+test("retains a real debugger pause that arrives before the step acknowledgement", async ({
+  page,
+}, info) => {
+  await writeFile(
+    path.join(workspace, "debug-race.js"),
+    "let counter = 1;\ncounter += 1;\nsetInterval(() => {}, 100);\n",
+  );
+  await seed(page);
+  await open(page, "debug-race.js");
+  await position(page, "counter");
+  await page.keyboard.press("F5");
+  await page.getByRole("checkbox", { name: "Pause at the first line", exact: true }).check();
+  await page.getByRole("button", { name: "Save and debug", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Debug session", exact: true });
+  try {
+    await expect(panel).toContainText("Paused", { timeout: 60_000 });
+    await page.evaluate(async () => {
+      const runtime = "/src/components/codeEditor/editorRuntime.ts";
+      const models = "/src/components/codeEditor/editorModels.ts";
+      const stores = "/src/components/codeEditor/editorDebugStore.ts";
+      const native = "/src/nativeApi.ts";
+      const { monaco } = (await import(
+        /* @vite-ignore */ runtime
+      )) as typeof import("../src/components/codeEditor/editorRuntime");
+      const { editorEntry } = (await import(
+        /* @vite-ignore */ models
+      )) as typeof import("../src/components/codeEditor/editorModels");
+      const { getEditorDebugStore } = (await import(
+        /* @vite-ignore */ stores
+      )) as typeof import("../src/components/codeEditor/editorDebugStore");
+      const { ensureNativeApi } = (await import(
+        /* @vite-ignore */ native
+      )) as typeof import("../src/nativeApi");
+      const model = monaco.editor
+        .getEditors()
+        .find((editor) => editor.getModel()?.uri.scheme === "synara-workspace")
+        ?.getModel();
+      const entry = model && editorEntry(model);
+      if (!entry?.cwd) throw new Error("Missing workspace editor.");
+      const api = ensureNativeApi();
+      const action = api.editor.debugAction;
+      window.editorRaceProbe = {
+        store: getEditorDebugStore(entry.client, entry.cwd),
+        restore: () => {
+          api.editor.debugAction = action;
+        },
+      };
+      // Delay only delivery of the real RPC response; the poll events remain real.
+      api.editor.debugAction = async (input) => {
+        const result = await action(input);
+        if (input.action === "next") await new Promise((resolve) => setTimeout(resolve, 1_500));
+        return result;
+      };
+    });
+    const snapshot = () => page.evaluate(() => window.editorRaceProbe!.store.getSnapshot());
+    const pauseVersion = (await snapshot()).pauseVersion;
+    await panel.getByRole("button", { name: /^Step over/ }).click();
+    await expect.poll(async () => (await snapshot()).pauseVersion).toBeGreaterThan(pauseVersion);
+    await expect.poll(async () => (await snapshot()).busy).toBe(false);
+    expect((await snapshot()).phase).toBe("paused");
+    expect((await snapshot()).frames.length).toBeGreaterThan(0);
+    expect((await snapshot()).scopes.length).toBeGreaterThan(0);
+    await capture(page, info, "after-late-step-preserves-real-pause");
+  } finally {
+    await page.evaluate(async () => {
+      window.editorRaceProbe?.restore();
+      await window.editorRaceProbe?.store.stop();
+      delete window.editorRaceProbe;
+    });
+  }
 });

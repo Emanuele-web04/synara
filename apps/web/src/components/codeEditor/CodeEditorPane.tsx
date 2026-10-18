@@ -11,14 +11,12 @@ import {
   lazy,
   Suspense,
   useCallback,
-  useMemo,
   useRef,
-  useState,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 
 import { isBrowserSaveChord } from "~/hooks/useWorkspaceFileEditorShortcuts";
@@ -27,11 +25,12 @@ import type { ChatFileReference } from "~/lib/chatReferences";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { PanelStateMessage } from "../chat/PanelStateMessage";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
+import { reloadEditorAfterSave } from "./editorRecovery";
 
-// A lazy component remembers a failed import, so Retry builds a new one.
-const createEditorSurface = () => lazy(() => import("./MonacoEditorSurface"));
-export type EditorSurfaceComponent = ReturnType<typeof createEditorSurface>;
+const EditorSurface = lazy(() => import("./MonacoEditorSurface"));
+export type EditorSurfaceComponent = typeof EditorSurface;
 export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
@@ -81,35 +80,40 @@ class EditorSurfaceErrorBoundary extends Component<
     return { failed: true };
   }
   override render() {
-    return this.state.failed
-      ? this.props.fallback(() => {
-          this.setState({ failed: false });
-          this.props.onRetry();
-        })
-      : this.props.children;
+    return this.state.failed ? this.props.fallback(this.props.onRetry) : this.props.children;
   }
 }
 
 /**
  * Keeps a draft editable when the engine chunk fails to load (offline, a stale
- * build): shows the fallback with a Retry that imports the engine again with a
- * fresh lazy component and remounts the surface.
+ * build). Retry flushes all native editor buffers before reloading the page:
+ * recreating React.lazy alone cannot clear a browser's failed module import.
  */
 export function EditorSurfaceBoundary(props: {
   children: (Surface: EditorSurfaceComponent) => ReactNode;
   fallback: (retry: () => void) => ReactNode;
   loading: ReactNode;
 }) {
-  const [attempt, setAttempt] = useState(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new loader per attempt
-  const Surface = useMemo(createEditorSurface, [attempt]);
+  const client = useQueryClient();
+  const retrying = useRef(false);
+  const retry = () => {
+    if (retrying.current) return;
+    retrying.current = true;
+    void reloadEditorAfterSave(client)
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not reload the editor",
+          description: error instanceof Error ? error.message : "Your draft is preserved.",
+        });
+      })
+      .finally(() => {
+        retrying.current = false;
+      });
+  };
   return (
-    <EditorSurfaceErrorBoundary
-      key={attempt}
-      fallback={props.fallback}
-      onRetry={() => setAttempt((value) => value + 1)}
-    >
-      <Suspense fallback={props.loading}>{props.children(Surface)}</Suspense>
+    <EditorSurfaceErrorBoundary fallback={props.fallback} onRetry={retry}>
+      <Suspense fallback={props.loading}>{props.children(EditorSurface)}</Suspense>
     </EditorSurfaceErrorBoundary>
   );
 }

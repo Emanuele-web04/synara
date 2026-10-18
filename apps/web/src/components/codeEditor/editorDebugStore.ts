@@ -220,21 +220,31 @@ export class EditorDebugStore {
   }
   async control(action: "continue" | "pause" | "next" | "stepIn" | "stepOut") {
     if (this.state.busy) return;
+    const generation = this.generation;
+    const pauseVersion = this.state.pauseVersion;
     this.update({ busy: true, error: null });
     try {
       let threadId = this.state.threadId;
       if (threadId === null)
         threadId = (await this.command({ action: "threads" })).threads?.[0]?.id ?? null;
+      if (generation !== this.generation) return;
       if (threadId === null) throw new Error("The debug target has no active thread yet.");
       await this.command({ action, threadId });
-      if (action !== "pause") {
+      // Polling can deliver the next stop (or termination) before the control
+      // response. That newer state must remain authoritative.
+      if (
+        generation === this.generation &&
+        pauseVersion === this.state.pauseVersion &&
+        this.state.phase !== "ended" &&
+        action !== "pause"
+      ) {
         this.frameGeneration++;
         this.update({ phase: "running", frames: [], scopes: [], frameId: null });
       }
     } catch (error) {
-      this.report(error);
+      if (generation === this.generation) this.report(error);
     } finally {
-      this.update({ busy: false });
+      if (generation === this.generation) this.update({ busy: false });
     }
   }
   async stop() {
