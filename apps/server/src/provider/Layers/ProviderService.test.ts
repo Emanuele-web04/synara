@@ -424,6 +424,7 @@ function makeFakeCodexAdapter(
       }),
   );
   const renewAgentGatewayCredential = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
+  const agentGatewayCredentialRetired = vi.fn((_threadId: ThreadId) => Effect.succeed(false));
 
   const listSessions = vi.fn(
     (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
@@ -507,6 +508,7 @@ function makeFakeCodexAdapter(
     respondToUserInput,
     stopSession,
     renewAgentGatewayCredential,
+    agentGatewayCredentialRetired,
     listSessions,
     hasSession,
     readThread,
@@ -555,6 +557,7 @@ function makeFakeCodexAdapter(
     respondToUserInput,
     stopSession,
     renewAgentGatewayCredential,
+    agentGatewayCredentialRetired,
     listSessions,
     hasSession,
     readThread,
@@ -4064,6 +4067,61 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
         yield* provider.stopSession({ threadId });
       }).pipe(Effect.timeout("2 seconds")),
+  );
+
+  it.effect.each([false, true])(
+    "recovers a credential the adapter reports as retired when the persisted marker was dropped (reuse=%s)",
+    (reuse) =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-adapter-reported-retired-credential");
+        routing.codex.renewAgentGatewayCredential.mockImplementationOnce(() =>
+          Effect.succeed(reuse),
+        );
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* routing.codex.waitForRuntimeSubscribers();
+
+        // The terminal event carrying AGENT_GATEWAY_TURN_AUTHORITY_RETIRED was
+        // dropped by the routing gates, so the durable marker was never
+        // persisted even though the adapter already fenced the bearer.
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.notEqual(
+          asRuntimePayloadRecord(binding?.runtimePayload).agentGatewayCredentialRotationRequired,
+          true,
+        );
+        routing.codex.agentGatewayCredentialRetired.mockImplementation(() => Effect.succeed(true));
+
+        const startsBefore = routing.codex.startSession.mock.calls.length;
+        const stopsBefore = routing.codex.stopSession.mock.calls.length;
+        const renewalsBefore = routing.codex.renewAgentGatewayCredential.mock.calls.length;
+
+        yield* provider.sendTurn({ threadId, input: "turn A", attachments: [] });
+
+        assert.equal(
+          routing.codex.renewAgentGatewayCredential.mock.calls.length,
+          renewalsBefore + 1,
+        );
+        assert.equal(routing.codex.stopSession.mock.calls.length, stopsBefore + (reuse ? 0 : 1));
+        assert.equal(routing.codex.startSession.mock.calls.length, startsBefore + (reuse ? 0 : 1));
+
+        yield* provider.stopSession({ threadId });
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            routing.codex.agentGatewayCredentialRetired.mockImplementation(() =>
+              Effect.succeed(false),
+            );
+          }),
+        ),
+        Effect.timeout("2 seconds"),
+      ),
   );
 
   it.effect.each(["completed", "aborted"] as const)(

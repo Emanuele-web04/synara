@@ -3204,6 +3204,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  /**
+   * Whether this session's gateway bearer was retired by a terminal turn and
+   * has not yet been replaced. This is the authoritative signal for routing:
+   * the durable rotation marker rides a runtime event that ProviderService
+   * may drop, but the in-memory fence here is what actually rejects writes.
+   */
+  isAgentGatewayCredentialRetired(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && context.gatewayCredentialRetired === true;
+  }
+
   private async stopSessionContext(
     context: CodexSessionContext,
     emitClosedLifecycle = true,

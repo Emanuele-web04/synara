@@ -443,6 +443,13 @@ function makeHarnessLayer(
     };
     /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
     readonly computerService?: Layer.Layer<ComputerService>;
+    readonly retiredWriteAuthorities?: ReadonlyArray<{
+      readonly threadId: string;
+      readonly sessionKey: string;
+      readonly provider: "codex";
+      readonly retiredTurnId: string;
+      readonly issuedAt: number;
+    }>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -535,6 +542,15 @@ function makeHarnessLayer(
         ? inFlightRequests.cancelTurn(`session-for-${threadId}`, turnId).settled
         : Promise.resolve();
     },
+    listRetiredWriteAuthorities: (threadId: string) =>
+      (options.retiredWriteAuthorities ?? [])
+        .filter((authority) => authority.threadId === threadId)
+        .map((authority) => ({
+          sessionKey: authority.sessionKey,
+          provider: authority.provider,
+          retiredTurnId: authority.retiredTurnId,
+          issuedAt: authority.issuedAt,
+        })),
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -2109,6 +2125,43 @@ describe("AgentGateway", () => {
       };
       assert.equal(error.code, "capability_denied");
       assert.equal(error.details.requiredCapability, "diagnostics:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("surfaces a retired gateway write authority while a newer turn is running", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      retiredWriteAuthorities: [
+        {
+          threadId: "thread-parent",
+          sessionKey: "session-for-thread-parent",
+          provider: "codex",
+          retiredTurnId: "turn-a",
+          issuedAt: 0,
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_diagnose_thread",
+        args: { threadId: "thread-parent" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      const findings = toolResultJson(response.result).findings as ReadonlyArray<{
+        severity: string;
+        code: string;
+        detail: string;
+      }>;
+      const finding = findings.find(
+        (entry) => entry.code === "agent_gateway_write_authority_retired",
+      );
+      assert.isDefined(finding);
+      assert.equal(finding?.severity, "error");
+      assert.include(finding?.detail, "turn-a");
+      assert.include(finding?.detail, "turn-parent-active");
+      assert.include(finding?.detail, "caller_turn_inactive");
+      assert.include(finding?.detail, "This session's gateway credential");
     }).pipe(Effect.provide(gatewayLayer));
   });
 
