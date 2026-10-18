@@ -37,6 +37,29 @@ Sign in to the same account/workspace on both computers. On the execution host, 
 
 Codes expire after nine minutes (leaving one minute of clock-skew headroom below the API publication limit) and are claimed once, transactionally, by a registered nonrevoked device key. Per-IP, per-account and per-code attempt budgets use PostgreSQL so multiple API instances share limits. Renewal cancels older rendezvous and pending local invitations. Cancellation revokes locally even if the API is temporarily unreachable. Invitation bundles remain only on the trusted servers and are removed from rendezvous storage on redemption/cancellation/expiry. The normal UI does not copy JSON. A redeemed bundle remains on the controller server until successful pairing, explicit cancellation/forgetting, account change or expiry. A temporary directory/dial failure can therefore retry the reviewed identity without redeeming the public code again. Cancellation waits for the in-flight setup before forgetting local trust. Existing [headless private-file pairing](remote-connections-v2.md#headless-owner-pairing) remains supported.
 
+### Diagnosing a rejected pairing code
+
+The account API deliberately returns the same `400 challenge_expired` response for
+an unavailable code and an invitation outside the caller's account/workspace.
+It is not evidence that the login expired or that the host tunnel is offline.
+Fixed-category `[api] Remote pairing rejected: reason=…` warnings distinguish
+device, proof, session lookup, host identity and invitation-lifetime failures
+without recording codes, proofs, tokens, identities or account content. The
+categories describe rejected attempts, not distinct users; a missing log entry
+does not prove that no attempt occurred. They become available after deploying
+the compatible account API, independently of desktop or native app releases.
+
+An owner's hosts remain visible across active workspaces, but pairing requires
+the same account and workspace on both devices. Refreshing into the old workspace
+does not repair a workspace mismatch.
+
+Renewal invalidates an older code. A lost HTTP response after the redemption
+transaction commits leaves that code consumed, even for the same device.
+Use a fresh code in those cases; do not erase app data,
+accept another account's invitation or replay a spent code to recover. A generic
+pairing `400` is not a reason to force account logout or blindly spend another
+single-use refresh token.
+
 Authorization polls have ±10% jitter around ten seconds and account requests have fifteen-second deadlines. Successful snapshots renew a sixty-second lease only after local application; the expiry check closes remote streams within approximately one additional second. Online revocation normally arrives on the next poll, with request/application latency added. Do not promise a strict wall-clock bound if the operating system or event loop is suspended. During outages the last lease expires; a failed refresh never extends it. Local provider tasks remain execution-host work when controllers disconnect.
 
 Remote .15 treats the legacy temporary enrollment refusal as unavailable access and keeps polling without revoking device trust. Admission still requires a fresh successful snapshot. Opening a populated remote workspace on its home route also no longer treats the home as an empty chat identifier. If an older build already revoked a pairing, updating does not restore it automatically: create a fresh code and pair normally. Do not erase local app data or restore revoked devices through database edits.

@@ -14,12 +14,23 @@ import { HostAuthDomainError, type HostRecord } from "../identity/interfaces";
 import { isUniqueViolation } from "../identity/hostRecords";
 import { verifyJwtWithEmbeddedJwk } from "../identity/signing";
 
-const invalid = () =>
-  new HostAuthDomainError(
+type PairingRejectionReason =
+  | "invitation_rejected"
+  | "device_unavailable"
+  | "proof_rejected"
+  | "code_unavailable_for_session"
+  | "host_identity_changed"
+  | "invitation_not_live";
+
+const invalid = (reason: PairingRejectionReason) => {
+  // Fixed categories only: never include the code, proof, account or host identity.
+  console.warn(`[api] Remote pairing rejected: reason=${reason}`);
+  return new HostAuthDomainError(
     400,
     "challenge_expired",
     "The pairing code is invalid, used, or expired",
   );
+};
 export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIssuer: string) {
   return {
     async publish(host: HostRecord, bundle: RemotePairingBundle) {
@@ -32,7 +43,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
         Date.parse(bundle.expiresAt) <= Date.now() ||
         Date.parse(bundle.expiresAt) > Date.now() + 600_000
       )
-        throw invalid();
+        throw invalid("invitation_rejected");
       await db.delete(codes).where(lt(codes.expiresAt, new Date()));
       for (let attempt = 0; attempt < 5; attempt++) {
         const raw = [...randomBytes(8)]
@@ -52,7 +63,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
               current.ownerUserId !== host.ownerUserId ||
               current.ownerOrgId !== host.ownerOrgId
             )
-              throw invalid();
+              throw invalid("host_identity_changed");
             // Explicit renewal cancels the previous rendezvous. Local owner approval remains required.
             await tx
               .update(codes)
@@ -74,7 +85,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
           if (!isUniqueViolation(error) || attempt === 4) throw error;
         }
       }
-      throw invalid();
+      throw invalid("invitation_rejected");
     },
     async cancel(host: HostRecord, inviteId: string) {
       await db
@@ -123,7 +134,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
             ),
           )
           .for("update");
-        if (!device) throw invalid();
+        if (!device) throw invalid("device_unavailable");
         try {
           await verifyJwtWithEmbeddedJwk(proof, {
             typ: "synara-pairing-code+jwt",
@@ -134,9 +145,10 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
             publicKeyJwk: device.publicKeyJwk,
           });
           const claims = decodeJwt(proof);
-          if (claims.sub !== session.userId || claims.code !== code) throw invalid();
+          if (claims.sub !== session.userId || claims.code !== code)
+            throw new Error("Invalid pairing proof claims");
         } catch {
-          throw invalid();
+          throw invalid("proof_rejected");
         }
         const [candidate] = await tx
           .select()
@@ -148,7 +160,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
               eq(codes.ownerOrgId, session.orgId),
             ),
           );
-        if (!candidate) throw invalid();
+        if (!candidate) throw invalid("code_unavailable_for_session");
         const [host] = await tx
           .select()
           .from(hosts)
@@ -160,7 +172,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
           host.ownerUserId !== session.userId ||
           host.ownerOrgId !== session.orgId
         )
-          throw invalid();
+          throw invalid("host_identity_changed");
         const [row] = await tx
           .select()
           .from(codes)
@@ -173,7 +185,7 @@ export function createPairingRendezvous(db: NodePgDatabase<typeof schema>, apiIs
             ),
           )
           .for("update");
-        if (!row?.bundle) throw invalid();
+        if (!row?.bundle) throw invalid("invitation_not_live");
         await tx
           .update(codes)
           .set({ claimedJkt: deviceJkt, bundle: null })

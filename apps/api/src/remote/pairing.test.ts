@@ -6,7 +6,7 @@ import {
 } from "@synara/contracts";
 import { eq } from "drizzle-orm";
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDb } from "../db";
 import { runMigrations } from "../db/migrate";
 import { devices, hosts, remotePairingCodes } from "../db/schema";
@@ -60,8 +60,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("pairing rendezvous (PostgreSQL)
     });
     const session = { userId: id, orgId: id };
     const published = await service.publish(host, bundle);
-    const proof = () =>
-      new SignJWT({ code: published.code })
+    const proof = (code = published.code) =>
+      new SignJWT({ code })
         .setProtectedHeader({ alg: "ES256", typ: "synara-pairing-code+jwt" })
         .setIssuer("synara-device")
         .setSubject(id)
@@ -88,14 +88,36 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("pairing rendezvous (PostgreSQL)
   });
   it("refuses another account, organization, or forged proof without spending the code", async () => {
     const f = await fixture();
-    await expect(
-      service.redeem({ ...f.session, userId: "other" }, f.published.code, f.jkt, await f.proof()),
-    ).rejects.toThrow();
-    await expect(
-      service.redeem({ ...f.session, orgId: "other" }, f.published.code, f.jkt, await f.proof()),
-    ).rejects.toThrow();
-    await expect(service.redeem(f.session, f.published.code, f.jkt, "forged")).rejects.toThrow();
-    expect(await f.redeem()).toEqual(f.bundle);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const publicError = {
+      status: 400,
+      code: "challenge_expired",
+      message: "The pairing code is invalid, used, or expired",
+    };
+    try {
+      await expect(
+        service.redeem({ ...f.session, userId: "other" }, f.published.code, f.jkt, await f.proof()),
+      ).rejects.toMatchObject(publicError);
+      await expect(
+        service.redeem({ ...f.session, orgId: "other" }, f.published.code, f.jkt, await f.proof()),
+      ).rejects.toMatchObject(publicError);
+      await expect(
+        service.redeem(f.session, f.published.code, f.jkt, "forged"),
+      ).rejects.toMatchObject(publicError);
+      await expect(
+        service.redeem(f.session, f.published.code, f.jkt, await f.proof("different-code")),
+      ).rejects.toMatchObject(publicError);
+      expect(await f.redeem()).toEqual(f.bundle);
+      // Exact arguments prove that no identifiers, invitation or proof enter these warnings.
+      expect(warning.mock.calls).toEqual([
+        ["[api] Remote pairing rejected: reason=device_unavailable"],
+        ["[api] Remote pairing rejected: reason=code_unavailable_for_session"],
+        ["[api] Remote pairing rejected: reason=proof_rejected"],
+        ["[api] Remote pairing rejected: reason=proof_rejected"],
+      ]);
+    } finally {
+      warning.mockRestore();
+    }
   });
   it("refuses expiry, cancellation, revoked device and replaced host identity", async () => {
     const expired = await fixture();
