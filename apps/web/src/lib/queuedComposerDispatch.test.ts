@@ -2,10 +2,15 @@ import { MessageId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerTurn } from "../composerDraftStore";
-import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  makeBrowserAnnotation,
+  makeImage,
+  resetComposerDraftStore,
+} from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
 import { makeState, makeThread } from "../storeTestFixtures";
+import { extractTrailingBrowserAnnotations } from "./browserAnnotations";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import * as composerSend from "./composerSend";
 
@@ -148,6 +153,47 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
         }),
       }),
     );
+  });
+
+  it("keeps an annotation's attached image reference when a queued turn is dispatched", async () => {
+    const queuedTurn = makeQueuedChatTurn();
+    if (queuedTurn.kind !== "chat") throw new Error("Expected chat turn");
+    queuedTurn.images = [
+      makeImage({ id: "image-other", previewUrl: "blob:other" }),
+      makeImage({ id: "image-annotated", previewUrl: "blob:annotated" }),
+    ];
+    queuedTurn.browserAnnotations = [
+      { ...makeBrowserAnnotation({ id: "annotation-1" }), imageId: "image-annotated" },
+      makeBrowserAnnotation({ id: "annotation-2", ordinal: 2 }),
+    ];
+    vi.spyOn(composerSend, "stageUploadComposerAttachments").mockResolvedValue({
+      attachments: [],
+      cleanup: async () => undefined,
+      commit: () => undefined,
+      runWithDispatch: async (dispatch) => dispatch([]),
+    });
+    const messageId = MessageId.makeUnsafe("queued-annotation-image-message");
+
+    const succeeded = await dispatchQueuedComposerTurnHeadless({
+      threadId: THREAD_ID,
+      queuedTurn,
+      dispatchMode: "queue",
+      assistantDeliveryMode: "streaming",
+      messageId,
+    });
+
+    expect(succeeded).toBe(true);
+    const calls = nativeApiMocks.dispatchCommand.mock.calls as unknown as Array<
+      [{ type: string; message?: { text: string } }]
+    >;
+    const command = calls.find(([call]) => call.type === "thread.turn.start")![0];
+    const { annotations } = extractTrailingBrowserAnnotations(command.message!.text, messageId);
+    expect(
+      annotations.map(({ id, attachedImage, imageId }) => ({ id, attachedImage, imageId })),
+    ).toEqual([
+      { id: "annotation-1", attachedImage: 2, imageId: undefined },
+      { id: "annotation-2", attachedImage: undefined, imageId: undefined },
+    ]);
   });
 
   it("dispatches a snapshotted plan follow-up as its own turn kind", async () => {

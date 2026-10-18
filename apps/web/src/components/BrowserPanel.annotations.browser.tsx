@@ -14,6 +14,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import type { ComposerImageAttachment } from "../composerDraftStore";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
 import { BrowserAnnotationButton } from "./BrowserPanel";
 import { browserAnnotationTheme } from "./BrowserPanel.logic";
@@ -95,12 +96,18 @@ function committedEvent(
 function AnnotationHarness(props: {
   harness: AnnotationMethodsHarness;
   onAdd: (annotation: Omit<BrowserAnnotationDraft, "ordinal">) => void;
+  onImage?: (image: ComposerImageAttachment) => void;
 }) {
   const [annotations, setAnnotations] = useState<BrowserAnnotationDraft[]>([]);
   const [browserStateVersion, setBrowserStateVersion] = useState(1);
   const [activeTabId, setActiveTabId] = useState<string | null>("tab-a");
   const addAnnotation = useCallback(
-    (_threadId: ThreadId, annotation: Omit<BrowserAnnotationDraft, "ordinal">) => {
+    (
+      _threadId: ThreadId,
+      annotation: Omit<BrowserAnnotationDraft, "ordinal">,
+      image?: ComposerImageAttachment,
+    ) => {
+      if (image) props.onImage?.(image);
       props.onAdd(annotation);
       setAnnotations((current) => [
         ...current,
@@ -111,7 +118,7 @@ function AnnotationHarness(props: {
       ]);
       return true;
     },
-    [props.onAdd],
+    [props.onAdd, props.onImage],
   );
   const controller = useBrowserAnnotations({
     methods: props.harness.methods,
@@ -196,6 +203,32 @@ describe("BrowserPanel annotations", () => {
     await expect.element(mounted.getByRole("button", { name: "Annotate page" })).toBeVisible();
     expect(harness.cancel).toHaveBeenCalledTimes(2);
 
+    await mounted.unmount();
+  });
+
+  it("prepares the committed image as a real composer attachment", async () => {
+    const harness = createMethodsHarness();
+    const onAdd = vi.fn();
+    const onImage = vi.fn();
+    const mounted = await render(
+      <AnnotationHarness harness={harness} onAdd={onAdd} onImage={onImage} />,
+    );
+    await mounted.getByRole("button", { name: "Annotate page" }).click();
+    await expect.element(mounted.getByRole("button", { name: "Cancel annotation" })).toBeVisible();
+    const bytes = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    harness.emit(committedEvent({ image: { mimeType: "image/png", bytes } }));
+    await expect.poll(() => onImage.mock.calls.length).toBe(1);
+    const image = onImage.mock.calls[0]![0] as ComposerImageAttachment;
+    expect(image.file).toBeInstanceOf(File);
+    expect(image.name).toBe("annotation-annotation-a.png");
+    expect(image.mimeType).toBe("image/png");
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    URL.revokeObjectURL(image.previewUrl);
     await mounted.unmount();
   });
 

@@ -10,6 +10,8 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 
+import type { ComposerImageAttachment } from "../../composerDraftStore";
+import { prepareComposerImageFromBrowserScreenshot } from "../../lib/browserPromptContext";
 import type { BrowserAnnotationDraft } from "../../lib/browserAnnotations";
 import {
   browserAnnotationDraftFromCommittedEvent,
@@ -42,6 +44,7 @@ interface UseBrowserAnnotationsInput {
   readonly addAnnotation: (
     threadId: ThreadId,
     annotation: Omit<BrowserAnnotationDraft, "ordinal">,
+    image?: ComposerImageAttachment,
   ) => boolean;
   readonly onError: (message: string | null) => void;
 }
@@ -202,15 +205,33 @@ export function useBrowserAnnotations({
         ) {
           return;
         }
-        const added = addAnnotation(
-          scope.threadId,
-          browserAnnotationDraftFromCommittedEvent(event),
-        );
-        if (!added) {
-          cancelPendingSession(false);
-          onError("This draft can't accept another browser annotation.");
+        const annotation = browserAnnotationDraftFromCommittedEvent(event);
+        const commit = (image?: ComposerImageAttachment) => {
+          const added = addAnnotation(event.threadId, annotation, image);
+          if (currentScopeRef.current.threadId !== event.threadId) return;
+          if (!added) {
+            cancelPendingSession(false);
+            onError("This draft can't accept another browser annotation or image.");
+          } else {
+            onError(null);
+          }
+        };
+        if (event.image) {
+          void prepareComposerImageFromBrowserScreenshot({
+            ...event.image,
+            sizeBytes: event.image.bytes.byteLength,
+            name: `annotation-${event.annotation.id}.png`,
+          }).then(commit, (error: unknown) => {
+            if (currentScopeRef.current.threadId === event.threadId) {
+              onError(
+                error instanceof Error
+                  ? error.message
+                  : "The annotation image could not be prepared.",
+              );
+            }
+          });
         } else {
-          onError(null);
+          commit();
         }
         return;
       }

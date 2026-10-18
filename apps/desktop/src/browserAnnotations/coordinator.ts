@@ -5,6 +5,7 @@ import type {
   BrowserAnnotationCancelInput,
   BrowserAnnotationCancelReason,
   BrowserAnnotationEvent,
+  BrowserAnnotationImage,
   BrowserAnnotationSession,
   BrowserAnnotationStartInput,
   BrowserAnnotationSyncMarkersInput,
@@ -22,6 +23,7 @@ import { BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL } from "../ipcChannels";
 import {
   BROWSER_ANNOTATION_PROTOCOL_VERSION,
   parseAnnotationGuestMessage,
+  type AnnotationGuestImage,
   parseBrowserAnnotationTheme,
   parseBrowserAnnotationMarkers,
 } from "./protocol";
@@ -40,6 +42,11 @@ interface BrowserAnnotationCoordinatorOptions {
     webContentsId: number,
   ) => BrowserAnnotationRuntime | null;
   readonly markHumanControl: (threadId: ThreadId) => void;
+  /**
+   * Decodes and re-encodes a guest-supplied image so only pixels, never the
+   * page's original bytes or metadata, reach the composer. Null rejects it.
+   */
+  readonly encodeImage: (image: AnnotationGuestImage) => BrowserAnnotationImage | null;
 }
 
 interface ReadyDocument {
@@ -323,6 +330,7 @@ export class BrowserAnnotationCoordinator {
       runtime.tabId,
       session.liveUrl,
     );
+    const image = message.image ? this.options.encodeImage(message.image) : null;
     this.emit({
       kind: "committed",
       sessionId: session.sessionId,
@@ -331,6 +339,7 @@ export class BrowserAnnotationCoordinator {
       document: session.document,
       source: message.annotation.source,
       annotation: message.annotation,
+      ...(image ? { image } : {}),
     });
   }
 

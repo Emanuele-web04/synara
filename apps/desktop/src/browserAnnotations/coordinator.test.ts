@@ -44,6 +44,9 @@ function documentKey(url: string): string {
 
 function createHarness(initialUrl = "https://example.test/app") {
   let url = initialUrl;
+  const encodeImage = vi.fn((image: { bytes: Uint8Array }) =>
+    image.bytes[0] === 0 ? null : { mimeType: "image/png" as const, bytes: Uint8Array.of(9) },
+  );
   const sent: Array<{ channel: string; payload: Record<string, unknown> }> = [];
   const webContents = {
     id: 42,
@@ -60,6 +63,7 @@ function createHarness(initialUrl = "https://example.test/app") {
     resolveVisibleRuntime: () => runtime,
     resolveRuntimeByWebContentsId: (id) => (id === webContents.id ? runtime : null),
     markHumanControl,
+    encodeImage,
   });
   coordinator.subscribe((event) => events.push(event));
   const ready = (documentToken: string, pageTitle = "Page") =>
@@ -71,6 +75,7 @@ function createHarness(initialUrl = "https://example.test/app") {
     });
   return {
     coordinator,
+    encodeImage,
     events,
     markHumanControl,
     ready,
@@ -94,6 +99,49 @@ function marker(url = "https://example.test/app", liveUrl = url) {
 }
 
 describe("BrowserAnnotationCoordinator", () => {
+  it("publishes the re-encoded image with a committed annotation", () => {
+    const harness = createHarness();
+    harness.ready("document-a");
+    const session = harness.coordinator.start({
+      threadId: THREAD_ID,
+      tabId: TAB_ID,
+      theme: DARK_ANNOTATION_THEME,
+    });
+    const commit = (id: string, firstByte: number) =>
+      harness.coordinator.handleGuestMessage(harness.webContents, {
+        version: 1,
+        kind: "committed",
+        documentToken: "document-a",
+        sessionId: session.sessionId,
+        annotation: {
+          id,
+          source: { url: "https://example.test/app", pageTitle: "Page" },
+          selector: "#target",
+          tagName: "BUTTON",
+          role: "button",
+          name: "Save",
+          text: "Save",
+          fingerprint: FINGERPRINT,
+          comment: "Make it look like this",
+          capturedAt: "2026-07-23T10:00:00.000Z",
+        },
+        image: { mimeType: "image/jpeg", bytes: Uint8Array.of(firstByte, 2, 3) },
+      });
+
+    commit("annotation-1", 1);
+    expect(harness.encodeImage).toHaveBeenCalledOnce();
+    expect(harness.events.at(-1)).toMatchObject({
+      kind: "committed",
+      image: { mimeType: "image/png", bytes: Uint8Array.of(9) },
+    });
+
+    // An undecodable image keeps the annotation and drops only the image.
+    commit("annotation-2", 0);
+    const last = harness.events.at(-1);
+    expect(last).toMatchObject({ kind: "committed", annotation: { id: "annotation-2" } });
+    expect(last && "image" in last).toBe(false);
+  });
+
   it("takes human control once and accepts consecutive commits until cancellation", () => {
     const harness = createHarness();
     harness.coordinator.syncMarkers({

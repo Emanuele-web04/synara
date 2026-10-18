@@ -1,5 +1,7 @@
 import {
+  BROWSER_ANNOTATION_IMAGE_MIME_TYPES,
   BROWSER_ANNOTATION_MAX_COMMENT_LENGTH,
+  BROWSER_ANNOTATION_MAX_IMAGE_BYTES,
   BROWSER_ANNOTATION_MAX_NAME_LENGTH,
   BROWSER_ANNOTATION_MAX_PAGE_TITLE_LENGTH,
   BROWSER_ANNOTATION_MAX_ROLE_LENGTH,
@@ -19,7 +21,9 @@ import {
 } from "./protocol";
 import { hardenBrowserAnnotationWebviewPreferences } from "./webviewSecurity";
 import {
+  GUEST_ANNOTATION_IMAGE_MIME_TYPES,
   GUEST_ANNOTATION_MAX_COMMENT_LENGTH,
+  GUEST_ANNOTATION_MAX_IMAGE_BYTES,
   GUEST_ANNOTATION_MAX_NAME_LENGTH,
   GUEST_ANNOTATION_MAX_PAGE_TITLE_LENGTH,
   GUEST_ANNOTATION_MAX_ROLE_LENGTH,
@@ -187,6 +191,43 @@ describe("browser annotation protocol", () => {
     ).toBeNull();
   });
 
+  it("accepts a bounded image on a commit and rejects malformed ones", () => {
+    const committed = (image: unknown) =>
+      parseAnnotationGuestMessage({
+        version: 1,
+        kind: "committed",
+        documentToken: "document-a",
+        sessionId: "session-a",
+        annotation: {
+          id: "annotation-1",
+          source,
+          selector: "#target",
+          tagName: "BUTTON",
+          role: "button",
+          name: "Save",
+          text: "Save",
+          fingerprint,
+          comment: "Like this",
+          capturedAt: "2026-07-23T10:00:00.000Z",
+        },
+        image,
+      });
+
+    expect(committed({ mimeType: "image/png", bytes: Uint8Array.of(1) })).toMatchObject({
+      image: { mimeType: "image/png" },
+    });
+    expect(committed(undefined)).not.toHaveProperty("image");
+    expect(committed({ mimeType: "image/svg+xml", bytes: Uint8Array.of(1) })).toBeNull();
+    expect(committed({ mimeType: "image/png", bytes: new Uint8Array(0) })).toBeNull();
+    expect(committed({ mimeType: "image/png", bytes: [1, 2, 3] })).toBeNull();
+    expect(
+      committed({
+        mimeType: "image/png",
+        bytes: new Uint8Array(BROWSER_ANNOTATION_MAX_IMAGE_BYTES + 1),
+      }),
+    ).toBeNull();
+  });
+
   it("keeps sandbox-local guest bounds aligned with the public contract", () => {
     expect({
       comment: GUEST_ANNOTATION_MAX_COMMENT_LENGTH,
@@ -197,6 +238,8 @@ describe("browser annotation protocol", () => {
       tagName: GUEST_ANNOTATION_MAX_TAG_NAME_LENGTH,
       text: GUEST_ANNOTATION_MAX_TEXT_LENGTH,
       url: GUEST_ANNOTATION_MAX_URL_LENGTH,
+      imageBytes: GUEST_ANNOTATION_MAX_IMAGE_BYTES,
+      imageMimeTypes: GUEST_ANNOTATION_IMAGE_MIME_TYPES,
     }).toEqual({
       comment: BROWSER_ANNOTATION_MAX_COMMENT_LENGTH,
       name: BROWSER_ANNOTATION_MAX_NAME_LENGTH,
@@ -206,6 +249,8 @@ describe("browser annotation protocol", () => {
       tagName: BROWSER_ANNOTATION_MAX_TAG_NAME_LENGTH,
       text: BROWSER_ANNOTATION_MAX_TEXT_LENGTH,
       url: BROWSER_ANNOTATION_MAX_URL_LENGTH,
+      imageBytes: BROWSER_ANNOTATION_MAX_IMAGE_BYTES,
+      imageMimeTypes: BROWSER_ANNOTATION_IMAGE_MIME_TYPES,
     });
   });
 
