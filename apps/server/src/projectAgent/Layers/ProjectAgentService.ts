@@ -506,7 +506,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
       return (
         (await importDirectoryExists(physical)) && (await findImportGitWorkspace(physical)) === null
       );
-    }).pipe(Effect.mapError(toServiceError("Failed to verify completed worker workspace.")));
+    }).pipe(
+      // Unknown access is not non-Git proof; let other workers keep recovering.
+      Effect.catch(() =>
+        Effect.logDebug("worker completion workspace verification unavailable", {
+          threadId: shell.id,
+        }).pipe(Effect.as(false)),
+      ),
+    );
     return nonGit ? turn : null;
   });
 
@@ -517,6 +524,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly outcome: ProjectManagedWorker["settleOutcome"];
     readonly taskId: ProjectTaskId | null;
     readonly createdAt: string;
+    readonly updatedAt?: string;
     readonly expectedTurnCommandId?: string | null;
   }) =>
     Effect.gen(function* () {
@@ -543,7 +551,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         nudgeAt: null,
         needsYou: false,
         needsYouAt: null,
-        updatedAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
       };
       const saved = yield* repository
         .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
@@ -986,7 +994,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           sourceEventId: `worker-non-git-completed:${worker.threadId}:${completedTurn.turnId}`,
           eventType: "worker.completed",
           turnId: completedTurn.turnId,
-          createdAt: completedTurn.completedAt!,
+          // Inbox ordering follows admission, not the old turn's completion time.
+          createdAt: nowIso,
         });
         return;
       }
@@ -5638,45 +5647,73 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
         const admitted =
           nonGitTurn && Option.isSome(worker)
-            ? yield* sql
-                .withTransaction(
-                  Effect.gen(function* () {
-                    // The engine writes pending starts/turns in the same SQLite database.
-                    // Claim before any report or wake; a queued or newer attempt wins.
-                    const current = yield* snapshotQuery.getThreadShellById(input.threadId);
-                    const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
-                      threadId: input.threadId,
-                    });
-                    const freshWorker = yield* repository.findManagedWorkerByThread(input.threadId);
-                    if (
-                      Option.isNone(current) ||
-                      Option.isSome(pending) ||
-                      Option.isNone(freshWorker) ||
-                      current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
-                      current.value.latestTurn.state !== "completed" ||
-                      current.value.session?.status !== "ready" ||
-                      current.value.session.activeTurnId !== null ||
-                      freshWorker.value.activeTurnCommandId !== worker.value.activeTurnCommandId
-                    )
-                      return null;
-                    const inserted = yield* insert;
-                    if (!inserted.inserted) return inserted;
-                    const saved = yield* persistWorkerSettlement({
-                      worker: freshWorker.value,
-                      outcome: "completed",
-                      taskId: Option.isSome(task) ? task.value.id : null,
-                      createdAt: input.createdAt,
-                      expectedTurnCommandId: freshWorker.value.activeTurnCommandId,
-                    });
-                    if (!saved)
-                      return yield* Effect.fail(
-                        fail("Completed worker attempt changed before settlement."),
+            ? yield* withProjectLock(
+                projectId,
+                sql
+                  .withTransaction(
+                    Effect.gen(function* () {
+                      // The engine writes pending starts/turns in the same SQLite database.
+                      // Claim before any report or wake; a queued or newer attempt wins.
+                      const current = yield* snapshotQuery.getThreadShellById(input.threadId);
+                      const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
+                        threadId: input.threadId,
+                      });
+                      const freshWorker = yield* repository.findManagedWorkerByThread(
+                        input.threadId,
                       );
-                    settledWorker = saved;
-                    return inserted;
-                  }),
-                )
-                .pipe(Effect.mapError(toServiceError("Failed to claim completed worker turn.")))
+                      if (
+                        Option.isNone(current) ||
+                        Option.isSome(pending) ||
+                        Option.isNone(freshWorker) ||
+                        current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
+                        current.value.latestTurn.state !== "completed" ||
+                        current.value.session?.status !== "ready" ||
+                        current.value.session.activeTurnId !== null ||
+                        freshWorker.value.activeTurnCommandId !== worker.value.activeTurnCommandId
+                      )
+                        return null;
+                      const cursor = yield* repository.getCursor(projectId);
+                      const frozen = cursor.frozenToInboxId
+                        ? yield* repository.getInboxEvent({
+                            projectId,
+                            inboxId: cursor.frozenToInboxId,
+                          })
+                        : Option.none();
+                      const observedAt = new Date().toISOString();
+                      // Inbox order is a logical admission clock; it must not
+                      // jump behind an acknowledged or frozen wake after clock rollback.
+                      const orderedAt = new Date(
+                        Math.max(
+                          Date.parse(observedAt),
+                          cursor.processedThroughCreatedAt
+                            ? Date.parse(cursor.processedThroughCreatedAt) + 1
+                            : 0,
+                          Option.isSome(frozen) ? Date.parse(frozen.value.createdAt) + 1 : 0,
+                        ),
+                      ).toISOString();
+                      const inserted = yield* repository.insertInboxEvent({
+                        ...inboxEvent,
+                        createdAt: orderedAt,
+                      });
+                      if (!inserted.inserted) return inserted;
+                      const saved = yield* persistWorkerSettlement({
+                        worker: freshWorker.value,
+                        outcome: "completed",
+                        taskId: Option.isSome(task) ? task.value.id : null,
+                        createdAt: nonGitTurn.completedAt!,
+                        updatedAt: observedAt,
+                        expectedTurnCommandId: freshWorker.value.activeTurnCommandId,
+                      });
+                      if (!saved)
+                        return yield* Effect.fail(
+                          fail("Completed worker attempt changed before settlement."),
+                        );
+                      settledWorker = saved;
+                      return inserted;
+                    }),
+                  )
+                  .pipe(Effect.mapError(toServiceError("Failed to claim completed worker turn."))),
+              )
             : yield* insert;
         if (!admitted) return;
         const inserted = admitted;
@@ -5774,7 +5811,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             sourceEventId,
             ...(nonGitTurn ? { expectedTurnCommandId: worker.value.activeTurnCommandId } : {}),
             ...(settledWorker ? { settledWorker } : {}),
-            createdAt: input.createdAt,
+            createdAt: nonGitTurn?.completedAt ?? input.createdAt,
             coordinatorThreadId: config.value.coordinatorThreadId,
             taskId: Option.isSome(task) ? task.value.id : null,
             lastKnownPr: Option.isSome(shell) ? (shell.value.lastKnownPr ?? null) : null,
