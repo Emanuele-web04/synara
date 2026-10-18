@@ -47,6 +47,41 @@ afterEach(async () => {
 });
 
 describe("real TypeScript project intelligence", () => {
+  it.each(["class", "return", "null", "true", "let", "yield", "await", "123 invalid", "bad-name"])(
+    "rejects renaming a variable binding to %s without changing disk",
+    async (newName) => {
+      expect(() => request("rename", { offset: main.indexOf("answer ="), newName })).toThrow(
+        "valid identifier",
+      );
+      expect(await readFile(path.join(root, "main.ts"), "utf8")).toBe(main);
+    },
+  );
+
+  it.each(["type", "async", "get", "$value", "café"])(
+    "retains valid contextual and Unicode binding names: %s",
+    (newName) => {
+      expect(
+        request("rename", { offset: main.indexOf("answer ="), newName }).edits?.[0]?.edits,
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ newText: newName })]));
+    },
+  );
+
+  it("allows reserved property names and preserves pre-existing syntax errors", () => {
+    expect(
+      request("rename", {
+        relativePath: "math.ts",
+        offset: math.indexOf("value: number"),
+        newName: "class",
+      }).edits?.length,
+    ).toBeGreaterThan(0);
+    documents = [
+      { relativePath: "main.ts", contents: main + "const incomplete = ;\n", version: 2 },
+    ];
+    expect(
+      request("rename", { offset: main.indexOf("answer ="), newName: "renamed" }).edits?.length,
+    ).toBeGreaterThan(0);
+  });
+
   it("provides completion documentation, signature help, navigation, references, symbols, and a read-only rename transaction", async () => {
     expect(
       request("completion", {

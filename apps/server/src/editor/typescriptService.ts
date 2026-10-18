@@ -404,12 +404,60 @@ export function createTypeScriptService(workspaceRoot: string) {
             });
             changes.set(item.fileName, edits);
           }
+          // Identifier characters alone do not make a valid binding name (for
+          // example `class`). Parse the actual edits so reserved property names
+          // and contextual keywords remain legal in their original context.
+          const renamedFiles = fileEdits(
+            [...changes].map(([fileName, textChanges]) => ({ fileName, textChanges })),
+          );
+          for (const change of renamedFiles) {
+            const fileName = resolve(change.relativePath);
+            let renamed = change.expectedContents;
+            for (const edit of change.edits.toSorted((a, b) => b.start - a.start)) {
+              renamed =
+                renamed.slice(0, edit.start) +
+                edit.newText +
+                renamed.slice(edit.start + edit.length);
+            }
+            const validate = (contents: string) => {
+              const source = ts.createSourceFile(
+                fileName,
+                contents,
+                options.target ?? ts.ScriptTarget.ESNext,
+                true,
+              );
+              const validationOptions = { ...options, noLib: true, noResolve: true };
+              const program = ts.createProgram([fileName], validationOptions, {
+                ...ts.createCompilerHost(validationOptions),
+                getSourceFile: (requested) =>
+                  path.resolve(requested) === fileName ? source : undefined,
+                fileExists: () => false,
+                readFile: () => undefined,
+                directoryExists: () => false,
+                getDirectories: () => [],
+              });
+              // Some invalid names (`let` in a const declaration, `yield` in a
+              // module) are context diagnostics, not parser errors. Compare
+              // both versions in the same isolated, disk-free environment.
+              return [
+                ...program.getSyntacticDiagnostics(source),
+                ...program.getSemanticDiagnostics(source),
+              ];
+            };
+            const existing = new Map<number, number>();
+            for (const diagnostic of validate(change.expectedContents)) {
+              existing.set(diagnostic.code, (existing.get(diagnostic.code) ?? 0) + 1);
+            }
+            for (const diagnostic of validate(renamed)) {
+              const remaining = existing.get(diagnostic.code) ?? 0;
+              if (!remaining) throw new Error("Enter a valid identifier for this location.");
+              existing.set(diagnostic.code, remaining - 1);
+            }
+          }
           return {
             ...base,
             span: info.triggerSpan,
-            edits: fileEdits(
-              [...changes].map(([fileName, textChanges]) => ({ fileName, textChanges })),
-            ),
+            edits: renamedFiles,
           };
         }
         case "documentSymbols": {
