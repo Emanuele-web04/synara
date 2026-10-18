@@ -22,7 +22,7 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "1.0.6-remote.23",
+    version: "1.0.6-remote.24",
     date: "Oct 18",
     features: [
       {
@@ -36,30 +36,6 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         title: "Open larger remote conversations",
         description:
           "Large remote conversation histories stream through both connection bridges with bounded memory and backpressure, instead of dropping at the former message-size limit.",
-      },
-      {
-        id: "claude-published-change-refresh",
-        title: "Claude publication updates",
-        description:
-          "Claude's published-change notifications refresh repository and pull-request information without an unhandled runtime warning.",
-      },
-    ],
-  },
-  {
-    version: "1.0.6-remote.22",
-    date: "Oct 18",
-    features: [
-      {
-        id: "remote-session-recovery",
-        title: "Recover connections without losing pairing",
-        description:
-          "Temporary account-service interruptions and expired sessions reconnect using your existing device approval. Actual revocations still require pairing again.",
-      },
-      {
-        id: "larger-remote-history",
-        title: "Open larger remote conversations",
-        description:
-          "Remote desktop clients can receive larger conversation histories without dropping the connection at the command-size limit.",
       },
       {
         id: "claude-published-change-refresh",
