@@ -73,6 +73,7 @@ import {
   type LibrarySortState,
   type LibraryTypeFilter,
   type LibraryViewMode,
+  librarySearchRows,
   nextLibrarySort,
   toggleLibraryDirectory,
 } from "./libraryPanel.logic";
@@ -109,7 +110,6 @@ function deletedPathFromCommitMessage(message: string): string | null {
 
 export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanelProps) {
   const library = useGroupLibrary({ projectId, enabled: open && projectId !== null });
-  const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<LibraryTypeFilter>("all");
   const [viewMode, setViewMode] = useState<LibraryViewMode>("list");
   const [sort, setSort] = useState<LibrarySortState>(DEFAULT_LIBRARY_SORT);
@@ -133,17 +133,37 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   // Latest history request wins — a slow response must not clobber a newer view.
   const historyGenerationRef = useRef(0);
 
-  const rows = useMemo(
-    () =>
-      flattenLibraryRows({
+  // A query searches the whole tree server-side: the per-directory listings only
+  // know folders a user opened, so a file in a never-opened folder was
+  // unreachable. Search returns paths only — opening a result still reads one
+  // file through the existing preview.
+  const searching = library.searchQuery.trim().length > 0;
+  const rows = useMemo(() => {
+    if (!searching) {
+      return flattenLibraryRows({
         entriesByDir: library.entriesByDir,
         expandedDirectories,
         sort,
         typeFilter,
-        query,
-      }),
-    [library.entriesByDir, expandedDirectories, sort, typeFilter, query],
-  );
+        query: "",
+      });
+    }
+    // The type filter and sort still apply; the server filtered by name/path.
+    return librarySearchRows({
+      results: library.searchResults,
+      typeFilter,
+      sort,
+      droppedPaths: library.droppedSearchPaths,
+    });
+  }, [
+    searching,
+    library.entriesByDir,
+    library.searchResults,
+    library.droppedSearchPaths,
+    expandedDirectories,
+    sort,
+    typeFilter,
+  ]);
 
   const openFile = useCallback((entry: LibraryEntry) => {
     setPreviewPath(entry.relativePath);
@@ -162,13 +182,13 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
   const handleEntryClick = useCallback(
     (entry: LibraryEntry) => {
-      if (entry.kind === "directory") {
+      if (entry.kind === "directory" && !searching) {
         toggleDirectory(entry);
       } else {
         openFile(entry);
       }
     },
-    [openFile, toggleDirectory],
+    [openFile, searching, toggleDirectory],
   );
 
   const showHistory = useCallback(
@@ -372,11 +392,20 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
       <div className="px-2 pb-1">
         <SearchInput
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search library..."
+          value={library.searchQuery}
+          onChange={(event) => library.search(event.target.value)}
+          placeholder="Search the whole library..."
           aria-label="Search library"
         />
+        {searching ? (
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            {library.searchBusy && library.searchResults.length === 0
+              ? "Searching…"
+              : `${library.searchResults.length} match${
+                  library.searchResults.length === 1 ? "" : "es"
+                } in the whole library${library.searchCursor !== null ? ", more available" : ""}`}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-1.5 px-2 pb-1.5">
@@ -586,7 +615,9 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           <div className="min-h-0 flex-1 overflow-y-auto p-1" data-library-view={viewMode}>
             {emptyLibrary ? (
               <PanelStateMessage density="compact" fill="flex">
-                {query || typeFilter !== "all" ? (
+                {library.searchBusy && searching ? (
+                  <p>Searching the whole library…</p>
+                ) : library.searchQuery || typeFilter !== "all" ? (
                   <p>No files match.</p>
                 ) : (
                   <p>No files yet. Add documents or artifacts for this hub.</p>
@@ -626,6 +657,29 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                 ))}
               </div>
             )}
+            {searching && rows.length > 0 ? (
+              <div className="px-1 pb-1 pt-2">
+                {library.searchCursor !== null ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    disabled={library.searchBusy}
+                    onClick={() => void library.loadMoreSearchResults()}
+                  >
+                    {library.searchBusy ? "Loading…" : "Load more results"}
+                  </Button>
+                ) : null}
+                {/* A bounded walk is visible rather than silently partial. */}
+                {library.searchTruncated ? (
+                  <p className="mt-1 text-ui-xs text-muted-foreground">
+                    Search stopped after scanning {library.searchScanned.toLocaleString()} entries.
+                    Narrow the query or browse folders.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </>
       )}

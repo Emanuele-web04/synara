@@ -10,6 +10,7 @@ import {
   type ProjectDocumentRevision,
   type ProjectEvidence,
   type ProjectId,
+  type ProjectMemoryNote,
   type ProjectTask,
   type ProjectThreadIndexEntry,
   type ThreadId,
@@ -276,6 +277,17 @@ export function useProjectAgent(input: {
             next[index] = event.head;
             return next;
           });
+        }
+        return;
+      }
+      if (event.type === "document-removed") {
+        if (event.projectId === current) {
+          // A deleted document leaves no head to carry, so drop the cached row:
+          // otherwise Settings would keep offering an edit for a note that is
+          // already gone.
+          setDocuments((documents) =>
+            documents.filter((document) => document.logicalPath !== event.logicalPath),
+          );
         }
         return;
       }
@@ -692,6 +704,64 @@ export function useProjectAgent(input: {
     [],
   );
 
+  // Memory-note operations are user-owned and distinct from writeDocument: the
+  // server reconciles the generated MEMORY.md index line and the disk mirror in
+  // the same commit, and reports the conflict when the note moved underneath.
+  const listMemoryNotes = useCallback(async () => {
+    const api = readNativeApi();
+    const projectId = projectIdRef.current;
+    if (!api?.projectAgent || !projectId) return [] as readonly ProjectMemoryNote[];
+    const listed = await api.projectAgent.listMemoryNotes({ projectId });
+    if (projectIdRef.current !== projectId) return [] as readonly ProjectMemoryNote[];
+    return listed.notes;
+  }, []);
+
+  const updateMemoryNote = useCallback(
+    async (input: { path: string; content: string; expectedRevision?: number; title?: string }) => {
+      const api = readNativeApi();
+      const projectId = projectIdRef.current;
+      if (!api?.projectAgent || !projectId) {
+        throw new Error("Project coordinator is unavailable.");
+      }
+      const saved = await api.projectAgent.updateMemoryNote({
+        requestId: crypto.randomUUID(),
+        projectId,
+        path: input.path,
+        content: input.content,
+        ...(input.expectedRevision !== undefined
+          ? { expectedRevision: input.expectedRevision }
+          : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+      });
+      // The note and index heads both moved; a re-list keeps the documents cache
+      // (and every other consumer of it) on the server's state.
+      if (projectIdRef.current === projectId) await load();
+      return saved;
+    },
+    [load],
+  );
+
+  const deleteMemoryNote = useCallback(
+    async (input: { path: string; expectedRevision?: number }) => {
+      const api = readNativeApi();
+      const projectId = projectIdRef.current;
+      if (!api?.projectAgent || !projectId) {
+        throw new Error("Project coordinator is unavailable.");
+      }
+      const removed = await api.projectAgent.deleteMemoryNote({
+        requestId: crypto.randomUUID(),
+        projectId,
+        path: input.path,
+        ...(input.expectedRevision !== undefined
+          ? { expectedRevision: input.expectedRevision }
+          : {}),
+      });
+      if (projectIdRef.current === projectId) await load();
+      return removed;
+    },
+    [load],
+  );
+
   const exportDocuments = useCallback(
     async (logicalPaths: ReadonlyArray<string>, destinationDirectory: string) => {
       const api = readNativeApi();
@@ -742,6 +812,9 @@ export function useProjectAgent(input: {
     refreshDigest,
     readDocument,
     writeDocument,
+    listMemoryNotes,
+    updateMemoryNote,
+    deleteMemoryNote,
     exportDocuments,
     setError,
   };

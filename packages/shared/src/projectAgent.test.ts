@@ -7,6 +7,8 @@ import {
   canWriteMemoryDocument,
   isMemoryDocumentPath,
   isMemoryThreadDocumentPath,
+  isUserEditableMemoryNoteDocumentPath,
+  memoryNoteOriginForAuthor,
   isProjectContextPreviewPath,
   MEMORY_AUTO_DOCUMENT_PATH,
   MEMORY_DOCUMENT_PREFIX,
@@ -71,6 +73,33 @@ describe("isMemoryDocumentPath", () => {
         principalThreadId: "thread-1",
       }),
     ).toBe(false);
+  });
+});
+
+describe("isUserEditableMemoryNoteDocumentPath", () => {
+  it("covers coordinator notes and user quick notes", () => {
+    expect(isUserEditableMemoryNoteDocumentPath("memory/2026-10-01-standup.md")).toBe(true);
+    expect(isUserEditableMemoryNoteDocumentPath("memory/2026-10-01-standup-2.md")).toBe(true);
+    expect(isUserEditableMemoryNoteDocumentPath("memory/notes/2026-10-01-standup.md")).toBe(true);
+  });
+
+  // The generated index and thread-scoped memory keep their own ownership: they
+  // are not notes the user may rewrite from Settings.
+  it("excludes the generated index and thread memory", () => {
+    expect(isUserEditableMemoryNoteDocumentPath(MEMORY_AUTO_DOCUMENT_PATH)).toBe(false);
+    expect(isUserEditableMemoryNoteDocumentPath(memoryThreadDocumentPath("thread-1"))).toBe(false);
+    expect(isUserEditableMemoryNoteDocumentPath("memory/notes/nested/one.md")).toBe(false);
+    expect(isUserEditableMemoryNoteDocumentPath("memory/not-a-dated-note.md")).toBe(false);
+    expect(isUserEditableMemoryNoteDocumentPath("instructions.md")).toBe(false);
+  });
+});
+
+describe("memoryNoteOriginForAuthor", () => {
+  it("labels a user's note a human instruction and an agent's a conclusion", () => {
+    expect(memoryNoteOriginForAuthor("user")).toBe("human-instruction");
+    expect(memoryNoteOriginForAuthor("coordinator")).toBe("agent-conclusion");
+    expect(memoryNoteOriginForAuthor("worker")).toBe("agent-conclusion");
+    expect(memoryNoteOriginForAuthor("system")).toBe("agent-conclusion");
   });
 });
 

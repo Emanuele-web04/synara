@@ -1130,6 +1130,79 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             );
           }),
         ),
+    applyDocumentChanges: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            for (const upsert of input.upserts) {
+              const { revision, expectedRevision } = upsert;
+              if (expectedRevision !== null && expectedRevision !== revision.revision - 1) {
+                return yield* Effect.fail(revisionMismatch("document"));
+              }
+              if (expectedRevision !== null) {
+                const head = yield* impl.getDocumentHead(revision.projectId, revision.logicalPath);
+                if (Option.isNone(head) || head.value.revision !== expectedRevision) {
+                  return yield* Effect.fail(revisionMismatch("document"));
+                }
+              }
+              yield* sql`
+                INSERT INTO project_agent_documents (
+                  revision_id, project_id, logical_path, revision, content, content_hash,
+                  author_kind, author_thread_id, sources_json, created_at
+                ) VALUES (
+                  ${revision.id}, ${revision.projectId}, ${revision.logicalPath}, ${revision.revision},
+                  ${revision.content}, ${revision.contentHash}, ${revision.authorKind},
+                  ${revision.authorThreadId}, ${JSON.stringify(revision.sources)}, ${revision.createdAt}
+                )
+              `;
+              yield* sql`
+                INSERT INTO project_agent_document_heads (
+                  project_id, logical_path, revision, content_hash, disk_hash, conflict_pending, updated_at
+                ) VALUES (
+                  ${revision.projectId}, ${revision.logicalPath}, ${revision.revision},
+                  ${revision.contentHash}, ${upsert.diskHash ?? revision.contentHash},
+                  ${upsert.conflictPending ? 1 : 0}, ${revision.createdAt}
+                )
+                ON CONFLICT (project_id, logical_path) DO UPDATE SET
+                  revision = excluded.revision,
+                  content_hash = excluded.content_hash,
+                  disk_hash = excluded.disk_hash,
+                  conflict_pending = excluded.conflict_pending,
+                  updated_at = excluded.updated_at
+              `;
+            }
+            for (const removal of input.deletes) {
+              if (removal.expectedRevision !== null) {
+                const head = yield* impl.getDocumentHead(input.projectId, removal.logicalPath);
+                if (Option.isNone(head) || head.value.revision !== removal.expectedRevision) {
+                  return yield* Effect.fail(revisionMismatch("document"));
+                }
+              }
+              yield* sql`
+                DELETE FROM project_agent_documents
+                WHERE project_id = ${input.projectId} AND logical_path = ${removal.logicalPath}
+              `;
+              yield* sql`
+                DELETE FROM project_agent_document_heads
+                WHERE project_id = ${input.projectId} AND logical_path = ${removal.logicalPath}
+              `;
+            }
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) => {
+            const detail = cause instanceof Error ? cause.message : String(cause);
+            const isConflict =
+              detail.includes("revision mismatch") || /unique constraint failed/i.test(detail);
+            return toPersistenceSqlError("ProjectAgentRepository.applyDocumentChanges")(
+              isConflict
+                ? revisionMismatch("document")
+                : cause instanceof Error
+                  ? cause
+                  : new Error(detail),
+            );
+          }),
+        ),
     markDocumentDiskSynced: (input) =>
       sql`
         UPDATE project_agent_document_heads

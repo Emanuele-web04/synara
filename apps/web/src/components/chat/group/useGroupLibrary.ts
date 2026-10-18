@@ -13,12 +13,15 @@ import {
   type ProjectId,
 } from "@synara/contracts";
 import { LIBRARY_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { readNativeApi } from "~/nativeApi";
 
 const ROOT_DIRECTORY = "";
+// One page of search results; "Load more" fetches the next cursor page.
+const SEARCH_PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 250;
 
 // Kept at module scope so no value blocks (ternaries, `?.`) live inside the
 // try/catch bodies below — those trip React Compiler bailouts.
@@ -31,6 +34,18 @@ const libraryUploadErrorMessage = (payload: unknown, status: number) => {
 };
 
 type NativeLibraryApi = NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"]["library"];
+
+// Search-page merge lives at module scope: a conditional value block inside a
+// try/catch body is a React Compiler bailout.
+function mergeSearchResults(input: {
+  readonly appending: boolean;
+  readonly previous: readonly LibraryEntry[];
+  readonly page: readonly LibraryEntry[];
+  readonly droppedPaths: ReadonlySet<string>;
+}): readonly LibraryEntry[] {
+  const merged = input.appending ? [...input.previous, ...input.page] : input.page;
+  return merged.filter((entry) => !input.droppedPaths.has(entry.relativePath));
+}
 
 export function useGroupLibrary(input: {
   readonly projectId: ProjectId | null;
@@ -50,6 +65,22 @@ export function useGroupLibrary(input: {
   // coalesce into a single follow-up instead of stacking sequential reloads.
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshQueuedRef = useRef(false);
+  // Server-side name search state. The per-directory listings only cover
+  // directories a user opened, so a query searches the whole tree instead; the
+  // results are paths only (no contents are read), and paging is cursor-based.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<readonly LibraryEntry[]>([]);
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+  const [searchScanned, setSearchScanned] = useState(0);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const searchGeneration = useRef(0);
+  const searchTimer = useRef<number | null>(null);
+  // Paths a rename/delete removed, so a page that was already in flight cannot
+  // re-add a row for something that no longer exists.
+  const [droppedSearchPaths, setDroppedSearchPaths] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
 
   // Refresh in place: keep every cached listing until its directory's fresh one
   // lands, so expanded subfolders never flash empty. The root plus every
@@ -111,6 +142,18 @@ export function useGroupLibrary(input: {
       setEntriesByDir(new Map());
       setStatus(null);
       loadedDirs.current = new Set();
+      // A query never carries across a project switch: the next project's
+      // library is a different tree and the old results would be false links.
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+      searchTimer.current = null;
+      searchGeneration.current += 1;
+      setDroppedSearchPaths(new Set<string>());
+      setSearchQuery("");
+      setSearchResults([]);
+      setSearchCursor(null);
+      setSearchTruncated(false);
+      setSearchScanned(0);
+      setSearchBusy(false);
       return;
     }
     const generation = loadGeneration.current;
@@ -216,6 +259,11 @@ export function useGroupLibrary(input: {
         await refreshStatus(projectId);
         if (projectIdRef.current === projectId) {
           if (refreshed) setError(null);
+          // An upload or a restore can add a path the active query matches,
+          // so the results are re-fetched instead of left stale.
+          if (searchQuery.trim().length > 0) {
+            void runSearch(searchQuery);
+          }
         }
       }
       succeeded = true;
@@ -237,7 +285,95 @@ export function useGroupLibrary(input: {
     const keep = (dir: string) => dir !== relativePath && !dir.startsWith(`${relativePath}/`);
     loadedDirs.current = new Set(Array.from(loadedDirs.current).filter(keep));
     setEntriesByDir((current) => new Map(Array.from(current).filter(([dir]) => keep(dir))));
+    // Same rule for search results: a renamed or deleted path disappears now,
+    // so no row keeps pointing at a file that is gone or has a new name.
+    setSearchResults((current) => {
+      const kept = current.filter((entry) => keep(entry.relativePath));
+      const removed = current.filter((entry) => !keep(entry.relativePath));
+      if (removed.length > 0) {
+        setDroppedSearchPaths(
+          new Set([...droppedSearchPaths, ...removed.map((entry) => entry.relativePath)]),
+        );
+      }
+      return kept;
+    });
   };
+
+  // Whole-tree name search. A fresh query replaces the result set; paging
+  // appends the next cursor's page. Paths dropped by a rename/delete are
+  // filtered out even if an in-flight page still names them.
+  const runSearch = useCallback(
+    async (query: string, options?: { readonly append?: boolean }) => {
+      const api = readNativeApi();
+      const projectId = projectIdRef.current;
+      const trimmed = query.trim();
+      if (!input.enabled || !api?.projectAgent || !projectId || trimmed.length === 0) return;
+      const generation = ++searchGeneration.current;
+      const appending = options?.append === true;
+      const cursor = appending ? searchCursor : null;
+      // Built before the try: a conditional value block inside try/catch is a
+      // React Compiler bailout. The guard closure keeps the logical conditions
+      // out of the try/catch bodies too.
+      const searchArgs = cursor
+        ? { projectId, query: trimmed, limit: SEARCH_PAGE_SIZE, cursor }
+        : { projectId, query: trimmed, limit: SEARCH_PAGE_SIZE };
+      const stillCurrent = () =>
+        projectIdRef.current === projectId && searchGeneration.current === generation;
+      setSearchBusy(true);
+      try {
+        const page = await api.projectAgent.library.search(searchArgs);
+        if (!stillCurrent()) return;
+        const kept = mergeSearchResults({
+          appending,
+          previous: searchResults,
+          page: page.entries,
+          droppedPaths: droppedSearchPaths,
+        });
+        setSearchResults(kept);
+        setSearchCursor(page.nextCursor);
+        setSearchTruncated(page.truncated);
+        setSearchScanned(page.scannedEntries);
+        // No finally: a finalizer is a React Compiler bailout, so the busy flag
+        // clears on each exit and a stale generation skips it entirely.
+        if (stillCurrent()) setSearchBusy(false);
+      } catch (cause) {
+        if (!stillCurrent()) return;
+        setSearchResults([]);
+        setSearchCursor(null);
+        setError(libraryErrorMessage(cause, "Failed to search the library."));
+        setSearchBusy(false);
+      }
+    },
+    [droppedSearchPaths, input.enabled, searchCursor, searchResults],
+  );
+
+  // Debounced: every keystroke would otherwise walk the whole library tree.
+  const search = useCallback(
+    (query: string) => {
+      setSearchQuery(query);
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+      searchTimer.current = null;
+      if (query.trim().length === 0) {
+        searchGeneration.current += 1;
+        setDroppedSearchPaths(new Set<string>());
+        setSearchResults([]);
+        setSearchCursor(null);
+        setSearchTruncated(false);
+        setSearchScanned(0);
+        setSearchBusy(false);
+        return;
+      }
+      // A new query invalidates the old page and the paths dropped under it.
+      setDroppedSearchPaths(new Set<string>());
+      searchTimer.current = window.setTimeout(() => void runSearch(query), SEARCH_DEBOUNCE_MS);
+    },
+    [runSearch],
+  );
+
+  const loadMoreSearchResults = useCallback(() => {
+    if (searchCursor === null || searchBusy) return;
+    void runSearch(searchQuery, { append: true });
+  }, [runSearch, searchBusy, searchCursor, searchQuery]);
 
   const rename = async (from: string, to: string) =>
     runMutation(async (library, projectId) => {
@@ -324,6 +460,15 @@ export function useGroupLibrary(input: {
     history,
     restore,
     upload,
+    search,
+    searchQuery,
+    searchResults,
+    searchCursor,
+    searchTruncated,
+    searchScanned,
+    searchBusy,
+    loadMoreSearchResults,
+    droppedSearchPaths,
     setError,
   };
 }

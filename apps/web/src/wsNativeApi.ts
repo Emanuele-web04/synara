@@ -940,10 +940,16 @@ export function createWsNativeApi(): NativeApi {
       listDocuments: (input) => transport.request(WS_METHODS.projectAgentListDocuments, input),
       readDocument: (input) => transport.request(WS_METHODS.projectAgentReadDocument, input),
       writeDocument: (input) => transport.request(WS_METHODS.projectAgentWriteDocument, input),
+      listMemoryNotes: (input) => transport.request(WS_METHODS.projectAgentListMemoryNotes, input),
+      updateMemoryNote: (input) =>
+        transport.request(WS_METHODS.projectAgentUpdateMemoryNote, input),
+      deleteMemoryNote: (input) =>
+        transport.request(WS_METHODS.projectAgentDeleteMemoryNote, input),
       exportDocuments: (input) => transport.request(WS_METHODS.projectAgentExportDocuments, input),
       refreshDigest: (input) => transport.request(WS_METHODS.projectAgentRefreshDigest, input),
       library: {
         list: (input) => transport.request(WS_METHODS.projectAgentLibraryList, input),
+        search: (input) => transport.request(WS_METHODS.projectAgentLibrarySearch, input),
         mkdir: (input) => transport.request(WS_METHODS.projectAgentLibraryMkdir, input),
         rename: (input) => transport.request(WS_METHODS.projectAgentLibraryRename, input),
         delete: (input) => transport.request(WS_METHODS.projectAgentLibraryDelete, input),
