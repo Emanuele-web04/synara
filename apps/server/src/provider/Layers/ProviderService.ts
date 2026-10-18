@@ -789,6 +789,24 @@ function runtimeEventRetiredGatewayTurnAuthority(event: ProviderRuntimeEvent): b
   return runtimePayloadRecord(event.raw?.payload)[AGENT_GATEWAY_TURN_AUTHORITY_RETIRED] === true;
 }
 
+/**
+ * The adapter that retired a gateway bearer is the authoritative source for
+ * its own retired state. The persisted `AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED`
+ * marker is only a hint: it rides a terminal runtime event that can be dropped
+ * by binding/generation/turn-applicability gates after the bearer is already
+ * fenced, so routing must also consult the adapter directly.
+ */
+function adapterReportsRetiredGatewayCredential<TError>(
+  adapter: ProviderAdapterShape<TError>,
+  threadId: ThreadId,
+): Effect.Effect<boolean> {
+  return adapter.agentGatewayCredentialRetired === undefined
+    ? Effect.succeed(false)
+    : adapter
+        .agentGatewayCredentialRetired(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(false)));
+}
+
 function runtimeActiveTurnId(value: unknown): string | undefined {
   const activeTurnId = runtimePayloadRecord(value).activeTurnId;
   return typeof activeTurnId === "string" ? activeTurnId : undefined;
@@ -2304,15 +2322,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const renewedAdapter = yield* lifecycle.runCurrent(threadId, () =>
           Effect.gen(function* () {
             let binding = yield* getCurrentBinding();
+            // The persisted marker rides a terminal event that can be dropped
+            // after the bearer is already fenced; the adapter is authoritative
+            // for its own retired state, so consult it before skipping
+            // rotation.
+            let adapter = yield* getAdapterForBinding(binding);
             const requiresCredentialRotation =
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-              ] === true;
+              ] === true || (yield* adapterReportsRetiredGatewayCredential(adapter, threadId));
             if (!requiresCredentialRotation) {
               return;
             }
 
-            let adapter = yield* getAdapterForBinding(binding);
             if (!(yield* adapter.hasSession(threadId))) {
               return;
             }
@@ -2322,14 +2344,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // The drain may have waited for a while. Re-read all durable
             // routing state before stopping anything.
             binding = yield* getCurrentBinding();
+            adapter = yield* getAdapterForBinding(binding);
             if (
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-              ] !== true
+              ] !== true &&
+              !(yield* adapterReportsRetiredGatewayCredential(adapter, threadId))
             ) {
               return;
             }
-            adapter = yield* getAdapterForBinding(binding);
             if (!(yield* adapter.hasSession(threadId))) {
               return;
             }
@@ -2871,7 +2894,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const requiresCredentialRotation =
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
-          ] === true;
+          ] === true ||
+          (yield* adapterReportsRetiredGatewayCredential(providerAdapter, input.threadId));
         // A live adapter session whose persisted generation no longer matches
         // the thread's current generation is a zombie: its runtime events are
         // rejected by the stale-generation gate, so a turn routed into it can

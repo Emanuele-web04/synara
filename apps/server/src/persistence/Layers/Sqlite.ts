@@ -15,6 +15,7 @@ import {
 import { createMigrationSchemaTooNewStartupBlockError } from "../MigrationSchemaTooNewStartupBlock.ts";
 import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { resolveSqliteMemoryBudget } from "../sqliteMemoryBudget.ts";
+import { reclaimFreedSqlitePages, reclaimLegacySqliteDatabase } from "../SqliteReclamation.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   acquireDatabaseLifecycleLock,
@@ -23,6 +24,7 @@ import {
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
+  readonly disableWAL?: boolean | undefined;
 };
 
 type Loader = {
@@ -40,7 +42,9 @@ const makeRuntimeSqliteLayer = (
     const runtime = process.versions.bun !== undefined ? "bun" : "node";
     const loader = defaultSqliteClientLoaders[runtime];
     const clientModule = yield* Effect.promise<Loader>(loader);
-    return clientModule.layer(config);
+    // Bun otherwise creates a WAL database before setup can choose auto_vacuum
+    // and exclusive locking. Node leaves these pragmas to setup already.
+    return clientModule.layer({ ...config, disableWAL: true });
   }).pipe(Layer.unwrap);
 
 function errnoCode(cause: unknown): string | undefined {
@@ -62,12 +66,14 @@ interface SqliteSetupOptions {
   readonly dbPath?: string | undefined;
   readonly pendingRecovery?: MigrationRecoveryMarker | null | undefined;
   readonly divergenceConsent?: string | undefined;
+  readonly onSetupComplete?: ((legacyRebuildNeeded: boolean) => void) | undefined;
 }
 
 const makeSetup = ({
   dbPath,
   pendingRecovery = null,
   divergenceConsent,
+  onSetupComplete,
 }: SqliteSetupOptions = {}) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -91,6 +97,13 @@ const makeSetup = ({
         }
       }
       yield* sql`PRAGMA busy_timeout = 5000;`;
+      // New databases need the pointer map before any migration creates tables.
+      // NONE databases keep their current mode until the offline shutdown rebuild.
+      const vacuumMode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum;`;
+      if (dbPath && vacuumMode[0]?.auto_vacuum === 0) {
+        const tables = yield* sql`SELECT 1 FROM sqlite_schema WHERE type = 'table' LIMIT 1`;
+        if (tables.length === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
+      }
       const journalModeRows = yield* sql<{ readonly journal_mode: string }>`
         PRAGMA journal_mode = WAL;
       `;
@@ -154,6 +167,24 @@ const makeSetup = ({
             : Effect.fail(cause),
         ),
       );
+      if (dbPath) {
+        const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum;`;
+        onSetupComplete?.(mode[0]?.auto_vacuum === 0);
+        if (mode[0]?.auto_vacuum === 2) {
+          yield* Effect.forkScoped(
+            Effect.gen(function* () {
+              while (true) {
+                yield* Effect.sleep("30 seconds");
+                yield* reclaimFreedSqlitePages(sql).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("SQLite incremental reclamation deferred", { cause }),
+                  ),
+                );
+              }
+            }),
+          );
+        }
+      }
     }),
   );
 
@@ -182,11 +213,21 @@ export const makeSqlitePersistenceLive = (
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
         yield* repairSqliteFilePermissions(dbPath);
 
+        // Finalizers unwind in reverse acquisition order: SQL closes first,
+        // maintenance exits second, and only then is the lifecycle lock released.
+        let legacyRebuildNeeded = false;
+        yield* Effect.addFinalizer(() =>
+          legacyRebuildNeeded ? reclaimLegacySqliteDatabase(dbPath) : Effect.void,
+        );
+
         return Layer.provideMerge(
           makeSetup({
             dbPath,
             pendingRecovery,
             divergenceConsent: options.divergenceConsent,
+            onSetupComplete: (needsRebuild) => {
+              legacyRebuildNeeded = needsRebuild;
+            },
           }),
           makeRuntimeSqliteLayer({ filename: dbPath }),
         );

@@ -97,6 +97,7 @@ function harness(name: string) {
     let cleanupPending = false;
     let failWithPendingCleanup = false;
     let brokenProject: string | null = null;
+    let isRepo = true;
     type Dependencies = Parameters<typeof makeHubWorkGateway>[0];
     const dependencies = {
       repository: {
@@ -132,7 +133,7 @@ function harness(name: string) {
       serverConfig: { attachmentsDir: "/unused" } as Dependencies["serverConfig"],
       git: {
         readBranchContext: () =>
-          Effect.succeed({ isRepo: true, branch: "main", upstreamRef: null }),
+          Effect.sync(() => ({ isRepo, branch: isRepo ? "main" : null, upstreamRef: null })),
       },
       createThreads: (input, creationContext) =>
         Effect.gen(function* () {
@@ -176,6 +177,9 @@ function harness(name: string) {
         runtimeMode = mode;
       },
       input,
+      setRepository: (value: boolean) => {
+        isRepo = value;
+      },
       denyTarget: () => {
         denyTarget = true;
       },
@@ -228,6 +232,31 @@ tests("Hub work gateway integration", (it) => {
         }),
     );
   }
+
+  it.effect(
+    "rejects a non-Git worktree before binding the source and accepts a corrected plan in the same turn",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness("non-git-worktree");
+        h.setRepository(false);
+        const invalid = {
+          ...h.input,
+          threads: [{ ...h.input.threads[0]!, environment: "worktree" as const }],
+        };
+        const result = yield* h.gateway.submit(invalid, h.context);
+        assert.equal(result?.isError, true);
+        assert.deepEqual(yield* h.repository.list(h.projectId), []);
+        assert.deepEqual(h.calls, []);
+        const corrected = yield* h.gateway.submit(
+          { ...invalid, threads: [{ ...invalid.threads[0]!, environment: "local" }] },
+          h.context,
+        );
+        assert.notEqual(corrected?.isError, true);
+        yield* h.gateway.tick;
+        assert.equal(h.calls.length, 1);
+        assert.equal(h.calls[0]!.threads[0]!.environment, "local");
+      }),
+  );
 
   it.effect("preserves an explicit approval mode instead of inheriting Auto", () =>
     Effect.gen(function* () {
