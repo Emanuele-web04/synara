@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.26",
+    date: "Oct 18",
+    features: [
+      {
+        id: "packaged-claude-import",
+        title: "Import Claude conversations reliably",
+        description:
+          "The packaged app reads Claude history without opening another Synara window or failing with an empty JSON response.",
+      },
+      {
+        id: "retired-mcp-credential-recovery",
+        title: "Recover Codex tool access between turns",
+        description:
+          "A session renews retired per-turn MCP write access before the next turn, while old credentials stay blocked.",
+      },
+      {
+        id: "hub-non-git-completion",
+        title: "Finish Hub work outside Git projects",
+        description:
+          "Completed Hub workers settle correctly even when their workspace has no Git checkpoint.",
+      },
+      {
+        id: "bounded-sqlite-reclamation",
+        title: "Reclaim space from deleted data",
+        description:
+          "SQLite reclaims freed pages in bounded passes, with guarded maintenance for older databases after closing.",
+      },
+      {
+        id: "owned-simulator-idle-cleanup",
+        title: "Release idle agent simulators",
+        description:
+          "Simulators booted by an agent close after their work settles. Devices you started and active work stay running.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.25",
     date: "Oct 18",
     features: [

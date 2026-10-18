@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.6-remote.26 — 2026-10-18
+
+### Fixed
+
+- Importing a Claude conversation in the packaged desktop app runs the metadata reader in Node mode instead of opening an extra Electron instance and failing with an empty JSON response. The selected account environment stays isolated from unrelated credentials.
+- Codex sessions recover retired per-turn MCP write credentials before the next turn, including when the terminal rotation marker was lost. Retired credentials remain fenced from writes.
+- Hub workers outside Git workspaces settle completed work without waiting for a Git checkpoint that cannot exist. Replay and workspace ownership checks remain in place.
+- SQLite reclaims freed pages in bounded maintenance passes. Older databases are considered for a guarded rebuild only after closing, with free-space and time limits; deferred maintenance does not block startup.
+- Simulators booted by an agent are released after their owning turns settle. User-booted devices and simulators still owned by active work stay running.
+
+### Verification
+
+- Integrates the requested main updates through `299fd573b1d6520c323a87c78d30be74e87e53e1` (#1974, #1971, #1975 and #1966) while preserving Remote identities, data homes and update feeds.
+- All 18,587 local repository tests pass, along with formatting, lint, typecheck, Windows runtime boundaries and migration lineage checks. The installed Electron runtime and its bundled Claude SDK read all 174 synthetic history rows through the corrected metadata helper without starting a provider query. This is not a completed live import, provider-resume or long-conversation viewport test.
+- Publication still requires the exact-tag quality/server suites, three packaged platform checks, macOS signing/notarization, Windows Defender and public artifact provenance. Windows keeps the exact-version unsigned policy and may show SmartScreen. The separate iPhone/iPad update and physical-device behavior are verified independently.
+
 ## 1.0.6-remote.25 — 2026-10-18
 
 ### Fixed
