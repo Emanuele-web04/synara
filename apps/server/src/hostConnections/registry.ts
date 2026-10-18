@@ -11,7 +11,12 @@ import type {
 } from "@synara/contracts";
 import { Effect, Layer, ServiceMap } from "effect";
 import WebSocket, { type RawData } from "ws";
-import { sendBoundedRelayFrame, type RelaySocket } from "../relaySocket";
+import {
+  forwardBoundedRelayResponses,
+  normalizeRelayFrame,
+  sendBoundedRelayFrame,
+  type RelaySocket,
+} from "../relaySocket";
 import type { DialedSession } from "./dialer";
 
 export const HOST_CONNECTION_WS_PATH_PREFIX = "/ws/remote/";
@@ -40,15 +45,6 @@ interface Attachment {
 }
 function closeCode(code: number): number {
   return [1005, 1006, 1015].includes(code) ? 1001 : code;
-}
-function frame(data: RawData, binary: boolean): string | Buffer {
-  return binary
-    ? Buffer.isBuffer(data)
-      ? data
-      : Array.isArray(data)
-        ? Buffer.concat(data)
-        : Buffer.from(data)
-    : data.toString();
 }
 
 /** Desired host relationships outlive renderer streams; every HTTP negotiation
@@ -320,11 +316,10 @@ export class HostConnectionRegistry {
     }
     clearTimeout(entry.timer);
     const toRemote = (data: RawData, binary: boolean) => {
-      if (remote.readyState === WebSocket.OPEN) sendBoundedRelayFrame(remote, frame(data, binary));
+      if (remote.readyState === WebSocket.OPEN)
+        sendBoundedRelayFrame(remote, normalizeRelayFrame(data, binary));
     };
-    const toLocal = (data: RawData, binary: boolean) => {
-      if (local.readyState === WebSocket.OPEN) sendBoundedRelayFrame(local, frame(data, binary));
-    };
+    const stopResponses = forwardBoundedRelayResponses(remote, local);
     const localClosed = () => this.closeAttachment(id, 1000, "Renderer detached");
     // Renewal replaces the stream and forces resubscription. In-flight commands
     // fail with an uncertain outcome; nothing in this layer replays their bytes.
@@ -340,11 +335,10 @@ export class HostConnectionRegistry {
       clearTimeout(renewal);
       local.off("message", toRemote);
       local.off("close", localClosed);
-      remote.off("message", toLocal);
+      stopResponses();
     };
     local.on("message", toRemote);
     local.on("close", localClosed);
-    remote.on("message", toLocal);
     return true;
   }
 

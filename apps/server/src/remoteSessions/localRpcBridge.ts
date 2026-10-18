@@ -11,7 +11,13 @@ import { Duration, Effect } from "effect";
 import WebSocket, { type RawData } from "ws";
 
 import type { SessionCredentialServiceShape } from "../auth/Services/SessionCredentialService";
-import { sendBoundedRelayFrame, type RelaySocket } from "../relaySocket";
+import {
+  forwardBoundedRelayResponses,
+  MAX_RELAY_RESPONSE_BYTES,
+  normalizeRelayFrame,
+  sendBoundedRelayFrame,
+  type RelaySocket,
+} from "../relaySocket";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "../wsCompatibility";
 import serverPackageJson from "../../package.json" with { type: "json" };
 
@@ -21,13 +27,7 @@ export interface LocalRpcBridgeOptions {
   readonly attachmentScope?: Parameters<typeof bindRemoteAttachmentSession>[1];
 }
 
-/** Reconstructs the original WebSocket frame kind without changing its bytes. */
-export function normalizeRelayFrame(data: RawData, binary: boolean): string | Buffer {
-  if (!binary) return data.toString();
-  if (Buffer.isBuffer(data)) return data;
-  if (Array.isArray(data)) return Buffer.concat(data);
-  return Buffer.from(data);
-}
+export { normalizeRelayFrame } from "../relaySocket";
 
 /**
  * A close code safe to hand to `ws.close()`. The reserved codes a peer never
@@ -61,6 +61,7 @@ export async function bridgeRemoteSocketToLocalRpc(
   let revoked = false;
   let unbindAttachments: (() => void) | undefined;
   let revokeDesktopUpdateAuthority: (() => void) | undefined;
+  let stopResponses: (() => void) | undefined;
   const revokeIssuedSession = async () => {
     if (!issuedSessionId || revoked) return;
     revoked = true;
@@ -104,6 +105,7 @@ export async function bridgeRemoteSocketToLocalRpc(
 
   external.on("message", forwardExternal);
   const cleanupForwarder = () => {
+    stopResponses?.();
     external.off("message", forwardExternal);
     pending.length = 0;
     pendingBytes = 0;
@@ -142,7 +144,7 @@ export async function bridgeRemoteSocketToLocalRpc(
     search.set("wsToken", websocketToken.token);
     internal = new WebSocket(
       `ws://127.0.0.1:${options.listeningPort}${WS_FEATURE_PATH}?${search.toString()}`,
-      { perMessageDeflate: true, handshakeTimeout: 15_000 },
+      { perMessageDeflate: true, handshakeTimeout: 15_000, maxPayload: MAX_RELAY_RESPONSE_BYTES },
     );
     internal.on("close", (code, reason) => {
       cleanupForwarder();
@@ -164,15 +166,21 @@ export async function bridgeRemoteSocketToLocalRpc(
       // Keep an error listener after setup. Terminating a CONNECTING socket on
       // an external close emits `error`; without a listener EventEmitter would
       // turn routine cancellation into an uncaught process exception.
-      internal?.on("error", reject);
+      internal?.on("error", (error: Error & { code?: string }) => {
+        // A receiver limit can finish locally as 1006 if its close handshake
+        // races teardown. Preserve the authoritative size refusal remotely.
+        if (
+          error.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" &&
+          external.readyState === WebSocket.OPEN
+        )
+          external.close(1009, "Remote response exceeds the message limit");
+        reject(error);
+      });
       if (externalClosed) reject(externalClosed);
     });
     rejectSetup = undefined;
     if (externalClosed) throw externalClosed;
-    internal.on("message", (data, binary) => {
-      if (external.readyState === WebSocket.OPEN)
-        sendBoundedRelayFrame(external, normalizeRelayFrame(data, binary));
-    });
+    stopResponses = forwardBoundedRelayResponses(internal, external);
   } catch (error) {
     cleanupForwarder();
     rejectSetup = undefined;

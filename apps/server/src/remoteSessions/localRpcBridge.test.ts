@@ -124,6 +124,18 @@ describe("normalizeRelayFrame", () => {
 });
 
 describe("bridgeRemoteSocketToLocalRpc", () => {
+  it("preserves an oversized response refusal even when its local close reports 1006", async () => {
+    const { external, internal } = await establishedBridge();
+    internal.emit(
+      "error",
+      Object.assign(new Error("response too large"), { code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH" }),
+    );
+    internal.reportClose(1006);
+    expect(external.closes).toEqual([
+      { code: 1009, reason: "Remote response exceeds the message limit" },
+    ]);
+  });
+
   it("revokes a session issued after the remote peer drops during setup", async () => {
     let finishTokenIssue: (() => void) | undefined;
     let tokenIssueStarted: (() => void) | undefined;
