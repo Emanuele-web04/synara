@@ -6099,6 +6099,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           // page of non-wake rows can no longer hide later worker alerts
           // behind the 50-row read window.
           let eligible: ReadonlyArray<ProjectInboxEvent> = [];
+          let deliveryBlocked = false;
           let scanAfterId = cursor.processedThroughInboxId;
           let scanAfterCreatedAt = cursor.processedThroughCreatedAt;
           for (;;) {
@@ -6111,16 +6112,43 @@ export const makeProjectAgentService = Effect.gen(function* () {
               })
               .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
             if (pending.length === 0) break;
-            for (const event of pending) yield* finishNonGitDelivery(event, config);
-            const found = pending.filter((event) => event.eligibleWake);
+            const readyPrefix: ProjectInboxEvent[] = [];
+            for (const event of pending) {
+              const delivered = yield* finishNonGitDelivery(event, config).pipe(
+                Effect.as(true),
+                // Keep the durable hole pending and materialize other ready
+                // completions without clearing an unrelated frozen continuation.
+                Effect.catch((error) =>
+                  Effect.logWarning("failed to deliver Hub worker completion", {
+                    projectId,
+                    inboxId: event.id,
+                    error: String(error),
+                  }).pipe(Effect.as(false)),
+                ),
+              );
+              if (!delivered) deliveryBlocked = true;
+              if (!deliveryBlocked) readyPrefix.push(event);
+            }
+            const found = readyPrefix.filter((event) => event.eligibleWake);
             if (found.length > 0) {
               eligible = found;
               break;
             }
-            const last = pending[pending.length - 1]!;
-            scanAfterId = last.id;
-            scanAfterCreatedAt = last.createdAt;
+            const last = readyPrefix.at(-1);
+            if (last) {
+              scanAfterId = last.id;
+              scanAfterCreatedAt = last.createdAt;
+            }
+            if (deliveryBlocked) break;
           }
+          // A frozen range can only be acknowledged if its entire prefix is
+          // ready. Later failed deliveries do not own or release that range.
+          if (
+            deliveryBlocked &&
+            cursor.frozenToInboxId !== null &&
+            !eligible.some((event) => event.id === cursor.frozenToInboxId)
+          )
+            return;
           // Paused/archived groups refuse coordinator wakes. The inbox rows
           // stay recorded, so resume/unarchive re-drives the backlog.
           if (config.pausedAt !== null || config.archivedAt !== null) return;

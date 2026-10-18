@@ -97,7 +97,10 @@ import { ProjectAgentReactorLive } from "../../projectAgent/Layers/ProjectAgentR
 import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
-import { readProjectDocumentMirror } from "../../projectAgent/materializer.ts";
+import {
+  materializeDocumentPath,
+  readProjectDocumentMirror,
+} from "../../projectAgent/materializer.ts";
 import { OrchestrationCommandInternalError } from "../Errors.ts";
 import { makeHubWorkService } from "../../projectAgent/hubWorkService.ts";
 import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
@@ -2259,6 +2262,8 @@ describe("CheckpointReactor", () => {
     "late-recovery",
     "cursor-race",
     "frozen-race",
+    "frozen-delivery-error",
+    "peer-delivery-error",
   ] as const)("settles only the completed non-Git Hub attempt, once (%s)", async (mode) => {
     const recovery = mode !== "live";
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-non-git-worker-"));
@@ -2291,6 +2296,8 @@ describe("CheckpointReactor", () => {
         "claim-error",
         "lookup-error",
         "late-recovery",
+        "frozen-delivery-error",
+        "peer-delivery-error",
       ].includes(mode),
     });
     const service = await runtime!.runPromise(
@@ -2543,6 +2550,209 @@ describe("CheckpointReactor", () => {
           createdAt: completedAt,
         }),
       );
+    }
+    if (mode === "frozen-delivery-error" || mode === "peer-delivery-error") {
+      const state = await runtime!.runPromise(
+        Effect.serviceOption(ServerConfig).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const reportPath = `inbox/${workerId}/report.md`;
+      const reportFile = materializeDocumentPath(state.stateDir, projectId, reportPath);
+      // A real directory at the file target makes mirror writes fail after the
+      // report revision commits, and keeps failing until the obstruction is removed.
+      fs.mkdirSync(reportFile, { recursive: true, mode: 0o700 });
+      const frozenId = ProjectInboxEventId.makeUnsafe("prior-running-wake");
+      if (mode === "frozen-delivery-error") {
+        const frozenAt = new Date(Date.now() - 60_000).toISOString();
+        await runtime!.runPromise(
+          repository.insertInboxEvent({
+            id: frozenId,
+            projectId,
+            sourceThreadId: coordinatorId,
+            sourceEventId: "prior-running-wake",
+            eventType: "worker.error",
+            taskId: null,
+            eligibleWake: true,
+            createdAt: frozenAt,
+          }),
+        );
+        await runtime!.runPromise(
+          repository.saveCursor({
+            projectId,
+            processedThroughInboxId: null,
+            processedThroughCreatedAt: null,
+            frozenFromInboxId: frozenId,
+            frozenToInboxId: frozenId,
+            coordinatorBusy: true,
+            coordinatorBusySince: completedAt,
+            updatedAt: completedAt,
+          }),
+        );
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("prior-wake-running"),
+            threadId: coordinatorId,
+            session: {
+              threadId: coordinatorId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("prior-wake-turn"),
+              lastError: null,
+              updatedAt: completedAt,
+            },
+            createdAt: completedAt,
+          }),
+        );
+        expect(
+          Option.getOrThrow(await runtime!.runPromise(query.getThreadShellById(coordinatorId)))
+            .latestTurn?.state,
+        ).toBe("running");
+      }
+      await runtime!.runPromise(service.inspectWorkerHealth());
+      if (mode === "frozen-delivery-error") {
+        const frozen = await runtime!.runPromise(repository.getCursor(projectId));
+        expect(frozen.coordinatorBusy).toBe(true);
+        expect(frozen.frozenToInboxId).toBe(frozenId);
+      }
+      if (mode === "peer-delivery-error")
+        await runtime!.runPromise(
+          repository.insertInboxEvent({
+            id: frozenId,
+            projectId,
+            sourceThreadId: coordinatorId,
+            sourceEventId: "prior-ready-prefix",
+            eventType: "worker.error",
+            taskId: null,
+            eligibleWake: true,
+            createdAt: new Date(Date.now() - 60_000).toISOString(),
+          }),
+        );
+      const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-delivery-peer-"));
+      tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(h, "zz-ready-delivery-peer", peerCwd);
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "delivery-peer",
+          callerThreadId: coordinatorId,
+          threadIds: [peer],
+          titles: ["Healthy peer"],
+        }),
+      );
+      const peerTurn = asTurnId("delivery-peer-turn");
+      const peerAt = new Date().toISOString();
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("delivery-peer-start"),
+          threadId: peer,
+          message: {
+            messageId: MessageId.makeUnsafe("delivery-peer-input"),
+            role: "user",
+            text: "Research",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: peerAt,
+        }),
+      );
+      await Effect.runPromise(
+        h.runtimeEvents.append({
+          type: "turn.started",
+          eventId: EventId.makeUnsafe("delivery-peer-started"),
+          provider: "codex",
+          threadId: peer,
+          turnId: peerTurn,
+          createdAt: peerAt,
+          payload: {},
+        }),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      await Effect.runPromise(
+        h.runtimeEvents.append(nativeCompletion("delivery-peer-complete", peer, peerTurn)),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      await runtime!.runPromise(service.inspectWorkerHealth());
+      // A failed earlier delivery cannot starve a ready peer's materialization,
+      // but its keyset hole cannot be acknowledged or used for another wake.
+      const peerReport = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({
+            projectId,
+            logicalPath: `inbox/${peer}/report.md`,
+          }),
+        ),
+      );
+      expect(peerReport.revision).toBe(1);
+      expect(
+        await runtime!.runPromise(
+          readProjectDocumentMirror({
+            stateDir: state.stateDir,
+            projectId,
+            logicalPath: `inbox/${peer}/report.md`,
+          }),
+        ),
+      ).toBe(peerReport.content);
+      expect(
+        (await runtime!.runPromise(repository.getCursor(projectId))).processedThroughInboxId,
+      ).toBe(mode === "peer-delivery-error" ? frozenId : null);
+      expect(wakes).toHaveLength(mode === "peer-delivery-error" ? 1 : 0);
+      if (mode === "frozen-delivery-error") {
+        const frozen = await runtime!.runPromise(repository.getCursor(projectId));
+        expect(frozen.coordinatorBusy).toBe(true);
+        expect(frozen.frozenToInboxId).toBe(frozenId);
+      }
+      fs.rmdirSync(reportFile);
+      if (mode === "frozen-delivery-error")
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("prior-wake-finished"),
+            threadId: coordinatorId,
+            session: {
+              threadId: coordinatorId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: new Date().toISOString(),
+            },
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      for (let attempt = 0; attempt < 3; attempt++)
+        await runtime!.runPromise(service.processPendingWakes(projectId));
+      await Effect.runPromise(h.engine.drain);
+      expect(wakes).toHaveLength(2);
+      const cursor = await runtime!.runPromise(repository.getCursor(projectId));
+      expect(cursor.frozenToInboxId).toBeNull();
+      expect(cursor.coordinatorBusy).toBe(false);
+      const report = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({ projectId, logicalPath: reportPath }),
+        ),
+      );
+      expect(report.revision).toBe(1);
+      expect(
+        await runtime!.runPromise(
+          readProjectDocumentMirror({
+            stateDir: state.stateDir,
+            projectId,
+            logicalPath: reportPath,
+          }),
+        ),
+      ).toBe(report.content);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(2);
+      return;
     }
     if (mode === "lookup-error" || mode === "claim-error") {
       const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-healthy-non-git-"));
