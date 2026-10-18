@@ -142,8 +142,12 @@ persistent queue and start as slots become available. Pausing or archiving a Hub
 starts. Cancelling queued work through the coordinator prevents it from starting.
 
 Repository tasks default to isolated worktrees; general Hub work and non-Git folders use the local
-workspace. An explicit environment choice still applies. Repeating the same delegation after a
-coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
+workspace. An explicit `worktree` choice requires a Git repository: select its `projectId` or
+choose `local`. Invalid worktree plans are rejected before task cards or source bindings are saved,
+so the coordinator can correct the plan in the same turn. Completed local non-Git workers settle
+and wake their coordinator without creating Git checkpoints; the health scan also recovers such
+completed workers after a missed live event. Repository workers still wait for their checkpoint
+outcome. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
 a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
 finish, the task retains its reserved slot until startup recovery confirms cleanup.
 

@@ -107,6 +107,7 @@ import {
   Stream,
 } from "effect";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { notifyAfterCommit } from "../../persistence/commitNotifications.ts";
 import { ServerConfig } from "../../config.ts";
@@ -123,6 +124,13 @@ import {
   normalizeDigestError,
   ProjectAgentRepository,
 } from "../../persistence/Services/ProjectAgentRepository.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import {
+  canonicalImportPath,
+  findImportGitWorkspace,
+  importDirectoryExists,
+} from "../../orchestration/projectImportPaths.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
@@ -326,9 +334,11 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
 
 export const makeProjectAgentService = Effect.gen(function* () {
   const repository = yield* ProjectAgentRepository;
+  const sql = yield* SqlClient.SqlClient;
   const hubWorkRepository = yield* Effect.serviceOption(HubWorkRepository);
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const projectionThreads = yield* ProjectionThreadRepository;
+  const projectionTurns = yield* ProjectionTurnRepository;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const serverConfig = yield* ServerConfig;
@@ -460,6 +470,117 @@ export const makeProjectAgentService = Effect.gen(function* () {
       })
       .pipe(Effect.catch(() => Effect.void));
 
+  // A successful non-Git turn has no checkpoint event. Only the persisted turn
+  // marker plus an accessible non-Git directory may replace that signal; Git
+  // failures, startup-ready sessions and missing workspaces keep their old path.
+  const completedNonGitTurn = Effect.fnUntraced(function* (shell: OrchestrationThreadShell) {
+    const turn = shell.latestTurn;
+    if (
+      shell.session?.status !== "ready" ||
+      shell.session.activeTurnId !== null ||
+      turn?.state !== "completed" ||
+      turn.completedAt === null
+    )
+      return null;
+    if (
+      Option.isSome(
+        yield* projectionTurns
+          .getPendingTurnStartByThreadId({ threadId: shell.id })
+          .pipe(Effect.mapError(toServiceError("Failed to resolve pending worker turn."))),
+      )
+    )
+      return null;
+    const persisted = yield* projectionTurns
+      .getByTurnId({ threadId: shell.id, turnId: turn.turnId })
+      .pipe(Effect.mapError(toServiceError("Failed to resolve completed worker turn.")));
+    if (Option.isNone(persisted) || persisted.value.startedWithoutGitWorkspace !== true)
+      return null;
+    const project = yield* snapshotQuery
+      .getProjectShellById(shell.projectId)
+      .pipe(Effect.mapError(toServiceError("Failed to resolve worker workspace.")));
+    if (Option.isNone(project)) return null;
+    const cwd = resolveThreadWorkspaceCwd({ ...shell, projectCwd: project.value.workspaceRoot });
+    if (!cwd) return null;
+    const nonGit = yield* Effect.tryPromise(async () => {
+      const physical = await canonicalImportPath(cwd);
+      return (
+        (await importDirectoryExists(physical)) && (await findImportGitWorkspace(physical)) === null
+      );
+    }).pipe(Effect.mapError(toServiceError("Failed to verify completed worker workspace.")));
+    return nonGit ? turn : null;
+  });
+
+  // Keep the durable worker claim free of filesystem, transcript and wake I/O
+  // so non-Git admission can atomically bind it to the exact completed attempt.
+  const persistWorkerSettlement = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly outcome: ProjectManagedWorker["settleOutcome"];
+    readonly taskId: ProjectTaskId | null;
+    readonly createdAt: string;
+    readonly expectedTurnCommandId?: string | null;
+  }) =>
+    Effect.gen(function* () {
+      const worker = input.worker;
+      const notice = { outcome: input.outcome };
+      const updated: ProjectManagedWorker = {
+        ...worker,
+        taskId: input.taskId ?? worker.taskId,
+        settledAt: input.createdAt,
+        settleOutcome: notice.outcome,
+        waitingSince:
+          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
+            ? (worker.waitingSince ?? input.createdAt)
+            : null,
+        // An event means the worker is alive; any stuck episode and recovery
+        // ladder run is over, and a flagged "Waiting on you" resolves.
+        // `recoveriesUsed` only resets on a genuine success — the ladder's own
+        // re-dispatches keep the count so the cap can't loop forever.
+        recoveriesUsed: notice.outcome === "completed" ? 0 : worker.recoveriesUsed,
+        stuckKind: null,
+        stuckSince: null,
+        recoveryEpisode: null,
+        recoveryStep: 0,
+        nudgeAt: null,
+        needsYou: false,
+        needsYouAt: null,
+        updatedAt: input.createdAt,
+      };
+      const saved = yield* repository
+        .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
+        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+      let persistedWorker = updated;
+      if (!saved.applied) {
+        // CAS miss: a concurrent write moved the row. Re-read once and apply
+        // the settle facts on top — losing a settle is worse than retrying.
+        const fresh = yield* repository
+          .findManagedWorkerByThread(worker.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
+        // A non-Git completion belongs to the observed attempt, never a newer
+        // coordinator/user turn that won the monitor write while we awaited I/O.
+        if (
+          input.expectedTurnCommandId !== undefined &&
+          Option.isSome(fresh) &&
+          fresh.value.activeTurnCommandId !== input.expectedTurnCommandId
+        )
+          return null;
+        if (Option.isSome(fresh)) {
+          persistedWorker = {
+            ...updated,
+            taskId: fresh.value.taskId ?? updated.taskId,
+            recoveriesUsed: updated.recoveriesUsed,
+            updatedAt: fresh.value.updatedAt,
+          };
+          yield* repository
+            .saveManagedWorkerMonitor({
+              worker: persistedWorker,
+              expectedUpdatedAt: fresh.value.updatedAt,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+        }
+      }
+      return persistedWorker;
+    });
+
   // Apply one settle/stuck event to a managed worker: post the compact system
   // row into the coordinator thread, update the durable worker row, then post
   // the all-workers roll-up once every worker in the creation batch has
@@ -474,6 +595,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly taskId: ProjectTaskId | null;
     /** Paused/archived groups keep recording worker state but post no rows. */
     readonly suppressRows?: boolean;
+    readonly expectedTurnCommandId?: string | null;
+    readonly settledWorker?: ProjectManagedWorker;
     /** Tracked PR association for the worker thread, when one exists. */
     readonly lastKnownPr?: { readonly url: string } | null;
   }) =>
@@ -542,54 +665,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         return;
       }
-      const updated: ProjectManagedWorker = {
-        ...worker,
-        taskId: input.taskId ?? worker.taskId,
-        settledAt: input.createdAt,
-        settleOutcome: notice.outcome,
-        waitingSince:
-          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
-            ? (worker.waitingSince ?? input.createdAt)
-            : null,
-        // An event means the worker is alive; any stuck episode and recovery
-        // ladder run is over, and a flagged "Waiting on you" resolves.
-        // `recoveriesUsed` only resets on a genuine success — the ladder's own
-        // re-dispatches keep the count so the cap can't loop forever.
-        recoveriesUsed: notice.outcome === "completed" ? 0 : worker.recoveriesUsed,
-        stuckKind: null,
-        stuckSince: null,
-        recoveryEpisode: null,
-        recoveryStep: 0,
-        nudgeAt: null,
-        needsYou: false,
-        needsYouAt: null,
-        updatedAt: input.createdAt,
-      };
-      const saved = yield* repository
-        .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
-        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
-      let persistedWorker = updated;
-      if (!saved.applied) {
-        // CAS miss: a concurrent write moved the row. Re-read once and apply
-        // the settle facts on top — losing a settle is worse than retrying.
-        const fresh = yield* repository
-          .findManagedWorkerByThread(worker.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
-        if (Option.isSome(fresh)) {
-          persistedWorker = {
-            ...updated,
-            taskId: fresh.value.taskId ?? updated.taskId,
-            recoveriesUsed: updated.recoveriesUsed,
-            updatedAt: fresh.value.updatedAt,
-          };
-          yield* repository
-            .saveManagedWorkerMonitor({
-              worker: persistedWorker,
-              expectedUpdatedAt: fresh.value.updatedAt,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
-        }
-      }
+      const persistedWorker =
+        input.settledWorker ??
+        (yield* persistWorkerSettlement({
+          worker,
+          outcome: notice.outcome,
+          taskId: input.taskId,
+          createdAt: input.createdAt,
+          ...(input.expectedTurnCommandId !== undefined
+            ? { expectedTurnCommandId: input.expectedTurnCommandId }
+            : {}),
+        }));
+      if (!persistedWorker) return;
       if (input.suppressRows !== true) {
         yield* postWorkerMonitorRow({
           coordinatorThreadId: input.coordinatorThreadId,
@@ -892,6 +979,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }
       const shell = input.shell.value;
       const sessionStatus = shell.session?.status ?? null;
+      const completedTurn = yield* completedNonGitTurn(shell);
+      if (completedTurn) {
+        yield* impl.ingestSettledThreadEvent({
+          threadId: worker.threadId,
+          sourceEventId: `worker-non-git-completed:${worker.threadId}:${completedTurn.turnId}`,
+          eventType: "worker.completed",
+          turnId: completedTurn.turnId,
+          createdAt: completedTurn.completedAt!,
+        });
+        return;
+      }
       if (isFailedWorkerSessionStatus(sessionStatus)) {
         const updatedAt = shell.session?.updatedAt ?? shell.updatedAt;
         yield* ingestHealthEvent(
@@ -5246,12 +5344,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             continue;
           }
           if (!config.enabled) continue;
-          const cursor = yield* repository
-            .getCursor(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load wake cursor.")));
-          if (cursor.coordinatorBusy || cursor.frozenFromInboxId) {
-            yield* impl.processPendingWakes(config.projectId);
-          }
+          // A crash can leave a fresh inbox event before any wake range was
+          // frozen. The existing receipt/cursor path also resumes that idle gap.
+          yield* impl.processPendingWakes(config.projectId);
         }
       }),
 
@@ -5449,10 +5544,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // treats it as an interruption (never `completed`): no false
         // "finished" row, and the recovery counter is not reset by the
         // ladder's own interrupt.
-        const eventType =
-          input.eventType === "thread.turn-diff-completed" &&
-          input.checkpointStatus !== undefined &&
-          input.checkpointStatus !== "ready"
+        const nonGitTurn =
+          (input.eventType === "thread.session-set" || input.eventType === "worker.completed") &&
+          (Option.isSome(worker) || Option.isSome(task)) &&
+          Option.isSome(shell)
+            ? yield* completedNonGitTurn(shell.value)
+            : null;
+        if (
+          input.eventType === "worker.completed" &&
+          (!nonGitTurn || nonGitTurn.turnId !== input.turnId)
+        )
+          return;
+        const sourceEventId = nonGitTurn
+          ? `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`
+          : input.sourceEventId;
+        const eventType = nonGitTurn
+          ? "worker.completed"
+          : input.eventType === "thread.turn-diff-completed" &&
+              input.checkpointStatus !== undefined &&
+              input.checkpointStatus !== "ready"
             ? "worker.interrupted"
             : input.eventType;
         if (Option.isSome(configByCoordinator)) {
@@ -5512,18 +5622,64 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // Paused/archived groups still record state (inbox event, worker row,
         // settlement report) — only the coordinator-thread rows suppress.
         const suppressRows = config.value.pausedAt != null || config.value.archivedAt != null;
-        const inserted = yield* repository
-          .insertInboxEvent({
-            id: branded.inbox(),
-            projectId,
-            sourceThreadId: input.threadId,
-            sourceEventId: input.sourceEventId,
-            eventType,
-            taskId: Option.isSome(task) ? task.value.id : null,
-            eligibleWake,
-            createdAt: input.createdAt,
-          })
+        const inboxEvent = {
+          id: branded.inbox(),
+          projectId,
+          sourceThreadId: input.threadId,
+          sourceEventId,
+          eventType,
+          taskId: Option.isSome(task) ? task.value.id : null,
+          eligibleWake,
+          createdAt: input.createdAt,
+        };
+        let settledWorker: ProjectManagedWorker | undefined;
+        const insert = repository
+          .insertInboxEvent(inboxEvent)
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
+        const admitted =
+          nonGitTurn && Option.isSome(worker)
+            ? yield* sql
+                .withTransaction(
+                  Effect.gen(function* () {
+                    // The engine writes pending starts/turns in the same SQLite database.
+                    // Claim before any report or wake; a queued or newer attempt wins.
+                    const current = yield* snapshotQuery.getThreadShellById(input.threadId);
+                    const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
+                      threadId: input.threadId,
+                    });
+                    const freshWorker = yield* repository.findManagedWorkerByThread(input.threadId);
+                    if (
+                      Option.isNone(current) ||
+                      Option.isSome(pending) ||
+                      Option.isNone(freshWorker) ||
+                      current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
+                      current.value.latestTurn.state !== "completed" ||
+                      current.value.session?.status !== "ready" ||
+                      current.value.session.activeTurnId !== null ||
+                      freshWorker.value.activeTurnCommandId !== worker.value.activeTurnCommandId
+                    )
+                      return null;
+                    const inserted = yield* insert;
+                    if (!inserted.inserted) return inserted;
+                    const saved = yield* persistWorkerSettlement({
+                      worker: freshWorker.value,
+                      outcome: "completed",
+                      taskId: Option.isSome(task) ? task.value.id : null,
+                      createdAt: input.createdAt,
+                      expectedTurnCommandId: freshWorker.value.activeTurnCommandId,
+                    });
+                    if (!saved)
+                      return yield* Effect.fail(
+                        fail("Completed worker attempt changed before settlement."),
+                      );
+                    settledWorker = saved;
+                    return inserted;
+                  }),
+                )
+                .pipe(Effect.mapError(toServiceError("Failed to claim completed worker turn.")))
+            : yield* insert;
+        if (!admitted) return;
+        const inserted = admitted;
         const shouldReport = managedWorker && shouldMaterializeWorkerSettlementReport(eventType);
         let reportRewritten = false;
         if (shouldReport) {
@@ -5615,7 +5771,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* recordWorkerMonitorEvent({
             worker: worker.value,
             eventType,
-            sourceEventId: input.sourceEventId,
+            sourceEventId,
+            ...(nonGitTurn ? { expectedTurnCommandId: worker.value.activeTurnCommandId } : {}),
+            ...(settledWorker ? { settledWorker } : {}),
             createdAt: input.createdAt,
             coordinatorThreadId: config.value.coordinatorThreadId,
             taskId: Option.isSome(task) ? task.value.id : null,
@@ -6560,4 +6718,4 @@ export const ProjectAgentServiceLive = Layer.effect(
       isServerGroupsEnabled() ? service : gateProjectAgentServiceForStable(service),
     ),
   ),
-);
+).pipe(Layer.provide(ProjectionTurnRepositoryLive));
