@@ -23,6 +23,27 @@ function Save-DefenderState($name) {
         ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-preferences.json"
     ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 8 | Set-Content "$evidence/$name-detections.json"
 }
+function Update-DefenderSignatures([string]$UpdateSource) {
+    $arguments = @{ ErrorAction = 'Stop' }
+    if ($UpdateSource) { $arguments.UpdateSource = $UpdateSource }
+    $source = if ($UpdateSource) { $UpdateSource } else { 'configured' }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Update-MpSignature @arguments
+            return
+        } catch {
+            $_ | Out-String | Set-Content "$evidence/signature-update-$source-$attempt-error.txt"
+            # Platform updates can restart WinDefend while the signature RPC is active.
+            # Retry only the observed RPC failure; a successful update is still required.
+            if ($attempt -eq 3 -or ($_.Exception.HResult -ne -2147023170 -and
+                $_.Exception.Message -notmatch '\bThe remote procedure call failed\b')) { throw }
+            Write-Warning "Defender signature RPC interrupted; waiting for WinDefend before retry $($attempt + 1) of 3."
+            $service = Get-Service -Name WinDefend
+            $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+            Start-Sleep -Seconds 10
+        }
+    }
+}
 Save-DefenderState 'before'
 $results = @()
 try {
@@ -37,14 +58,14 @@ try {
         }
     }
     Set-MpPreference -DisableRealtimeMonitoring $false -DisableArchiveScanning $false -DisableIOAVProtection $false -DisableBehaviorMonitoring $false -DisableScriptScanning $false
-    Update-MpSignature
+    Update-DefenderSignatures
     $signatureStatus = Get-MpComputerStatus
     if (-not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
         # A configured source can successfully return older staged definitions.
         # Retry Microsoft's direct source; the freshness gate below still applies.
         Save-DefenderState 'default-update'
         Write-Output 'Configured update source returned stale definitions; retrying MMPC.'
-        Update-MpSignature -UpdateSource MMPC
+        Update-DefenderSignatures -UpdateSource MMPC
     }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
