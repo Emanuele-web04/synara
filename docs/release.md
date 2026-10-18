@@ -382,7 +382,13 @@ Before startup smoke and artifact upload, the Windows job scans each final
 installer with Microsoft Defender. The guard enables protection and removes
 the hosted image's exclusions inside that disposable runner, updates security
 intelligence, verifies the actual file is not excluded, and requires an explicit
-clean scan plus unchanged installer bytes. If the configured update source returns
+clean scan plus unchanged installer bytes. Signature updates retry at most three
+times for an interrupted RPC, or a changed Defender platform with an unhealthy
+service/engine. Each retry waits up to 120 seconds for WinDefend and a nonzero
+engine, starting the service only if it stopped on this disposable runner. Other
+update errors fail immediately. A successful update and every scan gate remain
+required. Full error records and independent final evidence captures preserve the
+original failure; incomplete evidence also blocks publication. If the configured update source returns
 definitions older than 24 hours, it retries Microsoft's direct MMPC source.
 An older local timestamp then requires the installed version to match the latest
 version fetched from Microsoft's security intelligence page; unavailable or
