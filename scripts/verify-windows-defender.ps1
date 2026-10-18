@@ -16,12 +16,46 @@ $expected = @($installers | ForEach-Object {
     @{ path = $_.FullName; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
 })
 ConvertTo-Json -InputObject $expected | Set-Content "$evidence/expected-installers.json"
-function Save-DefenderState($name) {
-    Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties |
-        ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-status.json"
-    Get-MpPreference | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties |
-        ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-preferences.json"
-    ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 8 | Set-Content "$evidence/$name-detections.json"
+function Save-DefenderError($failure, $name) {
+    try {
+        $failure | Format-List * -Force | Out-String -Width 4096 | Set-Content "$evidence/$name-error.txt"
+        $failure.Exception | Format-List * -Force | Out-String -Width 4096 | Add-Content "$evidence/$name-error.txt"
+    } catch { Write-Warning "Could not preserve $name error: $($_.Exception.Message)" }
+}
+function Save-DefenderState($name, [switch]$BestEffort) {
+    $captures = @{
+        status = { Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties }
+        preferences = { Get-MpPreference | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties }
+        detections = { @(Get-MpThreatDetection) }
+    }
+    foreach ($kind in @('status', 'preferences', 'detections')) {
+        try {
+            $value = if ($kind -eq 'detections') { ,@(& $captures[$kind]) } else { & $captures[$kind] }
+            ConvertTo-Json -InputObject $value -Depth 8 | Set-Content "$evidence/$name-$kind.json"
+        } catch {
+            Save-DefenderError $_ "$name-$kind"
+            if (-not $BestEffort) { throw }
+            Write-Output "$name-$kind"
+        }
+    }
+}
+function Wait-DefenderReady {
+    $wait = [Diagnostics.Stopwatch]::StartNew()
+    for ($poll = 0; $poll -lt 24 -and $wait.Elapsed.TotalSeconds -lt 120; $poll++) {
+        try {
+            $service = Get-Service -Name WinDefend
+            if ($service.Status -eq 'Stopped') {
+                Start-Service -Name WinDefend
+                $service.Refresh()
+            }
+            $status = Get-MpComputerStatus
+            if ($service.Status -eq 'Running' -and $status.AMServiceEnabled -and
+                $status.AMEngineVersion -and $status.AMEngineVersion -ne '0.0.0.0') { return }
+        } catch { Save-DefenderError $_ "readiness-$poll" }
+        $remaining = 120000 - $wait.Elapsed.TotalMilliseconds
+        if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(5000, [int]$remaining)) }
+    }
+    throw 'WinDefend and its engine did not become ready within 120 seconds.'
 }
 function Update-DefenderSignatures([string]$UpdateSource) {
     $arguments = @{ ErrorAction = 'Stop' }
@@ -32,20 +66,31 @@ function Update-DefenderSignatures([string]$UpdateSource) {
             Update-MpSignature @arguments
             return
         } catch {
-            $_ | Out-String | Set-Content "$evidence/signature-update-$source-$attempt-error.txt"
-            # Platform updates can restart WinDefend while the signature RPC is active.
-            # Retry only the observed RPC failure; a successful update is still required.
-            if ($attempt -eq 3 -or ($_.Exception.HResult -ne -2147023170 -and
-                $_.Exception.Message -notmatch '\bThe remote procedure call failed\b')) { throw }
-            Write-Warning "Defender signature RPC interrupted; waiting for WinDefend before retry $($attempt + 1) of 3."
-            $service = Get-Service -Name WinDefend
-            $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
-            Start-Sleep -Seconds 10
+            $failure = $_
+            Save-DefenderError $failure "signature-update-$source-$attempt"
+            $status = $null
+            try {
+                $status = Get-MpComputerStatus
+                $status | ConvertTo-Json -Depth 6 | Set-Content "$evidence/signature-update-$source-$attempt-status.json"
+            } catch { Save-DefenderError $_ "signature-update-$source-$attempt-status" }
+            # A platform replacement can interrupt RPC or report a generic update failure.
+            # The latter is retryable only with a changed platform and unhealthy engine/service.
+            $rpcInterrupted = $failure.Exception.HResult -eq -2147023170 -or
+                $failure.Exception.Message -match '\bThe remote procedure call failed\b'
+            $platformRestarting = $status -and $initialPlatformVersion -and $status.AMProductVersion -and
+                $status.AMProductVersion -ne $initialPlatformVersion -and
+                (-not $status.AMServiceEnabled -or -not $status.AMEngineVersion -or $status.AMEngineVersion -eq '0.0.0.0')
+            if ($attempt -eq 3 -or -not ($rpcInterrupted -or $platformRestarting)) { throw $failure }
+            Write-Warning "Defender update interrupted; waiting for service/engine before retry $($attempt + 1) of 3."
+            Wait-DefenderReady
         }
     }
 }
+$initialPlatformVersion = (Get-MpComputerStatus).AMProductVersion
 Save-DefenderState 'before'
 $results = @()
+$events = @()
+$evidenceFailures = @()
 try {
     # Hosted images disable protection and exclude their entire working drives.
     # Strengthen this disposable runner only; cloud/sample consent is unchanged.
@@ -134,11 +179,21 @@ try {
     }
 } finally {
     Start-Sleep -Seconds 20
-    Save-DefenderState 'after'
-    ConvertTo-Json -InputObject $results -Depth 6 | Set-Content "$evidence/results.json"
-    $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started })
-    $events | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Depth 6 | Set-Content "$evidence/events.json"
+    # Evidence failures must not mask the original update/scan failure or stop other captures.
+    $evidenceFailures = @(Save-DefenderState 'after' -BestEffort)
+    try { ConvertTo-Json -InputObject $results -Depth 6 | Set-Content "$evidence/results.json" } catch {
+        Save-DefenderError $_ 'results'
+        $evidenceFailures += 'results'
+    }
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started })
+        ConvertTo-Json -InputObject @($events | Select-Object TimeCreated, Id, Message) -Depth 6 | Set-Content "$evidence/events.json"
+    } catch {
+        Save-DefenderError $_ 'events'
+        $evidenceFailures += 'events'
+    }
 }
+if ($evidenceFailures.Count -gt 0) { throw 'Defender qualification evidence is incomplete. Inspect the preserved errors.' }
 if (@($events | Where-Object { $_.Id -in @(1116, 1117, 1118, 1119) }).Count -gt 0) {
     throw 'Defender recorded detection/remediation during qualification.'
 }
