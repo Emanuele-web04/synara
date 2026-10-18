@@ -1624,10 +1624,34 @@ describe("ProviderRuntimeIngestion", () => {
       type: "runtime.error",
       payload: { message: "Old turn failed" },
       generation: "shared-generation",
+      overlapsBeforeCompletion: false,
     },
-    { type: "session.exited", payload: { exitKind: "error" }, generation: undefined },
+    {
+      type: "session.exited",
+      payload: { exitKind: "error" },
+      generation: undefined,
+      overlapsBeforeCompletion: false,
+    },
+    {
+      type: "session.exited",
+      payload: { exitKind: "error" },
+      generation: "shared-generation",
+      overlapsBeforeCompletion: true,
+    },
+    {
+      type: "session.state.changed",
+      payload: { state: "stopped" },
+      generation: undefined,
+      overlapsBeforeCompletion: true,
+    },
+    {
+      type: "session.state.changed",
+      payload: { state: "error" },
+      generation: "shared-generation",
+      overlapsBeforeCompletion: true,
+    },
   ])(
-    "preserves newer simulator turns after delayed $type (generation $generation)",
+    "preserves newer simulator turns after delayed $type (generation $generation, overlap $overlapsBeforeCompletion)",
     async (terminal) => {
       const backend = new FakeDeviceBackend();
       const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
@@ -1646,17 +1670,20 @@ describe("ProviderRuntimeIngestion", () => {
           createdAt: new Date().toISOString(),
         });
         await harness.drain();
-        harness.emit({
-          type: "turn.completed",
-          eventId: asEventId("device-earlier-completed"),
-          provider: "codex",
-          threadId,
-          turnId: asTurnId("device-earlier"),
-          lifecycleGeneration: generation,
-          payload: { state: "completed" },
-          createdAt: new Date().toISOString(),
-        });
-        await harness.drain();
+        const completeEarlier = async () => {
+          harness.emit({
+            type: "turn.completed",
+            eventId: asEventId("device-earlier-completed"),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId("device-earlier"),
+            lifecycleGeneration: generation,
+            payload: { state: "completed" },
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        };
+        if (!terminal.overlapsBeforeCompletion) await completeEarlier();
         for (const turnId of ["device-current-a", "device-current-b"]) {
           harness.emit({
             type: "turn.started",
@@ -1674,8 +1701,9 @@ describe("ProviderRuntimeIngestion", () => {
             turnId,
           });
         }
+        if (terminal.overlapsBeforeCompletion) await completeEarlier();
         expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe(
-          "device-current-a",
+          terminal.overlapsBeforeCompletion ? null : "device-current-a",
         );
         harness.emit({
           type: terminal.type,
@@ -1688,6 +1716,13 @@ describe("ProviderRuntimeIngestion", () => {
           createdAt: new Date().toISOString(),
         });
         await harness.drain();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+        // Continuing the overlapping turn must retain its lease, not a terminal replay guard.
+        await manager.withAgentActivity(threadId, () => manager.tap("FAKE-0001", 1, 1), {
+          udid: "FAKE-0001",
+          turnId: "device-current-a",
+        });
         await new Promise((resolve) => setTimeout(resolve, 40));
         expect(backend.callsOfKind("shutdown")).toHaveLength(0);
         harness.emit({

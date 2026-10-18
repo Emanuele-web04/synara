@@ -2819,14 +2819,16 @@ const make = Effect.gen(function* () {
       const outstandingTurns = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id);
       const generation = event.lifecycleGeneration;
       // A runtime.error can end one turn while its session serves another. Only actual
-      // session teardown retires a generation; a delayed exact-turn exit cannot end newer work.
+      // session teardown retires a generation. A named turn already settled in the ledger
+      // cannot authorize retiring overlapping work, even after the active projection clears.
       const sessionEndsObservedTurns =
         computerSessionEnded &&
         event.type !== "runtime.error" &&
         (rawEventTurnId === undefined ||
-          activeTurnId === null ||
-          rawEventTurnId === activeTurnId ||
-          (generation !== undefined && outstandingTurns?.get(activeTurnId) !== generation));
+          (outstandingTurns?.has(rawEventTurnId) === true &&
+            (activeTurnId === null ||
+              rawEventTurnId === activeTurnId ||
+              (generation !== undefined && outstandingTurns?.get(activeTurnId) !== generation))));
       // Never enumerate manager leases: a newer gateway turn can precede ingestion.
       if (Option.isSome(deviceService) && shouldReleaseTurnResources) {
         const endedDeviceTurns = new Set<TurnId>();
