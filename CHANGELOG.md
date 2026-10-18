@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.6-remote.23 — 2026-10-18
+
+### Fixed
+
+- Temporary account-service unavailability, service restarts and expired session credentials request a fresh authenticated connection without falsely revoking an approved device. Actual revocations, invalid proofs and unapproved devices remain refused.
+- Large remote conversation histories pass through both authenticated response bridges as ordered WebSocket continuation frames, with backpressure and bounded message, queue and write time limits. Valid 9.5 MiB Unicode transcripts no longer hit the former whole-message 8 MiB relay guard. Commands and encrypted outer messages keep their existing limits; assembled responses remain capped at 32 MiB.
+- Claude's `code_change_published` system message triggers the existing repository-scoped Git and pull-request refresh instead of producing an unhandled runtime warning. Repository and forge data remain authoritative; publication URLs and branch hints in provider output are not trusted.
+
+### Companion iPhone and iPad
+
+- The separate companion build 144 contains native connection recovery, long-conversation performance, provider switching and image improvements. Its distribution is verified separately; this desktop release does not install mobile changes.
+
+### Verification
+
+- Includes the stability fixes prepared for .22, which was not distributed because its Windows signature-update qualification failed before scanning. The runner now retries only the observed Defender RPC interruption after a bounded service-readiness wait; successful signature update, current intelligence, enabled protection, exclusion checks and a clean scan of unchanged installer bytes remain required.
+- Local quality and focused transport checks cover both response bridges, large Unicode histories, later replies, ordering, cancellation, slow consumers and oversized requests. Exact-tag CI must qualify the final source, packaging, startup, macOS signing/notarization, Windows Defender and public artifact provenance before delivery is complete.
+- Remote keeps separate identities, data homes and macOS Apple Silicon, Windows x64 and Linux x64 feeds. No backend deployment, migration, account reset, pairing reset or billing change is required. Existing invalid or revoked pairings still require explicit recovery.
+- Windows retains the version-scoped unsigned policy and may show SmartScreen. Automated qualification does not establish Windows browser-download acceptance, physical-device push delivery or unrestricted transcript size.
+
 ## 1.0.6-remote.22 — 2026-10-18
 
 ### Fixed
