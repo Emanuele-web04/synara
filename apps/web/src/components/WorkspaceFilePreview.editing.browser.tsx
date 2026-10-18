@@ -817,6 +817,11 @@ it("keeps the editor gutter aligned through horizontal and vertical scrolling", 
       )
       .toBeLessThan(1);
     editor.revealLineInCenter(100, monaco.editor.ScrollType.Immediate);
+    // The engine measures the widest rendered line on its next frame; scrolling
+    // before that clamps scrollLeft to the viewport width.
+    await expect
+      .poll(() => editor.getScrollWidth())
+      .toBeGreaterThan(editor.getLayoutInfo().contentWidth);
     editor.setScrollPosition(
       {
         scrollLeft: editor.getScrollWidth(),
