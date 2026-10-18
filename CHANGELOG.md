@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.6-remote.22 — 2026-10-18
+
+### Fixed
+
+- Temporary account-service unavailability, service restarts and expired session credentials now request a fresh authenticated connection instead of telling an approved device that its pairing was revoked. Actual revocations, invalid proofs and unapproved devices remain refused.
+- Remote desktop clients can load larger conversation snapshots without disconnecting at the command-size limit. Incoming responses remain bounded at 32 MiB; commands and outer transport chunks keep their existing limits.
+- Claude's `code_change_published` system message triggers the existing repository-scoped Git and pull-request refresh instead of producing an unhandled runtime warning. Repository and forge data remain authoritative; publication URLs and branch hints in provider output are not trusted.
+
+### Companion iPhone and iPad
+
+- The separate companion build 144 is being prepared with native connection recovery, long-conversation performance, provider switching and image improvements. Its availability and verification are recorded separately; this desktop release does not install mobile changes.
+
+### Verification
+
+- Local desktop quality checks and the full server suite passed, with a final real-TLS regression proving a valid 120-message snapshot above 2 MiB arrives intact while oversized commands and responses remain rejected. Synthetic authorization checks preserve the revocation and local-approval boundaries.
+- Remote keeps its separate identities, data homes and macOS Apple Silicon, Windows x64 and Linux x64 feeds. No backend deployment, migration, account reset, pairing reset or billing change is required. Existing invalid or revoked pairings still require explicit recovery.
+- One exact-tag publication run must qualify packaging, startup, macOS signing/notarization, Windows Defender and public artifact provenance before delivery is complete. Windows uses the version-scoped unsigned policy and may show SmartScreen. These checks do not establish physical-device push delivery or unrestricted transcript size.
+
 ## 1.0.6-remote.21 — 2026-10-18
 
 ### Added
