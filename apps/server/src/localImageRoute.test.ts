@@ -2,7 +2,8 @@
 // Boots the same `localImageEffectRouteLayer` that `makeEffectHttpRouteLayer` wires
 // into `effectServer.ts` and exercises it through a real HTTP listener.
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -369,6 +370,64 @@ describe("localImageEffectRouteLayer", () => {
       params.delete("grant");
       const ungrantedResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(ungrantedResponse.status).toBe(404);
+    });
+  });
+
+  it("opens a generated PNG in a sibling Git worktree only with its canonical file grant", async () => {
+    // Keep the fixture outside temporary roots, which already permit generated images.
+    const root = makeRepoTempDir("synara-linked-preview-");
+    const workspace = path.join(root, "playjelly");
+    const worktree = path.join(root, "playjelly-test-synara");
+    mkdirSync(workspace);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", workspace, ...args], { stdio: "pipe" });
+    git(["init", "--quiet"]);
+    git([
+      "-c",
+      "user.name=Preview fixture",
+      "-c",
+      "user.email=preview@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "Preview fixture",
+    ]);
+    git(["worktree", "add", "--quiet", "--detach", worktree]);
+    const imagePath = path.join(worktree, "dossiers-graphique.png");
+    const unrelatedPath = path.join(root, "unrelated.png");
+    const linkPath = path.join(worktree, "image-link.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7dUAAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(imagePath, bytes);
+    writeFileSync(unrelatedPath, bytes);
+    symlinkSync(imagePath, linkPath);
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+      const preview = () => fetch(`${origin}/api/local-image?${params}`);
+      expect((await preview()).status).toBe(404);
+      const grant = await createLocalPreviewGrant({ requestedPath: linkPath });
+      params.set("grant", grant.grant);
+      const response = await preview();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+
+      // Neither the containing worktree nor a subsequently retargeted link inherits the grant.
+      params.set("path", unrelatedPath);
+      expect((await preview()).status).toBe(404);
+      rmSync(linkPath);
+      symlinkSync(unrelatedPath, linkPath);
+      params.set("path", linkPath);
+      expect((await preview()).status).toBe(404);
     });
   });
 

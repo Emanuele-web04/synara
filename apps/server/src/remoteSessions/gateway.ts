@@ -10,7 +10,11 @@ import {
 import WebSocket, { type RawData } from "ws";
 
 import type { HostMintService } from "../hostAuth";
-import { JwtReplayCache, verifySessionCredential } from "../hostAuth";
+import {
+  HostAuthorizationUnavailableError,
+  JwtReplayCache,
+  verifySessionCredential,
+} from "../hostAuth";
 import type { HostIdentity } from "../hostIdentity";
 import type { RelaySocket } from "../relaySocket";
 import { RemoteSessionRegistry } from "./sessionRegistry";
@@ -66,7 +70,7 @@ export class RemoteConnectionGateway {
     let queuedBytes = 0;
     let queuedFrames = 0;
     const handshakeTimer = setTimeout(
-      () => socket.close(1008, "Remote authorization timed out"),
+      () => socket.close(1012, "Remote authorization timed out"),
       15_000,
     );
     handshakeTimer.unref();
@@ -145,7 +149,6 @@ export class RemoteConnectionGateway {
           });
           await this.options.authorizeDevice(peer.userId, peer.deviceJkt, peer.trustGeneration);
           if (socketClosed || socket.readyState !== WebSocket.OPEN) return;
-          state = "bridged";
           const id = randomUUID();
           removeSession = this.options.sessions.add({
             id,
@@ -158,6 +161,7 @@ export class RemoteConnectionGateway {
           // first read either closes this entry or is observed before bridging.
           await this.options.authorizeDevice(peer.userId, peer.deviceJkt, peer.trustGeneration);
           if (socketClosed || socket.readyState !== WebSocket.OPEN) return;
+          state = "bridged";
           const client = Schema.decodeUnknownSync(WsBootstrapNegotiateInput)(frame.client);
           const negotiated = await Effect.runPromise(
             negotiateWsCompatibility(client).pipe(
@@ -200,7 +204,11 @@ export class RemoteConnectionGateway {
           removeSession?.();
           removeSession = undefined;
           socket.close(
-            state === "mint" || state === "authorize" ? REMOTE_AUTH_ERROR : REMOTE_PROTOCOL_ERROR,
+            error instanceof HostAuthorizationUnavailableError
+              ? 1012
+              : state === "mint" || state === "authorize"
+                ? REMOTE_AUTH_ERROR
+                : REMOTE_PROTOCOL_ERROR,
             error instanceof Error ? error.message.slice(0, 120) : "remote authentication failed",
           );
         }

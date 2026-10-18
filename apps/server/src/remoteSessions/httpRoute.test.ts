@@ -5,7 +5,8 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Schema, Scope } from "effect";
+import { OrchestrationThreadStreamItem } from "@synara/contracts";
 import { HttpRouter } from "effect/unstable/http";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -42,6 +43,7 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
     run: (url: string, tunnel: RemoteTlsServer, captured: Buffer[]) => Promise<void>,
     serverIdentity = identity,
     handshakeTimeoutMs = 150,
+    accept?: (inner: WebSocket) => void,
   ) {
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const captured: Buffer[] = [];
@@ -49,7 +51,8 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
       identity: serverIdentity,
       handshakeTimeoutMs,
       accept: async (inner) => {
-        inner.on("message", (data, binary) => inner.send(data, { binary }));
+        if (accept) accept(inner);
+        else inner.on("message", (data, binary) => inner.send(data, { binary }));
         await Promise.resolve();
       },
     });
@@ -110,6 +113,101 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
       expect(tunnel.connectionCount).toBe(0);
     });
   });
+
+  it("receives a full long-thread snapshot without relaxing commands or response bounds", async () => {
+    const when = "2026-10-18T00:00:00.000Z";
+    const table = Array.from(
+      { length: 1_400 },
+      (_, index) => `| check-${index} | complete | ${index * 7} |`,
+    ).join("\n");
+    const item = Schema.decodeUnknownSync(Schema.toCodecJson(OrchestrationThreadStreamItem))({
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 120,
+        thread: {
+          id: "long-remote-thread",
+          projectId: "remote-project",
+          title: "Long conversation",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          latestTurn: null,
+          createdAt: when,
+          updatedAt: when,
+          deletedAt: null,
+          messages: Array.from({ length: 120 }, (_, index) => ({
+            id: `message-${index}`,
+            role: index % 2 ? "assistant" : "user",
+            text: index % 2 ? table : `Review section ${index}`,
+            turnId: `turn-${Math.floor(index / 2)}`,
+            streaming: false,
+            createdAt: when,
+            updatedAt: when,
+          })),
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          session: null,
+        },
+      },
+    });
+    const snapshot = JSON.stringify({ _tag: "Chunk", requestId: "1", values: [item] });
+    expect(Buffer.byteLength(snapshot)).toBeGreaterThan(2 * 1024 * 1024);
+    const rejectedCommands: string[] = [];
+    await fixture(
+      async (url) => {
+        const transport = await outer(url);
+        let largestOuterChunk = 0;
+        transport.on("message", (data) => {
+          largestOuterChunk = Math.max(largestOuterChunk, Buffer.byteLength(data as Buffer));
+        });
+        const socket = await connectRemoteWebSocket(transport, remoteTlsAnchor(identity));
+        const response = once(socket, "message");
+        socket.send("snapshot");
+        expect((await response)[0].toString()).toBe(snapshot);
+        expect(largestOuterChunk).toBeLessThanOrEqual(64 * 1024);
+        socket.terminate();
+
+        const oversizedCommand = await connectRemoteWebSocket(
+          await outer(url),
+          remoteTlsAnchor(identity),
+        );
+        const commandClosed = once(oversizedCommand, "close");
+        oversizedCommand.send(Buffer.alloc(2 * 1024 * 1024 + 1));
+        await commandClosed;
+        expect(rejectedCommands).toContain("WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+
+        const oversizedResponse = await connectRemoteWebSocket(
+          await outer(url),
+          remoteTlsAnchor(identity),
+        );
+        const responseError = once(oversizedResponse, "error");
+        oversizedResponse.send("oversized-response");
+        expect((await responseError)[0]).toMatchObject({
+          code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH",
+        });
+        oversizedResponse.terminate();
+      },
+      identity,
+      15_000,
+      (socket) => {
+        socket.on("error", (error) => {
+          if ("code" in error) rejectedCommands.push(String(error.code));
+        });
+        socket.on("message", (data) => {
+          if (data.toString() === "snapshot") socket.send(snapshot);
+          else if (data.toString() === "oversized-response") {
+            // Each fragment fits; the assembled response must still stay bounded.
+            const part = Buffer.alloc(1024 * 1024, 97);
+            for (let index = 0; index < 32; index++)
+              socket.send(part, { binary: false, fin: false });
+            socket.send("a", { fin: true });
+          }
+        });
+      },
+    );
+  }, 15_000);
 
   it.each(["untrusted-root", "wrong-hostname"])(
     "refuses %s before application data",

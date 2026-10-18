@@ -49,11 +49,15 @@ export class RemoteSessionRegistry {
     return true;
   }
 
-  private dropWhere(predicate: (session: RemoteSession) => boolean, reason: string): void {
+  private dropWhere(
+    predicate: (session: RemoteSession) => boolean,
+    reason: string,
+    code: number = REMOTE_SESSION_REVOKED_CLOSE_CODE,
+  ): void {
     for (const session of this.#sessions.values()) {
       if (!predicate(session)) continue;
       this.#sessions.delete(session.id);
-      session.close(REMOTE_SESSION_REVOKED_CLOSE_CODE, reason);
+      session.close(code, reason);
     }
   }
 
@@ -76,12 +80,17 @@ export class RemoteSessionRegistry {
     this.dropWhere((session) => session.deviceJkt === deviceJkt, "device revoked on host");
   }
 
-  closeAll(reason = "host connectivity stopped"): void {
-    this.dropWhere(() => true, reason);
+  // A service interruption needs a fresh authenticated session, not new device trust.
+  // Definitive scope retirement explicitly retains the revocation close code.
+  closeAll(
+    reason = "host connectivity stopped",
+    code: 1012 | typeof REMOTE_SESSION_REVOKED_CLOSE_CODE = 1012,
+  ): void {
+    this.dropWhere(() => true, reason, code);
   }
 
   dropExpired(nowSeconds = Math.floor(Date.now() / 1_000)): void {
-    this.dropWhere((session) => session.expiresAtSeconds <= nowSeconds, "credential expired");
+    this.dropWhere((session) => session.expiresAtSeconds <= nowSeconds, "credential expired", 1012);
   }
 }
 

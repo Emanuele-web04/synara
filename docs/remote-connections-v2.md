@@ -14,6 +14,22 @@ The owner creates a nine-minute, single-use code in Settings. The same-account c
 
 The controller persists desired connections. Each renderer attachment gets a new RPC stream, including after reload. Renewal prepares a replacement stream; requests are never generically replayed. Discovery/connection completions are fenced against stop, disconnect and account changes. HTTP resources use an independent pool of at most two TLS transports per host generation, bounded queues, streaming backpressure, Range and cancellation. Typed references choose allowlisted host routes; controller cookies and bearer credentials are not forwarded. Remote attachment ownership is stable across short-lived session leases.
 
+Temporary account-verification outages and expired authorization leases close sessions
+with retryable code `1012`; they do not revoke saved device approval. Definitive
+owner/device revocation still uses `4503`, and invalid device proofs use `4501`.
+Admission remains closed until account verification is available again. Mobile
+connection attempts are also fenced across suspension and resume, so an old attempt
+cannot replace a newer connection or permanently block its recovery. A missing
+thread ends only that thread's subscription, not the healthy host connection.
+
+Authenticated host responses have a 32 MiB assembled-message limit. Commands and
+opaque outer messages retain their 2 MiB limits; ciphertext is still sent in
+chunks of at most 64 KiB. The mobile receive queue admits at most 16 messages and
+32 MiB of queued payload, releasing its budget on consumption or closure. Real TLS
+regressions cover a 2.8 MB full transcript, oversized fragmented responses, unchanged
+command limits and mobile queue overflow. This is a bounded response budget, not
+support for arbitrarily large conversation snapshots or a physical-network soak.
+
 ## Capacity and setup
 
 The pairing code belongs to the computer's signed-in account and workspace. The
