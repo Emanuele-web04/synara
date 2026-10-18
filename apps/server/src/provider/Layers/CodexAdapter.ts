@@ -2808,6 +2808,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           try: () => manager.renewAgentGatewayCredential(threadId),
           catch: (cause) => toRequestError(threadId, "thread/resume", cause),
         }),
+      agentGatewayCredentialRetired: (threadId) =>
+        Effect.sync(() => manager.isAgentGatewayCredentialRetired(threadId)),
       listSessions,
       listGeneratedImageHomePaths,
       hasSession,

@@ -256,6 +256,15 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
 
+  /**
+   * Whether the live session's tool credential was retired by a terminal turn
+   * and has not yet been replaced. The adapter that retired the bearer is the
+   * authoritative source for this state; routing consults it so recovery does
+   * not depend solely on the persisted rotation marker, which can be lost
+   * when the carrying terminal event is rejected.
+   */
+  readonly agentGatewayCredentialRetired?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {

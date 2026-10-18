@@ -86,6 +86,29 @@ import * as Statement from "effect/unstable/sql/Statement";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { ProjectAgentServiceLive } from "../../projectAgent/Layers/ProjectAgentService.ts";
+import { ProjectAgentReactorLive } from "../../projectAgent/Layers/ProjectAgentReactor.ts";
+import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
+import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
+import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
+import {
+  materializeDocumentPath,
+  readProjectDocumentMirror,
+} from "../../projectAgent/materializer.ts";
+import { OrchestrationCommandInternalError } from "../Errors.ts";
+import { makeHubWorkService } from "../../projectAgent/hubWorkService.ts";
+import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
+import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
+import { AutomationId, ProjectInboxEventId } from "@synara/contracts";
+import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
+import { QueuedTurnPromotionRepositoryLive } from "../../persistence/Layers/QueuedTurnPromotions.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -373,6 +396,9 @@ describe("CheckpointReactor", () => {
     readonly startReactor?: boolean;
     readonly simulateProviderBaseline?: boolean;
     readonly liveTurnDiffThrottleWindowMs?: number;
+    readonly hubWakes?: string[];
+    readonly hubMonitorLive?: boolean;
+    readonly hubRuntimeIngestion?: boolean;
   }) {
     const cwd = createGitRepository(options?.hasInitialCommit ?? true);
     tempDirs.push(cwd);
@@ -423,14 +449,55 @@ describe("CheckpointReactor", () => {
       }),
     ).pipe(Layer.provide(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))));
 
-    const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-      prefix: "synara-checkpoint-reactor-test-",
-    });
+    const ServerConfigLayer = ServerConfig.layerTest(
+      process.cwd(),
+      {
+        prefix: "synara-checkpoint-reactor-test-",
+      },
+      options?.hubWakes
+        ? { groupsWorkspaceRoot: path.dirname(options.projectWorkspaceRoot!) }
+        : undefined,
+    );
 
-    const layer = makeCheckpointReactorLive(
+    const checkpointLayer = makeCheckpointReactorLive(
       options?.liveTurnDiffThrottleWindowMs === undefined
         ? undefined
         : { liveTurnDiffThrottleWindowMs: options.liveTurnDiffThrottleWindowMs },
+    );
+    const hubAutomation = {
+      runNow: (input: { automationId: string }) =>
+        Effect.sync(() => {
+          options?.hubWakes?.push(input.automationId);
+          return { run: { id: `hub-wake-${options?.hubWakes?.length}` } };
+        }),
+    };
+    const monitorLayer = (
+      options?.hubMonitorLive === false
+        ? ProjectAgentServiceLive
+        : ProjectAgentReactorLive.pipe(Layer.provideMerge(ProjectAgentServiceLive))
+    ).pipe(
+      Layer.provideMerge(ProjectAgentRepositoryLive),
+      Layer.provideMerge(HubWorkRepositoryLive),
+      Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
+      Layer.provideMerge(ProjectionThreadRepositoryLive),
+      Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
+      Layer.provideMerge(GitCoreLive),
+      Layer.provide(
+        Layer.succeed(AutomationService, hubAutomation as unknown as AutomationService["Service"]),
+      ),
+      Layer.provide(
+        Layer.succeed(TextGeneration, {
+          generateProjectDigest: () =>
+            Effect.succeed({ summary: "Worker completed.", focusItems: [] }),
+        } as unknown as TextGeneration["Service"]),
+      ),
+      Layer.provide(Layer.succeed(ProviderHealth, {} as ProviderHealth["Service"])),
+    );
+    const hubLayer = options?.hubRuntimeIngestion
+      ? Layer.merge(monitorLayer, ProviderRuntimeIngestionLive)
+      : monitorLayer;
+    const layer = (
+      options?.hubWakes ? Layer.merge(checkpointLayer, hubLayer) : checkpointLayer
     ).pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
@@ -466,6 +533,12 @@ describe("CheckpointReactor", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     const startReactor = () => Effect.runPromise(reactor.start.pipe(Scope.provide(scope!)));
     if (options?.startReactor !== false) await startReactor();
+    const ingestion = options?.hubRuntimeIngestion
+      ? await runtime.runPromise(
+          Effect.serviceOption(ProviderRuntimeIngestionService).pipe(Effect.map(Option.getOrThrow)),
+        )
+      : undefined;
+    if (ingestion) await Effect.runPromise(ingestion.start.pipe(Scope.provide(scope!)));
     const runtimeEvents = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository).pipe(
         Effect.provide(ProviderRuntimeEventRepositoryLive),
@@ -480,6 +553,7 @@ describe("CheckpointReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-project-create"),
         projectId: asProjectId("project-1"),
         title: "Test Project",
+        ...(options?.hubWakes ? { kind: "group" as const } : {}),
         workspaceRoot: options?.projectWorkspaceRoot ?? cwd,
         defaultModelSelection: {
           provider: "codex",
@@ -532,6 +606,8 @@ describe("CheckpointReactor", () => {
 
     return {
       sourceEngine: engine,
+      hubAutomation,
+      ingestion,
       // This suite isolates the checkpoint reactor. Model the provider's
       // pre-dispatch owner explicitly instead of relying on a domain backup.
       engine: {
@@ -2161,6 +2237,1164 @@ describe("CheckpointReactor", () => {
     turnId: asTurnId(turnId),
     createdAt: new Date().toISOString(),
     payload: { state: "completed" },
+  });
+
+  it.each([
+    "live",
+    "recovery",
+    "missing",
+    "git",
+    "startup",
+    "stale",
+    "pending",
+    "crash",
+    "delivery-error",
+    "rollup-error",
+    "newer-report",
+    "newer-mirror",
+    "metadata-error",
+    "paused-delivery",
+    "goal-limit",
+    "runtime-cwd",
+    "persisted-cwd",
+    "claim-error",
+    "lookup-error",
+    "late-recovery",
+    "cursor-race",
+    "frozen-race",
+    "frozen-delivery-error",
+    "peer-delivery-error",
+  ] as const)("settles only the completed non-Git Hub attempt, once (%s)", async (mode) => {
+    const recovery = mode !== "live";
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-non-git-worker-"));
+    tempDirs.push(cwd);
+    const wakes: string[] = [];
+    const projectedCwd =
+      mode === "runtime-cwd" || mode === "persisted-cwd" ? createGitRepository() : cwd;
+    if (projectedCwd !== cwd) tempDirs.push(projectedCwd);
+    const h = await createHarness({
+      projectWorkspaceRoot: projectedCwd,
+      threadWorktreePath: projectedCwd,
+      providerSessionCwd: cwd,
+      seedFilesystemCheckpoints: false,
+      simulateProviderBaseline: false,
+      hubWakes: wakes,
+      hubMonitorLive: !recovery,
+      hubRuntimeIngestion: [
+        "live",
+        "recovery",
+        "crash",
+        "delivery-error",
+        "rollup-error",
+        "newer-report",
+        "newer-mirror",
+        "metadata-error",
+        "paused-delivery",
+        "goal-limit",
+        "runtime-cwd",
+        "persisted-cwd",
+        "claim-error",
+        "lookup-error",
+        "late-recovery",
+        "frozen-delivery-error",
+        "peer-delivery-error",
+      ].includes(mode),
+    });
+    const service = await runtime!.runPromise(
+      Effect.serviceOption(ProjectAgentService).pipe(Effect.map(Option.getOrThrow)),
+    );
+    const repository = await runtime!.runPromise(
+      Effect.serviceOption(ProjectAgentRepository).pipe(Effect.map(Option.getOrThrow)),
+    );
+    const work = await runtime!.runPromise(
+      Effect.serviceOption(HubWorkRepository).pipe(Effect.map(Option.getOrThrow)),
+    );
+    const query = await runtime!.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const projectId = asProjectId("project-1");
+    const workerId = ThreadId.makeUnsafe("thread-1");
+    const coordinatorId = ThreadId.makeUnsafe("hub-coordinator");
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      h.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("hub-coordinator-create"),
+        threadId: coordinatorId,
+        projectId,
+        title: "Coordinator",
+        modelSelection: { provider: "codex", model: "fixture" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      repository.saveConfig(
+        {
+          projectId,
+          coordinatorThreadId: coordinatorId,
+          coordinatorName: "Hub",
+          coordinatorModelSelection: { provider: "codex", model: "fixture" },
+          limits: {
+            maxConcurrentWorkers: 1,
+            maxNewWorkersPerTurn: 8,
+            maxWorkerCreationsPerGoal: 40,
+            maxAutomaticContinuationsPerGoal: 20,
+            maxRepairRoundsPerTask: 2,
+          },
+          captureEnabled: true,
+          enabled: true,
+          automationId: AutomationId.makeUnsafe("hub-automation"),
+          revision: 1,
+          createdAt,
+          updatedAt: createdAt,
+          disabledAt: null,
+          pausedAt: null,
+          archivedAt: null,
+        },
+        null,
+      ),
+    );
+    const queuedTurnPromotions = await runtime!.runPromise(
+      Effect.serviceOption(QueuedTurnPromotionRepository).pipe(Effect.map(Option.getOrThrow)),
+    );
+    const gatewayService = makeHubWorkService({
+      repository: work,
+      projectAgentRepository: repository,
+      projectAgentService: service,
+      snapshotQuery: query,
+      queuedTurnPromotions,
+    });
+    const submitted = await runtime!.runPromise(
+      gatewayService.submit({
+        callerThreadId: coordinatorId,
+        callerTurnId: asTurnId("coordinator-turn"),
+        requestId: "research",
+        sourceMessages: [
+          {
+            threadId: coordinatorId,
+            messageId: MessageId.makeUnsafe("research-source"),
+            turnId: asTurnId("coordinator-turn"),
+            text: "Research this",
+            attachments: [],
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        tasks: [
+          {
+            spec: {
+              prompt: "Research",
+              environment: "local",
+              target: { provider: "codex", model: "fixture" },
+            },
+          },
+        ],
+      }),
+    );
+    const claimed = await runtime!.runPromise(gatewayService.claimNext(projectId));
+    expect(claimed?.id).toBe(submitted.items[0]!.id);
+    await runtime!.runPromise(
+      service.recordManagedWorkerThreads({
+        requestId: "hub-worker",
+        callerThreadId: coordinatorId,
+        threadIds: [workerId],
+        titles: ["Research"],
+      }),
+    );
+    await runtime!.runPromise(
+      gatewayService.attachWorker({ workItemId: claimed!.id, workerThreadId: workerId }),
+    );
+    const turnId = asTurnId("research-turn");
+    const requestedAt = new Date().toISOString();
+    await Effect.runPromise(
+      h.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("research-start"),
+        threadId: workerId,
+        message: {
+          messageId: MessageId.makeUnsafe("research-message"),
+          role: "user",
+          text: "Research",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: requestedAt,
+      }),
+    );
+    if (h.ingestion) {
+      await Effect.runPromise(
+        h.runtimeEvents.append({
+          type: "turn.started",
+          provider: "codex",
+          threadId: workerId,
+          turnId,
+          eventId: EventId.makeUnsafe("research-native-start"),
+          createdAt: requestedAt,
+          payload: {},
+        }),
+      );
+      await Effect.runPromise(h.ingestion.drain);
+    } else if (mode !== "startup")
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("research-running"),
+          threadId: workerId,
+          session: {
+            threadId: workerId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: requestedAt,
+          },
+          createdAt: requestedAt,
+        }),
+      );
+    await h.drain();
+    await Effect.runPromise(
+      h.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.makeUnsafe("research-answer"),
+        threadId: workerId,
+        messageId: MessageId.makeUnsafe("research-answer"),
+        turnId,
+        delta: "Exact completed research result",
+        createdAt: requestedAt,
+      }),
+    );
+    const capture = vi.spyOn(h.checkpointStore, "captureCheckpoint");
+    await Effect.runPromise(
+      h.runtimeEvents.append(nativeCompletion("research-complete", workerId, turnId)),
+    );
+    await h.drain();
+    const completedAt = new Date().toISOString();
+    if (mode === "missing") fs.rmSync(cwd, { recursive: true });
+    if (mode === "git") runGit(cwd, ["init"]);
+    // The real journal ingestion owns positive terminal lifecycle. Negative
+    // controls pause it so workspace changes and stale readiness are deterministic.
+    if (h.ingestion) await Effect.runPromise(h.ingestion.drain);
+    else
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("research-ready"),
+          threadId: workerId,
+          session: {
+            threadId: workerId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
+          createdAt: completedAt,
+        }),
+      );
+    if (mode === "persisted-cwd") {
+      const { ProviderSessionDirectory } =
+        await import("../../provider/Services/ProviderSessionDirectory.ts");
+      const { ProviderSessionDirectoryLive } =
+        await import("../../provider/Layers/ProviderSessionDirectory.ts");
+      const { ProviderSessionRuntimeRepositoryLive } =
+        await import("../../persistence/Layers/ProviderSessionRuntime.ts");
+      const directory = await runtime!.runPromise(
+        Effect.service(ProviderSessionDirectory).pipe(
+          Effect.provide(
+            ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntimeRepositoryLive)),
+          ),
+        ),
+      );
+      await runtime!.runPromise(
+        directory.upsert({
+          threadId: workerId,
+          provider: "codex",
+          runtimePayload: { cwd },
+          status: "stopped",
+        }),
+      );
+      const providerService = await runtime!.runPromise(
+        Effect.serviceOption(ProviderService).pipe(Effect.map(Option.getOrThrow)),
+      );
+      vi.spyOn(providerService, "listSessions").mockReturnValue(Effect.succeed([]));
+    }
+    if (mode === "stale") {
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("newer-running"),
+          threadId: workerId,
+          session: {
+            threadId: workerId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("newer-turn"),
+            lastError: null,
+            updatedAt: completedAt,
+          },
+          createdAt: completedAt,
+        }),
+      );
+      await runtime!.runPromise(
+        service.ingestSettledThreadEvent({
+          threadId: workerId,
+          sourceEventId: "late-completion",
+          eventType: "worker.completed",
+          turnId,
+          createdAt: completedAt,
+        }),
+      );
+    }
+    if (mode === "frozen-delivery-error" || mode === "peer-delivery-error") {
+      const state = await runtime!.runPromise(
+        Effect.serviceOption(ServerConfig).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const reportPath = `inbox/${workerId}/report.md`;
+      const reportFile = materializeDocumentPath(state.stateDir, projectId, reportPath);
+      // A real directory at the file target makes mirror writes fail after the
+      // report revision commits, and keeps failing until the obstruction is removed.
+      fs.mkdirSync(reportFile, { recursive: true, mode: 0o700 });
+      const frozenId = ProjectInboxEventId.makeUnsafe("prior-running-wake");
+      if (mode === "frozen-delivery-error") {
+        const frozenAt = new Date(Date.now() - 60_000).toISOString();
+        await runtime!.runPromise(
+          repository.insertInboxEvent({
+            id: frozenId,
+            projectId,
+            sourceThreadId: coordinatorId,
+            sourceEventId: "prior-running-wake",
+            eventType: "worker.error",
+            taskId: null,
+            eligibleWake: true,
+            createdAt: frozenAt,
+          }),
+        );
+        await runtime!.runPromise(
+          repository.saveCursor({
+            projectId,
+            processedThroughInboxId: null,
+            processedThroughCreatedAt: null,
+            frozenFromInboxId: frozenId,
+            frozenToInboxId: frozenId,
+            coordinatorBusy: true,
+            coordinatorBusySince: completedAt,
+            updatedAt: completedAt,
+          }),
+        );
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("prior-wake-running"),
+            threadId: coordinatorId,
+            session: {
+              threadId: coordinatorId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("prior-wake-turn"),
+              lastError: null,
+              updatedAt: completedAt,
+            },
+            createdAt: completedAt,
+          }),
+        );
+        expect(
+          Option.getOrThrow(await runtime!.runPromise(query.getThreadShellById(coordinatorId)))
+            .latestTurn?.state,
+        ).toBe("running");
+      }
+      await runtime!.runPromise(service.inspectWorkerHealth());
+      if (mode === "frozen-delivery-error") {
+        const frozen = await runtime!.runPromise(repository.getCursor(projectId));
+        expect(frozen.coordinatorBusy).toBe(true);
+        expect(frozen.frozenToInboxId).toBe(frozenId);
+      }
+      if (mode === "peer-delivery-error")
+        await runtime!.runPromise(
+          repository.insertInboxEvent({
+            id: frozenId,
+            projectId,
+            sourceThreadId: coordinatorId,
+            sourceEventId: "prior-ready-prefix",
+            eventType: "worker.error",
+            taskId: null,
+            eligibleWake: true,
+            createdAt: new Date(Date.now() - 60_000).toISOString(),
+          }),
+        );
+      const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-delivery-peer-"));
+      tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(h, "zz-ready-delivery-peer", peerCwd);
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "delivery-peer",
+          callerThreadId: coordinatorId,
+          threadIds: [peer],
+          titles: ["Healthy peer"],
+        }),
+      );
+      const peerTurn = asTurnId("delivery-peer-turn");
+      const peerAt = new Date().toISOString();
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("delivery-peer-start"),
+          threadId: peer,
+          message: {
+            messageId: MessageId.makeUnsafe("delivery-peer-input"),
+            role: "user",
+            text: "Research",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: peerAt,
+        }),
+      );
+      await Effect.runPromise(
+        h.runtimeEvents.append({
+          type: "turn.started",
+          eventId: EventId.makeUnsafe("delivery-peer-started"),
+          provider: "codex",
+          threadId: peer,
+          turnId: peerTurn,
+          createdAt: peerAt,
+          payload: {},
+        }),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      await Effect.runPromise(
+        h.runtimeEvents.append(nativeCompletion("delivery-peer-complete", peer, peerTurn)),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      await runtime!.runPromise(service.inspectWorkerHealth());
+      // A failed earlier delivery cannot starve a ready peer's materialization,
+      // but its keyset hole cannot be acknowledged or used for another wake.
+      const peerReport = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({
+            projectId,
+            logicalPath: `inbox/${peer}/report.md`,
+          }),
+        ),
+      );
+      expect(peerReport.revision).toBe(1);
+      expect(
+        await runtime!.runPromise(
+          readProjectDocumentMirror({
+            stateDir: state.stateDir,
+            projectId,
+            logicalPath: `inbox/${peer}/report.md`,
+          }),
+        ),
+      ).toBe(peerReport.content);
+      expect(
+        (await runtime!.runPromise(repository.getCursor(projectId))).processedThroughInboxId,
+      ).toBe(mode === "peer-delivery-error" ? frozenId : null);
+      expect(wakes).toHaveLength(mode === "peer-delivery-error" ? 1 : 0);
+      if (mode === "frozen-delivery-error") {
+        const frozen = await runtime!.runPromise(repository.getCursor(projectId));
+        expect(frozen.coordinatorBusy).toBe(true);
+        expect(frozen.frozenToInboxId).toBe(frozenId);
+      }
+      fs.rmdirSync(reportFile);
+      if (mode === "frozen-delivery-error")
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("prior-wake-finished"),
+            threadId: coordinatorId,
+            session: {
+              threadId: coordinatorId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: new Date().toISOString(),
+            },
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      for (let attempt = 0; attempt < 3; attempt++)
+        await runtime!.runPromise(service.processPendingWakes(projectId));
+      await Effect.runPromise(h.engine.drain);
+      expect(wakes).toHaveLength(2);
+      const cursor = await runtime!.runPromise(repository.getCursor(projectId));
+      expect(cursor.frozenToInboxId).toBeNull();
+      expect(cursor.coordinatorBusy).toBe(false);
+      const report = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({ projectId, logicalPath: reportPath }),
+        ),
+      );
+      expect(report.revision).toBe(1);
+      expect(
+        await runtime!.runPromise(
+          readProjectDocumentMirror({
+            stateDir: state.stateDir,
+            projectId,
+            logicalPath: reportPath,
+          }),
+        ),
+      ).toBe(report.content);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(2);
+      return;
+    }
+    if (mode === "lookup-error" || mode === "claim-error") {
+      const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-healthy-non-git-"));
+      tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(h, "zz-healthy-worker", peerCwd);
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "healthy-worker",
+          callerThreadId: coordinatorId,
+          threadIds: [peer],
+          titles: ["Healthy research"],
+        }),
+      );
+      const peerTurn = asTurnId("healthy-turn");
+      const peerAt = new Date().toISOString();
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("healthy-start"),
+          threadId: peer,
+          message: {
+            messageId: MessageId.makeUnsafe("healthy-message"),
+            role: "user",
+            text: "Research",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: peerAt,
+        }),
+      );
+      await Effect.runPromise(
+        h.runtimeEvents.append({
+          type: "turn.started",
+          provider: "codex",
+          threadId: peer,
+          turnId: peerTurn,
+          eventId: EventId.makeUnsafe("healthy-native-start"),
+          createdAt: peerAt,
+          payload: {},
+        }),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      await Effect.runPromise(
+        h.runtimeEvents.append(nativeCompletion("healthy-complete", peer, peerTurn)),
+      );
+      await Effect.runPromise(h.ingestion!.drain);
+      await h.drain();
+      const find = projectImportPaths.findImportGitWorkspace;
+      const save = repository.insertInboxEvent;
+      const claim = vi.spyOn(repository, "insertInboxEvent").mockImplementation((event) =>
+        mode === "claim-error" && event.sourceThreadId === workerId
+          ? Effect.fail(
+              new PersistenceSqlError({
+                operation: "fixture",
+                detail: "inbox temporarily unavailable",
+              }),
+            )
+          : save(event),
+      );
+      const physical = fs.realpathSync(cwd);
+      const discovery = vi
+        .spyOn(projectImportPaths, "findImportGitWorkspace")
+        .mockImplementation(async (value) => {
+          if (mode === "lookup-error" && value === physical)
+            throw Object.assign(new Error("fixture directory access denied"), { code: "EACCES" });
+          return find(value);
+        });
+      try {
+        await runtime!.runPromise(service.inspectWorkerHealth());
+        expect(
+          Option.getOrNull(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          )?.settleOutcome,
+        ).toBeNull();
+        expect(
+          Option.getOrNull(await runtime!.runPromise(repository.findManagedWorkerByThread(peer)))
+            ?.settleOutcome,
+        ).toBe("completed");
+        expect(wakes).toHaveLength(1);
+      } finally {
+        discovery.mockRestore();
+        claim.mockRestore();
+      }
+      return;
+    }
+    if (mode === "late-recovery") {
+      const finished = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadShellById(workerId)),
+      ).latestTurn!.completedAt!;
+      await expect.poll(() => Date.now()).toBeGreaterThan(Date.parse(finished));
+      const cursorAt = new Date().toISOString();
+      await runtime!.runPromise(
+        repository.insertInboxEvent({
+          id: ProjectInboxEventId.makeUnsafe("later-inbox-event"),
+          projectId,
+          sourceThreadId: coordinatorId,
+          sourceEventId: "later-already-processed",
+          eventType: "thread.session-set",
+          taskId: null,
+          eligibleWake: false,
+          createdAt: cursorAt,
+        }),
+      );
+      await runtime!.runPromise(service.processPendingWakes(projectId));
+      expect(
+        (await runtime!.runPromise(repository.getCursor(projectId))).processedThroughCreatedAt,
+      ).toBe(cursorAt);
+      await expect.poll(() => Date.now()).toBeGreaterThan(Date.parse(cursorAt));
+    }
+    if (
+      [
+        "crash",
+        "delivery-error",
+        "rollup-error",
+        "newer-report",
+        "newer-mirror",
+        "metadata-error",
+        "paused-delivery",
+        "goal-limit",
+      ].includes(mode)
+    ) {
+      // An already-finished batch peer makes the real rollup owner executable.
+      const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-finished-peer-"));
+      tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(h, "finished-batch-peer", peerCwd);
+      const originalWorker = Option.getOrThrow(
+        await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+      );
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "prior-batch-peer",
+          batchId: originalWorker.batchId,
+          callerThreadId: coordinatorId,
+          threadIds: [peer],
+          titles: ["Prior research"],
+        }),
+      );
+      const peerWorker = Option.getOrThrow(
+        await runtime!.runPromise(repository.findManagedWorkerByThread(peer)),
+      );
+      await runtime!.runPromise(
+        repository.upsertManagedWorker({
+          ...peerWorker,
+          settledAt: completedAt,
+          settleOutcome: "completed",
+        }),
+      );
+      const { ProjectGoalId, ProjectTaskId } = await import("@synara/contracts");
+      const goalId = ProjectGoalId.makeUnsafe("delivery-goal");
+      const taskId = ProjectTaskId.makeUnsafe("delivery-task");
+      const config = Option.getOrThrow(await runtime!.runPromise(repository.getConfig(projectId)));
+      await runtime!.runPromise(
+        repository.saveGoal(
+          {
+            id: goalId,
+            projectId,
+            objective: "Research",
+            authorizationSource: "user",
+            scopeVersion: 1,
+            acceptanceCriteria: null,
+            limits: config.limits,
+            status: "active",
+            continuationCount:
+              mode === "goal-limit" ? config.limits.maxAutomaticContinuationsPerGoal : 0,
+            workerCreationCount: 0,
+            authorizedAt: createdAt,
+            revision: 1,
+            createdAt,
+            updatedAt: createdAt,
+          },
+          null,
+        ),
+      );
+      await runtime!.runPromise(
+        repository.saveTask(
+          {
+            id: taskId,
+            projectId,
+            goalId,
+            title: "Research",
+            description: null,
+            acceptanceCriteria: null,
+            status: "running",
+            dependsOnTaskIds: [],
+            assignedThreadId: workerId,
+            repairCount: 0,
+            archivedAt: null,
+            revision: 1,
+            createdAt,
+            updatedAt: createdAt,
+          },
+          null,
+        ),
+      );
+      if (mode === "paused-delivery")
+        await runtime!.runPromise(
+          repository.saveConfig(
+            {
+              ...config,
+              pausedAt: completedAt,
+              revision: config.revision + 1,
+              updatedAt: completedAt,
+            },
+            config.revision,
+          ),
+        );
+      const write = repository.writeDocument;
+      const report = vi.spyOn(repository, "writeDocument").mockImplementation((input) =>
+        mode === "rollup-error" || mode === "metadata-error"
+          ? write(input)
+          : write(input).pipe(
+              Effect.andThen(
+                mode === "delivery-error"
+                  ? Effect.fail(
+                      new PersistenceSqlError({
+                        operation: "fixture",
+                        detail: "after report commit",
+                      }),
+                    )
+                  : Effect.interrupt,
+              ),
+            ),
+      );
+      const saveEvidence = repository.saveEvidence;
+      const evidenceWrite = vi.spyOn(repository, "saveEvidence").mockImplementation((input) =>
+        mode === "metadata-error"
+          ? Effect.fail(
+              new PersistenceSqlError({
+                operation: "fixture",
+                detail: "evidence temporarily unavailable",
+              }),
+            )
+          : saveEvidence(input),
+      );
+      const dispatch = h.sourceEngine.dispatch;
+      const monitor = vi.spyOn(h.sourceEngine, "dispatch").mockImplementation((command) =>
+        mode === "rollup-error" &&
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.workers.settled"
+          ? Effect.fail(
+              new OrchestrationCommandInternalError({
+                commandId: command.commandId,
+                commandType: command.type,
+                detail: "fixture rollup unavailable",
+              }),
+            )
+          : dispatch(command),
+      );
+      const interrupted = await runtime!.runPromiseExit(
+        mode === "paused-delivery"
+          ? service.ingestSettledThreadEvent({
+              threadId: workerId,
+              sourceEventId: "paused-ready",
+              eventType: "worker.completed",
+              turnId,
+              createdAt: completedAt,
+            })
+          : service.inspectWorkerHealth(),
+      );
+      report.mockRestore();
+      monitor.mockRestore();
+      evidenceWrite.mockRestore();
+      expect(Exit.isFailure(interrupted)).toBe(
+        ["crash", "newer-report", "newer-mirror", "paused-delivery", "goal-limit"].includes(mode),
+      );
+      expect(
+        Option.getOrThrow(await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)))
+          .settleOutcome,
+      ).toBe("completed");
+      expect(wakes).toHaveLength(0);
+      const state = await runtime!.runPromise(
+        Effect.serviceOption(ServerConfig).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const reportPath = `inbox/${workerId}/report.md`;
+      if (mode === "newer-report" || mode === "newer-mirror") {
+        const nextAt = new Date().toISOString();
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("newer-report-start"),
+            threadId: workerId,
+            message: {
+              messageId: MessageId.makeUnsafe("newer-report-message"),
+              role: "user",
+              text: "Next task",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: nextAt,
+          }),
+        );
+        await runtime!.runPromise(
+          service.recordWorkerTurnRequest({
+            threadId: workerId,
+            commandId: "newer-report-start",
+            dispatchOrigin: "agent",
+            turnId: null,
+            eventType: "thread.turn-start-requested",
+            createdAt: nextAt,
+          }),
+        );
+        const { ProjectDocumentRevisionId } = await import("@synara/contracts");
+        const { hashDocumentContent } = await import("../../projectAgent/materializer.ts");
+        if (mode === "newer-report")
+          await runtime!.runPromise(
+            repository.writeDocument({
+              revision: {
+                id: ProjectDocumentRevisionId.makeUnsafe("newer-report-document"),
+                projectId,
+                logicalPath: reportPath,
+                revision: 2,
+                content: "Newer B report",
+                contentHash: hashDocumentContent("Newer B report"),
+                authorKind: "system",
+                authorThreadId: workerId,
+                sources: [{ threadId: workerId, turnId: asTurnId("newer-turn") }],
+                createdAt: nextAt,
+              },
+              expectedRevision: 1,
+              diskHash: hashDocumentContent("Newer B report"),
+            }),
+          );
+      }
+      // Both ordinary health retry and startup recovery must finish delivery,
+      // with no duplicate report revision, rows or evidence on subsequent scans.
+      if (mode === "delivery-error" || mode === "rollup-error" || mode === "metadata-error")
+        await runtime!.runPromise(service.inspectWorkerHealth());
+      else await runtime!.runPromise(service.reconcilePendingWakes());
+      await runtime!.runPromise(service.reconcilePendingWakes());
+      expect(wakes).toHaveLength(mode === "paused-delivery" || mode === "goal-limit" ? 0 : 1);
+      await Effect.runPromise(h.engine.drain);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(mode === "paused-delivery" ? 0 : 1);
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.workers.settled"),
+      ).toHaveLength(
+        mode === "newer-report" || mode === "newer-mirror" || mode === "paused-delivery" ? 0 : 1,
+      );
+      const reportHead = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({ projectId, logicalPath: reportPath }),
+        ),
+      );
+      expect(reportHead.revision).toBe(mode === "newer-report" ? 2 : 1);
+      if (mode === "newer-report") {
+        expect(reportHead.content).toBe("Newer B report");
+        expect(
+          Option.getOrThrow(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          ).activeTurnCommandId,
+        ).toBe("newer-report-start");
+        expect(
+          Option.getOrThrow(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          ).settleOutcome,
+        ).toBeNull();
+      } else {
+        expect(reportHead.content).toContain("Exact completed research result");
+        expect(
+          await runtime!.runPromise(
+            readProjectDocumentMirror({
+              stateDir: state.stateDir,
+              projectId,
+              logicalPath: reportPath,
+            }),
+          ),
+        ).toBe(reportHead.content);
+      }
+      if (mode === "newer-mirror") {
+        const current = Option.getOrThrow(
+          await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+        );
+        expect(current.activeTurnCommandId).toBe("newer-report-start");
+        expect(current.settleOutcome).toBeNull();
+      }
+      const evidence = await runtime!.runPromise(repository.listEvidenceForTask(taskId));
+      expect(evidence).toHaveLength(1);
+      expect(evidence[0]!.sourceTurnId).toBe(turnId);
+      const activity = await runtime!.runPromise(
+        repository.listActivity({ projectId, limit: 100 }),
+      );
+      expect(
+        activity.filter((row) => row.kind === "document-written" && row.actorThreadId === workerId),
+      ).toHaveLength(1);
+      await runtime!.runPromise(gatewayService.reconcile(projectId));
+      expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(
+        mode === "newer-report" || mode === "newer-mirror",
+      );
+      return;
+    }
+    if (mode === "pending" || mode === "cursor-race" || mode === "frozen-race") {
+      let entered!: () => void;
+      let release!: () => void;
+      const seen = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const find = projectImportPaths.findImportGitWorkspace;
+      const physical = fs.realpathSync(cwd);
+      let blocked = false;
+      const discovery = vi
+        .spyOn(projectImportPaths, "findImportGitWorkspace")
+        .mockImplementation(async (value) => {
+          if (value === physical && !blocked) {
+            blocked = true;
+            entered();
+            await barrier;
+          }
+          return find(value);
+        });
+      const health = runtime!.runPromise(service.inspectWorkerHealth());
+      await seen;
+      if (mode === "cursor-race" || mode === "frozen-race") {
+        // A cursor can advance during discovery and remain ahead of wall time
+        // after a clock rollback. Completion time still describes the work.
+        const cursorAt = new Date(Date.now() + 60_000).toISOString();
+        await runtime!.runPromise(
+          repository.insertInboxEvent({
+            id: ProjectInboxEventId.makeUnsafe("concurrent-cursor"),
+            projectId,
+            sourceThreadId: coordinatorId,
+            sourceEventId: "concurrent-cursor",
+            eventType: "thread.session-set",
+            taskId: null,
+            eligibleWake: mode === "frozen-race",
+            createdAt: cursorAt,
+          }),
+        );
+        let priorWake: Promise<void> | undefined;
+        let releaseWake: (() => void) | undefined;
+        if (mode === "frozen-race") {
+          let wakeStarted!: () => void;
+          const enteredWake = new Promise<void>((resolve) => {
+            wakeStarted = resolve;
+          });
+          const wakeBarrier = new Promise<void>((resolve) => {
+            releaseWake = resolve;
+          });
+          const run = h.hubAutomation.runNow;
+          vi.spyOn(h.hubAutomation, "runNow").mockImplementationOnce((input) =>
+            Effect.promise(async () => {
+              wakeStarted();
+              await wakeBarrier;
+            }).pipe(Effect.andThen(run(input))),
+          );
+          priorWake = runtime!.runPromise(service.processPendingWakes(projectId));
+          await enteredWake;
+          expect((await runtime!.runPromise(repository.getCursor(projectId))).frozenToInboxId).toBe(
+            "concurrent-cursor",
+          );
+        } else await runtime!.runPromise(service.processPendingWakes(projectId));
+        release();
+        if (releaseWake) releaseWake();
+        if (priorWake) await priorWake;
+        await health;
+        discovery.mockRestore();
+        expect(wakes).toHaveLength(mode === "frozen-race" ? 2 : 1);
+        const inbox = await runtime!.runPromise(
+          repository.listInboxAfter({ projectId, limit: 100 }),
+        );
+        expect(
+          inbox.find((row) => row.eventType === "worker.completed")!.createdAt > cursorAt,
+        ).toBe(true);
+        expect(
+          Option.getOrThrow(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          ).settledAt,
+        ).toBe(
+          Option.getOrThrow(await runtime!.runPromise(query.getThreadShellById(workerId)))
+            .latestTurn!.completedAt,
+        );
+        return;
+      }
+      const nextAt = new Date().toISOString();
+      const commandId = CommandId.makeUnsafe("pending-next-start");
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.turn.start",
+          commandId,
+          threadId: workerId,
+          message: {
+            messageId: MessageId.makeUnsafe("next-message"),
+            role: "user",
+            text: "Continue research",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: nextAt,
+        }),
+      );
+      await runtime!.runPromise(
+        service.recordWorkerTurnRequest({
+          threadId: workerId,
+          commandId,
+          dispatchOrigin: "agent",
+          eventType: "thread.turn-start-requested",
+          turnId: null,
+          createdAt: nextAt,
+        }),
+      );
+      release();
+      await health;
+      discovery.mockRestore();
+      await Effect.runPromise(h.engine.drain);
+      await runtime!.runPromise(gatewayService.reconcile(projectId));
+      expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(true);
+      expect(
+        Option.getOrNull(await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)))
+          ?.settleOutcome,
+      ).toBeNull();
+      expect(wakes).toHaveLength(0);
+      // The newer attempt remains runnable and can complete normally afterwards.
+      const nextTurn = asTurnId("next-turn");
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("next-running"),
+          threadId: workerId,
+          session: {
+            threadId: workerId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: nextTurn,
+            lastError: null,
+            updatedAt: nextAt,
+          },
+          createdAt: nextAt,
+        }),
+      );
+      await h.drain();
+      const endAt = new Date().toISOString();
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("next-ready"),
+          threadId: workerId,
+          session: {
+            threadId: workerId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: endAt,
+          },
+          createdAt: endAt,
+        }),
+      );
+      await runtime!.runPromise(service.inspectWorkerHealth());
+      expect(wakes).toHaveLength(1);
+      await Effect.runPromise(h.engine.drain);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(1);
+      const reportHead = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({
+            projectId,
+            logicalPath: `inbox/${workerId}/report.md`,
+          }),
+        ),
+      );
+      expect(reportHead.revision).toBe(1);
+      await runtime!.runPromise(gatewayService.reconcile(projectId));
+      expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(false);
+      return;
+    }
+    if (recovery) await runtime!.runPromise(service.inspectWorkerHealth());
+    if (
+      mode !== "live" &&
+      mode !== "recovery" &&
+      mode !== "late-recovery" &&
+      mode !== "runtime-cwd" &&
+      mode !== "persisted-cwd"
+    ) {
+      const worker = Option.getOrNull(
+        await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+      );
+      expect(worker?.settleOutcome).toBeNull();
+      expect(wakes).toHaveLength(0);
+      expect(capture).not.toHaveBeenCalled();
+      return;
+    }
+    await expect
+      .poll(
+        async () =>
+          Option.getOrNull(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          )?.settleOutcome,
+      )
+      .toBe("completed");
+    await expect.poll(() => wakes.length).toBe(1);
+    await Effect.runPromise(h.engine.drain);
+    await runtime!.runPromise(gatewayService.reconcile(projectId));
+    const item = (await runtime!.runPromise(work.list(projectId)))[0]!;
+    expect(item.slotHeld).toBe(false);
+    for (let count = 0; count < 2; count++)
+      await runtime!.runPromise(service.inspectWorkerHealth());
+    await Effect.runPromise(
+      h.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("research-reconnect"),
+        threadId: workerId,
+        session: {
+          threadId: workerId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: completedAt,
+        },
+        createdAt: completedAt,
+      }),
+    );
+    await runtime!.runPromise(
+      service.ingestSettledThreadEvent({
+        threadId: workerId,
+        sourceEventId: "reconnect-replay",
+        eventType: "thread.session-set",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    expect(wakes).toHaveLength(1);
+    const inbox = await runtime!.runPromise(repository.listInboxAfter({ projectId, limit: 100 }));
+    expect(inbox.filter((row) => row.eligibleWake)).toHaveLength(1);
+    expect(capture).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(cwd, ".git"))).toBe(false);
   });
 
   it("recovers a committed native checkpoint while deferred thread detail is unavailable", async () => {
