@@ -22,6 +22,20 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.6-remote.25",
+    date: "Oct 18",
+    features: [
+      {
+        id: "recap-read-recovery",
+        title: "Recap recovers from temporary errors",
+        description:
+          "Inbox retries a temporary read failure automatically, so your day recap can load without pressing Try again.",
+        details:
+          "Retries use a bounded delay. If the computer reports a permanent error or needs an update, the error remains available for you to act on.",
+      },
+    ],
+  },
+  {
     version: "1.0.6-remote.24",
     date: "Oct 18",
     features: [

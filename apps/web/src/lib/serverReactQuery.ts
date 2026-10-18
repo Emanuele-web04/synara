@@ -11,7 +11,11 @@ import type {
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
-import { EXPENSIVE_READ_RETRY_OPTIONS } from "./expensiveReadRetry";
+import {
+  EXPENSIVE_READ_RETRY_OPTIONS,
+  expensiveReadRetryDelay,
+  shouldRetryExpensiveRead,
+} from "./expensiveReadRetry";
 import { withWorkspaceKeybindings } from "./hosts/workspaceKeybindings";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
@@ -512,7 +516,17 @@ export function serverRecapQueryOptions(
     refetchOnMount: live ? "always" : true,
     refetchInterval: live ? 5 * 60_000 : false,
     refetchOnWindowFocus: false,
-    retry: false,
+    // A transient read failure must not strand the recap until its next five-minute poll.
+    // Capacity is retried by the transport; permanent host verdicts stay actionable.
+    retry: (failureCount, error) => {
+      const failure = error as { code?: unknown; retryable?: unknown } | null;
+      return (
+        failure?.code !== "FEATURE_UNAVAILABLE" &&
+        failure?.retryable !== false &&
+        shouldRetryExpensiveRead(failureCount, error)
+      );
+    },
+    retryDelay: expensiveReadRetryDelay,
     queryFn: async () => ensureNativeApi().stats.getRecap(input),
   });
 }

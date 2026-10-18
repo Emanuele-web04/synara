@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.6-remote.25 — 2026-10-18
+
+### Fixed
+
+- Inbox recaps automatically retry temporary read failures with bounded backoff instead of staying failed until the next five-minute refresh. Unsupported-host and non-retryable errors remain visible; transport capacity retries are not multiplied.
+
+### Verification
+
+- A real React Query observer reproduces the failed-read recovery gap and now recovers after a temporary error without a manual retry. Focused checks also preserve unsupported-host, permanent-error and capacity-retry behavior.
+- Local formatting, lint, typecheck and focused tests qualify the candidate. Publication still requires the exact-tag quality/server suites, three packaged platform checks, macOS signing/notarization, Windows Defender and public artifact provenance. Installer upgrades and live-provider behavior are not established by those local checks.
+
 ## 1.0.6-remote.24 — 2026-10-18
 
 ### Fixed
