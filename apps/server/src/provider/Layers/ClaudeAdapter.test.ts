@@ -3550,58 +3550,78 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("projects vcs_state_changed system messages as vcs.state.changed events", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter(
-          (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
-        ),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "full-access",
-      });
-
-      harness.query.emit({
-        type: "system",
-        subtype: "vcs_state_changed",
-        kind: "commit",
-        cwd: "/repo/worktree",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-1",
-      } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; the VCS event
-      // arriving first proves it did not surface as an unhandled warning.
-      harness.query.emit({
-        type: "system",
-        subtype: "totally_unknown_subtype",
-        session_id: "sdk-session-vcs",
-        uuid: "vcs-sentinel",
-      } as unknown as SDKMessage);
-
-      const events = Array.from(yield* Fiber.join(eventsFiber));
-      assert.equal(events[0]?.type, "vcs.state.changed");
-      if (events[0]?.type === "vcs.state.changed") {
-        assert.deepEqual(events[0].payload, { kind: "commit", cwd: "/repo/worktree" });
-      }
-      assert.equal(events[1]?.type, "runtime.warning");
-      if (events[1]?.type === "runtime.warning") {
-        assert.equal(
-          events[1].payload.message,
-          "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+  for (const { subtype, message, expectedPayload } of [
+    {
+      subtype: "vcs_state_changed",
+      message: { kind: "commit", cwd: "/repo/worktree" },
+      expectedPayload: { kind: "commit", cwd: "/repo/worktree" },
+    },
+    {
+      subtype: "code_change_published",
+      message: {
+        provider: "github-enterprise",
+        url: "https://unverified.example/other/repo/pull/42",
+        repo: "other/repo",
+        identifier: "42",
+        action: "created",
+        branch: "unverified-branch",
+      },
+      expectedPayload: { kind: "code_change_published" },
+    },
+  ]) {
+    it.effect(`projects ${subtype} system messages as vcs.state.changed events`, () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "vcs.state.changed" || event.type === "runtime.warning",
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
         );
-      }
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        harness.query.emit({
+          type: "system",
+          subtype,
+          ...message,
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-1",
+        } as unknown as SDKMessage);
+        // The sentinel proves known Git notifications do not become warnings;
+        // publication URLs and branches never become trusted metadata either.
+        harness.query.emit({
+          type: "system",
+          subtype: "totally_unknown_subtype",
+          session_id: "sdk-session-vcs",
+          uuid: "vcs-sentinel",
+        } as unknown as SDKMessage);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(events[0]?.type, "vcs.state.changed");
+        if (events[0]?.type === "vcs.state.changed") {
+          assert.deepEqual(events[0].payload, expectedPayload);
+          assert.equal(events[0].threadId, THREAD_ID);
+        }
+        assert.equal(events[1]?.type, "runtime.warning");
+        if (events[1]?.type === "runtime.warning") {
+          assert.equal(
+            events[1].payload.message,
+            "Unhandled Claude system message subtype 'totally_unknown_subtype'.",
+          );
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   it.effect("still announces a task backgrounded via task_updated before the snapshot", () => {
     const harness = makeHarness();

@@ -62,6 +62,14 @@ export interface MintedSessionCredential {
   readonly expiresAtSeconds: number;
 }
 
+/** Account verification can lapse without invalidating a paired device's trust. */
+export class HostAuthorizationUnavailableError extends Error {
+  constructor() {
+    super("Remote authorization unavailable; retry after account verification");
+    this.name = "HostAuthorizationUnavailableError";
+  }
+}
+
 export class HostMintService {
   readonly #grants: HostGrantVerifier;
 
@@ -101,6 +109,7 @@ export class HostMintService {
       try {
         trustGeneration = await this.options.authorizeDevice(grant.sub, deviceJkt);
       } catch (cause) {
+        if (cause instanceof HostAuthorizationUnavailableError) throw cause;
         throw new HostMintError("not_authorized", "Device has no current local approval", {
           cause,
         });
@@ -111,7 +120,8 @@ export class HostMintService {
 
       this.#grants.consume(grant, now);
     } catch (cause) {
-      if (cause instanceof HostMintError) throw cause;
+      if (cause instanceof HostMintError || cause instanceof HostAuthorizationUnavailableError)
+        throw cause;
       const message = cause instanceof Error ? cause.message : "invalid mint request";
       const code =
         message.includes("grant") || message.includes("jti")

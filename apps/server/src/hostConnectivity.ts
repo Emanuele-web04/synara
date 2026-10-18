@@ -26,7 +26,7 @@ import {
   REMOTE_INNER_PAIRING_PATH,
 } from "./remoteTransport/tunnel";
 
-import { EnvironmentId } from "@synara/contracts";
+import { EnvironmentId, HOST_SESSION_CLOSE_REVOKED } from "@synara/contracts";
 import {
   accountApiIssuer,
   readAccountFile,
@@ -36,7 +36,12 @@ import {
 import type { SessionCredentialServiceShape } from "./auth/Services/SessionCredentialService";
 import type { ServerConfigShape } from "./config";
 import { startEndpointReporter } from "./endpointReporter";
-import { ApiJwksCache, HostGrantVerifier, HostMintService } from "./hostAuth";
+import {
+  ApiJwksCache,
+  HostAuthorizationUnavailableError,
+  HostGrantVerifier,
+  HostMintService,
+} from "./hostAuth";
 import { mintHostProof, readHostIdentity } from "./hostIdentity";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "./nodeHttpServer";
 import {
@@ -88,8 +93,7 @@ export async function startHostConnectivity(
   };
   let admissionAvailable = () => false;
   const authorizeDevice = async (userId: string, deviceJkt: string, generation?: number) => {
-    if (!admissionAvailable())
-      throw new Error("Remote authorization is unavailable; reconnect after account verification");
+    if (!admissionAvailable()) throw new HostAuthorizationUnavailableError();
     if (userId !== trustScope.userId)
       throw new Error("Only the locally linked owner is authorized");
     const trusted = await Effect.runPromise(
@@ -219,7 +223,7 @@ export async function startHostConnectivity(
       }),
       accept: (socket, path, ingress) => {
         if (!admissionAvailable()) {
-          socket.close(1008, "Remote authorization unavailable");
+          socket.close(1012, "Remote authorization unavailable");
           return;
         }
         if (path === REMOTE_INNER_PAIRING_PATH) {
@@ -249,7 +253,7 @@ export async function startHostConnectivity(
           return;
         if (jkt) remoteSessions.closeDevice(jkt);
         else {
-          remoteSessions.closeAll("remote access disabled");
+          remoteSessions.closeAll("remote access disabled", HOST_SESSION_CLOSE_REVOKED);
           tunnel.close();
           const disabling = hostProof()
             .then((proof) => client.disableRemoteTunnel(proof, credentials.hostId!, activeTunnelId))
@@ -300,7 +304,10 @@ export async function startHostConnectivity(
         await remoteSessions.reverify(snapshot);
       },
       unavailable: async (permanent) => {
-        remoteSessions.closeAll("Remote authorization unavailable");
+        remoteSessions.closeAll(
+          "Remote authorization unavailable",
+          permanent ? HOST_SESSION_CLOSE_REVOKED : 1012,
+        );
         if (permanent)
           await Effect.runPromise(
             options.remoteTrust.disable(trustScope, new Date().toISOString()),

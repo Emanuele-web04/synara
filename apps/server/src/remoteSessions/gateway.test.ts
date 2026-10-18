@@ -1,6 +1,6 @@
 import { controllerProtocol } from "../hostConnections/dialer";
 import { createHash, randomUUID } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,9 +25,9 @@ import {
   type JWK,
 } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { type RawData } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 
-import { HostMintService } from "../hostAuth";
+import { HostAuthorizationUnavailableError, HostMintService } from "../hostAuth";
 import { generateAndPersistHostIdentity, type HostIdentity } from "../hostIdentity";
 import type { RelaySocket } from "../relaySocket";
 import { RemoteConnectionGateway } from "./gateway";
@@ -117,7 +117,12 @@ async function devicePeer(identity: HostIdentity, environmentId: string, userId:
 }
 
 /** A real mint service plus a factory for genuinely valid mint requests. */
-async function mintFixture(identity: HostIdentity, environmentId: string, userId: string) {
+async function mintFixture(
+  identity: HostIdentity,
+  environmentId: string,
+  userId: string,
+  authorizeDevice: () => Promise<number> = async () => 1,
+) {
   const api = await generateKeyPair("EdDSA", { extractable: true });
   const apiJwk = await exportJWK(api.publicKey);
   const device = await generateKeyPair("EdDSA", { extractable: true });
@@ -129,7 +134,7 @@ async function mintFixture(identity: HostIdentity, environmentId: string, userId
     ],
   };
   const mintService = new HostMintService({
-    authorizeDevice: async () => 1,
+    authorizeDevice,
     identity,
     apiIssuer: API_ISSUER,
     environmentId,
@@ -172,6 +177,115 @@ async function mintFixture(identity: HostIdentity, environmentId: string, userId
 }
 
 describe("RemoteConnectionGateway", () => {
+  it.each([
+    "mint",
+    "first-trust-read",
+    "confirm-trust-read",
+    "invalid-proof",
+    "unapproved",
+    "revoked-confirm",
+  ] as const)(
+    "distinguishes temporary %s unavailability from invalid device credentials on the wire",
+    async (boundary) => {
+      const identity = await hostIdentity("unavailable");
+      const environmentId = "gateway-unavailable-environment";
+      const peer = await devicePeer(identity, environmentId, "owner");
+      const unavailable = new HostAuthorizationUnavailableError();
+      const mint = await mintFixture(identity, environmentId, "owner", async () => {
+        throw unavailable;
+      });
+      let authorizationReads = 0;
+      const sessions = new RemoteSessionRegistry();
+      const bridgeToLocal = vi.fn(async () => {});
+      const gateway = new RemoteConnectionGateway({
+        mintService: mint.mintService,
+        identity,
+        environmentId,
+        keyGeneration: 1,
+        sessions,
+        authorizeDevice: async () => {
+          authorizationReads++;
+          if (
+            boundary === "unapproved" ||
+            (boundary === "revoked-confirm" && authorizationReads === 2)
+          )
+            throw new Error("Device approval is missing or revoked on this host");
+          if (
+            (boundary !== "confirm-trust-read" && boundary !== "revoked-confirm") ||
+            authorizationReads === 2
+          )
+            throw unavailable;
+        },
+        bridgeToLocal,
+      });
+      const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      await once(server, "listening");
+      server.on("connection", (socket) => void gateway.accept(socket));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("No socket address");
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+      try {
+        await once(socket, "open");
+        const closed = once(socket, "close");
+        if (boundary === "mint") {
+          socket.send(
+            JSON.stringify({ v: 1, type: "mint_request", request: await mint.mintRequest() }),
+          );
+        } else {
+          socket.send(
+            JSON.stringify({
+              v: 1,
+              type: "session_authorize",
+              client: controllerProtocol,
+              credential:
+                boundary === "invalid-proof" ? "invalid.signature.bytes" : peer.credential,
+              dpop: await peer.dpop(),
+            }),
+          );
+        }
+        const [code] = (await closed) as [number];
+        expect(code).toBe(
+          ["invalid-proof", "unapproved", "revoked-confirm"].includes(boundary) ? 4501 : 1012,
+        );
+        expect(sessions.size).toBe(0);
+        expect(bridgeToLocal).not.toHaveBeenCalled();
+        if (boundary === "invalid-proof") expect(authorizationReads).toBe(0);
+        if (boundary === "confirm-trust-read") expect(authorizationReads).toBe(2);
+      } finally {
+        socket.terminate();
+        for (const client of server.clients) client.terminate();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
+
+  it("keeps a stalled authorization retryable without extending its handshake budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new TestSocket();
+      const sessions = new RemoteSessionRegistry();
+      const bridgeToLocal = vi.fn(async () => {});
+      const gateway = new RemoteConnectionGateway({
+        mintService: {} as HostMintService,
+        identity: {} as HostIdentity,
+        environmentId: "stalled-authorization",
+        keyGeneration: 1,
+        authorizeDevice: async () => {},
+        sessions,
+        bridgeToLocal,
+      });
+      await gateway.accept(socket);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(socket.closes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket.closes).toEqual([{ code: 1012, reason: "Remote authorization timed out" }]);
+      expect(sessions.size).toBe(0);
+      expect(bridgeToLocal).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not register a peer that closes at the final authorization boundary", async () => {
     const identity = await hostIdentity("race");
     const environmentId = "gateway-race-environment";

@@ -1098,8 +1098,8 @@ function readClaudeModelRefusalFallback(message: unknown): ClaudeModelRefusalFal
   };
 }
 
-// VCS state transitions (commit, checkout, rebase) stream as an untyped system
-// message; match structurally so SDK type drift stays inert.
+// Git and published-change notifications stream as untyped system messages;
+// match structurally so SDK type drift stays inert.
 interface ClaudeVcsStateChange {
   readonly kind?: string;
   readonly cwd?: string;
@@ -1115,7 +1115,15 @@ function readClaudeVcsStateChange(message: unknown): ClaudeVcsStateChange | unde
     kind?: unknown;
     cwd?: unknown;
   };
-  if (record.type !== "system" || record.subtype !== "vcs_state_changed") {
+  if (record.type !== "system") {
+    return undefined;
+  }
+  if (record.subtype === "code_change_published") {
+    // Claude's publication fields are scraped, unverified hints. Trigger the
+    // existing repo-scoped Git/forge lookup without trusting its URL or branch.
+    return { kind: "code_change_published" };
+  }
+  if (record.subtype !== "vcs_state_changed") {
     return undefined;
   }
   const kind = readNonEmptyString(record.kind);

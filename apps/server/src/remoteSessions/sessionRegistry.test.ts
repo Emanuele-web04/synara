@@ -1,3 +1,7 @@
+import { once } from "node:events";
+import WebSocket, { WebSocketServer } from "ws";
+import { HostDialError } from "../hostConnections/dialer";
+import { classifyConnectionFailure } from "../hostConnections/failure";
 import { HOST_SESSION_CLOSE_REVOKED } from "@synara/contracts";
 import type { HostAuthorizationSnapshot } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -79,6 +83,60 @@ describe("RemoteSessionRegistry", () => {
     expect(close).toHaveBeenCalledWith(HOST_SESSION_CLOSE_REVOKED, "device revoked");
     expect(registry.size).toBe(0);
   });
+
+  it.each([
+    "restart",
+    "authorization-unavailable",
+    "credential-expired",
+    "access-disabled",
+  ] as const)(
+    "distinguishes %s from device revocation at the actual socket boundary",
+    async (lifecycle) => {
+      const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("No socket address");
+      const accepted = once(server, "connection");
+      const client = new WebSocket(`ws://127.0.0.1:${address.port}`);
+      try {
+        await once(client, "open");
+        const [peer] = (await accepted) as [WebSocket];
+        const registry = new RemoteSessionRegistry();
+        const now = Math.floor(Date.now() / 1_000);
+        registry.add({
+          id: "retryable-session",
+          userId: "owner",
+          deviceJkt: "approved-device",
+          startedAt: new Date().toISOString(),
+          expiresAtSeconds: now,
+          via: "cloudflare",
+          close: (code, reason) => peer.close(code, reason),
+        });
+        const closed = once(client, "close");
+        if (lifecycle === "access-disabled")
+          registry.closeAll("remote access disabled", HOST_SESSION_CLOSE_REVOKED);
+        else if (lifecycle === "credential-expired") registry.dropExpired(now);
+        else if (lifecycle === "authorization-unavailable")
+          registry.closeAll("Remote authorization unavailable");
+        else registry.closeAll();
+        const [code] = (await closed) as [number];
+        expect(code).toBe(lifecycle === "access-disabled" ? HOST_SESSION_CLOSE_REVOKED : 1012);
+        expect(
+          classifyConnectionFailure(
+            new HostDialError("Peer closed during handshake", {
+              stage: "handshake",
+              closeCode: code,
+            }),
+          ),
+        ).toBe(lifecycle === "access-disabled" ? "revoked" : "reconnecting");
+        expect(registry.size).toBe(0);
+      } finally {
+        client.terminate();
+        for (const socket of server.clients) socket.terminate();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
 
   it("projects live session identity, transport, and start time without exposing close handles", () => {
     const registry = new RemoteSessionRegistry();
