@@ -146,8 +146,10 @@ workspace. An explicit `worktree` choice requires a Git repository: select its `
 choose `local`. Invalid worktree plans are rejected before task cards or source bindings are saved,
 so the coordinator can correct the plan in the same turn. Completed local non-Git workers settle
 and wake their coordinator without creating Git checkpoints; the health scan also recovers such
-completed workers after a missed live event. Repository workers still wait for their checkpoint
-outcome. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
+completed workers after a missed live event. Workspace checks use the provider session’s current
+folder, or its saved folder after a restart. Interrupted delivery resumes the same report, evidence,
+and monitoring rows before the coordinator wakes, without duplicating them or replacing a newer
+attempt’s report. Repository workers still wait for their checkpoint outcome. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
 a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
 finish, the task retains its reserved slot until startup recovery confirms cleanup.
 

@@ -97,6 +97,8 @@ import { ProjectAgentReactorLive } from "../../projectAgent/Layers/ProjectAgentR
 import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
+import { readProjectDocumentMirror } from "../../projectAgent/materializer.ts";
+import { OrchestrationCommandInternalError } from "../Errors.ts";
 import { makeHubWorkService } from "../../projectAgent/hubWorkService.ts";
 import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
@@ -2243,6 +2245,16 @@ describe("CheckpointReactor", () => {
     "stale",
     "pending",
     "crash",
+    "delivery-error",
+    "rollup-error",
+    "newer-report",
+    "newer-mirror",
+    "metadata-error",
+    "paused-delivery",
+    "goal-limit",
+    "runtime-cwd",
+    "persisted-cwd",
+    "claim-error",
     "lookup-error",
     "late-recovery",
     "cursor-race",
@@ -2252,17 +2264,34 @@ describe("CheckpointReactor", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-non-git-worker-"));
     tempDirs.push(cwd);
     const wakes: string[] = [];
+    const projectedCwd =
+      mode === "runtime-cwd" || mode === "persisted-cwd" ? createGitRepository() : cwd;
+    if (projectedCwd !== cwd) tempDirs.push(projectedCwd);
     const h = await createHarness({
-      projectWorkspaceRoot: cwd,
-      threadWorktreePath: cwd,
+      projectWorkspaceRoot: projectedCwd,
+      threadWorktreePath: projectedCwd,
       providerSessionCwd: cwd,
       seedFilesystemCheckpoints: false,
       simulateProviderBaseline: false,
       hubWakes: wakes,
       hubMonitorLive: !recovery,
-      hubRuntimeIngestion: ["live", "recovery", "crash", "lookup-error", "late-recovery"].includes(
-        mode,
-      ),
+      hubRuntimeIngestion: [
+        "live",
+        "recovery",
+        "crash",
+        "delivery-error",
+        "rollup-error",
+        "newer-report",
+        "newer-mirror",
+        "metadata-error",
+        "paused-delivery",
+        "goal-limit",
+        "runtime-cwd",
+        "persisted-cwd",
+        "claim-error",
+        "lookup-error",
+        "late-recovery",
+      ].includes(mode),
     });
     const service = await runtime!.runPromise(
       Effect.serviceOption(ProjectAgentService).pipe(Effect.map(Option.getOrThrow)),
@@ -2420,6 +2449,17 @@ describe("CheckpointReactor", () => {
         }),
       );
     await h.drain();
+    await Effect.runPromise(
+      h.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.makeUnsafe("research-answer"),
+        threadId: workerId,
+        messageId: MessageId.makeUnsafe("research-answer"),
+        turnId,
+        delta: "Exact completed research result",
+        createdAt: requestedAt,
+      }),
+    );
     const capture = vi.spyOn(h.checkpointStore, "captureCheckpoint");
     await Effect.runPromise(
       h.runtimeEvents.append(nativeCompletion("research-complete", workerId, turnId)),
@@ -2449,6 +2489,33 @@ describe("CheckpointReactor", () => {
           createdAt: completedAt,
         }),
       );
+    if (mode === "persisted-cwd") {
+      const { ProviderSessionDirectory } =
+        await import("../../provider/Services/ProviderSessionDirectory.ts");
+      const { ProviderSessionDirectoryLive } =
+        await import("../../provider/Layers/ProviderSessionDirectory.ts");
+      const { ProviderSessionRuntimeRepositoryLive } =
+        await import("../../persistence/Layers/ProviderSessionRuntime.ts");
+      const directory = await runtime!.runPromise(
+        Effect.service(ProviderSessionDirectory).pipe(
+          Effect.provide(
+            ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntimeRepositoryLive)),
+          ),
+        ),
+      );
+      await runtime!.runPromise(
+        directory.upsert({
+          threadId: workerId,
+          provider: "codex",
+          runtimePayload: { cwd },
+          status: "stopped",
+        }),
+      );
+      const providerService = await runtime!.runPromise(
+        Effect.serviceOption(ProviderService).pipe(Effect.map(Option.getOrThrow)),
+      );
+      vi.spyOn(providerService, "listSessions").mockReturnValue(Effect.succeed([]));
+    }
     if (mode === "stale") {
       await Effect.runPromise(
         h.engine.dispatch({
@@ -2477,7 +2544,7 @@ describe("CheckpointReactor", () => {
         }),
       );
     }
-    if (mode === "lookup-error") {
+    if (mode === "lookup-error" || mode === "claim-error") {
       const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-healthy-non-git-"));
       tempDirs.push(peerCwd);
       const peer = await addCheckpointThread(h, "zz-healthy-worker", peerCwd);
@@ -2526,11 +2593,22 @@ describe("CheckpointReactor", () => {
       await Effect.runPromise(h.ingestion!.drain);
       await h.drain();
       const find = projectImportPaths.findImportGitWorkspace;
+      const save = repository.insertInboxEvent;
+      const claim = vi.spyOn(repository, "insertInboxEvent").mockImplementation((event) =>
+        mode === "claim-error" && event.sourceThreadId === workerId
+          ? Effect.fail(
+              new PersistenceSqlError({
+                operation: "fixture",
+                detail: "inbox temporarily unavailable",
+              }),
+            )
+          : save(event),
+      );
       const physical = fs.realpathSync(cwd);
       const discovery = vi
         .spyOn(projectImportPaths, "findImportGitWorkspace")
         .mockImplementation(async (value) => {
-          if (value === physical)
+          if (mode === "lookup-error" && value === physical)
             throw Object.assign(new Error("fixture directory access denied"), { code: "EACCES" });
           return find(value);
         });
@@ -2548,6 +2626,7 @@ describe("CheckpointReactor", () => {
         expect(wakes).toHaveLength(1);
       } finally {
         discovery.mockRestore();
+        claim.mockRestore();
       }
       return;
     }
@@ -2575,28 +2654,290 @@ describe("CheckpointReactor", () => {
       ).toBe(cursorAt);
       await expect.poll(() => Date.now()).toBeGreaterThan(Date.parse(cursorAt));
     }
-    if (mode === "crash") {
-      // Interrupt the first report read after the atomic state/inbox commit.
-      // Startup must consume that durable inbox even though the worker is done
-      // and no wake range had yet been frozen.
-      const report = vi.spyOn(query, "getThreadDetailById").mockReturnValue(Effect.interrupt);
-      const interrupted = await runtime!.runPromiseExit(service.inspectWorkerHealth());
-      report.mockRestore();
-      expect(Exit.isFailure(interrupted)).toBe(true);
-      expect(
-        Option.getOrNull(await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)))
-          ?.settleOutcome,
-      ).toBe("completed");
-      expect((await runtime!.runPromise(repository.getCursor(projectId))).coordinatorBusy).toBe(
-        false,
+    if (
+      [
+        "crash",
+        "delivery-error",
+        "rollup-error",
+        "newer-report",
+        "newer-mirror",
+        "metadata-error",
+        "paused-delivery",
+        "goal-limit",
+      ].includes(mode)
+    ) {
+      // An already-finished batch peer makes the real rollup owner executable.
+      const peerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-finished-peer-"));
+      tempDirs.push(peerCwd);
+      const peer = await addCheckpointThread(h, "finished-batch-peer", peerCwd);
+      const originalWorker = Option.getOrThrow(
+        await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
       );
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "prior-batch-peer",
+          batchId: originalWorker.batchId,
+          callerThreadId: coordinatorId,
+          threadIds: [peer],
+          titles: ["Prior research"],
+        }),
+      );
+      const peerWorker = Option.getOrThrow(
+        await runtime!.runPromise(repository.findManagedWorkerByThread(peer)),
+      );
+      await runtime!.runPromise(
+        repository.upsertManagedWorker({
+          ...peerWorker,
+          settledAt: completedAt,
+          settleOutcome: "completed",
+        }),
+      );
+      const { ProjectGoalId, ProjectTaskId } = await import("@synara/contracts");
+      const goalId = ProjectGoalId.makeUnsafe("delivery-goal");
+      const taskId = ProjectTaskId.makeUnsafe("delivery-task");
+      const config = Option.getOrThrow(await runtime!.runPromise(repository.getConfig(projectId)));
+      await runtime!.runPromise(
+        repository.saveGoal(
+          {
+            id: goalId,
+            projectId,
+            objective: "Research",
+            authorizationSource: "user",
+            scopeVersion: 1,
+            acceptanceCriteria: null,
+            limits: config.limits,
+            status: "active",
+            continuationCount:
+              mode === "goal-limit" ? config.limits.maxAutomaticContinuationsPerGoal : 0,
+            workerCreationCount: 0,
+            authorizedAt: createdAt,
+            revision: 1,
+            createdAt,
+            updatedAt: createdAt,
+          },
+          null,
+        ),
+      );
+      await runtime!.runPromise(
+        repository.saveTask(
+          {
+            id: taskId,
+            projectId,
+            goalId,
+            title: "Research",
+            description: null,
+            acceptanceCriteria: null,
+            status: "running",
+            dependsOnTaskIds: [],
+            assignedThreadId: workerId,
+            repairCount: 0,
+            archivedAt: null,
+            revision: 1,
+            createdAt,
+            updatedAt: createdAt,
+          },
+          null,
+        ),
+      );
+      if (mode === "paused-delivery")
+        await runtime!.runPromise(
+          repository.saveConfig(
+            {
+              ...config,
+              pausedAt: completedAt,
+              revision: config.revision + 1,
+              updatedAt: completedAt,
+            },
+            config.revision,
+          ),
+        );
+      const write = repository.writeDocument;
+      const report = vi.spyOn(repository, "writeDocument").mockImplementation((input) =>
+        mode === "rollup-error" || mode === "metadata-error"
+          ? write(input)
+          : write(input).pipe(
+              Effect.andThen(
+                mode === "delivery-error"
+                  ? Effect.fail(
+                      new PersistenceSqlError({
+                        operation: "fixture",
+                        detail: "after report commit",
+                      }),
+                    )
+                  : Effect.interrupt,
+              ),
+            ),
+      );
+      const saveEvidence = repository.saveEvidence;
+      const evidenceWrite = vi.spyOn(repository, "saveEvidence").mockImplementation((input) =>
+        mode === "metadata-error"
+          ? Effect.fail(
+              new PersistenceSqlError({
+                operation: "fixture",
+                detail: "evidence temporarily unavailable",
+              }),
+            )
+          : saveEvidence(input),
+      );
+      const dispatch = h.sourceEngine.dispatch;
+      const monitor = vi.spyOn(h.sourceEngine, "dispatch").mockImplementation((command) =>
+        mode === "rollup-error" &&
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.workers.settled"
+          ? Effect.fail(
+              new OrchestrationCommandInternalError({
+                commandId: command.commandId,
+                commandType: command.type,
+                detail: "fixture rollup unavailable",
+              }),
+            )
+          : dispatch(command),
+      );
+      const interrupted = await runtime!.runPromiseExit(
+        mode === "paused-delivery"
+          ? service.ingestSettledThreadEvent({
+              threadId: workerId,
+              sourceEventId: "paused-ready",
+              eventType: "worker.completed",
+              turnId,
+              createdAt: completedAt,
+            })
+          : service.inspectWorkerHealth(),
+      );
+      report.mockRestore();
+      monitor.mockRestore();
+      evidenceWrite.mockRestore();
+      expect(Exit.isFailure(interrupted)).toBe(
+        ["crash", "newer-report", "newer-mirror", "paused-delivery", "goal-limit"].includes(mode),
+      );
+      expect(
+        Option.getOrThrow(await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)))
+          .settleOutcome,
+      ).toBe("completed");
       expect(wakes).toHaveLength(0);
+      const state = await runtime!.runPromise(
+        Effect.serviceOption(ServerConfig).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const reportPath = `inbox/${workerId}/report.md`;
+      if (mode === "newer-report" || mode === "newer-mirror") {
+        const nextAt = new Date().toISOString();
+        await Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("newer-report-start"),
+            threadId: workerId,
+            message: {
+              messageId: MessageId.makeUnsafe("newer-report-message"),
+              role: "user",
+              text: "Next task",
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: nextAt,
+          }),
+        );
+        await runtime!.runPromise(
+          service.recordWorkerTurnRequest({
+            threadId: workerId,
+            commandId: "newer-report-start",
+            dispatchOrigin: "agent",
+            turnId: null,
+            eventType: "thread.turn-start-requested",
+            createdAt: nextAt,
+          }),
+        );
+        const { ProjectDocumentRevisionId } = await import("@synara/contracts");
+        const { hashDocumentContent } = await import("../../projectAgent/materializer.ts");
+        if (mode === "newer-report")
+          await runtime!.runPromise(
+            repository.writeDocument({
+              revision: {
+                id: ProjectDocumentRevisionId.makeUnsafe("newer-report-document"),
+                projectId,
+                logicalPath: reportPath,
+                revision: 2,
+                content: "Newer B report",
+                contentHash: hashDocumentContent("Newer B report"),
+                authorKind: "system",
+                authorThreadId: workerId,
+                sources: [{ threadId: workerId, turnId: asTurnId("newer-turn") }],
+                createdAt: nextAt,
+              },
+              expectedRevision: 1,
+              diskHash: hashDocumentContent("Newer B report"),
+            }),
+          );
+      }
+      // Both ordinary health retry and startup recovery must finish delivery,
+      // with no duplicate report revision, rows or evidence on subsequent scans.
+      if (mode === "delivery-error" || mode === "rollup-error" || mode === "metadata-error")
+        await runtime!.runPromise(service.inspectWorkerHealth());
+      else await runtime!.runPromise(service.reconcilePendingWakes());
       await runtime!.runPromise(service.reconcilePendingWakes());
-      await runtime!.runPromise(service.reconcilePendingWakes());
-      expect(wakes).toHaveLength(1);
+      expect(wakes).toHaveLength(mode === "paused-delivery" || mode === "goal-limit" ? 0 : 1);
       await Effect.runPromise(h.engine.drain);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(mode === "paused-delivery" ? 0 : 1);
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.workers.settled"),
+      ).toHaveLength(
+        mode === "newer-report" || mode === "newer-mirror" || mode === "paused-delivery" ? 0 : 1,
+      );
+      const reportHead = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({ projectId, logicalPath: reportPath }),
+        ),
+      );
+      expect(reportHead.revision).toBe(mode === "newer-report" ? 2 : 1);
+      if (mode === "newer-report") {
+        expect(reportHead.content).toBe("Newer B report");
+        expect(
+          Option.getOrThrow(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          ).activeTurnCommandId,
+        ).toBe("newer-report-start");
+        expect(
+          Option.getOrThrow(
+            await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+          ).settleOutcome,
+        ).toBeNull();
+      } else {
+        expect(reportHead.content).toContain("Exact completed research result");
+        expect(
+          await runtime!.runPromise(
+            readProjectDocumentMirror({
+              stateDir: state.stateDir,
+              projectId,
+              logicalPath: reportPath,
+            }),
+          ),
+        ).toBe(reportHead.content);
+      }
+      if (mode === "newer-mirror") {
+        const current = Option.getOrThrow(
+          await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
+        );
+        expect(current.activeTurnCommandId).toBe("newer-report-start");
+        expect(current.settleOutcome).toBeNull();
+      }
+      const evidence = await runtime!.runPromise(repository.listEvidenceForTask(taskId));
+      expect(evidence).toHaveLength(1);
+      expect(evidence[0]!.sourceTurnId).toBe(turnId);
+      const activity = await runtime!.runPromise(
+        repository.listActivity({ projectId, limit: 100 }),
+      );
+      expect(
+        activity.filter((row) => row.kind === "document-written" && row.actorThreadId === workerId),
+      ).toHaveLength(1);
       await runtime!.runPromise(gatewayService.reconcile(projectId));
-      expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(false);
+      expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(
+        mode === "newer-report" || mode === "newer-mirror",
+      );
       return;
     }
     if (mode === "pending" || mode === "cursor-race" || mode === "frozen-race") {
@@ -2764,12 +3105,33 @@ describe("CheckpointReactor", () => {
       await runtime!.runPromise(service.inspectWorkerHealth());
       expect(wakes).toHaveLength(1);
       await Effect.runPromise(h.engine.drain);
+      const coordinator = Option.getOrThrow(
+        await runtime!.runPromise(query.getThreadDetailById(coordinatorId)),
+      );
+      expect(
+        coordinator.activities.filter((row) => row.kind === "synara.worker.settled"),
+      ).toHaveLength(1);
+      const reportHead = Option.getOrThrow(
+        await runtime!.runPromise(
+          repository.readDocumentRevision({
+            projectId,
+            logicalPath: `inbox/${workerId}/report.md`,
+          }),
+        ),
+      );
+      expect(reportHead.revision).toBe(1);
       await runtime!.runPromise(gatewayService.reconcile(projectId));
       expect((await runtime!.runPromise(work.list(projectId)))[0]?.slotHeld).toBe(false);
       return;
     }
     if (recovery) await runtime!.runPromise(service.inspectWorkerHealth());
-    if (mode !== "live" && mode !== "recovery" && mode !== "late-recovery") {
+    if (
+      mode !== "live" &&
+      mode !== "recovery" &&
+      mode !== "late-recovery" &&
+      mode !== "runtime-cwd" &&
+      mode !== "persisted-cwd"
+    ) {
       const worker = Option.getOrNull(
         await runtime!.runPromise(repository.findManagedWorkerByThread(workerId)),
       );
