@@ -37,7 +37,7 @@ function Harness({
   };
   return (
     <div style={{ width: 900, height: 500, display: "flex", flexDirection: "column" }}>
-      <div>
+      <div style={{ position: "relative", zIndex: 1, background: "var(--background)" }}>
         <button onClick={() => controls.current?.revertTo("const value = 999;\n")}>
           Edit via history API
         </button>
@@ -116,6 +116,183 @@ const rendered = () =>
   Array.from(activeEditor().getDomNode()?.querySelectorAll(".view-lines") ?? [])
     .map((lines) => lines.textContent ?? "")
     .join("\n");
+
+it.each(
+  [false, true].flatMap((diff) =>
+    ["Close", "Previous Match", "Next Match", "Find"].map((name) => ({ diff, name })),
+  ),
+)(
+  "keeps Find's $name tooltip visible and stable at the editor edge (diff: $diff)",
+  async ({ diff, name }) => {
+    await page.viewport(1200, 800);
+    const view = await mount(diff, "const value = 1;\nconsole.log(value);\n");
+    const editor = await ready();
+    await editor.getAction("actions.find")?.run();
+    await page.getByRole("textbox", { name: "Find", exact: true }).fill("value");
+    const close = page.getByRole("button", { name: /^Close(?:\s|$)/ });
+    await expect.element(close).toBeVisible();
+    const trigger =
+      name === "Find"
+        ? page.getByRole("textbox", { name: "Find", exact: true })
+        : page.getByRole("button", { name: new RegExp(`^${name}(?:\\s|$)`) });
+    const button = trigger.element();
+    const widget = button.closest(".find-widget");
+    const label = button.getAttribute("aria-label");
+    try {
+      await page.getByRole("button", { name: "Theme", exact: true }).hover();
+      await trigger.hover();
+      const tooltip = () =>
+        Array.from(document.querySelectorAll<HTMLElement>(".workbench-hover")).find(
+          (node) =>
+            (node.textContent === label ||
+              (name === "Find" && node.textContent?.startsWith("Find ("))) &&
+            node.getBoundingClientRect().height > 0,
+        );
+      await expect.poll(tooltip).toBeDefined();
+      const original = tooltip();
+      if (!original) throw new Error("Find's close tooltip did not open.");
+      // Hold the physical pointer still long enough to catch a hide/reopen loop.
+      const deadline = performance.now() + 1200;
+      while (performance.now() < deadline) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        expect(tooltip()).toBe(original);
+        const bounds = original.getBoundingClientRect();
+        const target = button.getBoundingClientRect();
+        expect(bounds.bottom <= target.top || bounds.top >= target.bottom).toBe(true);
+        // A DOM-visible tooltip can still be clipped by the editor or covered by its header.
+        for (const [x, y] of [
+          [bounds.left + 8, bounds.top + bounds.height / 2],
+          [bounds.right - 8, bounds.top + bounds.height / 2],
+          [bounds.left + bounds.width / 2, bounds.top + 4],
+          [bounds.left + bounds.width / 2, bounds.bottom - 4],
+        ] as const) {
+          expect(original.contains(document.elementFromPoint(x, y))).toBe(true);
+        }
+      }
+      await page.getByRole("button", { name: "Theme", exact: true }).hover();
+      await expect.poll(tooltip).toBeUndefined();
+      await close.click();
+      await expect.poll(() => widget?.getAttribute("aria-hidden")).toBe("true");
+    } finally {
+      await view.unmount();
+    }
+  },
+  15_000,
+);
+
+it.each([false, true].flatMap((replace) => [13, 18].map((fontSize) => ({ replace, fontSize }))))(
+  "centers and scales Find controls (replace: $replace, UI: $fontSize)",
+  async ({ replace, fontSize }) => {
+    const view = await mount(false, "const value = 1;\nconsole.log(value);\n");
+    const editor = await ready();
+    editor
+      .getDomNode()
+      ?.closest<HTMLElement>(".synara-code-editor")
+      ?.style.setProperty("--app-font-size-ui", `${fontSize}px`);
+    try {
+      await editor
+        .getAction(replace ? "editor.action.startFindReplaceAction" : "actions.find")
+        ?.run();
+      const find = page.getByRole("textbox", { name: "Find", exact: true });
+      await expect.element(find).toBeVisible();
+      for (const query of ["value", "value\nconsole"]) {
+        await find.fill(query);
+        const input = find.element();
+        const box = input.getBoundingClientRect();
+        const style = getComputedStyle(input);
+        expect(parseFloat(style.fontSize)).toBe(fontSize);
+        const firstLineCenter =
+          box.top + parseFloat(style.paddingTop) + parseFloat(style.lineHeight) / 2;
+        const widget = input.closest(".find-widget");
+        const counter = widget?.querySelector(".matchesCount");
+        if (!counter) throw new Error("Find's match counter did not mount.");
+        const range = document.createRange();
+        range.selectNodeContents(counter);
+        const text = range.getBoundingClientRect();
+        // Compare actual glyphs: fractional line heights and font ascenders can
+        // put their optical center slightly away from the line box center.
+        const mirror = input.closest(".monaco-inputbox")?.querySelector(".mirror");
+        if (!mirror) throw new Error("Find's measuring mirror did not mount.");
+        range.selectNodeContents(mirror);
+        const glyphs = range.getClientRects()[0];
+        if (!glyphs) throw new Error("Find's query glyphs were not measured.");
+        expect(
+          Math.abs(text.top + text.height / 2 - glyphs.top - glyphs.height / 2),
+          JSON.stringify({
+            text: text.toJSON(),
+            glyphs: glyphs.toJSON(),
+            box: box.toJSON(),
+            lineHeight: style.lineHeight,
+          }),
+        ).toBeLessThanOrEqual(0.25);
+        const controls = input.closest(".monaco-findInput")?.querySelector(".controls");
+        for (const name of [
+          '[aria-label^="Previous Match"]',
+          '[aria-label^="Next Match"]',
+          ".button.codicon-widget-close",
+        ]) {
+          const button = widget?.querySelector(name);
+          if (!button) throw new Error(`Find's ${name} did not mount.`);
+          const bounds = button.getBoundingClientRect();
+          expect(Math.abs(bounds.top + bounds.height / 2 - firstLineCenter)).toBeLessThanOrEqual(
+            0.25,
+          );
+        }
+        for (const toggle of controls?.children ?? []) {
+          const bounds = toggle.getBoundingClientRect();
+          expect(Math.abs(bounds.top + bounds.height / 2 - firstLineCenter)).toBeLessThanOrEqual(
+            0.25,
+          );
+        }
+        if (replace) {
+          const replacement = page.getByRole("textbox", { name: "Replace", exact: true }).element();
+          const replacementBox = replacement.getBoundingClientRect();
+          const replacementStyle = getComputedStyle(replacement);
+          expect(parseFloat(replacementStyle.fontSize)).toBe(fontSize);
+          const replacementCenter =
+            replacementBox.top +
+            parseFloat(replacementStyle.paddingTop) +
+            parseFloat(replacementStyle.lineHeight) / 2;
+          const toggle = replacement.closest(".monaco-findInput")?.querySelector(".controls > *");
+          if (!toggle) throw new Error("Replace's preserve-case toggle did not mount.");
+          const bounds = toggle.getBoundingClientRect();
+          expect(Math.abs(bounds.top + bounds.height / 2 - replacementCenter)).toBeLessThanOrEqual(
+            0.25,
+          );
+        }
+      }
+    } finally {
+      await view.unmount();
+    }
+  },
+);
+
+it.each([false, true])("overlays Find without moving the code (diff: %s)", async (diff) => {
+  const view = await mount(diff);
+  const editor = await ready();
+  if (diff) {
+    await expect.poll(() => monaco.editor.getDiffEditors()[0]?.getLineChanges()).not.toBeNull();
+    // Diff alignment inserts view zones asynchronously; finish that initial layout first.
+    for (let frame = 0; frame < 2; frame++)
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+  const lineTop = () => editor.getScrolledVisiblePosition({ lineNumber: 1, column: 1 })?.top;
+  const before = lineTop();
+  try {
+    await editor.getAction("actions.find")?.run();
+    await expect.element(page.getByRole("textbox", { name: "Find", exact: true })).toBeVisible();
+    expect(editor.getOption(monaco.editor.EditorOption.find).addExtraSpaceOnTop).toBe(false);
+    const deadline = performance.now() + 350;
+    while (performance.now() < deadline) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(lineTop()).toBe(before);
+    }
+    await page.getByRole("button", { name: /^Close(?:\s|$)/ }).click();
+    expect(lineTop()).toBe(before);
+  } finally {
+    await view.unmount();
+  }
+});
 
 it.each([false, true])(
   "publishes history only when undo/redo availability changes (diff: %s)",
@@ -309,6 +486,25 @@ it("keeps the editor mounted while typing in the command picker", async () => {
   expect(activeEditor()).toBe(editor);
   await view.unmount();
 });
+
+it.each(["Find in file", "Replace in file"])(
+  "hands keyboard focus to %s without editing the source",
+  async (command) => {
+    const initialValue = 'const value = "needle";\n';
+    const view = await mount(false, initialValue);
+    await ready();
+    await userEvent.keyboard("{F1}");
+    await userEvent.keyboard(command);
+    await userEvent.keyboard("{Enter}");
+    const find = page.getByRole("textbox", { name: "Find", exact: true });
+    await expect.element(find).toHaveFocus();
+    await userEvent.keyboard("searchQuery");
+    await expect.element(find).toHaveValue("searchQuery");
+    expect(buffer()).toBe(initialValue);
+    await userEvent.keyboard("{Escape}");
+    await view.unmount();
+  },
+);
 
 it("keeps both diff inputs labelled after layout and theme updates", async () => {
   const view = await mount(true);

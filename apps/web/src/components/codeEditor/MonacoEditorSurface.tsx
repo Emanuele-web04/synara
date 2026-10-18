@@ -394,7 +394,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
         await entry.model.redo();
         return;
       default:
-        await editor.getAction(id)?.run();
+        await engineAction(id);
     }
   }
   const run = useEffectEvent((id: EditorCommand) => {

@@ -376,6 +376,7 @@ export function editorAppearance(
     automaticLayout: true,
     scrollBeyondLastLine: false,
     fixedOverflowWidgets: true,
+    find: { addExtraSpaceOnTop: false },
     padding: { top: 8, bottom: 8 },
     renderLineHighlight: "line",
     renderLineHighlightOnlyWhenFocus: true,

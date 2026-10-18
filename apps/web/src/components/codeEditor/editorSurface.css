@@ -107,14 +107,71 @@
   color: var(--foreground);
 }
 .synara-code-editor .monaco-editor .find-widget {
+  --find-line-height: max(19px, calc(var(--app-font-size-ui) * 1.4));
+  --find-row-height: calc(var(--find-line-height) + 6px);
   top: 8px;
   border-top-left-radius: var(--radius-lg);
   border-top-right-radius: var(--radius-lg);
+  line-height: var(--find-line-height);
+}
+/* The engine fixes both the input and its measuring mirror to 13px. Keep them
+   on the same UI scale so multiline sizing follows the visible query. */
+.synara-code-editor .monaco-editor .find-widget > .find-part,
+.synara-code-editor .monaco-editor .find-widget > .replace-part,
+.synara-code-editor .monaco-editor .find-widget .monaco-findInput .monaco-inputbox,
+.synara-code-editor .monaco-editor .find-widget .monaco-findInput .input {
+  font-size: var(--app-font-size-ui);
+}
+.synara-code-editor .monaco-editor .find-widget > .find-part .monaco-inputbox,
+.synara-code-editor .monaco-editor .find-widget > .replace-part .monaco-inputbox {
+  min-height: var(--find-row-height);
+}
+.synara-code-editor .monaco-editor .find-widget > .find-part .find-actions,
+.synara-code-editor .monaco-editor .find-widget > .replace-part .replace-actions,
+.synara-code-editor .monaco-editor .find-widget .matchesCount {
+  height: var(--find-row-height);
+}
+/* Close is positioned outside the flex row; use that row's center too. */
+.synara-code-editor .monaco-editor .find-widget > .button.codicon-widget-close {
+  top: calc(3px + var(--find-row-height) / 2);
+  transform: translateY(-50%);
+}
+/* Center the counter and toggles on the input's first line. The engine's
+   asymmetric counter padding and rounded toggle offset put them below it.
+   Keep controls on that first row when the query grows to multiple lines. */
+.synara-code-editor .monaco-editor .find-widget .matchesCount {
+  align-items: center;
+  padding-block: 0;
+  line-height: var(--find-line-height);
+}
+.synara-code-editor .monaco-editor .find-widget > .find-part .monaco-findInput > .controls,
+.synara-code-editor .monaco-editor .find-widget > .replace-part .monaco-findInput > .controls {
+  /* Stay on the first line when a query grows to multiple lines. */
+  top: calc(var(--find-row-height) / 2);
+  transform: translateY(-50%);
 }
 .synara-code-editor .monaco-editor .suggest-widget .monaco-list-row,
 .synara-code-editor .monaco-editor .find-widget .monaco-inputbox,
 .synara-code-editor .monaco-editor .find-widget .button {
   border-radius: var(--radius-sm);
+}
+/* Managed tooltips are measured before their context view is positioned. Keep
+   that width at the editor edge: shrinking afterwards wraps the text over its
+   button and repeatedly triggers mouseleave/mouseenter without pointer movement.
+   The engine still limits the hover's maximum width to the available viewport. */
+.synara-code-editor .workbench-hover-container {
+  width: max-content;
+}
+/* Button tooltips reserve 3px for a pointer; input tooltips have no pointer.
+   Give the latter the same anchor clearance in either vertical direction. */
+.synara-code-editor .workbench-hover-container:has(> .monaco-hover.compact:not(.with-pointer)) {
+  padding-block: 3px;
+}
+/* Managed tooltips use an absolute context view, unlike the editor's fixed
+   overflow widgets. Position them against the viewport too, so editor clipping
+   and the file header cannot hide them. The engine still computes the anchor. */
+.synara-code-editor .context-view:has(> .workbench-hover-container) {
+  position: fixed !important;
 }
 .synara-code-editor .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label,
 .synara-code-editor .monaco-editor .monaco-hover .hover-contents,
