@@ -2,6 +2,7 @@ import http from "node:http";
 import tls from "node:tls";
 import { Duplex, Writable } from "node:stream";
 import WebSocket, { createWebSocketStream, WebSocketServer } from "ws";
+import { MAX_RELAY_RESPONSE_BYTES } from "../relaySocket";
 import {
   remoteTlsAnchor,
   remoteTlsServerName,
@@ -17,7 +18,6 @@ export const REMOTE_HANDSHAKE_TIMEOUT_MS = 15_000;
 const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 // A pinned host can send a full transcript snapshot larger than one command.
 // This is receive-only: client commands and opaque outer chunks keep their cap.
-const MAX_RESPONSE_MESSAGE_BYTES = 32 * 1024 * 1024;
 const STREAM_HIGH_WATER_BYTES = 64 * 1024;
 
 function ciphertextStream(outer: WebSocket): Duplex {
@@ -268,7 +268,7 @@ export async function connectRemoteWebSocket(
     const inner = new WebSocket(`ws://${remoteTlsServerName(anchor.environmentId)}${path}`, {
       createConnection: () => secure,
       handshakeTimeout: REMOTE_HANDSHAKE_TIMEOUT_MS,
-      maxPayload: MAX_RESPONSE_MESSAGE_BYTES,
+      maxPayload: MAX_RELAY_RESPONSE_BYTES,
       perMessageDeflate: false,
     });
     const abort = () => {

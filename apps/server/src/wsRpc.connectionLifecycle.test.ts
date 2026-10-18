@@ -60,7 +60,11 @@ import { bufferLiveUiStream } from "./wsStreamBackpressure";
 import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { ComputerEventInterests } from "./computer/computerEventInterests";
 import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
-import { HostConnectionRegistry, HostConnectionRegistryService } from "./hostConnections/registry";
+import {
+  HostConnectionRegistry,
+  HostConnectionRegistryService,
+  REMOTE_ATTACHMENT_QUERY,
+} from "./hostConnections/registry";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -702,6 +706,14 @@ describe("websocket RPC payload admission", () => {
   it("lets desktop renderers read remote negotiation while retaining origin and owner admission", async () => {
     const remote = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(remote, "listening");
+    const largeResponse = `${"a".repeat(9 * 1024 * 1024)}🦊`;
+    const receivedCommands: string[] = [];
+    remote.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        receivedCommands.push(data.toString());
+        socket.send(largeResponse);
+      });
+    });
     const address = remote.address();
     if (!address || typeof address === "string") throw new Error("Expected remote address");
     const registry = new HostConnectionRegistry();
@@ -743,11 +755,46 @@ describe("websocket RPC payload admission", () => {
       expect(desktop.headers.get("access-control-allow-origin")).toBe("synara://app");
       expect(desktop.headers.get("vary")).toBe("Origin");
       expect(desktop.headers.get("cache-control")).toBe("no-store");
-      expect(await desktop.json()).toMatchObject({
+      const prepared = (await desktop.json()) as WsBootstrapNegotiateResult;
+      expect(prepared).toMatchObject({
         serverInstanceId: "remote-instance",
         remoteAttachmentId: expect.any(String),
       });
       expect(dials).toBe(1);
+
+      const rendererUrl = new URL(`${server.origin}/ws/remote/mini/ws`);
+      rendererUrl.searchParams.set("token", "force-session-auth");
+      rendererUrl.searchParams.set(REMOTE_ATTACHMENT_QUERY, prepared.remoteAttachmentId!);
+      rendererUrl.searchParams.set(
+        WS_COMPATIBILITY_QUERY.serverInstanceId,
+        prepared.serverInstanceId,
+      );
+      await expect(
+        connect(rendererUrl.toString(), { headers: { origin: "http://evil.example" } }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      rendererUrl.searchParams.delete("token");
+      await expect(
+        connect(rendererUrl.toString(), { headers: desktopHeaders }),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      const pairedClient = await Effect.runPromise(server.sessions.issue({ role: "client" }));
+      const pairedTicket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(pairedClient.sessionId),
+      );
+      rendererUrl.searchParams.set("wsToken", pairedTicket.token);
+      await expect(
+        connect(rendererUrl.toString(), { headers: desktopHeaders }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      rendererUrl.searchParams.delete("wsToken");
+      rendererUrl.searchParams.set("token", "force-session-auth");
+      const renderer = await connect(rendererUrl.toString(), { headers: desktopHeaders });
+      const received = once(renderer, "message");
+      renderer.send("snapshot");
+      expect((await received)[0].toString()).toBe(largeResponse);
+      expect(renderer.readyState).toBe(WebSocket.OPEN);
+      const oversizedClosed = waitForCloseInfo(renderer);
+      renderer.send(Buffer.alloc(MAX_WEBSOCKET_MESSAGE_BYTES + 1), { binary: false });
+      await expect(oversizedClosed).resolves.toMatchObject({ code: 1009 });
+      expect(receivedCommands).toEqual(["snapshot"]);
 
       const noOrigin = await fetch(url);
       expect(noOrigin.status).toBe(200);

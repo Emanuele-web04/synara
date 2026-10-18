@@ -1,12 +1,170 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { controllerProtocol, type DialedSession } from "./dialer";
 import { HostConnectionRegistry } from "./registry";
+import { forwardBoundedRelayResponses, MAX_RELAY_RESPONSE_BYTES } from "../relaySocket";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
+
+/** A native socket boundary whose write completion can be held, failed or cancelled. */
+function controlledResponseSocket() {
+  const socket = new EventEmitter() as WebSocket;
+  Object.setPrototypeOf(socket, WebSocket.prototype);
+  Object.defineProperties(socket, {
+    readyState: { value: WebSocket.OPEN, writable: true },
+    bufferedAmount: { value: 0, writable: true },
+  });
+  const writes: Array<{
+    bytes: Buffer;
+    binary: boolean;
+    fin: boolean;
+    complete: (error?: Error) => void;
+  }> = [];
+  const closes: Array<{ code: number; reason: string }> = [];
+  socket.pause = vi.fn();
+  socket.resume = vi.fn();
+  socket.send = vi.fn((data, options, callback) => {
+    const flags = options as { binary: boolean; fin: boolean };
+    writes.push({
+      bytes: Buffer.from(data as Buffer),
+      binary: flags.binary,
+      fin: flags.fin,
+      complete: callback as (error?: Error) => void,
+    });
+  }) as unknown as WebSocket["send"];
+  socket.close = vi.fn((code = 1000, reason = "") => {
+    closes.push({ code, reason: String(reason) });
+    Object.defineProperty(socket, "readyState", { value: WebSocket.CLOSED, writable: true });
+    socket.emit("close", code, Buffer.from(reason));
+  });
+  socket.terminate = vi.fn();
+  return { socket, writes, closes };
+}
+
+describe("bounded response forwarding", () => {
+  it("preserves ordered text, split UTF-8 and binary messages while waiting for each write", async () => {
+    const source = controlledResponseSocket();
+    const target = controlledResponseSocket();
+    const stop = forwardBoundedRelayResponses(source.socket, target.socket);
+    const text = Buffer.from(`${"a".repeat(65_535)}🦊${"b".repeat(65_536)}`);
+    const binary = Buffer.from([0, 255, 127]);
+    source.socket.emit("message", text, false);
+    source.socket.emit("message", Buffer.from("next reply"), false);
+    source.socket.emit("message", binary, true);
+    expect(target.writes).toHaveLength(1);
+    expect(source.socket.pause).toHaveBeenCalledTimes(1);
+    const messages: Array<{ bytes: Buffer; binary: boolean }> = [];
+    let parts: Buffer[] = [];
+    for (let index = 0; index < target.writes.length; index++) {
+      const write = target.writes[index]!;
+      expect(write.bytes.length).toBeLessThanOrEqual(64 * 1024);
+      parts.push(write.bytes);
+      if (write.fin) {
+        messages.push({ bytes: Buffer.concat(parts), binary: write.binary });
+        parts = [];
+      }
+      write.complete();
+      await Promise.resolve();
+    }
+    expect(messages).toEqual([
+      { bytes: text, binary: false },
+      { bytes: Buffer.from("next reply"), binary: false },
+      { bytes: binary, binary: true },
+    ]);
+    expect(target.closes).toEqual([]);
+    expect(source.socket.resume).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it.each(["response", "waiting bytes", "waiting count", "wire backlog"])(
+    "refuses an oversized %s without an unbounded pending queue",
+    (limit) => {
+      const source = controlledResponseSocket();
+      const target = controlledResponseSocket();
+      forwardBoundedRelayResponses(source.socket, target.socket);
+      if (limit === "wire backlog") {
+        Object.defineProperty(target.socket, "bufferedAmount", { value: 8 * 1024 * 1024 });
+      }
+      source.socket.emit(
+        "message",
+        Buffer.alloc(limit === "response" ? MAX_RELAY_RESPONSE_BYTES + 1 : 1),
+        false,
+      );
+      if (limit === "waiting bytes") {
+        for (let index = 0; index < 4; index++)
+          source.socket.emit("message", Buffer.alloc(2 * 1024 * 1024), false);
+        expect(target.closes).toEqual([]);
+        source.socket.emit("message", Buffer.alloc(1), false);
+      }
+      if (limit === "waiting count") {
+        for (let index = 0; index < 128; index++)
+          source.socket.emit("message", Buffer.alloc(0), false);
+        expect(target.closes).toEqual([]);
+        source.socket.emit("message", Buffer.alloc(0), false);
+      }
+      expect(target.closes).toMatchObject([{ code: 1009 }]);
+      expect(target.writes.length).toBeLessThanOrEqual(1);
+      expect(source.socket.listenerCount("message")).toBe(0);
+    },
+  );
+
+  it("closes a stalled writer and ignores its late completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = controlledResponseSocket();
+      const target = controlledResponseSocket();
+      forwardBoundedRelayResponses(source.socket, target.socket);
+      source.socket.emit("message", Buffer.alloc(128 * 1024), false);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(target.closes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(target.closes).toMatchObject([{ code: 1013 }]);
+      target.writes[0]!.complete();
+      await Promise.resolve();
+      expect(target.writes).toHaveLength(1);
+      expect(source.socket.listenerCount("message")).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["source", "target"])("releases responses when the %s closes", async (side) => {
+    const source = controlledResponseSocket();
+    const target = controlledResponseSocket();
+    forwardBoundedRelayResponses(source.socket, target.socket);
+    source.socket.emit("message", Buffer.alloc(128 * 1024), false);
+    source.socket.emit("message", Buffer.from("pending reply"), false);
+    (side === "source" ? source : target).socket.close();
+    target.writes[0]!.complete();
+    await Promise.resolve();
+    expect(target.writes).toHaveLength(1);
+    expect(source.socket.listenerCount("message")).toBe(0);
+    expect(target.socket.listenerCount("close")).toBe(0);
+  });
+
+  it.each(["throw", "callback"])(
+    "propagates a %s write failure without sending the rest",
+    async (failure) => {
+      const source = controlledResponseSocket();
+      const target = controlledResponseSocket();
+      if (failure === "throw")
+        target.socket.send = () => {
+          throw new Error("write failed");
+        };
+      forwardBoundedRelayResponses(source.socket, target.socket);
+      source.socket.emit("message", Buffer.alloc(128 * 1024), false);
+      if (failure === "callback") target.writes[0]!.complete(new Error("write failed"));
+      await Promise.resolve();
+      expect(target.closes).toMatchObject([{ code: 1011 }]);
+      expect(target.writes.length).toBeLessThanOrEqual(1);
+      expect(source.socket.listenerCount("message")).toBe(0);
+    },
+  );
 });
 async function fixture(
   firstTtlSeconds = 3600,

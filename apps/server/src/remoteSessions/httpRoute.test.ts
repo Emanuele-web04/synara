@@ -6,19 +6,27 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Exit, Schema, Scope } from "effect";
-import { OrchestrationThreadStreamItem } from "@synara/contracts";
+import { OrchestrationThreadStreamItem, WS_FEATURE_PATH } from "@synara/contracts";
 import { HttpRouter } from "effect/unstable/http";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeBoundedNodeHttpServer } from "../nodeHttpServer";
 import { sendBoundedRelayFrame } from "../relaySocket";
+import type { SessionCredentialServiceShape } from "../auth/Services/SessionCredentialService";
+import { bridgeRemoteSocketToLocalRpc } from "./localRpcBridge";
+import { HostConnectionRegistry } from "../hostConnections/registry";
+import { controllerProtocol } from "../hostConnections/dialer";
 import {
   initializeRemoteTlsIdentity,
   loadRemoteTlsIdentity,
   remoteTlsAnchor,
   type RemoteTlsIdentity,
 } from "../remoteTransport/certificates";
-import { connectRemoteWebSocket, RemoteTlsServer } from "../remoteTransport/tunnel";
+import {
+  connectRemoteWebSocket,
+  RemoteTlsServer,
+  REMOTE_INNER_RPC_PATH,
+} from "../remoteTransport/tunnel";
 import {
   hostRemoteWebSocketRouteLayer,
   HOST_REMOTE_WS_PATH,
@@ -43,7 +51,7 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
     run: (url: string, tunnel: RemoteTlsServer, captured: Buffer[]) => Promise<void>,
     serverIdentity = identity,
     handshakeTimeoutMs = 150,
-    accept?: (inner: WebSocket) => void,
+    accept?: (inner: WebSocket) => void | Promise<void>,
   ) {
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const captured: Buffer[] = [];
@@ -51,7 +59,7 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
       identity: serverIdentity,
       handshakeTimeoutMs,
       accept: async (inner) => {
-        if (accept) accept(inner);
+        if (accept) await accept(inner);
         else inner.on("message", (data, binary) => inner.send(data, { binary }));
         await Promise.resolve();
       },
@@ -114,11 +122,11 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
     });
   });
 
-  it("receives a full long-thread snapshot without relaxing commands or response bounds", async () => {
+  function longThreadSnapshot(tableRows: number) {
     const when = "2026-10-18T00:00:00.000Z";
     const table = Array.from(
-      { length: 1_400 },
-      (_, index) => `| check-${index} | complete | ${index * 7} |`,
+      { length: tableRows },
+      (_, index) => `| check-${index} | complete 🔬 café 漢字 | ${index * 7} |`,
     ).join("\n");
     const item = Schema.decodeUnknownSync(Schema.toCodecJson(OrchestrationThreadStreamItem))({
       kind: "snapshot",
@@ -152,7 +160,11 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
         },
       },
     });
-    const snapshot = JSON.stringify({ _tag: "Chunk", requestId: "1", values: [item] });
+    return JSON.stringify({ _tag: "Chunk", requestId: "1", values: [item] });
+  }
+
+  it("receives a full long-thread snapshot without relaxing commands or response bounds", async () => {
+    const snapshot = longThreadSnapshot(1_400);
     expect(Buffer.byteLength(snapshot)).toBeGreaterThan(2 * 1024 * 1024);
     const rejectedCommands: string[] = [];
     await fixture(
@@ -208,6 +220,172 @@ describe("remote TLS at the real Effect/Node HTTP boundary", () => {
       },
     );
   }, 15_000);
+
+  it.each(["native", "desktop-controller"])(
+    "bridges a greater-than-8-MiB snapshot and following reply in order for %s",
+    async (consumer) => {
+      const snapshot = longThreadSnapshot(3_240);
+      const snapshotBytes = Buffer.from(snapshot);
+      expect(snapshotBytes.byteLength).toBeGreaterThan(9 * 1024 * 1024);
+      expect(snapshotBytes.byteLength).toBeLessThan(10 * 1024 * 1024);
+      const following = JSON.stringify({
+        _tag: "Exit",
+        requestId: "2",
+        exit: { _tag: "Success", value: "still connected 🔬 café 漢字" },
+      });
+      const requests: string[] = [];
+      const admissions: string[] = [];
+      let registry: HostConnectionRegistry | undefined;
+      let rendererServer: WebSocketServer | undefined;
+      const local = new WebSocketServer({
+        host: "127.0.0.1",
+        port: 0,
+        perMessageDeflate: false,
+        maxPayload: 2 * 1024 * 1024,
+      });
+      local.on("connection", (socket, request) => {
+        admissions.push(request.url!);
+        socket.on("error", () => {});
+        socket.on("message", (data) => {
+          requests.push(data.toString());
+          if (data.toString() === "snapshot") socket.send(snapshot);
+          else if (data.toString() === "following-small") socket.send(following);
+          else if (data.toString() === "oversized-response") {
+            socket.send("a".repeat(32 * 1024 * 1024 + 1));
+          }
+        });
+      });
+      const sessions = {
+        cookieName: "synara-test",
+        issue: () => Effect.succeed({ sessionId: "large-response-session" }),
+        issueWebSocketToken: () => Effect.succeed({ token: "large-response-ws-token" }),
+        revoke: () => Effect.succeed(true),
+      } as unknown as SessionCredentialServiceShape;
+      await once(local, "listening");
+      const address = local.address();
+      if (!address || typeof address === "string")
+        throw new Error("Expected local RPC TCP address");
+      try {
+        await fixture(
+          async (url) => {
+            let largestOuterChunk = 0;
+            const dial = async (signal?: AbortSignal) => {
+              const transport = await outer(url);
+              transport.on("message", (data) => {
+                largestOuterChunk = Math.max(largestOuterChunk, Buffer.byteLength(data as Buffer));
+              });
+              return connectRemoteWebSocket(
+                transport,
+                remoteTlsAnchor(identity),
+                REMOTE_INNER_RPC_PATH,
+                signal,
+              );
+            };
+            let socket: WebSocket;
+            if (consumer === "native") socket = await dial();
+            else {
+              registry = new HostConnectionRegistry();
+              registry.setConnector("host", "Mini", async (_client, signal) => ({
+                socket: await dial(signal),
+                compatibility: {
+                  protocolEpoch: 1,
+                  negotiatedRevision: 1,
+                  serverBuild: "fixture-host",
+                  serverInstanceId: "fixture-generation",
+                  capabilities: [],
+                },
+                environmentId: "test-environment",
+                credential: "fixture-credential",
+                credentialExpiresAtSeconds: Date.now() / 1_000 + 3_600,
+                transport: "lan",
+                race: { outcome: "unreachable", attempts: [] },
+              }));
+              const ready = await registry.prepare("host", controllerProtocol);
+              rendererServer = new WebSocketServer({
+                host: "127.0.0.1",
+                port: 0,
+                maxPayload: 2 * 1024 * 1024,
+                perMessageDeflate: false,
+              });
+              rendererServer.on("connection", (renderer, request) => {
+                renderer.on("error", () => {});
+                registry!.attach("host", request.url!.slice(1), renderer, "fixture-generation");
+              });
+              await once(rendererServer, "listening");
+              const rendererAddress = rendererServer.address();
+              if (!rendererAddress || typeof rendererAddress === "string")
+                throw new Error("Expected renderer TCP address");
+              socket = new WebSocket(
+                `ws://127.0.0.1:${rendererAddress.port}/${ready.remoteAttachmentId}`,
+                {
+                  maxPayload: 32 * 1024 * 1024,
+                  perMessageDeflate: false,
+                },
+              );
+              await once(socket, "open");
+            }
+            const received: Array<{ bytes: Buffer; binary: boolean }> = [];
+            const replies = new Promise<void>((resolve, reject) => {
+              const closed = (code: number) =>
+                reject(new Error(`Bridge closed before both replies (${code})`));
+              socket.once("close", closed);
+              socket.once("error", reject);
+              socket.on("message", (data, binary) => {
+                received.push({ bytes: Buffer.from(data as Buffer), binary });
+                if (received.length === 2) {
+                  socket.off("close", closed);
+                  socket.off("error", reject);
+                  resolve();
+                }
+              });
+            });
+            // Both replies can reach the bridge while the large message is draining.
+            // They must remain separate UTF-8 text messages in their original order.
+            socket.send("snapshot");
+            socket.send("following-small");
+            await replies;
+            expect(requests).toEqual(["snapshot", "following-small"]);
+            expect(received.map((frame) => frame.binary)).toEqual([false, false]);
+            expect(Buffer.compare(received[0]!.bytes, snapshotBytes)).toBe(0);
+            expect(received[1]!.bytes.toString("utf8")).toBe(following);
+            expect(largestOuterChunk).toBeLessThanOrEqual(64 * 1024);
+            expect(socket.readyState).toBe(WebSocket.OPEN);
+            if (registry) expect(registry.status("host").state).toBe("connected");
+            expect(admissions).toHaveLength(1);
+            const admission = new URL(admissions[0]!, "http://127.0.0.1");
+            expect(admission.pathname).toBe(WS_FEATURE_PATH);
+            expect(admission.searchParams.get("wsToken")).toBe("large-response-ws-token");
+            // The real bridge may stream a valid large reply, but must still
+            // refuse an aggregate above the independent 32 MiB response cap.
+            const closed = once(socket, "close");
+            socket.send("oversized-response");
+            expect((await closed)[0]).toBe(1009);
+            expect(received).toHaveLength(2);
+          },
+          identity,
+          15_000,
+          (inner) =>
+            bridgeRemoteSocketToLocalRpc(
+              inner,
+              {
+                userId: "response-test-user",
+                expiresAtSeconds: Math.floor(Date.now() / 1_000) + 60,
+              },
+              { listeningPort: address.port, sessions },
+            ),
+        );
+      } finally {
+        registry?.closeAll();
+        if (rendererServer) {
+          for (const socket of rendererServer.clients) socket.terminate();
+          await new Promise<void>((resolve) => rendererServer!.close(() => resolve()));
+        }
+        for (const socket of local.clients) socket.terminate();
+        await new Promise<void>((resolve) => local.close(() => resolve()));
+      }
+    },
+    15_000,
+  );
 
   it.each(["untrusted-root", "wrong-hostname"])(
     "refuses %s before application data",

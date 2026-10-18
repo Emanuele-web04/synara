@@ -13,7 +13,7 @@ import {
 // only a connection the shell itself trusts as its console (the same rule the
 // local `/ws` applies for the desktop bridge and loopback) may take it.
 
-import { EffectRelaySocket } from "../effectRelaySocket";
+import { upgradeNativeWebSocket } from "../nodeHttpServer";
 
 import {
   WS_FEATURE_PATH,
@@ -167,22 +167,25 @@ export const hostConnectionRouteLayer = Layer.effectDiscard(
           return HttpServerResponse.text("No open connection to that host", { status: 404 });
         }
 
-        const socket = yield* request.upgrade;
-        const writer = yield* socket.writer;
-        const adapter = new EffectRelaySocket(writer);
+        const socket = yield* upgradeNativeWebSocket(request.source);
         if (
           !registry.attach(
             hostId,
             url.searchParams.get(REMOTE_ATTACHMENT_QUERY) ?? "",
-            adapter,
+            socket,
             url.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId),
           )
         ) {
           return HttpServerResponse.empty();
         }
-        yield* socket
-          .runRaw((message) => adapter.receive(message))
-          .pipe(Effect.ensuring(Effect.sync(() => adapter.closed())));
+        yield* Effect.callback<void>((resume) => {
+          socket.once("close", () => resume(Effect.void));
+          socket.on("error", () => {
+            // Receiver errors already start a protocol close (for example
+            // 1009). Do not replace that refusal with an abrupt TCP reset.
+            if (socket.readyState === socket.OPEN) socket.terminate();
+          });
+        });
         return HttpServerResponse.empty();
       }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.empty()))),
     );

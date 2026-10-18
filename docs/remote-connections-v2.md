@@ -22,13 +22,18 @@ connection attempts are also fenced across suspension and resume, so an old atte
 cannot replace a newer connection or permanently block its recovery. A missing
 thread ends only that thread's subscription, not the healthy host connection.
 
-Authenticated host responses have a 32 MiB assembled-message limit. Commands and
-opaque outer messages retain their 2 MiB limits; ciphertext is still sent in
-chunks of at most 64 KiB. The mobile receive queue admits at most 16 messages and
-32 MiB of queued payload, releasing its budget on consumption or closure. Real TLS
-regressions cover a 2.8 MB full transcript, oversized fragmented responses, unchanged
-command limits and mobile queue overflow. This is a bounded response budget, not
-support for arbitrarily large conversation snapshots or a physical-network soak.
+Authenticated host responses have a 32 MiB assembled-message limit. Both the
+execution-host bridge and the desktop controller forward each response as ordered
+64 KiB WebSocket continuation frames, waiting for each write acknowledgement.
+Each sender retains at most one 32 MiB active response, 8 MiB of waiting payload
+and 128 waiting messages; its wire backlog still cannot exceed 8 MiB. A write
+without progress for thirty seconds closes the connection. Commands and opaque
+outer messages retain their 2 MiB limits; ciphertext chunks stay at most 64 KiB.
+The mobile receive queue admits at most 16 messages and 32 MiB of queued payload,
+releasing its budget on consumption or closure. Real HTTP/TLS regressions deliver
+a 9.5 MiB Unicode transcript and a following reply through both bridges in order,
+and reject oversized responses and commands. These finite response and queue
+budgets do not establish unlimited history paging or a physical-network soak.
 
 ## Capacity and setup
 
