@@ -2086,6 +2086,86 @@ for (const driver of ["pi", "antigravity"] as const) {
   );
 }
 
+for (const driver of ["pi", "antigravity"] as const) {
+  it.effect(`lists no retained ${driver} context after a failed stop of an active turn`, () =>
+    Effect.gen(function* () {
+      const source = makeFakeCodexAdapter(driver);
+      const threadId = asThreadId(`retained-${driver}-active-turn-listing`);
+      const sourceId = asProviderInstanceId(`${driver}_source`);
+      const settingsLayer = ServerSettingsService.layerTest({
+        providerInstances: { [sourceId]: { driver, enabled: true } },
+      });
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: sourceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const activeTurnId = asTurnId(`turn-${driver}-active`);
+        source.updateSession(threadId, (session) => ({
+          ...session,
+          status: "running",
+          activeTurnId,
+        }));
+        assert.deepEqual(
+          (yield* provider.listSessions()).map((session) => [
+            session.threadId,
+            session.status,
+            session.activeTurnId,
+          ]),
+          [[threadId, "running", activeTurnId]],
+        );
+        const stopError = new ProviderAdapterProcessError({
+          provider: driver,
+          threadId,
+          detail: "session teardown could not prove exit",
+        });
+        // Pi lists a stopped context as closed. Antigravity keeps the running
+        // turn it could not settle, so its snapshot still carries the turn id.
+        source.stopSession.mockImplementationOnce((id) =>
+          Effect.sync(() => {
+            source.retainStopped(id);
+            if (driver === "pi") {
+              source.updateSession(id, (session) => ({ ...session, status: "closed" }));
+            }
+          }).pipe(Effect.andThen(Effect.fail(stopError))),
+        );
+        assertFailure(yield* Effect.result(provider.stopRuntimeSession!({ threadId })), stopError);
+        assert.isFalse(yield* source.hasSession(threadId));
+        assert.isTrue(yield* source.adapter.hasRetainedSession!(threadId));
+        assert.lengthOf(yield* source.listSessions(), 1, "the adapter must keep the context");
+        assert.lengthOf(
+          (yield* provider.listSessions()).filter((session) => session.threadId === threadId),
+          0,
+          "a retained context was listed as a live session",
+        );
+        // The next send reaches recovery, which retries the cleanup and
+        // starts a fresh runtime instead of waiting on the retained turn.
+        yield* provider.sendTurn({ threadId, input: "recover" });
+        assert.lengthOf(source.stopSession.mock.calls, 2);
+        assert.lengthOf(source.startSession.mock.calls, 2);
+        assert.lengthOf(source.sendTurn.mock.calls, 1);
+        assert.isTrue(yield* source.hasSession(threadId));
+        assert.deepEqual(
+          (yield* provider.listSessions()).map((session) => [session.threadId, session.status]),
+          [[threadId, "ready"]],
+        );
+      }).pipe(
+        Effect.provide(
+          makeRegistrySwitchLayer(
+            driver,
+            source.adapter,
+            makeFakeCodexAdapter("droid").adapter,
+            settingsLayer,
+          ),
+        ),
+      );
+    }),
+  );
+}
+
 deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
   it.effect("stops sessions whose provider instance was deleted from settings", () =>
     Effect.gen(function* () {

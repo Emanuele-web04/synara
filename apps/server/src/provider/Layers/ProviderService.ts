@@ -4988,7 +4988,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const listSessions: ProviderServiceShape["listSessions"] = () =>
       Effect.gen(function* () {
         const activeSessions = (yield* Effect.forEach(adapters, (adapter) =>
-          adapter.listSessions(),
+          adapter.listSessions().pipe(
+            Effect.flatMap((sessions) =>
+              // An adapter with a retained probe keeps a context after a failed
+              // stop for cleanup retries. That context is not live, so it stays
+              // out of the listing that decides liveness and holds queued turns.
+              adapter.hasRetainedSession
+                ? Effect.filter(sessions, (session) => adapter.hasSession(session.threadId))
+                : Effect.succeed(sessions),
+            ),
+          ),
         )).flatMap((sessions) => sessions);
         // One `list()` query: `listBindings` already returns every persisted
         // binding (skipping rows with unknown providers, exactly as the per-thread
