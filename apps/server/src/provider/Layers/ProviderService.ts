@@ -2708,6 +2708,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return matches.find((match) => match !== null) ?? null;
       });
 
+    // Only adapters with a separate retained probe keep a context that
+    // hasSession reports inactive; the others are found by findLiveSession.
+    const findRetainedAdapter = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const matches = yield* Effect.forEach(
+          adapters,
+          (adapter) =>
+            adapter.hasRetainedSession
+              ? adapter
+                  .hasRetainedSession(threadId)
+                  .pipe(Effect.map((retained) => (retained ? adapter : null)))
+              : Effect.succeed(null),
+          { concurrency: "unbounded" },
+        );
+        return matches.find((match) => match !== null) ?? null;
+      });
+
     const stopStaleSessionsForThread = (input: {
       readonly threadId: ThreadId;
       readonly provider: ProviderKind;
@@ -4617,13 +4634,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : Effect.fail(error),
               ),
             );
-            if (routed === null) return;
-            hasRoutableBinding = true;
+            // A Pi startup that fails after registering its context can retain
+            // that context with no binding while hasSession reports it inactive.
+            // Routing stays on hasSession; this cleanup falls back to the
+            // retained probe so a second teardown failure still fails the stop.
+            const adapter = routed?.adapter ?? (yield* findRetainedAdapter(input.threadId));
+            if (adapter === null) return;
+            hasRoutableBinding = routed !== null;
             // Start the physical cleanup under the old generation, alongside
             // its durable drain. Neither may wait for the other to begin, and
             // one failure must not cancel the remaining cleanup/drain work.
             yield* settleConcurrentTeardowns(
-              [routed.adapter.stopSession(input.threadId), flushRuntimeText(input.threadId)],
+              [adapter.stopSession(input.threadId), flushRuntimeText(input.threadId)],
               (teardown) => teardown,
             );
           }),

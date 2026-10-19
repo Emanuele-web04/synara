@@ -1924,6 +1924,109 @@ for (const driver of ["pi", "antigravity"] as const) {
   }
 }
 
+// A Pi startup that fails after registering its context, with teardown
+// unproven, keeps the stopped context and persists no binding.
+const startRetainedPiWithoutBinding = (
+  source: ReturnType<typeof makeFakeCodexAdapter>,
+  threadId: ThreadId,
+  sourceId: ProviderInstanceId,
+) =>
+  Effect.gen(function* () {
+    const provider = yield* ProviderService;
+    const directory = yield* ProviderSessionDirectory;
+    const startError = new ProviderAdapterRequestError({
+      provider: "pi",
+      method: "session/start-cleanup",
+      detail: "Failed to prove Pi startup cleanup completed.",
+    });
+    const originalStart = source.startSession.getMockImplementation()!;
+    source.startSession.mockImplementationOnce((input) =>
+      originalStart(input).pipe(
+        Effect.andThen(Effect.sync(() => source.retainStopped(input.threadId))),
+        Effect.andThen(Effect.fail(startError)),
+      ),
+    );
+    assertFailure(
+      yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "pi",
+          providerInstanceId: sourceId,
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      ),
+      startError,
+    );
+    assert.isTrue(Option.isNone(yield* directory.getBinding(threadId)));
+    assert.isFalse(yield* source.hasSession(threadId));
+    assert.lengthOf(yield* source.listSessions(), 1);
+  });
+
+const makeRetainedPiLayer = (source: ReturnType<typeof makeFakeCodexAdapter>) =>
+  makeRegistrySwitchLayer(
+    "pi",
+    source.adapter,
+    makeFakeCodexAdapter("droid").adapter,
+    ServerSettingsService.layerTest({
+      providerInstances: { pi_source: { driver: "pi", enabled: true } },
+    }),
+  );
+
+it.effect("stops a retained pi context without a binding after a failed startup", () =>
+  Effect.gen(function* () {
+    const source = makeFakeCodexAdapter("pi");
+    const threadId = asThreadId("retained-pi-startup-stop");
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      yield* startRetainedPiWithoutBinding(source, threadId, asProviderInstanceId("pi_source"));
+      const stopError = new ProviderAdapterProcessError({
+        provider: "pi",
+        threadId,
+        detail: "session teardown could not prove exit",
+      });
+      source.stopSession.mockImplementationOnce(() => Effect.fail(stopError));
+      const retried = yield* Effect.result(provider.stopSession({ threadId }));
+      assert.lengthOf(source.stopSession.mock.calls, 1, "retained context was not stopped");
+      assert.equal(retried._tag, "Failure", "unproven cleanup must fail the stop");
+      if (retried._tag === "Failure") assert.deepEqual(retried.failure, stopError);
+      assert.lengthOf(yield* source.listSessions(), 1);
+      yield* provider.stopSession({ threadId });
+      assert.lengthOf(source.stopSession.mock.calls, 2);
+      assert.lengthOf(yield* source.listSessions(), 0);
+      yield* provider.stopSession({ threadId });
+      assert.lengthOf(source.stopSession.mock.calls, 2);
+      assert.isTrue(Option.isNone(yield* directory.getBinding(threadId)));
+    }).pipe(Effect.provide(makeRetainedPiLayer(source)));
+  }),
+);
+
+it.effect("keeps command routing on hasSession for a retained pi context without a binding", () =>
+  Effect.gen(function* () {
+    const source = makeFakeCodexAdapter("pi");
+    const threadId = asThreadId("retained-pi-startup-route");
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      yield* startRetainedPiWithoutBinding(source, threadId, asProviderInstanceId("pi_source"));
+      const sent = yield* Effect.result(provider.sendTurn({ threadId, input: "recover" }));
+      assert.lengthOf(source.sendTurn.mock.calls, 0, "retained context received a turn");
+      assert.equal(sent._tag, "Failure", "a retained context must not route a turn");
+      if (sent._tag === "Failure") {
+        assert.deepEqual(
+          sent.failure,
+          new ProviderValidationError({
+            operation: "ProviderService.sendTurn",
+            issue: `Cannot route thread '${threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          }),
+        );
+      }
+      assert.lengthOf(source.startSession.mock.calls, 1);
+      assert.lengthOf(yield* source.listSessions(), 1);
+    }).pipe(Effect.provide(makeRetainedPiLayer(source)));
+  }),
+);
+
 deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
   it.effect("stops sessions whose provider instance was deleted from settings", () =>
     Effect.gen(function* () {
