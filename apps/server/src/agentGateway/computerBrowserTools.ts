@@ -431,27 +431,29 @@ export function makeAgentGatewayComputerBrowserTools(
     const authorization = await Promise.resolve()
       .then(() => options.resolveForegroundAuthorization?.(context))
       .catch(() => COMPUTER_FOREGROUND_NOT_AUTHORIZED);
-    if (
-      authorization?.userRequestedVisibleUse !== true &&
-      !(
-        consent !== undefined &&
-        options.requestForegroundConsent !== undefined &&
-        (await options.requestForegroundConsent(
-          "computer_browser_prepare",
-          consent.args,
-          context,
-          consent.signal,
-        ))
-      )
-    ) {
-      throw new CuaActionError(
-        "Showing a browser window was not allowed for this task (declined or cancelled). " +
-          "Keep windowed false to work in the background, and do not ask " +
-          "again in this turn.",
-        "not-dispatched",
-        COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
-      );
-    }
+    if (authorization?.userRequestedVisibleUse === true) return;
+    const outcome =
+      consent !== undefined && options.requestForegroundConsent !== undefined
+        ? await options.requestForegroundConsent(
+            "computer_browser_prepare",
+            consent.args,
+            context,
+            consent.signal,
+          )
+        : ("declined" as const);
+    if (outcome === "authorized") return;
+    throw new CuaActionError(
+      outcome === "cancelled"
+        ? "The approval prompt for showing a browser window closed before the " +
+            "user answered — nothing was declined. You may show a fresh prompt once " +
+            "more if windowed is still needed; otherwise keep windowed false to work " +
+            "in the background."
+        : "Showing a browser window was not allowed for this task (declined or cancelled). " +
+            "Keep windowed false to work in the background, and do not ask " +
+            "again in this turn.",
+      "not-dispatched",
+      COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+    );
   };
 
   /**
