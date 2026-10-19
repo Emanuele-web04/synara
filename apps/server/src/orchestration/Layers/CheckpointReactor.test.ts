@@ -6725,10 +6725,43 @@ describe("CheckpointReactor", () => {
       detail:
         "Another thread is working in this workspace. Stop its active turn before undoing changes.",
     },
+    {
+      name: "refuses it with no live session while a peer's projected turn is here and its retained turn is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it with no live session while a peer's pending turn is here and its retained turn is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "pending",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "keeps refusing it with no live session while a peer's projected turn and idle retained context are here and its workspace is elsewhere",
+      holder: "live-and-retained-peer",
+      liveSession: false,
+      retainedTurn: false,
+      liveTurn: false,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
   ])(
     "guards a files-only Undo over a live session and a retained context: $name",
     async ({
       holder,
+      liveSession,
       retainedTurn,
       liveTurn,
       retainedElsewhere,
@@ -6743,7 +6776,9 @@ describe("CheckpointReactor", () => {
       // cleanup failed leaves it. The peer's live session works in another
       // repository and only its retained context in this one, or the other
       // way round, and the projection or a pending start can report a turn
-      // for the peer while its live session is idle.
+      // for the peer while its live session is idle. A peer can also have no
+      // live session at all, and the turn reported for it then starts in the
+      // thread workspace, not where its retained context lists.
       const fakes = new Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>();
       const harness = await createHarness({
         providerServiceLayer: createRetainingPiProviderServiceLayer({
@@ -6792,16 +6827,21 @@ describe("CheckpointReactor", () => {
           }
           const stop = yield* Effect.result(pi.stopSession(holderThreadId));
           expect(stop._tag).toBe("Failure");
-          // No binding names the kept context, so this start reaches the
-          // stale stop, whose second teardown failure is only logged.
-          yield* providerService.startSession(holderThreadId, {
-            provider: "codex",
-            threadId: holderThreadId,
-            cwd: liveCwd,
-            runtimeMode: "full-access",
-          });
-          if (liveTurn) {
-            yield* providerService.sendTurn({ threadId: holderThreadId, input: "edit README.md" });
+          if (liveSession !== false) {
+            // No binding names the kept context, so this start reaches the
+            // stale stop, whose second teardown failure is only logged.
+            yield* providerService.startSession(holderThreadId, {
+              provider: "codex",
+              threadId: holderThreadId,
+              cwd: liveCwd,
+              runtimeMode: "full-access",
+            });
+            if (liveTurn) {
+              yield* providerService.sendTurn({
+                threadId: holderThreadId,
+                input: "edit README.md",
+              });
+            }
           }
           const [live, retained] = yield* Effect.all([
             providerService.listSessions(),
@@ -6816,12 +6856,16 @@ describe("CheckpointReactor", () => {
               session.cwd,
             ]),
           ).toEqual([
-            [
-              "codex",
-              liveTurn ? "running" : "ready",
-              liveTurn ? "codex-unproven-turn" : null,
-              liveCwd,
-            ],
+            ...(liveSession === false
+              ? []
+              : [
+                  [
+                    "codex",
+                    liveTurn ? "running" : "ready",
+                    liveTurn ? "codex-unproven-turn" : null,
+                    liveCwd,
+                  ],
+                ]),
             ["pi", "closed", retainedTurn ? "pi-unproven-turn" : null, retainedCwd],
           ]);
         }),

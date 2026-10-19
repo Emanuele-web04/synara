@@ -1408,7 +1408,9 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       if (!reportedTurn && busyPeerSessions.length === 0) continue;
       // A session works where it started. A busy session names its own cwd,
       // and a turn the projection or a pending start reports names the first
-      // listed session's as well, then the thread workspace.
+      // listed session's as well, then the thread workspace. With no live
+      // session that turn starts in the thread workspace, so a retained
+      // context listed elsewhere does not stand in for it.
       const peerWorkspaceCwd = resolveThreadWorkspaceCwd({
         thread: peer,
         projects: commandReadModel.projects,
@@ -1420,10 +1422,12 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
         reportedSession === undefined || busyPeerSessions.includes(reportedSession)
           ? busyPeerSessions
           : [...busyPeerSessions, reportedSession];
-      const peerCwds =
-        cwdSessions.length > 0
-          ? cwdSessions.map((session) => session.cwd ?? peerWorkspaceCwd)
-          : [peerWorkspaceCwd];
+      const reportedTurnStartsInWorkspace =
+        reportedTurn && !live.some((session) => session.threadId === peerThreadId);
+      const peerCwds = [
+        ...cwdSessions.map((session) => session.cwd ?? peerWorkspaceCwd),
+        ...(cwdSessions.length === 0 || reportedTurnStartsInWorkspace ? [peerWorkspaceCwd] : []),
+      ];
       const peerIdentities = yield* Effect.forEach(
         peerCwds.filter((peerCwd): peerCwd is string => peerCwd !== undefined),
         (peerCwd) => turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd),
