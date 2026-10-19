@@ -74,6 +74,17 @@ import type {
   ProviderAdapterShape,
 } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
+import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
+import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
+import { CodexAdapter } from "../Services/CodexAdapter.ts";
+import { CursorAdapter } from "../Services/CursorAdapter.ts";
+import { DevinAdapter } from "../Services/DevinAdapter.ts";
+import { DroidAdapter } from "../Services/DroidAdapter.ts";
+import { GrokAdapter } from "../Services/GrokAdapter.ts";
+import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
+import { OmpAdapter } from "../Services/OmpAdapter.ts";
+import { PiAdapter } from "../Services/PiAdapter.ts";
+import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
@@ -1625,10 +1636,10 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
 const deletedRouting = makeProviderServiceLayer();
 
 for (const driver of ["pi", "antigravity"] as const) {
-  for (const sourceState of ["disabled", "deleted"] as const) {
+  for (const sourceState of ["enabled", "disabled", "deleted"] as const) {
     for (const action of ["switch", "clear", "preserve-active-clear"] as const) {
       it.effect(
-        `retries retained ${driver} cleanup before ${action} with a ${sourceState} source`,
+        `retries retained ${driver} cleanup before ${action} with ${sourceState === "enabled" ? "an" : "a"} ${sourceState} source`,
         () =>
           Effect.gen(function* () {
             const source = makeFakeCodexAdapter(driver);
@@ -1642,34 +1653,37 @@ for (const driver of ["pi", "antigravity"] as const) {
                 [targetId]: { driver: "droid", enabled: true },
               },
             });
-            const registryLayer = Layer.effect(
-              ProviderAdapterRegistry,
-              Effect.gen(function* () {
-                const settings = yield* ServerSettingsService;
-                const getByProvider = (kind: string) =>
-                  kind === driver
-                    ? Effect.succeed(source.adapter)
-                    : kind === "droid"
-                      ? Effect.succeed(replacement.adapter)
-                      : Effect.fail(new ProviderUnsupportedError({ provider: kind }));
-                return {
-                  getByProvider,
-                  getByInstance: (instanceId: ProviderInstanceId) =>
-                    settings.getSettings.pipe(
-                      Effect.flatMap((current) => {
-                        const instance = current.providerInstances[instanceId];
-                        return instance?.enabled
-                          ? getByProvider(instance.driver)
-                          : Effect.fail(new ProviderUnsupportedError({ provider: instanceId }));
-                      }),
-                      Effect.mapError(
-                        (cause) => new ProviderUnsupportedError({ provider: instanceId, cause }),
-                      ),
-                    ),
-                  listProviders: () => Effect.succeed([driver, "droid"] as const),
-                };
-              }),
-            ).pipe(Layer.provide(settingsLayer));
+            const adapterFor = <P extends ProviderKind>(provider: P) => ({
+              ...(provider === driver
+                ? source.adapter
+                : provider === "droid"
+                  ? replacement.adapter
+                  : makeFakeCodexAdapter(provider).adapter),
+              provider,
+            });
+            const registryLayer = ProviderAdapterRegistryLive.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(CodexAdapter, adapterFor("codex")),
+                  Layer.succeed(ClaudeAdapter, {
+                    ...adapterFor("claudeAgent"),
+                    steerTurn: () => Effect.die("Unexpected turn steering"),
+                    stopTask: () => Effect.die("Unexpected task stop"),
+                    backgroundTask: () => Effect.die("Unexpected background task"),
+                    steerSubagent: () => Effect.die("Unexpected subagent steering"),
+                  }),
+                  Layer.succeed(CursorAdapter, adapterFor("cursor")),
+                  Layer.succeed(DevinAdapter, adapterFor("devin")),
+                  Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
+                  Layer.succeed(GrokAdapter, adapterFor("grok")),
+                  Layer.succeed(DroidAdapter, adapterFor("droid")),
+                  Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
+                  Layer.succeed(OmpAdapter, adapterFor("omp")),
+                  Layer.succeed(PiAdapter, adapterFor("pi")),
+                  settingsLayer,
+                ),
+              ),
+            );
             const directoryLayer = ProviderSessionDirectoryLive.pipe(
               Layer.provide(ProviderSessionRuntimeRepositoryLive),
               Layer.provide(SqlitePersistenceMemory),
@@ -1708,7 +1722,9 @@ for (const driver of ["pi", "antigravity"] as const) {
               assert.lengthOf(yield* source.listSessions(), 1);
               yield* settings.updateSettings({
                 providerInstances: {
-                  ...(sourceState === "disabled" ? { [sourceId]: { driver, enabled: false } } : {}),
+                  ...(sourceState !== "deleted"
+                    ? { [sourceId]: { driver, enabled: sourceState === "enabled" } }
+                    : {}),
                   [targetId]: { driver: "droid", enabled: true },
                 },
               });
@@ -1747,6 +1763,29 @@ for (const driver of ["pi", "antigravity"] as const) {
                 assert.equal(after.resumeCursor, null);
                 assert.equal(after.status, "stopped");
                 assert.notEqual(after.lifecycleGeneration, before.lifecycleGeneration);
+              }
+              if (sourceState === "enabled" && action === "preserve-active-clear") {
+                yield* provider.startSession(threadId, {
+                  provider: driver,
+                  providerInstanceId: sourceId,
+                  threadId,
+                  runtimeMode: "full-access",
+                });
+                const liveBinding = Option.getOrThrow(yield* directory.getBinding(threadId));
+                assert.isNotNull(liveBinding.resumeCursor);
+                yield* provider.clearSessionResumeCursor!({
+                  threadId,
+                  preserveActiveRuntime: true,
+                });
+                const preserved = Option.getOrThrow(yield* directory.getBinding(threadId));
+                assert.equal(preserved.resumeCursor, null);
+                assert.equal(preserved.status, liveBinding.status);
+                assert.equal(preserved.lifecycleGeneration, liveBinding.lifecycleGeneration);
+                assert.isTrue(yield* source.hasSession(threadId));
+                yield* provider.sendTurn({ threadId, input: "still live" });
+                assert.lengthOf(source.sendTurn.mock.calls, 1);
+                assert.lengthOf(source.startSession.mock.calls, 2);
+                assert.lengthOf(source.stopSession.mock.calls, 3);
               }
             }).pipe(Effect.provide(Layer.mergeAll(serviceLayer, directoryLayer, settingsLayer)));
           }),
