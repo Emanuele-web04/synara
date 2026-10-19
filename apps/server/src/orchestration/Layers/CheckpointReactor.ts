@@ -1300,7 +1300,16 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       Effect.forEach(relevantThreadIds, (threadId) =>
         projectionTurnRepository.getPendingTurnStartByThreadId({ threadId }),
       ),
-      providerService.listSessions(),
+      // A context kept after a failed stop is out of the live listing, so
+      // routing and queued turns skip it, but its process may still be
+      // writing to this worktree. The guards below read it as well.
+      Effect.all([
+        providerService.listSessions(),
+        providerService.listRetainedSessions?.() ??
+          Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+      ]).pipe(
+        Effect.map(([liveSessions, retainedSessions]) => [...liveSessions, ...retainedSessions]),
+      ),
     ]);
     const commandThread = commandReadModel.threads.find(
       (entry) => entry.id === event.payload.threadId,

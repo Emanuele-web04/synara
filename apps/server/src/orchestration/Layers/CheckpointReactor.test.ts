@@ -134,6 +134,7 @@ function createProviderServiceHarness(
   providerStatus: ProviderSession["status"] = "ready",
   activeTurnId?: TurnId,
   runtimeEventCapacity?: number,
+  retainedSessions?: ReadonlyArray<ProviderSession>,
 ) {
   const now = new Date().toISOString();
   const runtimeEventPubSub = Effect.runSync(
@@ -179,6 +180,9 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
+    ...(retainedSessions === undefined
+      ? {}
+      : { listRetainedSessions: () => Effect.succeed(retainedSessions) }),
     getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
@@ -390,6 +394,7 @@ describe("CheckpointReactor", () => {
     readonly providerName?: ProviderKind;
     readonly providerStatus?: ProviderSession["status"];
     readonly providerActiveTurnId?: TurnId;
+    readonly providerRetainedSessions?: ReadonlyArray<ProviderSession>;
     readonly hasInitialCommit?: boolean;
     readonly runtimeEventCapacity?: number;
     readonly sqlStatements?: string[];
@@ -410,6 +415,7 @@ describe("CheckpointReactor", () => {
       options?.providerStatus ?? "ready",
       options?.providerActiveTurnId,
       options?.runtimeEventCapacity,
+      options?.providerRetainedSessions,
     );
 
     // Installed after the harness has seeded its checkpoints, so a test can fail
@@ -6261,6 +6267,127 @@ describe("CheckpointReactor", () => {
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      holder: "the thread",
+      holderId: "thread-1",
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      holder: "a peer thread",
+      holderId: "retained-turn-peer",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+  ])(
+    "refuses a files-only Undo while $holder keeps a retained turn running",
+    async ({ holder, holderId, detail }) => {
+      // A failed Antigravity stop keeps its context with the running turn, the
+      // live listing leaves that context out, and the provider reactor projects
+      // the thread stopped with no active turn. The retained listing is the
+      // only signal left that the process may still be writing to the worktree.
+      const createdAt = new Date().toISOString();
+      const holderThreadId = ThreadId.makeUnsafe(holderId);
+      const harness = await createHarness({
+        hasSession: holder === "a peer thread",
+        providerRetainedSessions: [
+          {
+            provider: "antigravity",
+            status: "running",
+            runtimeMode: "full-access",
+            threadId: holderThreadId,
+            activeTurnId: asTurnId("retained-antigravity-turn"),
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const setSession = (sessionThreadId: ThreadId, status: "ready" | "stopped") =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`retained-turn-session-${sessionThreadId}`),
+            threadId: sessionThreadId,
+            session: {
+              threadId: sessionThreadId,
+              status,
+              providerName: "antigravity",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      if (holder === "a peer thread") {
+        await setSession(threadId, "ready");
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("retained-turn-peer-create"),
+            threadId: holderThreadId,
+            projectId: asProjectId("project-1"),
+            title: "Stopped peer",
+            modelSelection: { provider: "antigravity", model: "gemini-3-pro" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: harness.cwd,
+            createdAt,
+          }),
+        );
+      }
+      await setSession(holderThreadId, "stopped");
+      for (const turnCount of [1, 2] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`retained-turn-diff-${turnCount}`),
+            threadId,
+            turnId: asTurnId(`turn-${turnCount}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+            status: "ready",
+            files:
+              turnCount === 2
+                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
+                : [],
+            checkpointTurnCount: turnCount,
+            createdAt,
+          }),
+        );
+      }
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("retained-turn-files-undo"),
+          threadId,
+          turnCount: 2,
+          scope: "files",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === threadId);
+      expect(
+        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
+          ?.payload,
+      ).toMatchObject({ detail });
+      expect(
+        target?.checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === 2)?.files,
+      ).toHaveLength(1);
+      expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
 
   it("rejects a child-thread revert while its parent-owned provider session is active", async () => {
     const harness = await createHarness({

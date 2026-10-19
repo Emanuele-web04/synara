@@ -251,6 +251,14 @@ export interface ProviderServiceShape {
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
+  /**
+   * List the contexts an adapter keeps after a failed stop for cleanup
+   * retries. They are not live and `listSessions` leaves them out, but their
+   * process may still be running, so safety checks such as the checkpoint
+   * revert guard read this view as well.
+   */
+  readonly listRetainedSessions?: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
   /** Read the settings that produced a persisted native resume cursor. */
   readonly getPersistedSessionProfile: (
     threadId: ThreadId,

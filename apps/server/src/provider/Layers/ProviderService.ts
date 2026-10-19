@@ -5043,6 +5043,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const listRetainedSessions: NonNullable<ProviderServiceShape["listRetainedSessions"]> = () =>
+      Effect.forEach(adapters, (adapter) =>
+        // The contexts the listing above leaves out. Their process may still
+        // be running, so safety checks such as the checkpoint revert guard
+        // read them here.
+        adapter.hasRetainedSession
+          ? Effect.flatMap(adapter.listSessions(), (sessions) =>
+              Effect.filter(sessions, (session) =>
+                adapter.hasSession(session.threadId).pipe(Effect.map((live) => !live)),
+              ),
+            )
+          : Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+      ).pipe(Effect.map((sessions) => sessions.flatMap((entries) => entries)));
+
     const startClaudeCompaction: NonNullable<ProviderServiceShape["startClaudeCompaction"]> = (
       input,
     ) =>
@@ -5336,6 +5350,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,
+      listRetainedSessions,
       getCapabilities,
       getClaudeCacheObservation,
       startClaudeCompaction,
