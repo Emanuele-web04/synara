@@ -1,6 +1,6 @@
 // FILE: ChatView.selectors.ts
 // Purpose: Keep ChatView's thread-scoped selectors off the component hot path and out of the render file.
-// Exports: lineage/work-log selector factories used by ChatView.
+// Exports: lineage/work-log/running-child selector factories used by ChatView.
 
 import {
   type MessageId,
@@ -9,6 +9,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 
+import { resolveSubagentThreadStatusKind } from "../lib/subagentPresentation";
 import type { AppState } from "../storeState";
 import { collectByIds, getThreadFromState } from "../threadDerivation";
 import type {
@@ -190,6 +191,57 @@ export function localSubagentThreadId(
   providerThreadId: string,
 ): ThreadIdType {
   return ThreadId.makeUnsafe(`subagent:${parentThreadId}:${providerThreadId}`);
+}
+
+const EMPTY_THREAD_IDS: ReadonlyArray<ThreadIdType> = Object.freeze([]);
+
+// Child threads of `parentThreadId` still at work by their own session and latest
+// turn, for agents that no transcript card stands for. Reruns only when the
+// thread list, shells, sessions or turn states change identity.
+export function createRunningChildThreadIdsSelector(parentThreadId: ThreadIdType | null) {
+  let previousThreadIds: AppState["threadIds"] | undefined;
+  let previousThreadShellById: AppState["threadShellById"] | undefined;
+  let previousThreadSessionById: AppState["threadSessionById"] | undefined;
+  let previousThreadTurnStateById: AppState["threadTurnStateById"] | undefined;
+  let previousResult: ReadonlyArray<ThreadIdType> = EMPTY_THREAD_IDS;
+
+  return (state: AppState): ReadonlyArray<ThreadIdType> => {
+    if (!parentThreadId) {
+      return EMPTY_THREAD_IDS;
+    }
+    if (
+      previousThreadIds === state.threadIds &&
+      previousThreadShellById === state.threadShellById &&
+      previousThreadSessionById === state.threadSessionById &&
+      previousThreadTurnStateById === state.threadTurnStateById
+    ) {
+      return previousResult;
+    }
+    previousThreadIds = state.threadIds;
+    previousThreadShellById = state.threadShellById;
+    previousThreadSessionById = state.threadSessionById;
+    previousThreadTurnStateById = state.threadTurnStateById;
+
+    const running: ThreadIdType[] = [];
+    for (const threadId of state.threadIds ?? []) {
+      const shell = state.threadShellById?.[threadId];
+      if (!shell || shell.parentThreadId !== parentThreadId || shell.archivedAt) {
+        continue;
+      }
+      const statusKind = resolveSubagentThreadStatusKind({
+        error: shell.error,
+        session: state.threadSessionById?.[threadId] ?? null,
+        latestTurn: state.threadTurnStateById?.[threadId]?.latestTurn ?? null,
+      });
+      if (statusKind === "running") {
+        running.push(threadId);
+      }
+    }
+    if (!shallowEqualThreadIds(previousResult, running)) {
+      previousResult = running.length > 0 ? running : EMPTY_THREAD_IDS;
+    }
+    return previousResult;
+  };
 }
 
 export function createRelevantWorkLogThreadsSelector(input: {

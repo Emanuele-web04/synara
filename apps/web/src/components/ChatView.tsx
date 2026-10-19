@@ -211,14 +211,16 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
   deriveActiveWorkStartedAt,
-  derivePendingBackgroundWork,
   derivePhase,
+  deriveRunningSubagentTasks,
   deriveTimelineEntries,
   findLatestProposedPlan,
   findSidebarProposedPlan,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
+  isSessionAliveForSubagents,
+  NO_RUNNING_SUBAGENT_TASKS,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -281,7 +283,10 @@ import {
   shouldStartActiveTurnLayoutGrace,
   type PendingFileUndo,
 } from "./ChatView.logic";
-import { createThreadLineageSelector } from "./ChatView.selectors";
+import {
+  createRunningChildThreadIdsSelector,
+  createThreadLineageSelector,
+} from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -324,7 +329,7 @@ import {
 import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { HubPendingApprovals } from "./chat/group/HubPendingApprovals";
-import { ComposerPendingBackgroundWorkRow } from "./chat/ComposerPendingBackgroundWorkRow";
+import { ComposerRunningAgentsCapsule } from "./chat/ComposerRunningAgentsCapsule";
 import {
   ComposerClaudeCacheReviewPanel,
   isClaudeCacheReviewPanelVisible,
@@ -343,8 +348,9 @@ import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFi
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import {
-  findLatestRunningSubagentRun,
+  scanSubagentRunCards,
   subagentRunPhaseStatusKind,
+  summarizeRunningAgents,
 } from "./chat/SubagentRunCard.logic";
 import { useSubagentRunControls } from "./chat/useSubagentRunControls";
 import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
@@ -1516,6 +1522,8 @@ export default function ChatView({
     subagentRunThreads,
     backgroundedSubagentToolUseIds,
     subagentTaskEnds,
+    subagentRuntimeRetired,
+    subagentRootSessionStatus,
     subagentThreadRunRow,
     composerSubagentStripItems,
     subagentRoster,
@@ -1530,22 +1538,69 @@ export default function ChatView({
   // "N running" chip that brings it back into view.
   const runningSubagentRunParentId = activeThread?.parentThreadId ?? activeThread?.id ?? null;
   const subagentRunLiveTurnId = latestTurnLive ? activeLatestTurnId : null;
-  const runningSubagentRun = useMemo(
+  const subagentCardScan = useMemo(
     () =>
-      findLatestRunningSubagentRun({
+      scanSubagentRunCards({
         entries: workLogEntries,
         threads: subagentRunThreads,
         parentThreadId: runningSubagentRunParentId,
         liveTurnId: subagentRunLiveTurnId,
         taskEndByToolUseId: subagentTaskEnds,
         backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+        runtimeRetired: subagentRuntimeRetired,
       }),
     [
       backgroundedSubagentToolUseIds,
       runningSubagentRunParentId,
       subagentRunLiveTurnId,
       subagentRunThreads,
+      subagentRuntimeRetired,
       subagentTaskEnds,
+      workLogEntries,
+    ],
+  );
+  const runningSubagentRun = subagentCardScan.latestRunningCard;
+  // Every agent still at work in the thread, for the composer's "N agents running"
+  // capsule. A subagent's own view counts only the agents it launched: its
+  // siblings live in the parent's transcript.
+  const isSubagentThreadView = Boolean(activeThread?.parentThreadId);
+  const runningSubagentTasks = useMemo(
+    () =>
+      isSubagentThreadView
+        ? NO_RUNNING_SUBAGENT_TASKS
+        : deriveRunningSubagentTasks({
+            activities: threadActivities,
+            liveTurnId: subagentRunLiveTurnId,
+            sessionStatus: subagentRootSessionStatus,
+          }),
+    [isSubagentThreadView, subagentRootSessionStatus, subagentRunLiveTurnId, threadActivities],
+  );
+  const runningChildParentId =
+    !isSubagentThreadView && isSessionAliveForSubagents(subagentRootSessionStatus)
+      ? activeThreadId
+      : null;
+  const runningChildThreadIds = useStore(
+    useMemo(
+      () => createRunningChildThreadIdsSelector(runningChildParentId),
+      [runningChildParentId],
+    ),
+  );
+  const runningAgents = useMemo(
+    () =>
+      summarizeRunningAgents({
+        scan: subagentCardScan,
+        tasks: runningSubagentTasks,
+        runningChildThreadIds,
+        rootThreadId: runningSubagentRunParentId,
+        entries: workLogEntries,
+        liveTurnId: subagentRunLiveTurnId,
+      }),
+    [
+      runningChildThreadIds,
+      runningSubagentRunParentId,
+      runningSubagentTasks,
+      subagentCardScan,
+      subagentRunLiveTurnId,
       workLogEntries,
     ],
   );
@@ -1703,20 +1758,6 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
-  // Once the turn settles, still-running isBackgrounded tasks keep the thread
-  // visibly "waiting on background work" instead of going quiet.
-  const pendingBackgroundWork = useMemo(
-    () =>
-      latestTurnSettled
-        ? derivePendingBackgroundWork({
-            activities: threadActivities,
-            latestTurn: activeLatestTurn,
-            session: activeThread?.session ?? null,
-          })
-        : null,
-    [activeLatestTurn, activeThread?.session, latestTurnSettled, threadActivities],
-  );
-  const pendingBackgroundWorkCount = pendingBackgroundWork?.count ?? 0;
 
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -5344,6 +5385,7 @@ export default function ChatView({
             threads: subagentRunThreads,
             backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
             taskEndByToolUseId: subagentTaskEnds,
+            runtimeRetired: subagentRuntimeRetired,
             onOpenThread: onNavigateToThread,
             onStop: onStopSubagentStripItem,
             onBackground: onBackgroundSubagentStripItem,
@@ -5354,6 +5396,7 @@ export default function ChatView({
       runningSubagentRunParentId,
       subagentRunLiveTurnId,
       subagentTaskEnds,
+      subagentRuntimeRetired,
       backgroundedSubagentToolUseIds,
       onBackgroundSubagentStripItem,
       onNavigateToThread,
@@ -5563,6 +5606,13 @@ export default function ChatView({
   const handleConfirmWorktreeHandoff = useStableCallback(confirmWorktreeHandoff);
   const handleResetInteractionMode = useStableCallback(resetInteractionMode);
   const closeAgentActivityDetail = useStableCallback(() => setOpenAgentActivityId(null));
+  const runningAgentsTargetEntryId = runningAgents.targetEntryId;
+  const onShowRunningAgents = useStableCallback(() => {
+    if (!runningAgentsTargetEntryId) return;
+    // The timeline is hidden under an open agent detail.
+    closeAgentActivityDetail();
+    timelineControllerRef.current?.scrollToWorkEntry(runningAgentsTargetEntryId);
+  });
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -6150,8 +6200,11 @@ export default function ChatView({
                   onClear={clearThreadGoal}
                 />
               ) : null}
-              {pendingBackgroundWorkCount > 0 ? (
-                <ComposerPendingBackgroundWorkRow count={pendingBackgroundWorkCount} />
+              {runningAgents.count > 0 ? (
+                <ComposerRunningAgentsCapsule
+                  count={runningAgents.count}
+                  onShow={runningAgentsTargetEntryId ? onShowRunningAgents : undefined}
+                />
               ) : null}
               {showComposerComputerControlEffortHint ? (
                 <ComposerComputerControlEffortHint
@@ -6857,7 +6910,9 @@ export default function ChatView({
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
                     subagentRun={subagentRunContext}
-                    runningSubagentRun={runningSubagentRun}
+                    // The composer's "N agents running" capsule already counts and
+                    // scrolls to these agents; one indicator is enough.
+                    runningSubagentRun={runningAgents.count > 0 ? null : runningSubagentRun}
                     subagentThread={subagentThread}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
                     activeTurnStartedAt={activeWorkStartedAt}

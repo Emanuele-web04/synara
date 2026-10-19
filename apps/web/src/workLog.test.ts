@@ -40,6 +40,54 @@ describe("deriveSubagentTaskEnds", () => {
       previous: { outcome: "completed", endedAt: firstEnd.createdAt },
     });
   });
+
+  it("resolves an end that names only its task through the open task's start", () => {
+    const started = makeActivity({
+      id: "started",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:00:01Z",
+      payload: { taskId: "task-bg", toolUseId: "toolu_bg" },
+    });
+    const stopped = makeActivity({
+      id: "stopped",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:05:00Z",
+      payload: { taskId: "task-bg", status: "stopped" },
+    });
+    expect(deriveSubagentTaskEnds([started, stopped]).get("toolu_bg")).toEqual({
+      outcome: "stopped",
+      endedAt: stopped.createdAt,
+    });
+
+    // A late stop for a task that already ended does not overwrite its outcome.
+    const completed = makeActivity({
+      id: "completed",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:02:00Z",
+      payload: { taskId: "task-bg", toolUseId: "toolu_bg", status: "completed" },
+    });
+    expect(deriveSubagentTaskEnds([started, completed, stopped]).get("toolu_bg")).toEqual({
+      outcome: "completed",
+      endedAt: completed.createdAt,
+    });
+
+    const anonymous = makeActivity({
+      id: "anonymous",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:00:01Z",
+      payload: { taskId: "task-bash" },
+    });
+    expect(
+      deriveSubagentTaskEnds([
+        anonymous,
+        makeActivity({
+          id: "bash-done",
+          kind: "task.completed",
+          payload: { taskId: "task-bash", status: "completed" },
+        }),
+      ]).size,
+    ).toBe(0);
+  });
 });
 
 describe("deriveWorkLogEntries", () => {
