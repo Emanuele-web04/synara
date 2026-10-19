@@ -1635,6 +1635,55 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
 
 const deletedRouting = makeProviderServiceLayer();
 
+const makeRegistrySwitchLayer = (
+  driver: "pi" | "antigravity",
+  source: ProviderAdapterShape<ProviderAdapterError>,
+  replacement: ProviderAdapterShape<ProviderAdapterError>,
+  settingsLayer: ReturnType<typeof ServerSettingsService.layerTest>,
+) => {
+  const adapterFor = <P extends ProviderKind>(provider: P) => ({
+    ...(provider === driver
+      ? source
+      : provider === "droid"
+        ? replacement
+        : makeFakeCodexAdapter(provider).adapter),
+    provider,
+  });
+  const registryLayer = ProviderAdapterRegistryLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(CodexAdapter, adapterFor("codex")),
+        Layer.succeed(ClaudeAdapter, {
+          ...adapterFor("claudeAgent"),
+          steerTurn: () => Effect.die("Unexpected turn steering"),
+          stopTask: () => Effect.die("Unexpected task stop"),
+          backgroundTask: () => Effect.die("Unexpected background task"),
+          steerSubagent: () => Effect.die("Unexpected subagent steering"),
+        }),
+        Layer.succeed(CursorAdapter, adapterFor("cursor")),
+        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
+        Layer.succeed(GrokAdapter, adapterFor("grok")),
+        Layer.succeed(DroidAdapter, adapterFor("droid")),
+        Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
+        Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(PiAdapter, adapterFor("pi")),
+        settingsLayer,
+      ),
+    ),
+  );
+  const directoryLayer = ProviderSessionDirectoryLive.pipe(
+    Layer.provide(ProviderSessionRuntimeRepositoryLive),
+    Layer.provide(SqlitePersistenceMemory),
+  );
+  const serviceLayer = makeProviderServiceLive().pipe(
+    Layer.provide(registryLayer),
+    Layer.provide(directoryLayer),
+    Layer.provide(settingsLayer),
+  );
+  return Layer.mergeAll(serviceLayer, directoryLayer, settingsLayer);
+};
+
 for (const driver of ["pi", "antigravity"] as const) {
   for (const sourceState of ["enabled", "disabled", "deleted"] as const) {
     for (const action of ["switch", "clear", "preserve-active-clear"] as const) {
@@ -1653,46 +1702,6 @@ for (const driver of ["pi", "antigravity"] as const) {
                 [targetId]: { driver: "droid", enabled: true },
               },
             });
-            const adapterFor = <P extends ProviderKind>(provider: P) => ({
-              ...(provider === driver
-                ? source.adapter
-                : provider === "droid"
-                  ? replacement.adapter
-                  : makeFakeCodexAdapter(provider).adapter),
-              provider,
-            });
-            const registryLayer = ProviderAdapterRegistryLive.pipe(
-              Layer.provide(
-                Layer.mergeAll(
-                  Layer.succeed(CodexAdapter, adapterFor("codex")),
-                  Layer.succeed(ClaudeAdapter, {
-                    ...adapterFor("claudeAgent"),
-                    steerTurn: () => Effect.die("Unexpected turn steering"),
-                    stopTask: () => Effect.die("Unexpected task stop"),
-                    backgroundTask: () => Effect.die("Unexpected background task"),
-                    steerSubagent: () => Effect.die("Unexpected subagent steering"),
-                  }),
-                  Layer.succeed(CursorAdapter, adapterFor("cursor")),
-                  Layer.succeed(DevinAdapter, adapterFor("devin")),
-                  Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
-                  Layer.succeed(GrokAdapter, adapterFor("grok")),
-                  Layer.succeed(DroidAdapter, adapterFor("droid")),
-                  Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
-                  Layer.succeed(OmpAdapter, adapterFor("omp")),
-                  Layer.succeed(PiAdapter, adapterFor("pi")),
-                  settingsLayer,
-                ),
-              ),
-            );
-            const directoryLayer = ProviderSessionDirectoryLive.pipe(
-              Layer.provide(ProviderSessionRuntimeRepositoryLive),
-              Layer.provide(SqlitePersistenceMemory),
-            );
-            const serviceLayer = makeProviderServiceLive().pipe(
-              Layer.provide(registryLayer),
-              Layer.provide(directoryLayer),
-              Layer.provide(settingsLayer),
-            );
             yield* Effect.gen(function* () {
               const provider = yield* ProviderService;
               const directory = yield* ProviderSessionDirectory;
@@ -1787,7 +1796,128 @@ for (const driver of ["pi", "antigravity"] as const) {
                 assert.lengthOf(source.startSession.mock.calls, 2);
                 assert.lengthOf(source.stopSession.mock.calls, 3);
               }
-            }).pipe(Effect.provide(Layer.mergeAll(serviceLayer, directoryLayer, settingsLayer)));
+            }).pipe(
+              Effect.provide(
+                makeRegistrySwitchLayer(driver, source.adapter, replacement.adapter, settingsLayer),
+              ),
+            );
+          }),
+      );
+    }
+  }
+}
+
+for (const driver of ["pi", "antigravity"] as const) {
+  for (const sourceState of ["live", "enabled", "disabled", "deleted"] as const) {
+    for (const failure of ["start", "persistence"] as const) {
+      it.effect(
+        sourceState === "live"
+          ? `restores a live ${driver} source when the replacement ${failure} fails`
+          : `does not restart a retained ${driver} source with ${sourceState === "enabled" ? "an" : "a"} ${sourceState} instance when the replacement ${failure} fails`,
+        () =>
+          Effect.gen(function* () {
+            const source = makeFakeCodexAdapter(driver);
+            const replacement = makeFakeCodexAdapter("droid");
+            const threadId = asThreadId(`switch-rollback-${driver}-${sourceState}-${failure}`);
+            const sourceId = asProviderInstanceId(`${driver}_source`);
+            const targetId = asProviderInstanceId("droid_target");
+            const settingsLayer = ServerSettingsService.layerTest({
+              providerInstances: {
+                [sourceId]: { driver, enabled: true },
+                [targetId]: { driver: "droid", enabled: true },
+              },
+            });
+            yield* Effect.gen(function* () {
+              const provider = yield* ProviderService;
+              const directory = yield* ProviderSessionDirectory;
+              const settings = yield* ServerSettingsService;
+              yield* provider.startSession(threadId, {
+                provider: driver,
+                providerInstanceId: sourceId,
+                threadId,
+                runtimeMode: "full-access",
+              });
+              if (sourceState !== "live") {
+                const stopError = new ProviderAdapterProcessError({
+                  provider: driver,
+                  threadId,
+                  detail: "session teardown could not prove exit",
+                });
+                source.stopSession.mockImplementationOnce((id) =>
+                  Effect.sync(() => source.retainStopped(id)).pipe(
+                    Effect.andThen(Effect.fail(stopError)),
+                  ),
+                );
+                assertFailure(
+                  yield* Effect.result(provider.stopRuntimeSession!({ threadId })),
+                  stopError,
+                );
+                assert.isFalse(yield* source.hasSession(threadId));
+                assert.lengthOf(yield* source.listSessions(), 1);
+                yield* settings.updateSettings({
+                  providerInstances: {
+                    ...(sourceState !== "deleted"
+                      ? { [sourceId]: { driver, enabled: sourceState === "enabled" } }
+                      : {}),
+                    [targetId]: { driver: "droid", enabled: true },
+                  },
+                });
+              }
+              const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+              const replacementError =
+                failure === "start"
+                  ? new ProviderAdapterProcessError({
+                      provider: "droid",
+                      threadId,
+                      detail: "replacement could not start",
+                    })
+                  : new ProviderSessionDirectoryPersistenceError({
+                      operation: "test",
+                      detail: "replacement binding could not persist",
+                    });
+              if (replacementError._tag === "ProviderAdapterProcessError") {
+                replacement.startSession.mockImplementationOnce(() =>
+                  Effect.fail(replacementError),
+                );
+              } else {
+                const upsert = directory.upsert;
+                vi.spyOn(directory, "upsert").mockImplementation((binding) =>
+                  binding.provider === "droid" ? Effect.fail(replacementError) : upsert(binding),
+                );
+              }
+              assertFailure(
+                yield* Effect.result(
+                  provider.startSession(threadId, {
+                    provider: "droid",
+                    providerInstanceId: targetId,
+                    threadId,
+                    runtimeMode: "full-access",
+                  }),
+                ),
+                replacementError,
+              );
+              assert.lengthOf(source.stopSession.mock.calls, sourceState === "live" ? 1 : 2);
+              assert.lengthOf(replacement.startSession.mock.calls, 1);
+              assert.lengthOf(replacement.stopSession.mock.calls, failure === "start" ? 0 : 1);
+              assert.lengthOf(yield* replacement.listSessions(), 0);
+              const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+              if (sourceState === "live") {
+                assert.lengthOf(source.startSession.mock.calls, 2);
+                assert.isTrue(yield* source.hasSession(threadId));
+                assert.equal(after.providerInstanceId, sourceId);
+                assert.equal(after.lifecycleGeneration, before.lifecycleGeneration);
+                yield* provider.sendTurn({ threadId, input: "restored" });
+                assert.lengthOf(source.sendTurn.mock.calls, 1);
+              } else {
+                assert.lengthOf(source.startSession.mock.calls, 1, "inactive source restarted");
+                assert.lengthOf(yield* source.listSessions(), 0);
+                assert.deepEqual(after, before);
+              }
+            }).pipe(
+              Effect.provide(
+                makeRegistrySwitchLayer(driver, source.adapter, replacement.adapter, settingsLayer),
+              ),
+            );
           }),
       );
     }
