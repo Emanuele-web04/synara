@@ -1660,7 +1660,14 @@ const make = Effect.gen(function* () {
       thread.session?.providerInstanceId !== requestedProviderInstanceId
         ? thread.session?.providerName
         : null;
-    const runtimeSession = (yield* providerService.listSessions()).find(
+    // A context whose teardown failed is out of the live listing, but its
+    // process may still run. Read the live listing first, then that one.
+    const [liveSessions, retainedSessions] = yield* Effect.all([
+      providerService.listSessions(),
+      providerService.listRetainedSessions?.() ??
+        Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+    ]);
+    const runtimeSession = [...liveSessions, ...retainedSessions].find(
       (session) => session.threadId === input.threadId,
     );
     yield* setThreadSession({

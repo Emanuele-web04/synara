@@ -83,7 +83,24 @@ import {
   ProviderAdapterValidationError,
   ProviderSessionDirectoryPersistenceError,
   ProviderValidationError,
+  type ProviderAdapterError,
 } from "../../provider/Errors.ts";
+import type { ProviderAdapterShape } from "../../provider/Services/ProviderAdapter.ts";
+import { AntigravityAdapter } from "../../provider/Services/AntigravityAdapter.ts";
+import { ClaudeAdapter } from "../../provider/Services/ClaudeAdapter.ts";
+import { CodexAdapter } from "../../provider/Services/CodexAdapter.ts";
+import { CursorAdapter } from "../../provider/Services/CursorAdapter.ts";
+import { DevinAdapter } from "../../provider/Services/DevinAdapter.ts";
+import { DroidAdapter } from "../../provider/Services/DroidAdapter.ts";
+import { GrokAdapter } from "../../provider/Services/GrokAdapter.ts";
+import { OmpAdapter } from "../../provider/Services/OmpAdapter.ts";
+import { OpenCodeAdapter } from "../../provider/Services/OpenCodeAdapter.ts";
+import { PiAdapter } from "../../provider/Services/PiAdapter.ts";
+import { ProviderAdapterRegistryLive } from "../../provider/Layers/ProviderAdapterRegistry.ts";
+import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
+import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
+import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
@@ -287,6 +304,117 @@ async function waitFor(
   return poll();
 }
 
+// The real ProviderService over the real adapter registry, each driver a small
+// fake. Like PiAdapter and AntigravityAdapter, a restart or a stop marks the
+// context stopped before its teardown. The first teardown fails and keeps the
+// context with the mode it was started in, a later one completes.
+function createRetainingRestartProviderServiceLayer() {
+  const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
+  const adapterFor = <P extends ProviderKind>(
+    provider: P,
+  ): ProviderAdapterShape<ProviderAdapterError> & { readonly provider: P } => {
+    const sessions = new Map<ThreadId, ProviderSession>();
+    const stopped = new Set<ThreadId>();
+    const teardown = (threadId: ThreadId, method: string) =>
+      Effect.suspend(() => {
+        const session = sessions.get(threadId);
+        if (session && !stopped.has(threadId)) {
+          stopped.add(threadId);
+          sessions.set(threadId, { ...session, status: "closed" });
+          return Effect.fail(
+            new ProviderAdapterRequestError({
+              provider,
+              method,
+              detail: "Failed to dispose previous session.",
+            }),
+          );
+        }
+        sessions.delete(threadId);
+        stopped.delete(threadId);
+        return Effect.void;
+      });
+    return {
+      provider,
+      capabilities: { sessionModelSwitch: "in-session" },
+      startSession: (input) =>
+        teardown(input.threadId, "session/restart").pipe(
+          Effect.map(() => {
+            const now = new Date().toISOString();
+            const session: ProviderSession = {
+              provider,
+              status: "ready",
+              runtimeMode: input.runtimeMode,
+              threadId: input.threadId,
+              ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              createdAt: now,
+              updatedAt: now,
+            };
+            sessions.set(input.threadId, session);
+            return session;
+          }),
+        ),
+      sendTurn: (input) =>
+        Effect.succeed({ threadId: input.threadId, turnId: asTurnId(`${provider}-turn`) }),
+      interruptTurn: () => Effect.void,
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: (threadId) => teardown(threadId, "session/stop"),
+      listSessions: () => Effect.sync(() => Array.from(sessions.values())),
+      hasSession: (threadId) => Effect.sync(() => sessions.has(threadId) && !stopped.has(threadId)),
+      ...(provider === "pi" || provider === "antigravity"
+        ? { hasRetainedSession: (threadId: ThreadId) => Effect.sync(() => sessions.has(threadId)) }
+        : {}),
+      readThread: () => unsupported(),
+      rollbackThread: () => unsupported(),
+      stopAll: () => Effect.void,
+      streamEvents: Stream.never,
+    };
+  };
+  const settingsLayer = ServerSettingsService.layerTest();
+  const registryLayer = ProviderAdapterRegistryLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(CodexAdapter, adapterFor("codex")),
+        Layer.succeed(ClaudeAdapter, {
+          ...adapterFor("claudeAgent"),
+          steerTurn: () => unsupported(),
+          stopTask: () => unsupported(),
+          backgroundTask: () => unsupported(),
+          steerSubagent: () => unsupported(),
+        }),
+        Layer.succeed(CursorAdapter, adapterFor("cursor")),
+        Layer.succeed(DevinAdapter, adapterFor("devin")),
+        Layer.succeed(AntigravityAdapter, adapterFor("antigravity")),
+        Layer.succeed(GrokAdapter, adapterFor("grok")),
+        Layer.succeed(DroidAdapter, adapterFor("droid")),
+        Layer.succeed(OpenCodeAdapter, adapterFor("opencode")),
+        Layer.succeed(OmpAdapter, adapterFor("omp")),
+        Layer.succeed(PiAdapter, adapterFor("pi")),
+        settingsLayer,
+      ),
+    ),
+  );
+  return makeProviderServiceLive().pipe(
+    Layer.provide(registryLayer),
+    Layer.provide(
+      ProviderSessionDirectoryLive.pipe(
+        Layer.provide(ProviderSessionRuntimeRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+      ),
+    ),
+    Layer.provide(settingsLayer),
+    Layer.provide(
+      Layer.succeed(ServerSecretStore, {
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+        remove: () => Effect.void,
+      }),
+    ),
+  );
+}
+
 describe("ProviderCommandReactor", () => {
   it.each([
     [undefined, 5000],
@@ -375,6 +503,8 @@ describe("ProviderCommandReactor", () => {
     readonly cancelClaudeCompactionDiscovery?: NonNullable<
       ProviderServiceShape["cancelClaudeCompactionDiscovery"]
     >;
+    readonly providerServiceLayer?: Layer.Layer<ProviderService, unknown>;
+    readonly listRetainedSessions?: NonNullable<ProviderServiceShape["listRetainedSessions"]>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -720,6 +850,7 @@ describe("ProviderCommandReactor", () => {
           }),
       clearSessionResumeCursor,
       listSessions,
+      ...(input?.listRetainedSessions ? { listRetainedSessions: input.listRetainedSessions } : {}),
       getPersistedSessionProfile:
         input?.getPersistedSessionProfile ?? (() => Effect.succeed(undefined)),
       getCapabilities: (_provider) =>
@@ -777,7 +908,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
-      Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(input?.providerServiceLayer ?? Layer.succeed(ProviderService, service)),
       Layer.provideMerge(
         input?.computerService
           ? Layer.succeed(ComputerService, input.computerService)
@@ -20840,6 +20971,174 @@ describe("ProviderCommandReactor", () => {
       expect.arrayContaining([expect.objectContaining({ runtimeMode: "approval-required" })]),
     );
     expect((await readHarnessThread(harness))?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it.each([
+    {
+      name: "a failed Pi restart",
+      provider: "pi",
+      model: "openai/gpt-4o",
+      staleProjection: false,
+      switchTo: undefined,
+    },
+    {
+      name: "a failed Pi restart the projection already claims",
+      provider: "pi",
+      model: "openai/gpt-4o",
+      staleProjection: true,
+      switchTo: undefined,
+    },
+    {
+      name: "a failed Antigravity restart",
+      provider: "antigravity",
+      model: "gemini-3-pro",
+      staleProjection: false,
+      switchTo: undefined,
+    },
+    {
+      name: "a failed switch away from Pi",
+      provider: "pi",
+      model: "openai/gpt-4o",
+      staleProjection: false,
+      switchTo: { provider: "grok", model: "grok-code-fast-1" },
+    },
+  ] as const)(
+    "reports the permissions of a context kept after $name",
+    async ({ provider, model, staleProjection, switchTo }) => {
+      // Through the real ProviderService and adapter registry. The teardown of
+      // the old context fails, so the service keeps it out of the live listing
+      // while its process may still run with the permissions it started with.
+      const harness = await createHarness({
+        threadModelSelection: { provider, model },
+        providerServiceLayer: createRetainingRestartProviderServiceLayer(),
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const startTurn = (id: string, runtimeMode: "full-access" | "approval-required") =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`cmd-${id}`),
+            threadId,
+            message: { messageId: asMessageId(id), role: "user", text: id, attachments: [] },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode,
+            createdAt: now,
+          }),
+        );
+
+      await startTurn("retained-rebind-first", "full-access");
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "ready");
+      await harness.drain();
+      expect((await readHarnessThread(harness))?.session).toMatchObject({
+        providerName: provider,
+        runtimeMode: "full-access",
+      });
+
+      const settled = (await readHarnessThread(harness))?.session;
+      if (!settled) throw new Error("Expected an established provider session");
+      const setSession = (id: string, session: OrchestrationSession) =>
+        Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`cmd-${id}`),
+            threadId,
+            session,
+            createdAt: now,
+          }),
+        );
+      if (staleProjection) {
+        // An earlier failed rebind can leave the projection claiming the
+        // requested mode, so only the process listing knows the real one.
+        await setSession("retained-rebind-stale", { ...settled, runtimeMode: "approval-required" });
+      }
+      if (switchTo) {
+        // A switch saved while a turn runs waits for the next turn start.
+        await setSession("retained-rebind-running", {
+          ...settled,
+          status: "running",
+          activeTurnId: asTurnId(`${provider}-turn`),
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-retained-rebind-switch"),
+            threadId,
+            modelSelection: switchTo,
+          }),
+        );
+        await harness.drain();
+        await setSession("retained-rebind-settled", settled);
+      }
+      await startTurn("retained-rebind-second", "approval-required");
+      await waitFor(
+        async () =>
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.turn.start.failed",
+          ) ?? false,
+      );
+      await harness.drain();
+
+      const thread = await readHarnessThread(harness);
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+      ).toMatchObject({
+        payload: { detail: expect.stringContaining("Failed to dispose previous session.") },
+      });
+      expect(thread?.runtimeMode).toBe("approval-required");
+      expect(thread?.session).toMatchObject({ status: "error", runtimeMode: "full-access" });
+    },
+  );
+
+  it("reports the live session's permissions when the thread also keeps a retained context", async () => {
+    // A failed stop of a stale context on another adapter is only logged, so a
+    // thread can have a live session and a retained context at once. Its turns
+    // run on the live session.
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+    const harness = await createHarness({
+      listRetainedSessions: () =>
+        Effect.succeed([
+          {
+            provider: "pi",
+            status: "closed",
+            runtimeMode: "approval-required",
+            threadId,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+    });
+    const startTurn = (id: string, runtimeMode: "full-access" | "approval-required") =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-${id}`),
+          threadId,
+          message: { messageId: asMessageId(id), role: "user", text: id, attachments: [] },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode,
+          createdAt: now,
+        }),
+      );
+
+    await startTurn("live-and-retained-first", "full-access");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    harness.startSession.mockImplementationOnce(
+      (_: unknown, __: unknown) => Effect.fail(new Error("simulated restart failure")) as never,
+    );
+    await startTurn("live-and-retained-second", "approval-required");
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await harness.drain();
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.runtimeMode).toBe("approval-required");
+    expect(thread?.session).toMatchObject({
+      status: "error",
+      providerName: "codex",
+      runtimeMode: "full-access",
+    });
   });
 
   it.each(["opencode"] as const)(
