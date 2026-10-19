@@ -229,20 +229,25 @@ function createProviderServiceHarness(
 
 // The real ProviderService over the real adapter registry. Each driver gets a
 // small fake. Like PiAdapter, a fake marks its context stopped before teardown,
-// and when the first teardown cannot prove the processes exited the context
-// stays with its turn id and lists as closed.
-function createRetainingPiProviderServiceLayer() {
+// and while a teardown cannot prove the processes exited the context stays
+// with its turn id and lists as closed. One teardown fails unless a test asks
+// for more, and a test can keep each fake to register a context on it.
+function createRetainingPiProviderServiceLayer(options?: {
+  readonly stopFailures?: number;
+  readonly adapters?: Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>;
+}) {
   const unsupported = () => Effect.die(new Error("Unsupported adapter call in test"));
   const adapterFor = <P extends ProviderKind>(
     provider: P,
   ): ProviderAdapterShape<ProviderAdapterError> & { readonly provider: P } => {
     const sessions = new Map<ThreadId, ProviderSession>();
     const stopped = new Set<ThreadId>();
+    const failuresLeft = new Map<ThreadId, number>();
     const update = (threadId: ThreadId, patch: Partial<ProviderSession>) => {
       const session = sessions.get(threadId);
       if (session) sessions.set(threadId, { ...session, ...patch });
     };
-    return {
+    const adapter: ProviderAdapterShape<ProviderAdapterError> & { readonly provider: P } = {
       provider,
       capabilities: { sessionModelSwitch: "in-session" },
       startSession: (input) =>
@@ -272,11 +277,14 @@ function createRetainingPiProviderServiceLayer() {
       respondToUserInput: () => unsupported(),
       stopSession: (threadId) =>
         Effect.suspend(() => {
-          if (stopped.has(threadId)) {
+          const failures = failuresLeft.get(threadId) ?? options?.stopFailures ?? 1;
+          if (failures === 0) {
             sessions.delete(threadId);
             stopped.delete(threadId);
+            failuresLeft.delete(threadId);
             return Effect.void;
           }
+          failuresLeft.set(threadId, failures - 1);
           stopped.add(threadId);
           update(threadId, { status: "closed" });
           return Effect.fail(
@@ -297,6 +305,8 @@ function createRetainingPiProviderServiceLayer() {
       stopAll: () => Effect.void,
       streamEvents: Stream.never,
     };
+    options?.adapters?.set(provider, adapter);
+    return adapter;
   };
   const settingsLayer = ServerSettingsService.layerTest();
   const registryLayer = ProviderAdapterRegistryLive.pipe(
@@ -6655,6 +6665,179 @@ describe("CheckpointReactor", () => {
         target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
           ?.payload,
       ).toEqual(detail === undefined ? undefined : expect.objectContaining({ detail }));
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "refuses it while the thread keeps a retained turn beside an idle live session",
+      holder: "thread-1",
+      retainedTurn: true,
+      liveTurn: false,
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+    {
+      name: "refuses it while a peer keeps a retained turn here beside an idle live session elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while the thread runs a live turn beside an idle retained context",
+      holder: "thread-1",
+      retainedTurn: false,
+      liveTurn: true,
+      detail:
+        "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
+    },
+  ])(
+    "guards a files-only Undo over a live session and a retained context: $name",
+    async ({ holder, retainedTurn, liveTurn, detail }) => {
+      // A thread can list a live session and a retained context at once. The
+      // service starts a replacement over a retained context whose binding it
+      // does not hold and only logs that context's failed stale stop, so the
+      // Pi context is registered on its adapter directly, as a startup whose
+      // cleanup failed leaves it. The peer's live session works in another
+      // repository and only its retained context in this one.
+      const fakes = new Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>();
+      const harness = await createHarness({
+        providerServiceLayer: createRetainingPiProviderServiceLayer({
+          stopFailures: 2,
+          adapters: fakes,
+        }),
+      });
+      const providerService = await runtime!.runPromise(Effect.service(ProviderService));
+      const createdAt = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const holderThreadId = ThreadId.makeUnsafe(holder);
+      let liveCwd = harness.cwd;
+      if (holderThreadId !== threadId) {
+        liveCwd = createGitRepository();
+        tempDirs.push(liveCwd);
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("live-and-retained-peer-create"),
+            threadId: holderThreadId,
+            projectId: asProjectId("project-1"),
+            title: "Peer elsewhere",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: liveCwd,
+            createdAt,
+          }),
+        );
+      }
+      const pi = fakes.get("pi")!;
+      await runtime!.runPromise(
+        Effect.gen(function* () {
+          yield* pi.startSession({
+            provider: "pi",
+            threadId: holderThreadId,
+            cwd: harness.cwd,
+            runtimeMode: "full-access",
+          });
+          if (retainedTurn) {
+            yield* pi.sendTurn({ threadId: holderThreadId, input: "edit README.md" });
+          }
+          const stop = yield* Effect.result(pi.stopSession(holderThreadId));
+          expect(stop._tag).toBe("Failure");
+          // No binding names the kept context, so this start reaches the
+          // stale stop, whose second teardown failure is only logged.
+          yield* providerService.startSession(holderThreadId, {
+            provider: "codex",
+            threadId: holderThreadId,
+            cwd: liveCwd,
+            runtimeMode: "full-access",
+          });
+          if (liveTurn) {
+            yield* providerService.sendTurn({ threadId: holderThreadId, input: "edit README.md" });
+          }
+          const [live, retained] = yield* Effect.all([
+            providerService.listSessions(),
+            providerService.listRetainedSessions?.() ??
+              Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+          ]);
+          expect(
+            [...live, ...retained].map((session) => [
+              session.provider,
+              session.status,
+              session.activeTurnId ?? null,
+              session.cwd,
+            ]),
+          ).toEqual([
+            [
+              "codex",
+              liveTurn ? "running" : "ready",
+              liveTurn ? "codex-unproven-turn" : null,
+              liveCwd,
+            ],
+            ["pi", "closed", retainedTurn ? "pi-unproven-turn" : null, harness.cwd],
+          ]);
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("live-and-retained-session-ready"),
+          threadId: holderThreadId,
+          session: {
+            threadId: holderThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      for (const turnCount of [1, 2] as const) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe(`live-and-retained-diff-${turnCount}`),
+            threadId,
+            turnId: asTurnId(`turn-${turnCount}`),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+            status: "ready",
+            files:
+              turnCount === 2
+                ? [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }]
+                : [],
+            checkpointTurnCount: turnCount,
+            createdAt,
+          }),
+        );
+      }
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("live-and-retained-files-undo"),
+          threadId,
+          turnCount: 2,
+          scope: "files",
+          createdAt,
+        }),
+      );
+      await harness.drain();
+
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === threadId);
+      expect(
+        target?.activities.find((activity) => activity.kind === "checkpoint.revert.failed")
+          ?.payload,
+      ).toMatchObject({ detail });
       expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
     },
   );

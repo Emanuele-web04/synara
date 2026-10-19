@@ -1315,14 +1315,17 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     const sessionHasInFlightTurn = (session: ProviderSession | undefined) =>
       providerSessionHasInFlightTurn(session) ||
       (session?.activeTurnId != null && retained.includes(session));
+    // A thread can list a live session and a retained context at once, so a
+    // turn on any of its sessions counts.
+    const sessionsWithInFlightTurn = (threadId: ThreadId) =>
+      providerSessions.filter(
+        (session) => session.threadId === threadId && sessionHasInFlightTurn(session),
+      );
     const commandThread = commandReadModel.threads.find(
       (entry) => entry.id === event.payload.threadId,
     );
     const sessionCommandThread = commandReadModel.threads.find(
       (entry) => entry.id === sessionThreadId,
-    );
-    const providerSession = providerSessions.find(
-      (session) => session.threadId === sessionThreadId,
     );
     const currentThread = commandThread ?? thread;
     const hasPendingNonTerminalTurnStart = pendingTurnStarts.some(
@@ -1335,7 +1338,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       threadHasInFlightTurn(currentThread) ||
       (sessionCommandThread !== undefined && threadHasInFlightTurn(sessionCommandThread)) ||
       hasPendingNonTerminalTurnStart ||
-      sessionHasInFlightTurn(providerSession)
+      sessionsWithInFlightTurn(sessionThreadId).length > 0
     ) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
@@ -1394,24 +1397,37 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     for (const peer of commandReadModel.threads) {
       if (relevantThreadIds.includes(peer.id)) continue;
       const providerThread = yield* resolveProviderSessionThread(projectionSnapshotQuery, peer.id);
-      const peerSession = providerSessions.find(
-        (session) => session.threadId === (providerThread?.id ?? peer.id),
-      );
+      const peerThreadId = providerThread?.id ?? peer.id;
+      const busyPeerSessions = sessionsWithInFlightTurn(peerThreadId);
       const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: peer.id,
       });
       if (
         !threadHasInFlightTurn(peer) &&
-        !sessionHasInFlightTurn(peerSession) &&
+        busyPeerSessions.length === 0 &&
         !(Option.isSome(pendingStart) && peer.session?.status !== "error")
       )
         continue;
-      const peerCwd =
-        peerSession?.cwd ??
-        resolveThreadWorkspaceCwd({ thread: peer, projects: commandReadModel.projects });
-      if (!peerCwd) continue;
-      const peerIdentity = yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd);
-      if (peerIdentity !== checkpointWorkspaceIdentity) continue;
+      // A session works where it started. A busy session names its own cwd,
+      // and a turn the projection or a pending start reports keeps the first
+      // session's, then the thread workspace.
+      const peerWorkspaceCwd = resolveThreadWorkspaceCwd({
+        thread: peer,
+        projects: commandReadModel.projects,
+      });
+      const cwdSessions =
+        busyPeerSessions.length > 0
+          ? busyPeerSessions
+          : providerSessions.filter((session) => session.threadId === peerThreadId).slice(0, 1);
+      const peerCwds =
+        cwdSessions.length > 0
+          ? cwdSessions.map((session) => session.cwd ?? peerWorkspaceCwd)
+          : [peerWorkspaceCwd];
+      const peerIdentities = yield* Effect.forEach(
+        peerCwds.filter((peerCwd): peerCwd is string => peerCwd !== undefined),
+        (peerCwd) => turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd),
+      );
+      if (!peerIdentities.includes(checkpointWorkspaceIdentity)) continue;
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
