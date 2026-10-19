@@ -28,15 +28,18 @@ import { truncateTitle } from "../../truncateTitle";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
 import {
+  createdAtAfterProviderHandoff,
   editAndResendDispatchFields,
   queuedChatTurnDispatchFields,
   planImplementationDispatchSettings,
   resolveQueuedTurnDispatchSettings,
   threadSettingsDispatchFields,
+  turnNeedsProviderHandoff,
   turnStartDispatchFields,
   type QueuedSteerGate,
   type TurnDispatchSettings,
 } from "../ChatView.logic";
+import type { ChatTurnSubmissionInput } from "./chatSendTypes";
 import { buildWorkflowResumePrompt } from "./WorkflowRunCard.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatLocalDispatch } from "./useChatLocalDispatch";
@@ -88,6 +91,7 @@ interface ChatTurnFollowUpsInput {
   persistThreadSettingsForNextTurn: ReturnType<
     typeof useChatRuntimeModes
   >["persistThreadSettingsForNextTurn"];
+  prepareProviderHandoffForSend: ChatTurnSubmissionInput["prepareProviderHandoffForSend"];
   setComposerDraftInteractionMode: ReturnType<
     typeof useChatComposerDraft
   >["setComposerDraftInteractionMode"];
@@ -134,6 +138,7 @@ export function useChatTurnFollowUps({
   armTranscriptAutoFollow,
   tailAnchorScrollInFlightRef,
   persistThreadSettingsForNextTurn,
+  prepareProviderHandoffForSend,
   setComposerDraftInteractionMode,
   rememberCustomBinaryPathForDispatch,
   workflowRunState,
@@ -177,7 +182,7 @@ export function useChatTurnFollowUps({
         ? prepareQueuedComposerResumeAfterSend(threadIdForSend)
         : undefined);
     const messageIdForSend = newMessageId();
-    const messageCreatedAt = new Date().toISOString();
+    let messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingComposerPrompt({
       provider: queuedTurn?.selectedProvider ?? selectedProvider,
       model: queuedTurn?.selectedModel ?? selectedModel,
@@ -215,12 +220,35 @@ export function useChatTurnFollowUps({
     const modelSelectionForPlanDispatch = planDispatchSettings.modelSelection;
     const computerControlSequenceForSend = computerControlChangeSequence.current;
 
+    const needsProviderHandoff = turnNeedsProviderHandoff({
+      thread: activeThread,
+      modelSelection: modelSelectionForPlanDispatch,
+    });
+
     const dispatchPlanFollowUpTurn = async () => {
       await persistThreadSettingsForNextTurn({
-        ...threadSettingsDispatchFields(planDispatchSettings),
+        // The handoff below owns a provider switch, as it does for Send.
+        ...(needsProviderHandoff
+          ? {
+              runtimeMode: planDispatchSettings.runtimeMode,
+              interactionMode: planDispatchSettings.interactionMode,
+            }
+          : threadSettingsDispatchFields(planDispatchSettings)),
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
       });
+      if (needsProviderHandoff && prepareProviderHandoffForSend) {
+        await prepareProviderHandoffForSend(activeThread, modelSelectionForPlanDispatch);
+        messageCreatedAt = createdAtAfterProviderHandoff({
+          activities: getThreadFromState(useStore.getState(), threadIdForSend)?.activities,
+          createdAt: messageCreatedAt,
+        });
+        setOptimisticUserMessages((messages) =>
+          messages.map((message) =>
+            message.id === messageIdForSend ? { ...message, createdAt: messageCreatedAt } : message,
+          ),
+        );
+      }
 
       // Keep the mode toggle and plan-follow-up banner in sync immediately
       // while the same-thread implementation turn is starting.

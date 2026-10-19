@@ -18,6 +18,8 @@ import type { WorkLogEntry } from "../session-logic";
 import {
   accessModeModelSelectionToPersist,
   appendVoiceTranscriptToPrompt,
+  autoWaitsForProviderHandoff,
+  createdAtAfterProviderHandoff,
   buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
@@ -33,6 +35,7 @@ import {
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   threadHasProviderLockingActivity,
+  turnNeedsProviderHandoff,
   threadHasProviderLockingMessages,
   hasFileUndoSettled,
   type LocalDispatchSnapshot,
@@ -1027,6 +1030,90 @@ describe("voice helpers", () => {
     expect(retargetQueuedTurnToThreadProvider(queued, { ...claudeThread, latestTurn: null })).toBe(
       queued,
     );
+
+    // Auto travels only to a model that can run it.
+    const queuedAuto = { ...queued, runtimeMode: "auto" as const };
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    expect(retargetQueuedTurnToThreadProvider(queuedAuto, openCodeThread).runtimeMode).toBe(
+      "approval-required",
+    );
+    expect(
+      retargetQueuedTurnToThreadProvider(
+        {
+          ...queuedAuto,
+          modelSelection: claudeSelection,
+          selectedProvider: "claudeAgent" as const,
+        },
+        codexThreadWithTurn,
+      ).runtimeMode,
+    ).toBe("auto");
+  });
+
+  it("hands off any send that picks another provider for a thread that already ran", () => {
+    expect(
+      turnNeedsProviderHandoff({ thread: codexThreadWithTurn, modelSelection: claudeSelection }),
+    ).toBe(true);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: codexThreadWithTurn,
+        modelSelection: { provider: "codex", model: "gpt-5.5" },
+      }),
+    ).toBe(false);
+    expect(
+      turnNeedsProviderHandoff({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        modelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+  });
+
+  it("orders a message sent after a handoff behind the handoff row", () => {
+    const handoffAt = "2999-01-01T00:00:00.000Z";
+    expect(
+      createdAtAfterProviderHandoff({
+        activities: [
+          { kind: "provider.handoff", createdAt: "2026-05-02T09:00:00.000Z" },
+          { kind: "provider.handoff", createdAt: handoffAt },
+        ],
+        createdAt: "2026-05-02T10:00:00.000Z",
+      }),
+    ).toBe("2999-01-01T00:00:00.001Z");
+    const now = Date.now();
+    expect(
+      Date.parse(
+        createdAtAfterProviderHandoff({ activities: [], createdAt: "2000-01-01T00:00:00.000Z" }),
+      ),
+    ).toBeGreaterThanOrEqual(now);
+  });
+
+  it("waits for Send before Auto when only the picked provider can run it", () => {
+    const openCodeThread = {
+      ...codexThreadWithTurn,
+      modelSelection: { provider: "opencode" as const, model: "openai/gpt-5" },
+    };
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: openCodeThread,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(true);
+    // The current provider can run Auto, so it is saved against it now.
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(false);
+    expect(
+      autoWaitsForProviderHandoff({
+        thread: { ...openCodeThread, latestTurn: null },
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(false);
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {

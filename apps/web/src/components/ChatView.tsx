@@ -4718,6 +4718,7 @@ export default function ChatView({
     armTranscriptAutoFollow,
     tailAnchorScrollInFlightRef,
     persistThreadSettingsForNextTurn,
+    prepareProviderHandoffForSend,
     setComposerDraftInteractionMode,
     rememberCustomBinaryPathForDispatch,
     workflowRunState,

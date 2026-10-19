@@ -5017,6 +5017,104 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     });
 
+    it("hands the thread off when Continue task runs on another provider", async () => {
+      // A Codex turn that hit a provider error, continued on Claude from its
+      // banner ("Change model", then "Continue task").
+      const base = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("handoff-continue-user"),
+        targetText: "Review the requested pull requests",
+      });
+      const turnId = TurnId.makeUnsafe("handoff-continue-failed-turn");
+      const cause = "Selected model is at capacity. Please try a different model.";
+      const snapshot: OrchestrationReadModel = {
+        ...base,
+        threads: [
+          {
+            ...base.threads[0]!,
+            messages: [
+              createUserMessage({
+                id: MessageId.makeUnsafe("handoff-continue-user"),
+                text: "Review the requested pull requests",
+                offsetSeconds: 0,
+              }),
+              {
+                ...createAssistantMessage({
+                  id: MessageId.makeUnsafe("handoff-continue-progress"),
+                  text: "I am checking the pull requests and their conflicts.",
+                  offsetSeconds: 3,
+                }),
+                turnId,
+              },
+            ],
+            latestTurn: {
+              turnId,
+              state: "error",
+              requestedAt: NOW_ISO,
+              startedAt: NOW_ISO,
+              completedAt: isoAt(10),
+              assistantMessageId: null,
+            },
+            activities: [
+              {
+                id: EventId.makeUnsafe("handoff-continue-error"),
+                turnId,
+                createdAt: isoAt(10),
+                sequence: 1,
+                kind: "runtime.error",
+                tone: "error",
+                summary: "Provider runtime error",
+                payload: { message: cause, class: "provider_error" },
+              },
+              {
+                id: EventId.makeUnsafe("handoff-continue-failed"),
+                turnId,
+                createdAt: isoAt(10),
+                sequence: 2,
+                kind: "turn.completed",
+                tone: "error",
+                summary: "Turn failed",
+                payload: { state: "failed", errorMessage: cause },
+              },
+            ],
+          },
+        ],
+      };
+      const mounted = await mountWithCapturedCommands(snapshot, respondToHandoff("completed"));
+      try {
+        await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+        useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+        });
+        await page.getByRole("button", { name: "Continue task", exact: true }).click();
+        await vi.waitFor(
+          () =>
+            expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+              true,
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+        // The first write of Claude is the handoff itself, not a plain settings save.
+        const handoffIndex = mounted.commands.findIndex(
+          (command) =>
+            command.type === "thread.meta.update" &&
+            command.modelSelection?.provider === "claudeAgent",
+        );
+        expect(mounted.commands[handoffIndex]).toMatchObject({ providerHandoff: true });
+        const turnStartIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(turnStartIndex).toBeGreaterThan(handoffIndex);
+        expect(mounted.commands[turnStartIndex]).toMatchObject({
+          threadId: THREAD_ID,
+          modelSelection: { provider: "claudeAgent" },
+          message: { text: expect.stringContaining("avoid repeating") },
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("hands off the captured selection when the picker changes during attachment upload", async () => {
       let releaseUpload = () => {};
       attachmentUploadBarrier = new Promise<void>((resolve) => {

@@ -1,4 +1,5 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
@@ -14,6 +15,7 @@ import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
   accessModeModelSelectionToPersist,
+  autoWaitsForProviderHandoff,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
 } from "../ChatView.logic";
@@ -84,6 +86,21 @@ export function useChatRuntimeModes({
               type: "error",
               title: "Could not update access mode",
               description: "Synara is not connected to the server.",
+            });
+            return false;
+          }
+          if (
+            nextMode === "auto" &&
+            autoWaitsForProviderHandoff({ thread: serverThread, selectedModelSelection })
+          ) {
+            // The server checks Auto against the thread's current provider, which
+            // cannot run it. The switch itself happens on Send.
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: `Send a message to switch to ${
+                PROVIDER_DISPLAY_NAMES[selectedModelSelection.provider]
+              } first, then choose this access mode.`,
             });
             return false;
           }
