@@ -1,4 +1,5 @@
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -289,7 +290,10 @@ export const createEffectServer = Effect.fn(function* (
         }
       }
       yield* reconcileRestartStuckTurns;
-    }).pipe(Effect.provide(ProjectionPendingInteractionRepositoryLive)),
+    }).pipe(
+      Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProviderSessionRuntimeRepositoryLive),
+    ),
     reactors: [
       automationScheduler,
       automationRunReactor,

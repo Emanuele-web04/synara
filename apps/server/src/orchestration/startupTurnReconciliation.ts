@@ -43,6 +43,7 @@ import type {
   OrchestrationSession,
   RuntimeMode,
   ThreadId,
+  TurnId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
 import {
@@ -52,6 +53,7 @@ import {
 import { Array as Arr, Effect, Option } from "effect";
 import type { ProjectionPendingInteraction } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProviderSessionRuntimeRepository } from "../persistence/Services/ProviderSessionRuntime.ts";
 import {
   CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND,
   threadHasCheckpointRevertInProgress,
@@ -93,7 +95,8 @@ export interface ReconcilableThread {
   readonly session: OrchestrationSession | null;
   readonly latestTurn: { readonly state: "running" | "interrupted" | "completed" | "error" } | null;
   readonly activities?: ReadonlyArray<
-    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence"> &
+      Partial<Pick<OrchestrationThreadActivity, "turnId" | "sequenceSource">>
   >;
   readonly messages?: ReadonlyArray<
     Pick<OrchestrationMessage, "id" | "role" | "streaming" | "turnId">
@@ -266,6 +269,151 @@ function planStreamingMessageFinalizeCommands(input: {
     }));
 }
 
+/** A provider task a dead runtime left open, retired with a "stopped" end. */
+export interface RestartOrphanedTask {
+  readonly taskId: string;
+  readonly toolUseId?: string;
+  readonly workflowTaskId?: string;
+  readonly turnId: TurnId | null;
+}
+
+interface OpenTask {
+  startedAt: string;
+  turnId: TurnId | null;
+  // Present only while the task's own start is still open, so a re-listed
+  // task that already ended cannot rewrite its launching call's outcome.
+  toolUseId?: string;
+  workflowTaskId?: string;
+}
+
+function taskPayloadRecord(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
+function taskPayloadString(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * Tasks still open in a thread's activity log that started before this process:
+ * provider runtimes live in-process, so none of them can still be running, and
+ * without an end the UI keeps counting them as running agents or background
+ * work. Mirrors the client's notion of outstanding work: a start, a
+ * "moved to background" patch or notice opens a task; a completion or a
+ * terminal/paused status patch closes it.
+ */
+export function findRestartOrphanedTasks(
+  activities: NonNullable<ReconcilableThread["activities"]>,
+  startedBefore: string,
+): ReadonlyArray<RestartOrphanedTask> {
+  const open = new Map<string, OpenTask>();
+  const openIfUnknown = (taskId: string, activity: (typeof activities)[number]) => {
+    if (!open.has(taskId)) {
+      open.set(taskId, { startedAt: activity.createdAt, turnId: activity.turnId ?? null });
+    }
+  };
+  for (const activity of activities) {
+    const payload = taskPayloadRecord(activity.payload);
+    if (activity.kind === "runtime.warning") {
+      if (payload?.nativeEventType !== "background_tasks_changed") continue;
+      const tasks = taskPayloadRecord(payload.data)?.tasks;
+      if (!Array.isArray(tasks)) continue;
+      for (const task of tasks) {
+        const taskId = taskPayloadString(taskPayloadRecord(task), "task_id");
+        if (taskId) openIfUnknown(taskId, activity);
+      }
+      continue;
+    }
+    const taskId = taskPayloadString(payload, "taskId");
+    if (!taskId) continue;
+    switch (activity.kind) {
+      case "task.started": {
+        const toolUseId = taskPayloadString(payload, "toolUseId");
+        const workflowTaskId = taskPayloadString(payload, "workflowTaskId");
+        open.set(taskId, {
+          startedAt: activity.createdAt,
+          turnId: activity.turnId ?? null,
+          ...(toolUseId ? { toolUseId } : {}),
+          ...(workflowTaskId ? { workflowTaskId } : {}),
+        });
+        break;
+      }
+      case "task.completed":
+        open.delete(taskId);
+        break;
+      case "task.updated": {
+        const status = taskPayloadString(payload, "status");
+        if (
+          status === "completed" ||
+          status === "failed" ||
+          status === "killed" ||
+          status === "paused" ||
+          payload?.isBackgrounded === false
+        ) {
+          open.delete(taskId);
+        } else if (payload?.isBackgrounded === true) {
+          openIfUnknown(taskId, activity);
+        }
+        break;
+      }
+    }
+  }
+  const orphaned: RestartOrphanedTask[] = [];
+  for (const [taskId, task] of open) {
+    if (task.startedAt >= startedBefore) continue;
+    const { startedAt: _startedAt, ...retired } = task;
+    orphaned.push({ taskId, ...retired });
+  }
+  return orphaned;
+}
+
+function planOrphanedTaskCommands(input: {
+  readonly thread: ReconcilableThread;
+  readonly startedBefore: string;
+  readonly now: string;
+}): ReadonlyArray<ThreadActivityAppendCommand> {
+  const activities = input.thread.activities ?? [];
+  // Server and clients order a thread's activities by sequence alone. The
+  // orchestration counter a plain append would get is unrelated to the provider
+  // journal sequence the task's start carries, and can be lower, which would
+  // order the end before its start and reopen the task. Continue the thread's
+  // provider sequence instead.
+  let lastProviderSequence: number | undefined;
+  for (const activity of activities) {
+    if (activity.sequence === undefined || activity.sequenceSource === "orchestration") continue;
+    lastProviderSequence = Math.max(lastProviderSequence ?? 0, activity.sequence);
+  }
+  return findRestartOrphanedTasks(activities, input.startedBefore).map((task, index) => {
+    const commandKey = `restart-reconcile-task:${input.thread.id}:${task.taskId}:${input.now}`;
+    return {
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(commandKey),
+      threadId: input.thread.id,
+      activity: {
+        id: EventId.makeUnsafe(commandKey),
+        tone: "info",
+        kind: "task.completed",
+        summary: "Task stopped",
+        payload: {
+          taskId: task.taskId,
+          status: "stopped",
+          ...(task.toolUseId ? { toolUseId: task.toolUseId } : {}),
+          ...(task.workflowTaskId ? { workflowTaskId: task.workflowTaskId } : {}),
+        },
+        turnId: task.turnId,
+        ...(lastProviderSequence !== undefined
+          ? { sequence: lastProviderSequence + 1 + index }
+          : {}),
+        createdAt: input.now,
+      },
+      createdAt: input.now,
+    };
+  });
+}
+
 function buildStalePendingRequestCommand(input: {
   readonly threadId: ThreadId;
   readonly now: string;
@@ -306,6 +454,8 @@ export function planRestartTurnReconciliation(input: {
   readonly threads: ReadonlyArray<ReconcilableThread>;
   readonly pendingInteractions?: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
+  /** When this process started: tasks opened before it are retired as stopped. */
+  readonly retireTasksStartedBefore?: string;
 }): ReadonlyArray<RestartReconciliationCommand> {
   const pendingInteractions = input.pendingInteractions ?? [];
   const pendingByThread = new Map<string, ReconcilablePendingInteraction[]>();
@@ -330,6 +480,15 @@ export function planRestartTurnReconciliation(input: {
     });
     if (staleCheckpointRevertCommand !== null) {
       commands.push(staleCheckpointRevertCommand);
+    }
+    if (input.retireTasksStartedBefore !== undefined) {
+      commands.push(
+        ...planOrphanedTaskCommands({
+          thread,
+          startedBefore: input.retireTasksStartedBefore,
+          now: input.now,
+        }),
+      );
     }
     if (!hasInFlightTurn && !hasDanglingActiveTurn(thread)) {
       continue;
@@ -400,7 +559,10 @@ export function planRestartTurnReconciliation(input: {
 export const reconcileRestartStuckTurns: Effect.Effect<
   void,
   never,
-  OrchestrationEngineService | ProjectionSnapshotQuery | ProjectionPendingInteractionRepository
+  | OrchestrationEngineService
+  | ProjectionSnapshotQuery
+  | ProjectionPendingInteractionRepository
+  | ProviderSessionRuntimeRepository
 > = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -417,14 +579,34 @@ export const reconcileRestartStuckTurns: Effect.Effect<
       ),
     );
   const unsettledByThread = new Map(Object.entries(Arr.groupBy(unsettled, (row) => row.threadId)));
+  // A runtime row the previous process never marked stopped belongs to a
+  // runtime that died with it (a clean shutdown stops every runtime first).
+  const runtimeRows = yield* ProviderSessionRuntimeRepository;
+  const deadRuntimeThreadIds = new Set(
+    (yield* runtimeRows
+      .list()
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to read restart-orphaned provider runtimes", { cause }).pipe(
+            Effect.as([]),
+          ),
+        ),
+      ))
+      .filter((row) => row.status !== "stopped")
+      .map((row) => row.threadId),
+  );
   const now = new Date().toISOString();
+  // Work started by this process is live; everything opened before it is not.
+  const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
   const threadsNeedingRestartCleanup = readModel.threads.filter(
     (thread) =>
       needsRestartReconciliation(thread) ||
       threadHasCheckpointRevertInProgress(thread) ||
       thread.hasPendingApprovals ||
       thread.hasPendingUserInput ||
-      unsettledByThread.has(thread.id),
+      unsettledByThread.has(thread.id) ||
+      deadRuntimeThreadIds.has(thread.id) ||
+      findRestartOrphanedTasks(thread.activities ?? [], processStartedAt).length > 0,
   );
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
@@ -452,6 +634,7 @@ export const reconcileRestartStuckTurns: Effect.Effect<
     threads: reconcilableThreads,
     pendingInteractions: unsettled,
     now,
+    retireTasksStartedBefore: processStartedAt,
   });
   if (commands.length === 0) {
     return;

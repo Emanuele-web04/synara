@@ -21,6 +21,7 @@ import { ServerConfig } from "../config.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../persistence/Layers/ProjectionPendingInteractions.ts";
+import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
@@ -81,6 +82,7 @@ describe("boot-time pending interaction reconciliation", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+      Layer.provideMerge(ProviderSessionRuntimeRepositoryLive),
       Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -147,6 +149,7 @@ describe("boot-time pending interaction reconciliation", () => {
       readonly kind: string;
       readonly payload: OrchestrationThreadActivity["payload"];
       readonly sequence?: number;
+      readonly createdAt?: string;
     }) =>
       Effect.runPromise(
         engine.dispatch({
@@ -160,7 +163,7 @@ describe("boot-time pending interaction reconciliation", () => {
             summary: input.kind,
             payload: input.payload,
             turnId: null,
-            createdAt: new Date().toISOString(),
+            createdAt: input.createdAt ?? new Date().toISOString(),
             ...(input.sequence !== undefined ? { sequence: input.sequence } : {}),
           },
           createdAt: new Date().toISOString(),
@@ -561,5 +564,55 @@ describe("boot-time pending interaction reconciliation", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ streaming: false, text: "Partial answer", turnId });
     expect(thread?.session).toMatchObject({ status: "interrupted", activeTurnId: null });
+  });
+
+  it("retires agent tasks a dead runtime left open, after their starts, once", async () => {
+    const harness = await createHarness();
+    const beforeBoot = new Date(Date.now() - process.uptime() * 1000 - 60_000).toISOString();
+    await harness.appendActivity({
+      id: "orphan-start",
+      kind: "task.started",
+      payload: { taskId: "task-orphan", taskType: "local_agent", toolUseId: "toolu_orphan" },
+      sequence: 7,
+      createdAt: beforeBoot,
+    });
+    await harness.appendActivity({
+      id: "done-start",
+      kind: "task.started",
+      payload: { taskId: "task-done", taskType: "local_agent", toolUseId: "toolu_done" },
+      sequence: 8,
+      createdAt: beforeBoot,
+    });
+    await harness.appendActivity({
+      id: "done-end",
+      kind: "task.completed",
+      payload: { taskId: "task-done", status: "completed", toolUseId: "toolu_done" },
+      sequence: 9,
+      createdAt: beforeBoot,
+    });
+    // Started by this process: its runtime is live.
+    await harness.appendActivity({
+      id: "live-start",
+      kind: "task.started",
+      payload: { taskId: "task-live", taskType: "local_agent", toolUseId: "toolu_live" },
+      sequence: 10,
+    });
+
+    await harness.runBootReconciliation();
+    await harness.runBootReconciliation();
+
+    const activities = (await harness.readThread())?.activities ?? [];
+    const retired = activities.filter(
+      (activity) => activity.kind === "task.completed" && activity.id !== "activity-done-end",
+    );
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatchObject({
+      summary: "Task stopped",
+      payload: { taskId: "task-orphan", status: "stopped", toolUseId: "toolu_orphan" },
+    });
+    // Ordering is by sequence alone: the end continues the provider sequence its
+    // start belongs to, rather than taking the unrelated orchestration counter.
+    expect(retired[0]!.sequenceSource).toBeUndefined();
+    expect(retired[0]!.sequence).toBe(11);
   });
 });
