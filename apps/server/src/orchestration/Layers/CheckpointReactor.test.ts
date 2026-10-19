@@ -6694,15 +6694,56 @@ describe("CheckpointReactor", () => {
       detail:
         "Thread 'thread-1' has an active turn. Interrupt the current turn before reverting checkpoints.",
     },
+    {
+      name: "refuses it while a peer's projected turn and idle live session are here beside a retained turn elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while a peer's pending turn and idle live session are here beside a retained turn elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      turnReport: "pending",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
+    {
+      name: "refuses it while a peer's idle live session is here and its workspace and retained turn are elsewhere",
+      holder: "live-and-retained-peer",
+      retainedTurn: true,
+      liveTurn: false,
+      retainedElsewhere: true,
+      workspace: "retained",
+      turnReport: "projected",
+      detail:
+        "Another thread is working in this workspace. Stop its active turn before undoing changes.",
+    },
   ])(
     "guards a files-only Undo over a live session and a retained context: $name",
-    async ({ holder, retainedTurn, liveTurn, detail }) => {
+    async ({
+      holder,
+      retainedTurn,
+      liveTurn,
+      retainedElsewhere,
+      workspace,
+      turnReport,
+      detail,
+    }) => {
       // A thread can list a live session and a retained context at once. The
       // service starts a replacement over a retained context whose binding it
       // does not hold and only logs that context's failed stale stop, so the
       // Pi context is registered on its adapter directly, as a startup whose
       // cleanup failed leaves it. The peer's live session works in another
-      // repository and only its retained context in this one.
+      // repository and only its retained context in this one, or the other
+      // way round, and the projection or a pending start can report a turn
+      // for the peer while its live session is idle.
       const fakes = new Map<ProviderKind, ProviderAdapterShape<ProviderAdapterError>>();
       const harness = await createHarness({
         providerServiceLayer: createRetainingPiProviderServiceLayer({
@@ -6715,9 +6756,12 @@ describe("CheckpointReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const holderThreadId = ThreadId.makeUnsafe(holder);
       let liveCwd = harness.cwd;
+      let retainedCwd = harness.cwd;
       if (holderThreadId !== threadId) {
-        liveCwd = createGitRepository();
-        tempDirs.push(liveCwd);
+        const elsewhere = createGitRepository();
+        tempDirs.push(elsewhere);
+        if (retainedElsewhere) retainedCwd = elsewhere;
+        else liveCwd = elsewhere;
         await Effect.runPromise(
           harness.engine.dispatch({
             type: "thread.create",
@@ -6729,7 +6773,7 @@ describe("CheckpointReactor", () => {
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             runtimeMode: "full-access",
             branch: null,
-            worktreePath: liveCwd,
+            worktreePath: workspace === "retained" ? retainedCwd : liveCwd,
             createdAt,
           }),
         );
@@ -6740,7 +6784,7 @@ describe("CheckpointReactor", () => {
           yield* pi.startSession({
             provider: "pi",
             threadId: holderThreadId,
-            cwd: harness.cwd,
+            cwd: retainedCwd,
             runtimeMode: "full-access",
           });
           if (retainedTurn) {
@@ -6778,7 +6822,7 @@ describe("CheckpointReactor", () => {
               liveTurn ? "codex-unproven-turn" : null,
               liveCwd,
             ],
-            ["pi", "closed", retainedTurn ? "pi-unproven-turn" : null, harness.cwd],
+            ["pi", "closed", retainedTurn ? "pi-unproven-turn" : null, retainedCwd],
           ]);
         }),
       );
@@ -6789,16 +6833,34 @@ describe("CheckpointReactor", () => {
           threadId: holderThreadId,
           session: {
             threadId: holderThreadId,
-            status: "ready",
+            status: turnReport === "projected" ? "running" : "ready",
             providerName: "codex",
             runtimeMode: "full-access",
-            activeTurnId: null,
+            activeTurnId: turnReport === "projected" ? asTurnId("peer-projected-turn") : null,
             lastError: null,
             updatedAt: createdAt,
           },
           createdAt,
         }),
       );
+      if (turnReport === "pending") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("live-and-retained-pending-start"),
+            threadId: holderThreadId,
+            message: {
+              messageId: MessageId.makeUnsafe("live-and-retained-pending-message"),
+              role: "user",
+              text: "edit README.md",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            createdAt,
+          }),
+        );
+      }
       for (const turnCount of [1, 2] as const) {
         await Effect.runPromise(
           harness.engine.dispatch({

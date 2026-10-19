@@ -1402,23 +1402,24 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: peer.id,
       });
-      if (
-        !threadHasInFlightTurn(peer) &&
-        busyPeerSessions.length === 0 &&
-        !(Option.isSome(pendingStart) && peer.session?.status !== "error")
-      )
-        continue;
+      const reportedTurn =
+        threadHasInFlightTurn(peer) ||
+        (Option.isSome(pendingStart) && peer.session?.status !== "error");
+      if (!reportedTurn && busyPeerSessions.length === 0) continue;
       // A session works where it started. A busy session names its own cwd,
-      // and a turn the projection or a pending start reports keeps the first
-      // session's, then the thread workspace.
+      // and a turn the projection or a pending start reports names the first
+      // listed session's as well, then the thread workspace.
       const peerWorkspaceCwd = resolveThreadWorkspaceCwd({
         thread: peer,
         projects: commandReadModel.projects,
       });
+      const reportedSession = reportedTurn
+        ? providerSessions.find((session) => session.threadId === peerThreadId)
+        : undefined;
       const cwdSessions =
-        busyPeerSessions.length > 0
+        reportedSession === undefined || busyPeerSessions.includes(reportedSession)
           ? busyPeerSessions
-          : providerSessions.filter((session) => session.threadId === peerThreadId).slice(0, 1);
+          : [...busyPeerSessions, reportedSession];
       const peerCwds =
         cwdSessions.length > 0
           ? cwdSessions.map((session) => session.cwd ?? peerWorkspaceCwd)
