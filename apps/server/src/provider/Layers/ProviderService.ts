@@ -4744,14 +4744,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (!binding || !isExpectedIdleStopCurrent()) return;
               const adapter = yield* getAdapterForBinding(binding);
               const hasActiveSession = yield* adapter.hasSession(input.threadId);
+              // A context retained by a failed stop is not live, but its cursor
+              // can be newer than a binding write that has not landed yet.
+              const hasRetainedSession = adapter.hasRetainedSession
+                ? yield* adapter.hasRetainedSession(input.threadId)
+                : hasActiveSession;
               let resumeCursor = binding.resumeCursor;
               if (!isExpectedIdleStopCurrent()) return;
-              if (hasActiveSession) {
+              if (hasRetainedSession) {
                 const activeSessions = yield* adapter.listSessions();
                 const activeSession = activeSessions.find(
                   (session) => session.threadId === input.threadId,
                 );
                 if (
+                  hasActiveSession &&
                   rawInput.onlyIfIdleSince !== undefined &&
                   (!activeSession ||
                     activeSession.status === "connecting" ||

@@ -2027,6 +2027,65 @@ it.effect("keeps command routing on hasSession for a retained pi context without
   }),
 );
 
+for (const driver of ["pi", "antigravity"] as const) {
+  it.effect(`persists the cursor a retained ${driver} context learned before a stop retry`, () =>
+    Effect.gen(function* () {
+      const source = makeFakeCodexAdapter(driver);
+      const threadId = asThreadId(`retained-${driver}-stop-retry-cursor`);
+      const sourceId = asProviderInstanceId(`${driver}_source`);
+      const settingsLayer = ServerSettingsService.layerTest({
+        providerInstances: { [sourceId]: { driver, enabled: true } },
+      });
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const started = yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: sourceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        // The adapter learned a native cursor before its binding write landed.
+        const learnedCursor = { opaque: `learned-${driver}` };
+        source.updateSession(threadId, (session) => ({ ...session, resumeCursor: learnedCursor }));
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.deepEqual(before.resumeCursor, started.resumeCursor);
+        const stopError = new ProviderAdapterProcessError({
+          provider: driver,
+          threadId,
+          detail: "session teardown could not prove exit",
+        });
+        source.stopSession.mockImplementationOnce((id) =>
+          Effect.sync(() => source.retainStopped(id)).pipe(Effect.andThen(Effect.fail(stopError))),
+        );
+        assertFailure(yield* Effect.result(provider.stopRuntimeSession!({ threadId })), stopError);
+        assert.isFalse(yield* source.hasSession(threadId));
+        assert.lengthOf(yield* source.listSessions(), 1);
+        assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+        yield* provider.stopRuntimeSession!({ threadId });
+        assert.lengthOf(source.stopSession.mock.calls, 2);
+        assert.lengthOf(yield* source.listSessions(), 0);
+        const stopped = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(stopped.status, "stopped");
+        assert.deepEqual(stopped.resumeCursor, learnedCursor, "retry persisted a stale cursor");
+        yield* provider.sendTurn({ threadId, input: "resume" });
+        assert.lengthOf(source.startSession.mock.calls, 2);
+        assert.deepEqual(source.startSession.mock.calls[1]?.[0].resumeCursor, learnedCursor);
+        assert.lengthOf(source.sendTurn.mock.calls, 1);
+      }).pipe(
+        Effect.provide(
+          makeRegistrySwitchLayer(
+            driver,
+            source.adapter,
+            makeFakeCodexAdapter("droid").adapter,
+            settingsLayer,
+          ),
+        ),
+      );
+    }),
+  );
+}
+
 deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
   it.effect("stops sessions whose provider instance was deleted from settings", () =>
     Effect.gen(function* () {
