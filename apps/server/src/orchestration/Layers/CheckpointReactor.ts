@@ -1295,7 +1295,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       sessionThreadId === event.payload.threadId
         ? [event.payload.threadId]
         : [event.payload.threadId, sessionThreadId];
-    const [commandReadModel, pendingTurnStarts, providerSessions] = yield* Effect.all([
+    const [commandReadModel, pendingTurnStarts, [live, retained]] = yield* Effect.all([
       orchestrationEngine.getReadModel(),
       Effect.forEach(relevantThreadIds, (threadId) =>
         projectionTurnRepository.getPendingTurnStartByThreadId({ threadId }),
@@ -1307,10 +1307,14 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
         providerService.listSessions(),
         providerService.listRetainedSessions?.() ??
           Effect.succeed<ReadonlyArray<ProviderSession>>([]),
-      ]).pipe(
-        Effect.map(([liveSessions, retainedSessions]) => [...liveSessions, ...retainedSessions]),
-      ),
+      ]),
     ]);
+    const providerSessions = [...live, ...retained];
+    // A retained context keeps whatever status its adapter reports, Pi says
+    // closed, so its turn id alone marks a turn in flight.
+    const sessionHasInFlightTurn = (session: ProviderSession | undefined) =>
+      providerSessionHasInFlightTurn(session) ||
+      (session?.activeTurnId != null && retained.includes(session));
     const commandThread = commandReadModel.threads.find(
       (entry) => entry.id === event.payload.threadId,
     );
@@ -1331,7 +1335,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       threadHasInFlightTurn(currentThread) ||
       (sessionCommandThread !== undefined && threadHasInFlightTurn(sessionCommandThread)) ||
       hasPendingNonTerminalTurnStart ||
-      providerSessionHasInFlightTurn(providerSession)
+      sessionHasInFlightTurn(providerSession)
     ) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
@@ -1398,7 +1402,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       });
       if (
         !threadHasInFlightTurn(peer) &&
-        !providerSessionHasInFlightTurn(peerSession) &&
+        !sessionHasInFlightTurn(peerSession) &&
         !(Option.isSome(pendingStart) && peer.session?.status !== "error")
       )
         continue;
