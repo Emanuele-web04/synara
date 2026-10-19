@@ -3866,7 +3866,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
 
     const hasSession: PiAdapterShape["hasSession"] = (threadId) =>
-      Effect.sync(() => sessions.has(threadId));
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context !== undefined && !context.stopped;
+      });
 
     const snapshotThread = (context: PiSessionContext): ProviderThreadSnapshot => {
       const historyItems = mapMessageHistory(context.runtime.session);

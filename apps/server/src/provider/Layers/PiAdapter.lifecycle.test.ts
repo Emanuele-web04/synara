@@ -937,6 +937,29 @@ it("does not let an old prompt rejection settle a replacement session's turn", a
   });
 });
 
+it("retains a failed-stop context without reporting a live session", async () => {
+  responses("success");
+  await withAdapter(async (adapter) => {
+    const dispose = vi.spyOn(captured.sessions[0]!, "dispose").mockImplementationOnce(() => {
+      throw new Error("runtime disposal failed");
+    });
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(true);
+    expect(await Effect.runPromise(adapter.hasSession(ThreadId.makeUnsafe("missing")))).toBe(false);
+
+    const stopped = await Effect.runPromise(Effect.result(adapter.stopSession(threadId)));
+    expect(stopped._tag).toBe("Failure");
+    expect(await Effect.runPromise(adapter.listSessions())).toMatchObject([
+      { threadId, status: "closed" },
+    ]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+
+    await Effect.runPromise(adapter.stopSession(threadId));
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(await Effect.runPromise(adapter.listSessions())).toEqual([]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+  });
+});
+
 it("disposes during SDK backoff without a resumed request or late turn completion", async () => {
   const calls = responses("error", "until-abort");
   await withAdapter(async (adapter, events) => {

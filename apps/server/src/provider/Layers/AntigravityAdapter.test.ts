@@ -1725,6 +1725,56 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     throw new Error("process exit could not be proven");
   };
 
+  it("retains a failed-stop context without reporting a live session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-failed-stop-"));
+    const children: ChildProcess[] = [];
+    const teardownProcessTree = vi.fn(completeProcessTeardown).mockImplementationOnce(failTeardown);
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-failed-stop");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+          expect(yield* adapter.hasSession(ThreadId.makeUnsafe("missing"))).toBe(false);
+          yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+
+          const stopped = yield* Effect.result(adapter.stopSession(threadId));
+          expect(stopped._tag).toBe("Failure");
+          expect(yield* adapter.listSessions()).toMatchObject([{ threadId }]);
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+
+          yield* adapter.stopSession(threadId);
+          expect(teardownProcessTree).toHaveBeenCalledTimes(2);
+          expect(yield* adapter.listSessions()).toEqual([]);
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess: makeSpawnProcess(children),
+              teardownProcessTree,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "failed-stop-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      for (const child of children) child.emit("close", 0, null);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { error: "Historical failure", turns: 6, stopCleanup: false },
     {
