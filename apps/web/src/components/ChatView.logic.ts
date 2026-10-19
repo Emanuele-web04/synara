@@ -66,6 +66,7 @@ import {
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -903,6 +904,52 @@ export function threadHasProviderLockingActivity(
     thread.session !== null ||
     threadHasProviderLockingMessages(thread)
   );
+}
+
+type ProviderLockingThread = Pick<
+  Thread,
+  "messages" | "sidechatSourceThreadId" | "latestTurn" | "session" | "modelSelection"
+>;
+
+/**
+ * The model selection an access-mode change may save with it. A provider
+ * picked in the composer over a thread that already runs on another one is a
+ * pending Hand off, which only Send performs; saving it here would switch the
+ * thread's provider without one.
+ */
+export function accessModeModelSelectionToPersist(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): ModelSelection | undefined {
+  return input.selectedModelSelection.provider === input.thread.modelSelection.provider ||
+    !threadHasProviderLockingActivity(input.thread)
+    ? input.selectedModelSelection
+    : undefined;
+}
+
+/**
+ * A queued turn follows the thread when its provider changed after the turn
+ * was queued (a Hand off while the queue was paused). Sending the queued
+ * provider would quietly switch the thread back.
+ */
+export function retargetQueuedTurnToThreadProvider<T extends QueuedComposerTurn>(
+  queuedTurn: T,
+  thread: ProviderLockingThread,
+): T {
+  if (
+    queuedTurn.modelSelection.provider === thread.modelSelection.provider ||
+    !threadHasProviderLockingActivity(thread)
+  ) {
+    return queuedTurn;
+  }
+  const { providerOptionsForDispatch: _queuedProviderOptions, ...rest } = queuedTurn;
+  return {
+    ...rest,
+    modelSelection: thread.modelSelection,
+    selectedProvider: thread.modelSelection.provider,
+    selectedModel: thread.modelSelection.model,
+    selectedPromptEffort: resolvePromptEffortFromModelSelection(thread.modelSelection),
+  } as T;
 }
 
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {

@@ -26,6 +26,7 @@ import { type ChatMessage, type Thread } from "../../types";
 import {
   resolveQueuedComposerAutoDispatchHold,
   resolveQueuedSteerGateTransition,
+  retargetQueuedTurnToThreadProvider,
   type QueuedSteerGate,
 } from "../ChatView.logic";
 import { useChatComposerDraft } from "./useChatComposerDraft";
@@ -270,7 +271,10 @@ export function useChatQueuedTurns({
             }
           : null,
       );
-      setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
+      setComposerDraftModelSelection(
+        activeThread.id,
+        retargetQueuedTurnToThreadProvider(queuedTurn, activeThread).modelSelection,
+      );
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
       // Restore the frozen switch plus its revocation generation.
@@ -320,17 +324,16 @@ export function useChatQueuedTurns({
   );
 
   const dispatchQueuedComposerTurn = useCallback(
-    async (queuedTurn: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
-      if (
-        hasPendingCacheReview ||
-        getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview != null
-      ) {
+    async (queued: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
+      const thread = getThreadFromState(useStore.getState(), threadId);
+      if (hasPendingCacheReview || thread?.claudeCacheReview != null) {
         return false;
       }
       const lateSendHandlers = lateComposerSendHandlersRef.current;
       if (!lateSendHandlers) {
         return false;
       }
+      const queuedTurn = thread ? retargetQueuedTurnToThreadProvider(queued, thread) : queued;
       if (queuedTurn.kind === "chat") {
         return lateSendHandlers.send(undefined, dispatchMode, queuedTurn);
       }

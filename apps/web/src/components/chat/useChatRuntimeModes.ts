@@ -13,6 +13,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
+  accessModeModelSelectionToPersist,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
 } from "../ChatView.logic";
@@ -86,9 +87,16 @@ export function useChatRuntimeModes({
             });
             return false;
           }
+          const accessModeModelSelection =
+            nextMode === "auto"
+              ? accessModeModelSelectionToPersist({
+                  thread: serverThread,
+                  selectedModelSelection,
+                })
+              : undefined;
           const persistenceInput = {
             currentModelSelection: serverThread.modelSelection,
-            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            ...(accessModeModelSelection ? { nextModelSelection: accessModeModelSelection } : {}),
             currentRuntimeMode: currentMode,
             nextRuntimeMode: nextMode,
             persistModelSelection: (modelSelection: ModelSelection) =>

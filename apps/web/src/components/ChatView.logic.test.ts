@@ -16,6 +16,7 @@ import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
 
 import {
+  accessModeModelSelectionToPersist,
   appendVoiceTranscriptToPrompt,
   buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
@@ -46,6 +47,7 @@ import {
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
   resolveQueuedTurnDispatchSettings,
+  retargetQueuedTurnToThreadProvider,
   turnStartDispatchFields,
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
@@ -947,6 +949,84 @@ describe("voice helpers", () => {
         messages: importedOnly.messages,
       }),
     ).toBe(true);
+  });
+
+  const codexThreadWithTurn = {
+    sidechatSourceThreadId: null,
+    session: null,
+    messages: [],
+    modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+    latestTurn: {
+      turnId: "turn-1" as never,
+      state: "error" as const,
+      requestedAt: "2026-05-02T10:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+      assistantMessageId: null,
+    },
+  };
+  const claudeSelection = {
+    provider: "claudeAgent" as const,
+    model: "claude-sonnet-5",
+    options: { effort: "high" as const },
+  };
+
+  it("leaves a pending provider switch out of an access-mode save", () => {
+    // Switching providers on a thread that already ran belongs to Hand off at Send.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBeUndefined();
+    const codexSelection = { provider: "codex" as const, model: "gpt-5.5" };
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: codexThreadWithTurn,
+        selectedModelSelection: codexSelection,
+      }),
+    ).toBe(codexSelection);
+    // A thread that has not run yet still adopts the picked provider.
+    expect(
+      accessModeModelSelectionToPersist({
+        thread: { ...codexThreadWithTurn, latestTurn: null },
+        selectedModelSelection: claudeSelection,
+      }),
+    ).toBe(claudeSelection);
+  });
+
+  it("moves a queued turn onto the provider the thread switched to", () => {
+    const queued = {
+      id: "queued-1",
+      kind: "plan-follow-up" as const,
+      createdAt: "2026-05-02T10:00:00.000Z",
+      previewText: "implement",
+      text: "implement",
+      interactionMode: "default" as const,
+      selectedProvider: "codex" as const,
+      selectedModel: "gpt-5-codex",
+      selectedPromptEffort: "xhigh",
+      modelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+      providerOptionsForDispatch: { codex: { homePath: "/tmp/codex-home" } },
+      runtimeMode: "full-access" as const,
+    };
+    const claudeThread = { ...codexThreadWithTurn, modelSelection: claudeSelection };
+
+    const retargeted = retargetQueuedTurnToThreadProvider(queued, claudeThread);
+
+    expect(retargeted).toMatchObject({
+      id: "queued-1",
+      text: "implement",
+      modelSelection: claudeSelection,
+      selectedProvider: "claudeAgent",
+      selectedModel: "claude-sonnet-5",
+      selectedPromptEffort: "high",
+    });
+    expect(retargeted).not.toHaveProperty("providerOptionsForDispatch");
+    expect(retargetQueuedTurnToThreadProvider(queued, codexThreadWithTurn)).toBe(queued);
+    expect(retargetQueuedTurnToThreadProvider(queued, { ...claudeThread, latestTurn: null })).toBe(
+      queued,
+    );
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
