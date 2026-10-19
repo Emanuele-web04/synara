@@ -1744,6 +1744,8 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           });
           expect(yield* adapter.hasSession(threadId)).toBe(true);
           expect(yield* adapter.hasSession(ThreadId.makeUnsafe("missing"))).toBe(false);
+          expect(yield* adapter.hasRetainedSession!(threadId)).toBe(true);
+          expect(yield* adapter.hasRetainedSession!(ThreadId.makeUnsafe("missing"))).toBe(false);
           yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
           expect(yield* adapter.hasSession(threadId)).toBe(true);
 
@@ -1751,11 +1753,13 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           expect(stopped._tag).toBe("Failure");
           expect(yield* adapter.listSessions()).toMatchObject([{ threadId }]);
           expect(yield* adapter.hasSession(threadId)).toBe(false);
+          expect(yield* adapter.hasRetainedSession!(threadId)).toBe(true);
 
           yield* adapter.stopSession(threadId);
           expect(teardownProcessTree).toHaveBeenCalledTimes(2);
           expect(yield* adapter.listSessions()).toEqual([]);
           expect(yield* adapter.hasSession(threadId)).toBe(false);
+          expect(yield* adapter.hasRetainedSession!(threadId)).toBe(false);
         }).pipe(
           Effect.provide(
             makeAntigravityAdapterLive({

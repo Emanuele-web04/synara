@@ -302,6 +302,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
 
       assert.equal(instanceAdapter.provider, "codex");
       assert.notEqual(instanceAdapter, fakeCodexAdapter);
+      assert.isUndefined(instanceAdapter.hasRetainedSession);
       assert.ok((yield* registry.listInstances()).includes(asProviderInstanceId("codex_work")));
     }),
   );
@@ -505,6 +506,37 @@ layer("ProviderAdapterRegistryLive", (it) => {
       );
     }),
   );
+});
+
+it.effect("scopes retained cleanup probes to their provider instance", () => {
+  const ownThread = ThreadId.makeUnsafe("retained-work");
+  const otherThread = ThreadId.makeUnsafe("retained-other");
+  const missingThread = ThreadId.makeUnsafe("retained-missing");
+  const now = new Date().toISOString();
+  const sessions: ProviderSession[] = [ownThread, otherThread].map((threadId) => ({
+    provider: "codex",
+    providerInstanceId: asProviderInstanceId(threadId === ownThread ? "codex_work" : "codex"),
+    threadId,
+    runtimeMode: "full-access",
+    status: "closed",
+    createdAt: now,
+    updatedAt: now,
+  }));
+  const adapter: CodexAdapterShape = {
+    ...fakeCodexAdapter,
+    listSessions: () => Effect.succeed(sessions),
+    hasSession: () => Effect.succeed(false),
+    hasRetainedSession: (threadId) =>
+      Effect.succeed(sessions.some((session) => session.threadId === threadId)),
+  };
+  return Effect.gen(function* () {
+    const registry = yield* ProviderAdapterRegistry;
+    const scoped = yield* registry.getByInstance!(asProviderInstanceId("codex_work"));
+    assert.isTrue(yield* adapter.hasRetainedSession!(otherThread));
+    assert.isTrue(yield* scoped.hasRetainedSession!(ownThread));
+    assert.isFalse(yield* scoped.hasRetainedSession!(otherThread));
+    assert.isFalse(yield* scoped.hasRetainedSession!(missingThread));
+  }).pipe(Effect.provide(registryLayer(adapter)));
 });
 
 it("rejects missing required methods while constructing the registry", async () => {

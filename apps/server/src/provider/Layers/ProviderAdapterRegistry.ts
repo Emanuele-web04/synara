@@ -197,6 +197,7 @@ function adapterFacadeForInstance(
     stopSession,
     listSessions,
     hasSession,
+    ...(adapter.hasRetainedSession ? { hasRetainedSession: hasSession } : {}),
     stopAll,
     ...(forkThread ? { forkThread } : {}),
     streamEvents: adapter.streamEvents.pipe(

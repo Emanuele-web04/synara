@@ -945,6 +945,10 @@ it("retains a failed-stop context without reporting a live session", async () =>
     });
     expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(true);
     expect(await Effect.runPromise(adapter.hasSession(ThreadId.makeUnsafe("missing")))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
+    expect(
+      await Effect.runPromise(adapter.hasRetainedSession!(ThreadId.makeUnsafe("missing"))),
+    ).toBe(false);
 
     const stopped = await Effect.runPromise(Effect.result(adapter.stopSession(threadId)));
     expect(stopped._tag).toBe("Failure");
@@ -952,11 +956,13 @@ it("retains a failed-stop context without reporting a live session", async () =>
       { threadId, status: "closed" },
     ]);
     expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
 
     await Effect.runPromise(adapter.stopSession(threadId));
     expect(dispose).toHaveBeenCalledTimes(2);
     expect(await Effect.runPromise(adapter.listSessions())).toEqual([]);
     expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(false);
   });
 });
 

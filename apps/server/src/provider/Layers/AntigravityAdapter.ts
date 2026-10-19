@@ -3024,6 +3024,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           const context = sessions.get(threadId);
           return context !== undefined && !context.stopped;
         }),
+      hasRetainedSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
       readThread: (threadId) => requireSession(threadId).pipe(Effect.map(snapshot)),
       rollbackThread,
       stopAll,

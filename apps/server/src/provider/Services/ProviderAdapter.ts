@@ -293,6 +293,13 @@ export interface ProviderAdapterShape<TError> {
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
+   * Check whether a context still needs cleanup, including a stopped context
+   * retained after teardown failed. Cleanup callers fall back to hasSession
+   * when omitted. Routing must continue to use hasSession.
+   */
+  readonly hasRetainedSession?: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
    * Read a provider thread snapshot.
    */
   readonly readThread: (threadId: ThreadId) => Effect.Effect<ProviderThreadSnapshot, TError>;

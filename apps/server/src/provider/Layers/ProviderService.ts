@@ -3338,7 +3338,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }
 
               const previousAdapter = yield* getAdapterForBinding(persistedBinding);
-              if (!(yield* previousAdapter.hasSession(threadId))) {
+              if (
+                !(yield* (previousAdapter.hasRetainedSession ?? previousAdapter.hasSession)(
+                  threadId,
+                ))
+              ) {
                 return yield* startAndPersistReplacement;
               }
 
@@ -4909,7 +4913,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const adapter = yield* getAdapterForBinding(binding);
               const hasActiveSession = yield* adapter.hasSession(input.threadId);
               const preserveActive = hasActiveSession && input.preserveActiveRuntime === true;
-              if (hasActiveSession && !preserveActive) {
+              const hasRetainedSession = adapter.hasRetainedSession
+                ? yield* adapter.hasRetainedSession(input.threadId)
+                : hasActiveSession;
+              if (hasRetainedSession && !preserveActive) {
                 yield* adapter.stopSession(input.threadId);
               }
               if (!preserveActive) {

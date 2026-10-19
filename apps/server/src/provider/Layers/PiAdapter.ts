@@ -4200,6 +4200,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       stopSession,
       listSessions,
       hasSession,
+      hasRetainedSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
       readThread,
       rollbackThread,
       compactThread,
