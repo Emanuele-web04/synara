@@ -1839,6 +1839,70 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("moves a live Codex thread to Claude when the caller abandons its continuation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-provider-rebind-abandon");
+      const codex = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.ok(codex.resumeCursor);
+      routing.claude.startSession.mockClear();
+
+      // A stored provider rebind (Group settings, an ordinary model save) asks
+      // to leave the Codex history behind instead of resetting it first.
+      const outcome = yield* provider.startSessionWithOutcome!(
+        threadId,
+        { provider: "claudeAgent", threadId, runtimeMode: "full-access" },
+        { abandonOtherProviderContinuation: true },
+      );
+
+      assert.equal(outcome.session.provider, "claudeAgent");
+      assert.isTrue(outcome.priorTranscriptBootstrapPending);
+      assert.notProperty(routing.claude.startSession.mock.calls[0]?.[0] ?? {}, "resumeCursor");
+      assert.isFalse(yield* routing.codex.adapter.hasSession(threadId));
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.provider, "claudeAgent");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect(
+    "keeps a same-driver home change protected when continuation abandon is requested",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-claude-home-abandon-boundary");
+        yield* provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          providerOptions: { claudeAgent: { homePath: "/tmp/claude-abandon-home-a" } },
+          runtimeMode: "full-access",
+        });
+        yield* provider.stopRuntimeSession!({ threadId });
+        routing.claude.startSession.mockClear();
+
+        const result = yield* Effect.result(
+          provider.startSessionWithOutcome!(
+            threadId,
+            {
+              provider: "claudeAgent",
+              threadId,
+              providerOptions: { claudeAgent: { homePath: "/tmp/claude-abandon-home-b" } },
+              runtimeMode: "full-access",
+            },
+            { abandonOtherProviderContinuation: true },
+          ),
+        );
+
+        assert.equal(result._tag, "Failure");
+        assert.equal(routing.claude.startSession.mock.calls.length, 0);
+      }),
+  );
+
   it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

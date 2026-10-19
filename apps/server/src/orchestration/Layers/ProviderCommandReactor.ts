@@ -2421,6 +2421,10 @@ const make = Effect.gen(function* () {
       ...(resumeCursor !== undefined ? { resumeCursor } : {}),
     });
 
+    // The stored selection is the thread's durable provider choice (Hand off,
+    // a coordinator model change). Starting it may replace a session of another
+    // provider, whose native history ProviderService otherwise refuses to drop.
+    const startsStoredProvider = preferredProvider === thread.modelSelection.provider;
     const startProviderSessionWithOutcome = (
       resumeCursor?: unknown,
       registerPriorTranscriptBootstrapOnFreshStart = false,
@@ -2429,6 +2433,7 @@ const make = Effect.gen(function* () {
       return providerService.startSessionWithOutcome
         ? providerService.startSessionWithOutcome(threadId, startInput, {
             registerPriorTranscriptBootstrapOnFreshStart,
+            ...(startsStoredProvider ? { abandonOtherProviderContinuation: true } : {}),
           })
         : providerService.startSession(threadId, startInput).pipe(
             Effect.map((session) => ({

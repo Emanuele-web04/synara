@@ -18563,6 +18563,43 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("claudeAgent");
   });
 
+  it("asks to abandon the Codex continuation when a stored switch rebinds to Claude", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-codex-rebind-1",
+      text: "first turn on codex",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // A plain model save (not Hand off) moves the stored selection to Claude.
+    // ProviderService refuses to drop Codex history unless the start says so.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-codex-rebind-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+      }),
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-codex-rebind-2",
+      text: "now on claude",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const rebindStart = harness.startSessionWithOutcome.mock.calls.find(
+      ([, startInput]) => startInput.provider === "claudeAgent",
+    );
+    expect(rebindStart?.[2]).toMatchObject({ abandonOtherProviderContinuation: true });
+    expect(rebindStart?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on codex");
+  });
+
   it("clears a stale Claude resume cursor surfaced asynchronously and retries fresh once", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },

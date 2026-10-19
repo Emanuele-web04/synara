@@ -3111,6 +3111,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const continuationResetRequested =
                 persistedBinding !== undefined &&
                 readPersistedContinuationResetRequested(persistedBinding.runtimePayload);
+              // Only a switch to another driver may abandon the persisted
+              // continuation implicitly; a same-driver home or account change
+              // still has to be resolved by the user.
+              const abandonsOtherProviderContinuation =
+                outcomeOptions?.abandonOtherProviderContinuation === true &&
+                persistedBinding !== undefined &&
+                persistedBinding.provider !== resolved.instance.driver;
               const canReusePersistedResumeCursor =
                 persistedBinding !== undefined &&
                 hasResumeCursor(persistedBinding.resumeCursor) &&
@@ -3118,6 +3125,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (
                 persistedBinding !== undefined &&
                 !continuationResetRequested &&
+                !abandonsOtherProviderContinuation &&
                 ((!hasAvailableResumeCursor && !exactPersistedLaunchMatch) ||
                   (hasAvailableResumeCursor && !continuationCompatible)) &&
                 (providerUsesProtectedNativeContinuation(persistedBinding.provider) ||
@@ -3277,6 +3285,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const priorTranscriptBootstrapPending =
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
+                  abandonsOtherProviderContinuation ||
                   (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
                     !nativeResumeSucceeded);
 
