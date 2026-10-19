@@ -2472,18 +2472,24 @@ const make = Effect.gen(function* () {
     const workspaceChanged =
       activeSessionBeforeEnsure !== undefined &&
       providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
+    // Starting another provider stops this runtime. Only Hand off may end its
+    // background tasks that way, after the user agrees to stop them.
+    const replacesOtherProviderRuntime =
+      activeSessionBeforeEnsure !== undefined &&
+      activeSessionBeforeEnsure.provider !== preferredProvider;
     // Background tasks may share the old process. Never kill them merely to
     // apply a project relocation, including when metadata cleared the projection.
     if (
-      workspaceChanged &&
+      (workspaceChanged || replacesOtherProviderRuntime) &&
       providerService.hasLiveRuntimeTasks &&
       (yield* providerService.hasLiveRuntimeTasks({ threadId }))
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        issue:
-          "Finish or stop this thread's background tasks before resuming in the new project path.",
+        issue: replacesOtherProviderRuntime
+          ? "Finish or stop this thread's background tasks before switching providers."
+          : "Finish or stop this thread's background tasks before resuming in the new project path.",
       });
     }
     const reusableSession =

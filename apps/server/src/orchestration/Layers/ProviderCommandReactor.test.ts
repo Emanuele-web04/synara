@@ -18600,6 +18600,46 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on codex");
   });
 
+  it("refuses a stored provider switch that would end running background tasks", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-rebind-tasks-1",
+      text: "first turn on codex",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
+
+    // Only Hand off may stop background tasks, after the user agrees to.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-rebind-tasks-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+      }),
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-rebind-tasks-2",
+      text: "now on claude",
+      createdAt: now,
+    });
+
+    await waitFor(async () =>
+      ((await readHarnessThread(harness))?.activities ?? []).some(
+        (activity) =>
+          activity.kind === "provider.turn.start.failed" &&
+          JSON.stringify(activity.payload).includes("before switching providers"),
+      ),
+    );
+    expect(
+      harness.startSession.mock.calls.some(([, input]) => input.provider === "claudeAgent"),
+    ).toBe(false);
+    expect(harness.sendTurn.mock.calls.length).toBe(1);
+  });
+
   it("clears a stale Claude resume cursor surfaced asynchronously and retries fresh once", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
