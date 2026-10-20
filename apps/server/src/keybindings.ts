@@ -130,6 +130,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
+  // With no terminal focused and no workspace open, Cmd/Ctrl+W owns the regular
+  // chat surface instead of Electron's native window-close role: it closes the
+  // active open-thread tab like a browser tab.
+  { key: "mod+w", command: "threadTab.close", when: "!terminalFocus && !terminalWorkspaceOpen" },
   // Keep workspace tabs on literal Ctrl so Cmd+1…9 remains consistent app navigation
   // on macOS even when a thread was opened directly as a full-width terminal.
   { key: "ctrl+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },

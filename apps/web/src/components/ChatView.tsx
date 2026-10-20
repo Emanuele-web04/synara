@@ -58,6 +58,7 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { closeDockTerminalPane } from "~/hooks/useTerminalSurfaceController";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -4036,6 +4037,23 @@ export default function ChatView({
     return true;
   }, [cycleEffort]);
 
+  // The open-thread tab strip owns the real close flow (queue, guarded navigation,
+  // last-tab fallback); the Cmd/Ctrl+W chord reaches it through this ref. When the strip
+  // is not mounted (tabs hidden, split view, editor rail) or has no matching tab, the
+  // false return leaves the chord for the native window-close role.
+  const closeActiveThreadTabRef = useRef<(() => boolean) | null>(null);
+  const onCloseActiveThreadTab = useStableCallback(() => {
+    return closeActiveThreadTabRef.current?.() ?? false;
+  });
+  const onCloseDockTerminalPane = useStableCallback((paneId: string) => {
+    if (!activeThreadId) return;
+    void closeDockTerminalPane({
+      hostThreadId: activeThreadId,
+      paneId,
+      confirmationEnabled: settings.confirmTerminalTabClose,
+    });
+  });
+
   useChatKeyboardShortcuts({
     onToggleDevicePanel,
     onSplitSurface,
@@ -4077,6 +4095,8 @@ export default function ChatView({
     openNewFullWidthTerminal,
     closeActiveWorkspaceView,
     setTerminalWorkspaceTab,
+    onCloseActiveThreadTab,
+    onCloseDockTerminalPane,
     onToggleDiff,
     commitAndPushTriggerRef,
     showGitActions,
@@ -6604,6 +6624,7 @@ export default function ChatView({
                   <OpenThreadTabStrip
                     activeThreadId={activeThread.id}
                     keybindings={keybindings}
+                    closeActiveTabRef={closeActiveThreadTabRef}
                     onRenameActiveThread={() => setRenameDialogOpen(true)}
                   />
                 ),

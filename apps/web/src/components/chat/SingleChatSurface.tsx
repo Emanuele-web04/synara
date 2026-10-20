@@ -17,8 +17,7 @@ import {
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
-import { closeTerminalSurface } from "../../hooks/useTerminalSurfaceController";
-import { dockTerminalThreadId } from "../../lib/dockTerminalScope";
+import { closeDockTerminalPane } from "../../hooks/useTerminalSurfaceController";
 import { useAppSettings } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import type { DiffRouteSearch } from "../../diffRouteSearch";
@@ -1218,21 +1217,11 @@ export function SingleChatSurface(props: {
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => {
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind === "terminal") {
-              void closeTerminalSurface(
-                dockTerminalThreadId(props.threadId),
-                appSettings.confirmTerminalTabClose,
+              void closeDockTerminalPane({
+                hostThreadId: props.threadId,
                 paneId,
-              )
-                .then((closed) => {
-                  if (closed) closePane(props.threadId, paneId);
-                })
-                .catch((error: unknown) => {
-                  toastManager.add({
-                    type: "error",
-                    title: "Unable to close terminal",
-                    description: error instanceof Error ? error.message : "Please try again.",
-                  });
-                });
+                confirmationEnabled: appSettings.confirmTerminalTabClose,
+              });
               return;
             }
             if (dockState.panes.find((pane) => pane.id === paneId)?.kind !== "explorer") {

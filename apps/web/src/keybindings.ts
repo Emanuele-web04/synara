@@ -276,6 +276,13 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("pageup", { ctrlKey: true, modKey: false }),
     whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("isMac"))),
   },
+  // Terminal focus keeps mod+w for terminal.close and the workspace keeps it for
+  // closeActive; everywhere else it closes the active open-thread tab.
+  {
+    command: "threadTab.close",
+    shortcut: commandShortcut("w"),
+    whenAst: whenAnd(whenNotTerminalFocus, whenNot(whenIdentifier("terminalWorkspaceOpen"))),
+  },
   // Numbered space jumps target the switcher's visual tab order (mod+alt+1 = Void).
   // Same guard as the creation chords: Cmd+Alt never reaches the PTY on macOS, while
   // Ctrl+Alt+digit doubles as AltGr input on Linux/Windows and must yield to terminals.

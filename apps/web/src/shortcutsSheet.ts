@@ -295,6 +295,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Switch to the open thread tab on the right of the active one.",
   },
   {
+    command: "threadTab.close",
+    label: "Close tab",
+    description: "Close the active open-thread tab, like a browser tab.",
+  },
+  {
     command: "editor.openFavorite",
     label: "Open in favorite editor",
     description: "Send the current thread or workspace target to your preferred editor.",

@@ -8,7 +8,7 @@
 //             thread context menu.
 
 import type { ProjectId, ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
@@ -52,6 +52,7 @@ const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: st
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
   keybindings: ResolvedKeybindingsConfig;
+  closeActiveTabRef?: RefObject<(() => boolean) | null>;
   onRenameActiveThread: () => void;
 }) {
   const { activeThreadId, keybindings } = props;
@@ -140,6 +141,24 @@ export function OpenThreadTabStrip(props: {
       }
     });
   };
+
+  // Cmd/Ctrl+W lands here through useChatKeyboardShortcuts: close the tab the user is
+  // looking at (the optimistically-painted one), exactly like its close button. A false
+  // return tells the caller to leave the chord untouched (e.g. no matching tab).
+  const closeActiveTab = useStableCallback(() => {
+    const tab = tabs.find((candidate) => candidate.threadId === shownThreadId);
+    if (!tab) return false;
+    closeTab(tab.threadId, tab.projectId);
+    return true;
+  });
+  useEffect(() => {
+    const ref = props.closeActiveTabRef;
+    if (!ref) return;
+    ref.current = closeActiveTab;
+    return () => {
+      if (ref.current === closeActiveTab) ref.current = null;
+    };
+  }, [props.closeActiveTabRef, closeActiveTab]);
 
   const closeTabsInScope = (anchorThreadId: ThreadId, scope: OpenThreadTabCloseScope) => {
     cancelTabSelection();
