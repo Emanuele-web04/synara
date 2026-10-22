@@ -8,6 +8,9 @@ import {
 } from "@synara/shared/jsonrpc-stdio";
 
 export const CODEX_APP_SERVER_MAX_FRAME_BYTES = JSONRPC_STDIO_MAX_FRAME_BYTES;
+// Plugin catalogs have no pagination in the app-server protocol and can exceed
+// the conversation budget. Keep their larger responses on discovery processes.
+export const CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES = 32 * 1024 * 1024;
 export const CODEX_APP_SERVER_MAX_QUEUED_STDIN_BYTES = JSONRPC_STDIO_MAX_QUEUED_STDIN_BYTES;
 
 export type CodexAppServerTransportErrorReason = JsonRpcStdioTransportErrorReason;

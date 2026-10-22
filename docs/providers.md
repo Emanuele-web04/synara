@@ -213,6 +213,12 @@ after a restart. Catalog revalidation uses a temporary Claude process because ru
 retain the model metadata returned when they initialized. Ordinary picker reads share the
 server cache rather than starting a process each time.
 
+Codex plugin catalogs run in a dedicated discovery process scoped to the same working directory,
+account, home, configuration, and authentication generation as the request. Discovery stdout
+frames have a 32 MiB limit because `plugin/list` is not paginated and catalogs can exceed 16 MiB.
+A response beyond that bound fails discovery without stopping a conversation. Conversation stdout
+frames and all stdin frames retain the 16 MiB limit.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
