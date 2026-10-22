@@ -48,6 +48,11 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+Codex native resume is confirmed only when the runtime returns the requested thread ID.
+If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
+history as unavailable and carries the stored transcript through the existing bounded recovery
+summary. Starting the replacement process alone does not prove that native history was restored.
+
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
 errors still appear. Previously stored activity rows are preserved.

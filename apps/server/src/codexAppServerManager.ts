@@ -5971,7 +5971,7 @@ export const __codexCliVersionGateTesting = {
   cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
 };
 
-function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
+export function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
     return undefined;
   }
