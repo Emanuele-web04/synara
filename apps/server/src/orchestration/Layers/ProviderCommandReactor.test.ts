@@ -21522,6 +21522,62 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it("discloses omitted and shortened transcript messages in the recovery activity", async () => {
+    const provider = "opencode";
+    const harness = await createHarness({
+      threadModelSelection: { provider, model: "openai/gpt-5" },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("import-long-recovery-history"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: Array.from({ length: 160 }, (_, index) => ({
+          messageId: asMessageId(`recovery-history-${index}`),
+          role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+          text: `Historical decision ${index}: ${"detail ".repeat(60)}`,
+          createdAt: now,
+          updatedAt: now,
+        })),
+        createdAt: now,
+      }),
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "recovery-seed",
+      text: "Keep the most recent release decision.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.clearSessionResumeCursor({ threadId: ThreadId.makeUnsafe("thread-1") }),
+    );
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "recovery-follow-up",
+      text: "Continue the release.",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "recovery-bootstrap-completed",
+      provider,
+      type: "completed",
+    });
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.context.changed",
+        ) === true,
+    );
+    const recoveryActivity = (await readHarnessThread(harness))?.activities.findLast(
+      (activity) => activity.kind === "provider.context.changed",
+    );
+    expect(recoveryActivity?.summary).toMatch(
+      /^Summary: 67 messages omitted; 88 messages shortened\./,
+    );
+    expect(recoveryActivity?.summary).not.toContain("Historical decision");
+  });
+
   it.each(["opencode"] as const)(
     "retries a stale %s resume once with transcript context and one user turn",
     async (provider) => {

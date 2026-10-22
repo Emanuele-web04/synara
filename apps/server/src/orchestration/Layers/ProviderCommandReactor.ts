@@ -171,12 +171,14 @@ import {
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
+  buildPriorTranscriptBootstrap,
   buildPriorTranscriptBootstrapText,
   buildForkBootstrapText,
   buildHandoffBootstrapText,
   hasNativeAssistantMessagesBefore,
   listImportedForkMessages,
   listPriorTranscriptMessages,
+  type TranscriptBootstrap,
 } from "../handoff.ts";
 import {
   OrchestrationCommandInternalError,
@@ -458,6 +460,7 @@ type ProviderContextLifecycleReason =
 interface ProviderContextLifecycleEvidence {
   readonly nativeHistory: "available" | "unavailable";
   readonly recapText: string | null;
+  readonly recapCoverage?: Pick<TranscriptBootstrap, "omittedMessages" | "shortenedMessages">;
   readonly reason: ProviderContextLifecycleReason;
   readonly sessionRestarted: boolean;
 }
@@ -496,6 +499,21 @@ function recapTailPreview(recapText: string): string {
 }
 
 function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvidence): string {
+  const coverage = evidence.recapCoverage;
+  const omissions =
+    coverage && coverage.omittedMessages > 0
+      ? `${coverage.omittedMessages} ${coverage.omittedMessages === 1 ? "message" : "messages"} omitted`
+      : null;
+  const shortening =
+    coverage && coverage.shortenedMessages > 0
+      ? `${coverage.shortenedMessages} ${coverage.shortenedMessages === 1 ? "message" : "messages"} shortened`
+      : null;
+  const disclosure = [omissions, shortening].filter(Boolean).join("; ");
+  const summary = providerContextLifecycleBaseSummary(evidence);
+  return disclosure ? `Summary: ${disclosure}. ${summary}` : summary;
+}
+
+function providerContextLifecycleBaseSummary(evidence: ProviderContextLifecycleEvidence): string {
   if (evidence.reason === "fork-from-earlier-turn") {
     return evidence.recapText !== null
       ? "This fork starts from an earlier turn, so the model continues from the transcript up to that turn."
@@ -3594,14 +3612,15 @@ const make = Effect.gen(function* () {
           "The latest message is too long to include the transcript context required by the restarted provider session. Shorten the message and retry.",
       });
     }
-    const priorTranscriptBootstrapText =
+    const priorTranscriptBootstrap =
       shouldBootstrapPriorTranscriptContext && priorTranscriptBootstrapAvailableChars > 0
-        ? buildPriorTranscriptBootstrapText(
+        ? buildPriorTranscriptBootstrap(
             thread,
             transcriptBoundaryMessageId,
             priorTranscriptBootstrapAvailableChars,
           )
         : null;
+    const priorTranscriptBootstrapText = priorTranscriptBootstrap?.text ?? null;
     const restartReason: ProviderContextLifecycleReason = interruptEscalation
       ? "interrupt-escalation"
       : nativeResumeFailed
@@ -3629,6 +3648,7 @@ const make = Effect.gen(function* () {
               priorEscalationEvidence?.nativeHistory ??
               (nativeResumeSucceeded ? "available" : "unavailable"),
             recapText: priorTranscriptBootstrapText,
+            ...(priorTranscriptBootstrap ? { recapCoverage: priorTranscriptBootstrap } : {}),
             reason: restartReason,
             sessionRestarted:
               nativeSessionRestarted || priorEscalationEvidence?.sessionRestarted === true,
@@ -4068,17 +4088,19 @@ const make = Effect.gen(function* () {
           });
           yield* ensureSessionForStaleRetry;
 
-          const retryBootstrapText =
+          const retryBootstrap =
             priorTranscriptBootstrapAvailableChars > 0
-              ? buildPriorTranscriptBootstrapText(
+              ? buildPriorTranscriptBootstrap(
                   thread,
                   transcriptBoundaryMessageId,
                   priorTranscriptBootstrapAvailableChars,
                 )
               : null;
+          const retryBootstrapText = retryBootstrap?.text ?? null;
           providerContextLifecycleEvidence = {
             nativeHistory: "unavailable",
             recapText: retryBootstrapText,
+            ...(retryBootstrap ? { recapCoverage: retryBootstrap } : {}),
             reason: interruptEscalation ? "interrupt-escalation" : "native-resume-failed",
             sessionRestarted: !preserveActiveRuntime,
           };

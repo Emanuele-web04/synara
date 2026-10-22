@@ -60,6 +60,13 @@ Codex's internal `turn/moderationMetadata` notifications stay in local native ev
 when logging is enabled and do not create conversation activity rows. Actual provider
 errors still appear. Previously stored activity rows are preserved.
 
+Codex `guardianWarning` and `warning` notifications appear as runtime warning notices.
+Their messages are retained in local thread activities, up to the existing 2,000-character
+warning limit, so they remain available after raw runtime events age out. These warnings
+remain visible when the provider supplies no turn ID. Routine approved Guardian reviews stay
+quiet, and credential values in warning messages and details are redacted before storage.
+These warnings do not fail the session or create operational diagnostic incidents.
+
 Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
 contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
 32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
@@ -602,6 +609,11 @@ continue the task and work in the same environment with the context Synara passe
 
 Use handoffs deliberately. Review the working tree before and after changing providers so ownership
 remains clear.
+
+When a provider cannot resume its native conversation, Synara can continue from a bounded transcript
+summary. The existing recovery activity reports how many messages that summary omitted or shortened;
+expand it to inspect the summary size and preview. Omitted content remains in the Synara conversation.
+This fallback does not recreate provider-native tool results, reasoning, or cache state.
 
 ## When a provider is missing
 
