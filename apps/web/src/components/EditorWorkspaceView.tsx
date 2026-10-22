@@ -56,6 +56,7 @@ import type { FileCommentSelection } from "~/lib/fileComments";
 import { cn } from "~/lib/utils";
 import { useTheme } from "~/hooks/useTheme";
 import { useEditorRailStore, type EditorRailItem } from "~/editorRailStore";
+import { NATIVE_EDITOR_ON } from "~/betaFeatures";
 import { Skeleton } from "./ui/skeleton";
 import {
   ChatHeaderButton,
@@ -69,6 +70,7 @@ import { fileRowClassName } from "./chat/fileRowStyles";
 import { DiffStat } from "./chat/DiffStatLabel";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import {
+  ExplorerActivityBarButton,
   setFileReferenceDragData,
   WorkspaceFilesSidebar,
   WorkspaceSearchSidebar,
@@ -346,6 +348,46 @@ function DiffFilesSidebar(props: {
   );
 }
 
+function EditorActivityBar(props: {
+  centerMode: EditorCenterMode;
+  searchActive: boolean;
+  sidebarVisible: boolean;
+  onSelectItem: (item: EditorActivityBarItem) => void;
+}) {
+  const centerFamily = editorCenterModeFamily(props.centerMode);
+  const filesActive = props.sidebarVisible && !props.searchActive && centerFamily === "file";
+  const diffActive = props.sidebarVisible && !props.searchActive && centerFamily === "diff";
+  const searchActive = props.sidebarVisible && props.searchActive;
+  return (
+    <nav
+      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 app-content-surface"
+      aria-label="Editor activity bar"
+    >
+      <ExplorerActivityBarButton
+        label={filesActive ? "Hide files sidebar" : "Files"}
+        active={filesActive}
+        onClick={() => props.onSelectItem("file")}
+      >
+        <FoldersIcon className="size-5" />
+      </ExplorerActivityBarButton>
+      <ExplorerActivityBarButton
+        label={diffActive ? "Hide diff sidebar" : "Diff"}
+        active={diffActive}
+        onClick={() => props.onSelectItem("diff")}
+      >
+        <ChangesIcon className="size-5" />
+      </ExplorerActivityBarButton>
+      <ExplorerActivityBarButton
+        label={searchActive ? "Hide search sidebar" : "Search files"}
+        active={searchActive}
+        onClick={() => props.onSelectItem("search")}
+      >
+        <SearchIcon className="size-5" />
+      </ExplorerActivityBarButton>
+    </nav>
+  );
+}
+
 export interface EditorLeaveGuard {
   guardLeavingEdit: (run: () => void) => void;
 }
@@ -437,6 +479,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   const diffActive = sidebarVisible && !searchPaneActive && centerFamily === "diff";
   const searchActive = sidebarVisible && searchPaneActive;
   useEffect(() => {
+    if (!NATIVE_EDITOR_ON) return;
     const items: EditorRailItem[] = [
       {
         id: "file",
@@ -655,7 +698,24 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
       </div>
       {/* The body sits on the content block below the top bar; clip the opaque
           panes to the block's rounded corners so none paints a square over them. */}
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden [border-radius:var(--app-rail-block-radii,0)]">
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+          NATIVE_EDITOR_ON && "[border-radius:var(--app-rail-block-radii,0)]",
+        )}
+      >
+        {!NATIVE_EDITOR_ON && (
+          <EditorActivityBar
+            centerMode={props.centerMode}
+            searchActive={searchPaneActive}
+            sidebarVisible={sidebarVisible}
+            onSelectItem={(item) =>
+              editorActivityBarSelectionLeavesEditor(activityBarSelection(item))
+                ? guardLeavingEdit(() => handleActivityBarSelectItem(item))
+                : handleActivityBarSelectItem(item)
+            }
+          />
+        )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
           {!sidebarVisible ? null : searchPaneActive ? (
             <WorkspaceSearchSidebar
