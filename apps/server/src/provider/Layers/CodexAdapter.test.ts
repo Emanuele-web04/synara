@@ -732,7 +732,7 @@ it.effect(
         const manager = new FakeCodexManager();
         yield* Effect.gen(function* () {
           const adapter = yield* CodexAdapter;
-          const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+          const eventsFiber = yield* Stream.take(adapter.streamEvents, 4).pipe(
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -750,6 +750,18 @@ it.effect(
 
           emit("item/autoApprovalReview/started", "inProgress");
           emit("item/autoApprovalReview/completed", "approved");
+          manager.emit("event", {
+            id: asEventId("approved-guardian-warning"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "guardianWarning",
+            threadId: asThreadId("review-thread"),
+            payload: {
+              message:
+                "Automatic approval review approved (risk: low): API_KEY=private-approved-key",
+            },
+          } satisfies ProviderEvent);
           emit("item/autoApprovalReview/completed", "denied");
           emit("item/autoApprovalReview/completed", "aborted");
           manager.emit("event", {
@@ -762,18 +774,27 @@ it.effect(
             turnId: asTurnId("review-turn"),
             payload: { threadId: "review-thread", turnId: "review-turn", moderationMetadata: {} },
           } satisfies ProviderEvent);
+          manager.emit("event", {
+            id: asEventId("hook-warning-log"),
+            kind: "notification",
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            method: "warning",
+            threadId: asThreadId("review-thread"),
+            payload: { message: "Hook unavailable: API_KEY=private-native-warning-key" },
+          } satisfies ProviderEvent);
           emit("session/started", "ready");
 
           const events = Array.from(yield* Fiber.join(eventsFiber));
           assert.deepEqual(
             events.map((event) => event.type),
-            ["runtime.warning", "runtime.warning", "session.started"],
+            ["runtime.warning", "runtime.warning", "runtime.warning", "session.started"],
           );
           assert.deepEqual(
             events
               .filter((event) => event.type === "runtime.warning")
               .map((event) => event.payload.message),
-            ["Review denied", "Review aborted"],
+            ["Review denied", "Review aborted", "Hook unavailable: API_KEY=[REDACTED]"],
           );
         }).pipe(
           Effect.provide(
@@ -789,6 +810,10 @@ it.effect(
         assert.ok(nativeLog.includes('"method":"item/autoApprovalReview/started"'));
         assert.ok(nativeLog.includes('"status":"inProgress"'));
         assert.ok(nativeLog.includes('"method":"turn/moderationMetadata"'));
+        assert.ok(nativeLog.includes('"method":"guardianWarning"'));
+        assert.ok(nativeLog.includes('"method":"warning"'));
+        assert.equal(nativeLog.includes("private-native-warning-key"), false);
+        assert.equal(nativeLog.includes("private-approved-key"), false);
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -955,8 +980,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         Effect.forkChild,
       );
       const warnings = [
-        ["guardianWarning", "Automatic approval review is unavailable. ".repeat(15).trim()],
-        ["warning", "A provider operation needs attention."],
+        [
+          "guardianWarning",
+          "Automatic approval review is unavailable. ".repeat(15).trim(),
+          "Automatic approval review is unavailable. ".repeat(15).trim(),
+        ],
+        [
+          "warning",
+          "Hook needs attention: API_KEY=private-hook-warning-key",
+          "Hook needs attention: API_KEY=[REDACTED]",
+        ],
       ] as const;
 
       for (const [method, message] of warnings) {
@@ -979,14 +1012,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       for (const [index, event] of events.entries()) {
         assert.equal(event.type, "runtime.warning");
         if (event.type !== "runtime.warning") continue;
-        const message = warnings[index]![1];
+        const message = warnings[index]![2];
         assert.equal(event.payload.message, message);
+        assert.equal(JSON.stringify(event).includes("private-hook-warning-key"), false);
         const [activity] = projectProviderRuntimeActivities(event);
         assert.equal(activity?.kind, "runtime.warning");
         assert.equal(activity?.tone, "info");
         assert.deepEqual(activity?.payload, {
           message,
           detail: message,
+          nativeEventType: `codex.${warnings[index]![0]}`,
           data: { threadId: "native-thread-1", message: `  ${message}\n` },
         });
       }

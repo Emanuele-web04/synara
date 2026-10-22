@@ -2636,6 +2636,47 @@ describe("deriveMessagesTimelineRows", () => {
     },
   });
 
+  it.each(["before", "after"] as const)(
+    "keeps a thread warning visible %s a settled reply",
+    (position) => {
+      const warning: TimelineEntry = {
+        id: "thread-warning",
+        kind: "work",
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "thread-warning",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "Runtime warning",
+          detail: "Approval review is unavailable.",
+          tone: "info",
+          activityKind: "runtime.warning",
+          nativeEventType: "codex.guardianWarning",
+        },
+      };
+      const assistant = assistantEntry("a1", "2026-01-01T00:00:03Z", {
+        turnId: "t1",
+        text: "Finished.",
+        completedAt: "2026-01-01T00:00:04Z",
+      });
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        conversationOnly: true,
+        collapseFinishedTurns: true,
+        timelineEntries: [
+          userEntry("u1", "2026-01-01T00:00:00Z"),
+          ...(position === "before" ? [warning, assistant] : [assistant, warning]),
+        ],
+      });
+      expect(
+        rows.some(
+          (row) =>
+            row.kind === "work" &&
+            row.groupedEntries.some((entry) => entry.id === "thread-warning"),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("keeps a worker-monitor row standalone before an assistant message", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
