@@ -1,3 +1,6 @@
+import { NotionRpcs } from "@synara/contracts";
+import { NotionIntegration } from "./notion/Services/NotionIntegration";
+import { makeNotionHandlers, ownerScopedNotionTodos } from "./notion/wsHandlers";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -273,6 +276,7 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
+  .merge(NotionRpcs)
   .middleware(WsRequestAdmissionMiddleware);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
@@ -498,7 +502,9 @@ const makeWsRpcHandlersLayer = () =>
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
-      const todoService = yield* TodoService;
+      const todoService = ownerScopedNotionTodos(yield* TodoService);
+      const optionalNotion = yield* Effect.serviceOption(NotionIntegration);
+      const notionIntegration = Option.getOrNull(optionalNotion);
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
@@ -3151,6 +3157,7 @@ const makeWsRpcHandlersLayer = () =>
             : Stream.fail(tasksUnavailableError()),
 
         ...makeWsDeviceHandlers(deviceService),
+        ...makeNotionHandlers(notionIntegration),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

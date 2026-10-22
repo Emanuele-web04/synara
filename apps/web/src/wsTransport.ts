@@ -1,3 +1,4 @@
+import { NotionRpcs } from "@synara/contracts";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
 // Layer: Web transport
@@ -292,7 +293,10 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+    .merge(WsComputerRpcGroup)
+    .merge(WsProjectAgentRpcGroup)
+    .merge(NotionRpcs),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;

@@ -1,0 +1,224 @@
+{
+  "description": "Verified fixture-only Synara Notion UI screenshots. Not live Notion OAuth or packaged E2E proof.",
+  "sources": [
+    {
+      "artifactId": 12006471137,
+      "revision": "7fb4a362e1224898f0d35493949690320a306696",
+      "run": 38804921325,
+      "group": "previous",
+      "screenshotCount": 19
+    },
+    {
+      "artifactId": 12036206286,
+      "revision": "d5ea733867b6356a09d738cdacbbfbbf19fd4117",
+      "run": 38877198693,
+      "group": "current",
+      "screenshotCount": 10
+    }
+  ],
+  "assets": [
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-board.png",
+      "sha": "c839abdf43f984954c6f1e6dd57e236ade4fead3",
+      "bytes": 75167,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-board.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-calendar.png",
+      "sha": "dbbcc798493d7a096e738d3d28efe31cf68cd50f",
+      "bytes": 88740,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-calendar.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-date-property-editor.png",
+      "sha": "c8f9d33aad88cd8363b6a645c1aaa67846d05db2",
+      "bytes": 113819,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-date-property-editor.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-mapping.png",
+      "sha": "af3962e293b0c49f9f983d5af90ef33913dcf727",
+      "bytes": 95098,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-mapping.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-rich-text-editor.png",
+      "sha": "1ca2822d13e15f7fa25daa44495de979427f54e2",
+      "bytes": 62602,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-rich-text-editor.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-settings.png",
+      "sha": "dbaad920d008ae4946eccdb319fe8aa74cf0475e",
+      "bytes": 66258,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-settings.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-sprints.png",
+      "sha": "d47cdcf728828e7a7d4bfe7b0bbd630fde2af679",
+      "bytes": 115595,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-sprints.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-table.png",
+      "sha": "0e562d65f2ca9d01c93373b2f66e438ea0b7b8d8",
+      "bytes": 88112,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-table.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-timeline.png",
+      "sha": "f0659e7626834bc29eed2e6eff94bb8d206c59f0",
+      "bytes": 68283,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-timeline.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/after-wiki.png",
+      "sha": "0e039a1f3d8ea2799ccf104e843129da8fd452fb",
+      "bytes": 66712,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/after-wiki.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-board.png",
+      "sha": "4ecac96312dbf616d34539dc5818555c5965ce0f",
+      "bytes": 70928,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-board.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-calendar.png",
+      "sha": "ddd501e52d3d364a689017bf8eb3bd73793c8f22",
+      "bytes": 67549,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-calendar.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-mapping.png",
+      "sha": "af3962e293b0c49f9f983d5af90ef33913dcf727",
+      "bytes": 95098,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-mapping.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-rich-text-editor.png",
+      "sha": "57d92a4c27220c1f6765700c7daec4d5290dd553",
+      "bytes": 62794,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-rich-text-editor.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-settings.png",
+      "sha": "8778c2c9be1327a191384966b9464a09a2a6f176",
+      "bytes": 66397,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-settings.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-sprints.png",
+      "sha": "75b9e49d9a5ac96348356d49770d12a7b506609b",
+      "bytes": 84769,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-sprints.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-table.png",
+      "sha": "0ac0237a06bfba1b183fd5c91a58710f2b1e8d1f",
+      "bytes": 83138,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-table.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-timeline.png",
+      "sha": "b16e8452f1d167111a8ce618172347e072be73e8",
+      "bytes": 64224,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-timeline.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/previous/before-wiki.png",
+      "sha": "063b8d8497db79d679b0de0cf8e23c4545a36c26",
+      "bytes": 62632,
+      "sourceArtifactId": 12006471137,
+      "original": "screenshots/before-wiki.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-filtered-open-task.png",
+      "sha": "9fe099cd3d94175bc68315a6a079259e1e420e9b",
+      "bytes": 65580,
+      "sourceArtifactId": 12036206286,
+      "original": "after-filtered-open-task.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-connected-workspace.png",
+      "sha": "681063f39b36f9ead0bc67c63747661aa335236f",
+      "bytes": 48728,
+      "sourceArtifactId": 12036206286,
+      "original": "after-connected-workspace.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-task-filters.png",
+      "sha": "66ab023b85f01135faa1d84cf1401e51ad1f9d42",
+      "bytes": 38954,
+      "sourceArtifactId": 12036206286,
+      "original": "after-task-filters.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-mapped-database.png",
+      "sha": "061a70511f7728c2ee4f2d4dce18fa14ebb7fec6",
+      "bytes": 66083,
+      "sourceArtifactId": 12036206286,
+      "original": "after-mapped-database.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-tasks-dark.png",
+      "sha": "8ad214c8a5370d68f3aca33cd3452820743e807c",
+      "bytes": 31597,
+      "sourceArtifactId": 12036206286,
+      "original": "after-tasks-dark.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-tasks-light.png",
+      "sha": "c0ede9bc099b66ecf002a4ac85859a547b188133",
+      "bytes": 31225,
+      "sourceArtifactId": 12036206286,
+      "original": "after-tasks-light.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/after-tasks-narrow.png",
+      "sha": "b851d00e7c48dd7b64d587b3e9544f1fc980c071",
+      "bytes": 27793,
+      "sourceArtifactId": 12036206286,
+      "original": "after-tasks-narrow.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/before-tasks-dark.png",
+      "sha": "f2d72dc00793647f6e19e4a57158935e2f079949",
+      "bytes": 25928,
+      "sourceArtifactId": 12036206286,
+      "original": "before-tasks-dark.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/before-tasks-light.png",
+      "sha": "d59333267e04a3962ebe59b406dd5a85d1ab503c",
+      "bytes": 25597,
+      "sourceArtifactId": 12036206286,
+      "original": "before-tasks-light.png"
+    },
+    {
+      "path": "docs/assets/notion-pr-1937/current/before-tasks-narrow.png",
+      "sha": "6af2844b9ac5fa275c872d9608bddc4afb063fdd",
+      "bytes": 22359,
+      "sourceArtifactId": 12036206286,
+      "original": "before-tasks-narrow.png"
+    }
+  ]
+}

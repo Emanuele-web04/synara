@@ -24,6 +24,8 @@ export * from "./agentMentions";
 export * from "./agentGateway";
 export * from "./externalMcp";
 export * from "./mcpConnectors";
+export * from "./notion";
+export * from "./notionRpc";
 export * from "./ws";
 export * from "./wsCompatibility";
 export * from "./keybindings";
