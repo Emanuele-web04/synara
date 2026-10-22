@@ -32,6 +32,7 @@ import { CodexJsonlFramer, CodexJsonlWriter } from "../../codexAppServerTranspor
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
 import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
+import { projectProviderRuntimeActivities } from "../../orchestration/providerRuntimeActivityProjection.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -943,6 +944,52 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.summary, "Invalid MCP configuration");
       assert.equal(firstEvent.value.payload.details, "url is not supported for stdio");
       assert.equal(firstEvent.value.payload.path, "mcp_servers.synara");
+    }),
+  );
+
+  it.effect("retains Codex guardian and runtime warning messages as warning activities", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const warnings = [
+        ["guardianWarning", "Automatic approval review is unavailable. ".repeat(15).trim()],
+        ["warning", "A provider operation needs attention."],
+      ] as const;
+
+      for (const [method, message] of warnings) {
+        lifecycleManager.emit("event", {
+          id: asEventId(`evt-${method}`),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("thread-1"),
+          payload: { threadId: "native-thread-1", message: `  ${message}\n` },
+        } satisfies ProviderEvent);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["runtime.warning", "runtime.warning"],
+      );
+      for (const [index, event] of events.entries()) {
+        assert.equal(event.type, "runtime.warning");
+        if (event.type !== "runtime.warning") continue;
+        const message = warnings[index]![1];
+        assert.equal(event.payload.message, message);
+        const [activity] = projectProviderRuntimeActivities(event);
+        assert.equal(activity?.kind, "runtime.warning");
+        assert.equal(activity?.tone, "info");
+        assert.deepEqual(activity?.payload, {
+          message,
+          detail: message,
+          data: { threadId: "native-thread-1", message: `  ${message}\n` },
+        });
+      }
     }),
   );
 

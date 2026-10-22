@@ -1837,6 +1837,19 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (event.method === "guardianWarning" || event.method === "warning") {
+    return [
+      {
+        type: "runtime.warning",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          message: asTrimmedString(payload?.message) ?? "Codex runtime warning",
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "configWarning") {
     const details = asTrimmedString(payload?.details);
     const path = asTrimmedString(payload?.path);
