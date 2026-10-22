@@ -589,6 +589,11 @@ continue the task and work in the same environment with the context Synara passe
 Use handoffs deliberately. Review the working tree before and after changing providers so ownership
 remains clear.
 
+When a provider cannot resume its native conversation, Synara can continue from a bounded transcript
+summary. The existing recovery activity reports how many messages that summary omitted or shortened;
+expand it to inspect the summary size and preview. Omitted content remains in the Synara conversation.
+This fallback does not recreate provider-native tool results, reasoning, or cache state.
+
 ## When a provider is missing
 
 Check these in order:
