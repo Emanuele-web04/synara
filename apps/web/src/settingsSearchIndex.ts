@@ -516,7 +516,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "worktrees:managed-worktrees",
     section: "worktrees",
     title: "Managed worktrees",
-    keywords: "Review and clean up the worktrees created by Synara. git branch remove",
+    keywords:
+      "Review and clean up the worktrees created by Synara. git branch remove automatic cleanup merged pull request archived",
     target: null,
   },
 

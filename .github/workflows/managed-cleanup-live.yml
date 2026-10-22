@@ -1,0 +1,25 @@
+name: Native managed worktree cleanup
+on:
+  pull_request:
+    paths:
+      - "apps/server/src/managedWorktrees*"
+      - ".github/workflows/managed-cleanup-live.yml"
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: read
+jobs:
+  native-cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+      - name: Verify real Git and live GitHub cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNARA_LIVE_GITHUB: "1"
+        run: bun run --cwd apps/server test src/managedWorktrees.live.test.ts

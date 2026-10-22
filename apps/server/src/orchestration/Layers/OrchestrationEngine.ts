@@ -1,3 +1,4 @@
+import { withWorktreeLifecycle } from "../../worktreeLifecycle";
 import type {
   ChatAttachment,
   OrchestrationEvent,
@@ -217,7 +218,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }
           });
           return yield* restore(Deferred.await(ticket.ready)).pipe(
-            Effect.andThen(restore(effect)),
+            Effect.andThen(restore(withWorktreeLifecycle(serverConfig.homeDir, effect))),
             Effect.ensuring(
               Effect.sync(() => {
                 if (activeMaintenanceTicket !== ticket) {

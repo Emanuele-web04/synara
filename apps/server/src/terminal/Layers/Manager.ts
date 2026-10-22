@@ -1,3 +1,4 @@
+import { withWorktreeLifecycle } from "../../worktreeLifecycle";
 // FILE: Manager.ts
 // Purpose: Implements server-side terminal sessions, cleanup orchestration, history persistence, and PTY output flow control.
 // Layer: Terminal infrastructure
@@ -1277,6 +1278,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     ) {
       throw new Error("The terminal is busy. Stop its command before running this action.");
     }
+  }
+
+  hasLiveSessionsForThread(threadId: string): boolean {
+    return this.sessionsForThread(threadId).some(
+      (session) =>
+        session.process !== null || session.status === "starting" || session.status === "running",
+    );
   }
 
   async closeSessionsOpenedAtOrBefore(input: TerminalCloseOpenedAtOrBeforeInput): Promise<void> {
@@ -2565,10 +2573,13 @@ export const TerminalManagerLive = Layer.effect(
 
     return {
       open: (input) =>
-        Effect.tryPromise({
-          try: () => runtime.open(input),
-          catch: (cause) => terminalErrorFromCause("Failed to open terminal", cause),
-        }),
+        withWorktreeLifecycle(
+          homeDir,
+          Effect.tryPromise({
+            try: () => runtime.open(input),
+            catch: (cause) => terminalErrorFromCause("Failed to open terminal", cause),
+          }),
+        ),
       write: (input) =>
         Effect.tryPromise({
           try: () => runtime.write(input),
@@ -2590,15 +2601,20 @@ export const TerminalManagerLive = Layer.effect(
           catch: (cause) => terminalErrorFromCause("Failed to clear terminal", cause),
         }),
       restart: (input) =>
-        Effect.tryPromise({
-          try: () => runtime.restart(input),
-          catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
-        }),
+        withWorktreeLifecycle(
+          homeDir,
+          Effect.tryPromise({
+            try: () => runtime.restart(input),
+            catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
+          }),
+        ),
       close: (input) =>
         Effect.tryPromise({
           try: () => runtime.close(input),
           catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
         }),
+      hasLiveSessionsForThread: (threadId) =>
+        Effect.sync(() => runtime.hasLiveSessionsForThread(threadId)),
       closeSessionsOpenedAtOrBefore: (input) =>
         Effect.tryPromise({
           try: () => runtime.closeSessionsOpenedAtOrBefore(input),

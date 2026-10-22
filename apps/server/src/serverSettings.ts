@@ -1,3 +1,4 @@
+import { withWorktreeLifecycle } from "./worktreeLifecycle";
 /**
  * ServerSettings - Server-authoritative settings persistence.
  *
@@ -645,7 +646,7 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
 }
 
 const makeServerSettings = Effect.gen(function* () {
-  const { settingsPath } = yield* ServerConfig;
+  const { settingsPath, homeDir } = yield* ServerConfig;
   const providerCredentials = yield* ProviderCredentials;
   const secretStore = yield* ServerSecretStore;
   const fs = yield* FileSystem.FileSystem;
@@ -1245,8 +1246,10 @@ const makeServerSettings = Effect.gen(function* () {
         settings,
       })),
     ),
-    updateSettings,
-    updateSettingsView: (patch) => updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+    updateSettings: (patch, derivePatch) =>
+      withWorktreeLifecycle(homeDir, updateSettings(patch, derivePatch)),
+    updateSettingsView: (patch) =>
+      withWorktreeLifecycle(homeDir, updateSettings(patch)).pipe(Effect.map(toServerSettingsView)),
     subscribeChanges: PubSub.subscribe(changesPubSub).pipe(
       Effect.map((subscription) =>
         Stream.fromSubscription(subscription).pipe(Stream.map(projectSettings)),
