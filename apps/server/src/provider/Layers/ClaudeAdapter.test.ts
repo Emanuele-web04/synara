@@ -15636,6 +15636,94 @@ describe("Claude subagent tracking", () => {
     );
   });
 
+  for (const terminalSource of ["task_updated", "task_notification"] as const) {
+    it.effect(
+      `ignores settled background task telemetry until a real restart (${terminalSource})`,
+      () => {
+        const harness = makeHarness();
+        const BG = "toolu_settled_background";
+        const taskId = "task-settled-background";
+        const task = { task_id: taskId, task_type: "local_bash", description: "Background check" };
+        const other = {
+          task_id: "task-still-live",
+          task_type: "local_bash",
+          description: "Other work",
+        };
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* startTrackingSession(adapter);
+
+          for (const message of [
+            rootToolUse(0, BG, "Bash", { command: "check", description: task.description }),
+            system("task_started", { ...task, tool_use_id: BG, is_backgrounded: true }),
+            system("background_tasks_changed", { tasks: [task] }),
+            userMessage(null, [trackingToolResult(BG, "Moved to background.")]),
+            terminalSource === "task_updated"
+              ? system("task_updated", { task_id: taskId, patch: { status: "completed" } })
+              : system("task_notification", {
+                  task_id: taskId,
+                  status: "completed",
+                  summary: "Done.",
+                }),
+            // Queued telemetry can arrive after the terminal event. It must not
+            // keep the runtime alive or put a finished task back into Working.
+            system("task_progress", { task_id: taskId, description: "Stale progress" }),
+            system("task_updated", {
+              task_id: taskId,
+              patch: { status: "running", is_backgrounded: true },
+            }),
+            system("background_tasks_changed", { tasks: [] }),
+            system("background_tasks_changed", { tasks: [task, other] }),
+            // The same native id can be resumed. Only a new start reopens it.
+            system("task_started", { ...task, tool_use_id: BG, is_backgrounded: true }),
+            system("task_progress", { task_id: taskId, description: "Resumed progress" }),
+            system("task_updated", {
+              task_id: taskId,
+              patch: { status: "running", is_backgrounded: true },
+            }),
+            system("background_tasks_changed", { tasks: [task] }),
+            system("task_notification", {
+              task_id: taskId,
+              status: "completed",
+              summary: "Resumed done.",
+            }),
+            success(),
+          ]) {
+            harness.query.emit(message);
+          }
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          assert.deepEqual(
+            events
+              .filter((event) => event.type === "task.progress")
+              .map((event) => payloadRecord(event).description),
+            ["Resumed progress"],
+          );
+          const reopened = events.filter(
+            (event) => event.type === "task.updated" && payloadRecord(event).status === "running",
+          );
+          assert.equal(reopened.length, 1);
+          const notices = events.filter(
+            (event) => event.type === "runtime.warning" && detailTaskIds(event).includes(taskId),
+          );
+          assert.equal(notices.length, 2);
+          const starts = events.filter(
+            (event) => event.type === "task.started" && taskIdOf(event) === taskId,
+          );
+          assert.equal(starts.length, 2);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
   it.effect("tells the user when a queued steer never reached the subagent", () => {
     const harness = makeHarness();
     const STEERED = "toolu_steered_agent";

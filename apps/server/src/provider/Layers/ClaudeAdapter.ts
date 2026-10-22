@@ -5489,9 +5489,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const isTerminalStatus =
             status === "completed" || status === "failed" || status === "killed";
-          // A late non-terminal patch from a task settled at turn end would
-          // mark it live again; the task ended with its turn.
-          if (!isTerminalStatus && context.turnEndSettledTaskIds.has(message.task_id)) {
+          // Terminal evidence wins over queued progress/status patches. Only
+          // task_started can reopen the same native id for a resumed run.
+          if (!isTerminalStatus && context.terminalTaskIds.has(message.task_id)) {
             return;
           }
           if (isTerminalStatus) {
@@ -5967,9 +5967,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           case "task_progress": {
-            // Zombie tail of a foreground task settled at turn end: projecting
-            // it would mark the task live again.
-            if (context.turnEndSettledTaskIds.has(message.task_id)) {
+            // A late progress message cannot resurrect a terminal task, whether
+            // it settled with its turn or through its own lifecycle notification.
+            if (context.terminalTaskIds.has(message.task_id)) {
               return;
             }
             yield* emitTaskUsageSnapshot(context, message);
@@ -6119,7 +6119,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             // REPLACE semantics: the payload is the full live background set.
             // Announce only newly backgrounded work with a one-line notice;
             // removals settle through their own task lifecycle events.
-            const tasks = Array.isArray(message.tasks) ? message.tasks : [];
+            const tasks = Array.isArray(message.tasks)
+              ? message.tasks.filter((task) => !context.terminalTaskIds.has(task.task_id))
+              : [];
             const added = tasks.filter((task) => !context.knownBackgroundTaskIds.has(task.task_id));
             context.knownBackgroundTaskIds.clear();
             for (const task of tasks) {
@@ -6145,11 +6147,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ownedAdded.length === 1
                   ? labels[0]!
                   : `${ownedAdded.length} tasks: ${labels.join(", ")}`.slice(0, 200);
-              yield* emitRuntimeWarning(
-                owner,
-                notice,
-                ownedTasks.length === tasks.length ? message : { ...message, tasks: ownedTasks },
-              );
+              yield* emitRuntimeWarning(owner, notice, { ...message, tasks: ownedTasks });
             }
             return;
           }

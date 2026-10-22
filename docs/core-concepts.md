@@ -197,6 +197,9 @@ outcome for that turn. Agent, automatic, steering, and historical interruptions 
 say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
 keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
 response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+For Claude tasks, a terminal task report wins over late progress and background snapshots. The task
+becomes live again only when Claude explicitly starts or resumes it; a new user message does not
+require stopping genuinely independent background work.
 
 **Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
 running, even if the provider had already finished and its final events are still arriving.
