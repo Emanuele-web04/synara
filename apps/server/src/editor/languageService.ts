@@ -11,8 +11,7 @@ type Session = {
   worker: Worker;
   pending: Map<number, Pending>;
   touched: number;
-  /** When the worker last answered anything; a cold project parse counts from creation. */
-  answered: number;
+  stallTimer?: ReturnType<typeof setTimeout> | undefined;
 };
 // A request that outlives its deadline is rejected on its own; the worker keeps
 // its parsed project. Only a worker that has answered nothing for this long
@@ -36,12 +35,23 @@ export class EditorLanguageService {
     const session = this.sessions.get(key);
     if (!session) return;
     this.sessions.delete(key);
+    clearTimeout(session.stallTimer);
     for (const pending of session.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
     session.pending.clear();
     void session.worker.terminate();
+  }
+
+  private watchWorker(key: string, session: Session) {
+    clearTimeout(session.stallTimer);
+    session.stallTimer = undefined;
+    if (!session.pending.size) return;
+    session.stallTimer = setTimeout(() => {
+      if (this.sessions.get(key) === session)
+        this.close(key, new Error("Language service stopped responding."));
+    }, WORKER_STALL_MS).unref();
   }
 
   async request(
@@ -72,17 +82,17 @@ export class EditorLanguageService {
           resourceLimits: { maxOldGenerationSizeMb: 512 },
         },
       );
-      session = { worker, pending: new Map(), touched: Date.now(), answered: Date.now() };
+      session = { worker, pending: new Map(), touched: Date.now() };
       this.sessions.set(key, session);
       const owned = session;
       worker.on(
         "message",
         (message: { id: number; result?: EditorIntelligenceResult; error?: string }) => {
-          owned.answered = Date.now();
           const pending = owned.pending.get(message.id);
           if (!pending) return;
           owned.pending.delete(message.id);
           clearTimeout(pending.timer);
+          this.watchWorker(key, owned);
           if (message.error || !message.result)
             pending.reject(new Error(message.error ?? "Invalid language service response."));
           else pending.resolve(message.result);
@@ -103,7 +113,7 @@ export class EditorLanguageService {
     return new Promise((resolve, reject) => {
       const abort = () => {
         const pending = owned.pending.get(id);
-        // Keep the job counted until the worker replies (or its deadline kills it).
+        // Keep the job counted until the worker replies or is closed.
         // Otherwise cancelled requests could flood the worker's message queue without limit.
         if (pending) pending.reject(new Error("Language request was cancelled."));
       };
@@ -111,10 +121,7 @@ export class EditorLanguageService {
       const timer = setTimeout(() => {
         const pending = owned.pending.get(id);
         if (!pending) return;
-        owned.pending.delete(id);
         pending.reject(new Error("Language service exceeded its 15-second deadline."));
-        if (Date.now() - owned.answered >= WORKER_STALL_MS && this.sessions.get(key) === owned)
-          this.close(key, new Error("Language service stopped responding."));
       }, REQUEST_DEADLINE_MS);
       owned.pending.set(id, {
         timer,
@@ -137,6 +144,7 @@ export class EditorLanguageService {
       }
       try {
         owned.worker.postMessage({ id, input: { ...input, cwd: root } });
+        if (owned.pending.size === 1) this.watchWorker(key, owned);
       } catch (error) {
         clearTimeout(timer);
         owned.pending.delete(id);

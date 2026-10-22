@@ -23,6 +23,7 @@ import {
 } from "~/lib/workspaceEditorSession";
 import { projectReadFileQueryOptions } from "~/lib/projectReactQuery";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
+import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import { editorLanguageForPath } from "./editorHighlighting";
 import { INTELLIGENCE_LANGUAGES } from "./editorProviders";
 
@@ -226,12 +227,36 @@ export async function ensureEditorModels(
   entry: EditorModelEntry,
   relativePaths: readonly string[],
 ): Promise<void> {
-  if (!entry.cwd) return;
-  await Promise.allSettled(
-    [...new Set(relativePaths)]
-      .filter((relativePath) => relativePath !== entry.relativePath)
-      .map((relativePath) => loadDependencyModel(entry, relativePath)),
+  if (!entry.cwd || entry.model.isDisposed()) return;
+  // Providers receive a shared model, not the main/peek editor requesting it.
+  // Keep nested targets with every visible document that could be using it.
+  const owners = [...registry(entry.client).entries.values()].filter(
+    (candidate) =>
+      candidate.cwd === entry.cwd &&
+      candidate.surfaces > 0 &&
+      (candidate === entry || candidate.dependencies.has(entry.relativePath)),
   );
+  const paths = [...new Set(relativePaths)];
+  const results = await Promise.allSettled(
+    owners.flatMap((owner) =>
+      paths
+        .filter((relativePath) => relativePath !== owner.relativePath)
+        .map((relativePath) => loadDependencyModel(owner, relativePath)),
+    ),
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  const hasOpenTarget =
+    paths.includes(entry.relativePath) ||
+    owners.some((owner) => paths.includes(owner.relativePath));
+  if (failed && !hasOpenTarget && results.every((result) => result.status === "rejected")) {
+    const message = isRpcCapacityExceededError(failed.reason)
+      ? "Workspace file reads are busy. Try the command again."
+      : failed.reason instanceof Error
+        ? failed.reason.message
+        : "Unable to load workspace navigation targets.";
+    for (const owner of owners) setEditorServiceStatus(owner, message);
+    setEditorServiceStatus(entry, message);
+  }
 }
 
 function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Promise<void> {
@@ -248,7 +273,18 @@ function loadDependencyModel(entry: EditorModelEntry, relativePath: string): Pro
       throw new Error("Too many files are held for peek views.");
     const session = getWorkspaceEditorSession(entry.client, cwd, relativePath);
     let contents = session.getSnapshot().value;
-    if (!session.dirty && !session.saving) {
+    const peer = [...registry(entry.client).entries.values()]
+      .find(
+        (candidate) =>
+          candidate !== entry && candidate.cwd === cwd && candidate.loading.has(relativePath),
+      )
+      ?.loading.get(relativePath);
+    if (peer) {
+      // Another visible owner is already refreshing this file. Reuse its
+      // result rather than cancelling the shared query underneath it.
+      await peer;
+      contents = session.getSnapshot().value;
+    } else if (!session.dirty && !session.saving) {
       // Cancel a read in flight for the pane first, as the session's reload does,
       // so this fetch is never deduplicated onto an older request.
       const readOptions = projectReadFileQueryOptions({ cwd, relativePath });

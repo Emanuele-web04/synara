@@ -14,7 +14,9 @@ import { getWorkspaceEditorSession } from "~/lib/workspaceEditorSession";
 import {
   acquireEditorModel,
   applyEditorEdits,
+  editorUri,
   ensureEditorModels,
+  entryForUri,
   workspaceDocuments,
 } from "./editorModels";
 
@@ -194,4 +196,90 @@ it("holds at most 64 peek models per document, counting loads in flight", async 
   expect(api.projects.readFile).toHaveBeenCalledTimes(64);
   handles.at(-1)!.release();
   expect(entry.dependencies.size).toBe(0);
+});
+
+it("loads nested peek targets within the visible document's budget and releases them with it", async () => {
+  const queryClient = client();
+  api.projects.readFile.mockImplementation(async ({ relativePath }: { relativePath: string }) =>
+    data(relativePath, `// ${relativePath}`),
+  );
+  const entry = open(queryClient, "main.ts", "// main.ts");
+  await ensureEditorModels(entry, ["second.ts"]);
+  const second = entryForUri(editorUri(queryClient, "/project", "second.ts"))!;
+  expect(second.surfaces).toBe(0);
+  await ensureEditorModels(second, ["third.ts"]);
+  const third = entryForUri(editorUri(queryClient, "/project", "third.ts"));
+  expect(third?.model.getValue()).toBe("// third.ts");
+  await ensureEditorModels(
+    second,
+    Array.from({ length: 70 }, (_, index) => `nested${index}.ts`),
+  );
+  expect(api.projects.readFile).toHaveBeenCalledTimes(64);
+  await ensureEditorModels(third!, ["main.ts"]);
+  handles.at(-1)!.release();
+  expect(second.references).toBe(0);
+  expect(third?.references).toBe(0);
+});
+
+it.each([false, true])(
+  "holds nested peek targets for every owner (intermediate visible: %s)",
+  async (intermediateVisible) => {
+    const queryClient = client();
+    api.projects.readFile.mockImplementation(async ({ relativePath }: { relativePath: string }) =>
+      data(relativePath, `// ${relativePath}`),
+    );
+    const first = open(queryClient, "first.ts", "// first.ts");
+    const firstHandle = handles.at(-1)!;
+    const other = open(queryClient, "other.ts", "// other.ts");
+    const otherHandle = handles.at(-1)!;
+    if (intermediateVisible) open(queryClient, "shared.ts", "// shared.ts");
+    const intermediateHandle = intermediateVisible ? handles.at(-1)! : null;
+    await ensureEditorModels(first, ["shared.ts"]);
+    await ensureEditorModels(other, ["shared.ts"]);
+    const shared = entryForUri(editorUri(queryClient, "/project", "shared.ts"))!;
+    let completeRead!: (value: ProjectReadFileResult) => void;
+    api.projects.readFile.mockImplementationOnce(
+      () =>
+        new Promise<ProjectReadFileResult>((resolve) => {
+          completeRead = resolve;
+        }),
+    );
+    const firstLoad = ensureEditorModels(first, ["nested.ts"]);
+    await vi.waitFor(() => expect(completeRead).toBeDefined());
+    const sharedLoad = ensureEditorModels(shared, ["nested.ts"]);
+    completeRead(data("nested.ts", "// nested.ts"));
+    await Promise.all([firstLoad, sharedLoad]);
+    expect(first.dependencies.has("nested.ts")).toBe(true);
+    const nested = entryForUri(editorUri(queryClient, "/project", "nested.ts"))!;
+    intermediateHandle?.release();
+    firstHandle.release();
+    expect(other.dependencies.has("nested.ts")).toBe(true);
+    expect(nested.references).toBe(1);
+    expect(nested.model.getValue()).toBe("// nested.ts");
+    otherHandle.release();
+    expect(nested.references).toBe(0);
+  },
+);
+
+it("reports failed navigation reads without discarding partial results or retrying admission", async () => {
+  const queryClient = client();
+  const entry = open(queryClient, "main.ts", "// main.ts");
+  const capacity = Object.assign(new Error("WebSocket expensive-read request capacity exceeded."), {
+    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+    retryable: true,
+    retryAfterMs: 250,
+  });
+  api.projects.readFile.mockRejectedValue(capacity);
+  await ensureEditorModels(entry, ["blocked.ts"]);
+  expect(entry.status).toBe("Workspace file reads are busy. Try the command again.");
+  expect(api.projects.readFile).toHaveBeenCalledTimes(1);
+  api.projects.readFile.mockImplementation(async ({ relativePath }: { relativePath: string }) => {
+    if (relativePath === "blocked.ts") throw capacity;
+    return data(relativePath, `// ${relativePath}`);
+  });
+  await ensureEditorModels(entry, ["main.ts", "blocked.ts"]);
+  await ensureEditorModels(entry, ["blocked.ts", "available.ts"]);
+  expect(entryForUri(editorUri(queryClient, "/project", "available.ts"))?.model.getValue()).toBe(
+    "// available.ts",
+  );
 });

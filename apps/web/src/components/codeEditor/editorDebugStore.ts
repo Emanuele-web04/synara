@@ -86,10 +86,12 @@ export class EditorDebugStore {
     if (!["idle", "ended"].includes(this.state.phase))
       throw new Error("A debug session is already running.");
     const api = this.api();
+    ++this.frameGeneration;
     this.launchController = new AbortController();
     const signal = this.launchController.signal;
     this.update({
       phase: "starting",
+      busy: false,
       sessionId: null,
       error: null,
       output: [],
@@ -171,9 +173,21 @@ export class EditorDebugStore {
           patch.frameId = null;
         }
       }
-      if (!this.state.connectionId)
+      const selectedConnection = patch.connectionId ?? this.state.connectionId;
+      if (!snapshot.connections.some((item) => item.id === selectedConnection && item.ready)) {
         patch.connectionId =
           snapshot.connections.find((item) => item.ready && item.id !== "root")?.id ?? null;
+        if (selectedConnection) {
+          ++this.frameGeneration;
+          stopped = undefined;
+          patch.phase = "running";
+          patch.frames = [];
+          patch.scopes = [];
+          patch.threads = [];
+          patch.frameId = null;
+          patch.threadId = null;
+        }
+      }
       while (output.length > 500 || output.reduce((sum, text) => sum + text.length, 0) > 256_000)
         output.shift();
       patch.output = output;
@@ -192,8 +206,12 @@ export class EditorDebugStore {
       if (generation !== this.generation) return;
       this.report(error);
       if (++this.pollFailures >= 4) {
+        ++this.frameGeneration;
         this.update({
           phase: "ended",
+          frames: [],
+          scopes: [],
+          frameId: null,
           error:
             "Lost the debug connection. The server will stop its adapter after the two-minute lease expires; launch-owned processes are stopped, attached processes are left running.",
         });
@@ -367,8 +385,9 @@ export class EditorDebugStore {
     this.update({ watches: this.state.watches.filter((item) => item.expression !== expression) });
   }
   private async refreshWatches(generation: number) {
+    const originals = this.state.watches;
     const watches = await Promise.all(
-      this.state.watches.map(async (watch) => {
+      originals.map(async (watch) => {
         try {
           const result = await this.evaluate(watch.expression, "watch");
           return {
@@ -385,7 +404,10 @@ export class EditorDebugStore {
         }
       }),
     );
-    if (generation === this.frameGeneration) this.update({ watches });
+    if (generation === this.frameGeneration) {
+      const refreshed = new Map(originals.map((watch, index) => [watch, watches[index]!]));
+      this.update({ watches: this.state.watches.map((watch) => refreshed.get(watch) ?? watch) });
+    }
   }
 }
 export function getEditorDebugStore(client: QueryClient, cwd: string) {
