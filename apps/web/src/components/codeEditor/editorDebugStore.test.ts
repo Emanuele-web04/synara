@@ -125,3 +125,168 @@ it.each(["stop", "terminated"] as const)(
     }
   },
 );
+
+it("ignores a previous session's pending frame and control after connection loss and restart", async () => {
+  const { store, client, acknowledge } = await pausedSession();
+  let completeScopes!: (value: object) => void;
+  const scopes = new Promise<object>((resolve) => {
+    completeScopes = resolve;
+  });
+  const originalAction = api.editor.debugAction.getMockImplementation()!;
+  api.editor.debugAction.mockImplementation((input: EditorDebugActionInput) =>
+    input.action === "scopes" && input.frameId === 2 ? scopes : originalAction(input),
+  );
+  try {
+    const control = store.control("next");
+    const selection = store.selectFrame(2);
+    api.editor.debugPoll.mockRejectedValue(new Error("connection lost"));
+    await vi.advanceTimersByTimeAsync(3_300);
+    expect(store.getSnapshot().phase).toBe("ended");
+    api.editor.debugStart.mockResolvedValue({ sessionId: "replacement" });
+    api.editor.debugPoll.mockResolvedValue({
+      sequence: 1,
+      terminated: false,
+      connections: [{ id: "new-target", name: "Node", ready: true }],
+      events: [],
+    });
+    await store.start({
+      request: "launch",
+      program: "index.js",
+      args: [],
+      port: 9229,
+      stopOnEntry: true,
+    });
+    completeScopes({ scopes: [{ name: "Old frame", variablesReference: 99, expensive: false }] });
+    await selection;
+    acknowledge({});
+    await control;
+    expect(store.getSnapshot()).toMatchObject({
+      phase: "running",
+      sessionId: "replacement",
+      frameId: null,
+      scopes: [],
+      busy: false,
+    });
+  } finally {
+    acknowledge({});
+    await store.stop();
+    client.clear();
+  }
+});
+
+it("publishes the stopped target before selecting its frames", async () => {
+  vi.useFakeTimers();
+  api.editor.debugStart.mockReset().mockResolvedValue({ sessionId: "session" });
+  api.editor.debugAction.mockReset().mockResolvedValue({ threads: [] });
+  api.editor.debugPoll.mockReset().mockResolvedValue({
+    sequence: 1,
+    terminated: false,
+    connections: [
+      { id: "first-target", name: "First", ready: true },
+      { id: "stopped-target", name: "Stopped", ready: true },
+    ],
+    events: [{ event: "stopped", connectionId: "stopped-target", threadId: 2 }],
+  });
+  const client = new QueryClient();
+  const store = new EditorDebugStore(client, "/qa");
+  const pausedTargets: (string | null)[] = [];
+  const unsubscribe = store.subscribe(() => {
+    if (store.getSnapshot().phase === "paused")
+      pausedTargets.push(store.getSnapshot().connectionId);
+  });
+  try {
+    await store.start({
+      request: "launch",
+      program: "index.js",
+      args: [],
+      port: 9229,
+      stopOnEntry: true,
+    });
+    expect(pausedTargets.length).toBeGreaterThan(0);
+    expect(pausedTargets.every((target) => target === "stopped-target")).toBe(true);
+  } finally {
+    unsubscribe();
+    await store.stop();
+    client.clear();
+  }
+});
+
+it("preserves watch edits while an earlier frame evaluation is pending", async () => {
+  const { store, client } = await pausedSession();
+  const originalAction = api.editor.debugAction.getMockImplementation()!;
+  const pending = new Map<string, (value: object) => void>();
+  let holdEvaluations = true;
+  try {
+    await store.addWatch("removed");
+    await store.addWatch("retained");
+    api.editor.debugAction.mockImplementation((input: EditorDebugActionInput) => {
+      if (input.action !== "evaluate") return originalAction(input);
+      if (holdEvaluations)
+        return new Promise<object>((resolve) => pending.set(input.expression!, resolve));
+      return Promise.resolve({ evaluation: { value: "current", variablesReference: 0 } });
+    });
+    const refresh = store.selectFrame(1);
+    await vi.waitFor(() => expect(pending.size).toBe(2));
+    store.removeWatch("removed");
+    holdEvaluations = false;
+    await store.addWatch("added");
+    for (const expression of ["removed", "retained"])
+      pending.get(expression)!({ evaluation: { value: "stale", variablesReference: 99 } });
+    await refresh;
+    expect(store.getSnapshot().watches).toEqual([
+      { expression: "retained", value: "current", variablesReference: 0 },
+      { expression: "added", value: "current", variablesReference: 0 },
+    ]);
+  } finally {
+    await store.stop();
+    client.clear();
+  }
+});
+
+it.each(["terminated", "removed"] as const)(
+  "selects a live target after the paused target is %s without a new stop event",
+  async (ending) => {
+    const { store, client } = await pausedSession();
+    let completeScopes!: (value: object) => void;
+    const scopes = new Promise<object>((resolve) => {
+      completeScopes = resolve;
+    });
+    const originalAction = api.editor.debugAction.getMockImplementation()!;
+    api.editor.debugAction.mockImplementation((input: EditorDebugActionInput) =>
+      input.action === "scopes" && input.frameId === 2 ? scopes : originalAction(input),
+    );
+    try {
+      const selection = store.selectFrame(2);
+      api.editor.debugPoll.mockResolvedValue({
+        sequence: 2,
+        terminated: false,
+        connections: [
+          ...(ending === "terminated" ? [{ id: "target", name: "Old", ready: false }] : []),
+          { id: "replacement", name: "Live", ready: true },
+        ],
+        events:
+          ending === "terminated"
+            ? [{ event: "terminated", connectionId: "target", text: "finished" }]
+            : [],
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      completeScopes({ scopes: [{ name: "Old frame", variablesReference: 99, expensive: false }] });
+      await selection;
+      expect(store.getSnapshot()).toMatchObject({
+        phase: "running",
+        connectionId: "replacement",
+        frameId: null,
+        frames: [],
+        scopes: [],
+        threadId: null,
+      });
+      await store.command({ action: "threads" });
+      expect(api.editor.debugAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({ connectionId: "replacement" }),
+      );
+    } finally {
+      await store.stop();
+      client.clear();
+    }
+  },
+);

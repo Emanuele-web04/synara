@@ -205,8 +205,14 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       while (document.querySelector('[data-slot="command-dialog-popup"]') && Date.now() < deadline)
         await new Promise((resolve) => setTimeout(resolve, 16));
     }
-    const editor = controllerRef.current?.editor;
-    if (!editor) return;
+    const surface = controllerRef.current?.editor;
+    if (!surface) return;
+    // Peek widgets have their own editor and cursor inside this surface.
+    const editor =
+      monaco.editor.getEditors().find((candidate) => {
+        const node = candidate.getDomNode();
+        return candidate.hasTextFocus() && node && surface.getDomNode()?.contains(node);
+      }) ?? surface;
     editor.focus();
     // Peek references is an editor command rather than an action; trigger runs both.
     const action = editor.getAction(id);
@@ -639,7 +645,13 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
           // workspace URI so the engine never swaps this surface's model.
           monaco.editor.registerEditorOpener({
             openCodeEditor(source, resource, selection) {
-              if (source !== editor || resource.scheme !== entry.model.uri.scheme) return false;
+              const sourceNode = source.getDomNode();
+              if (
+                !sourceNode ||
+                !editor.getDomNode()?.contains(sourceNode) ||
+                resource.scheme !== entry.model.uri.scheme
+              )
+                return false;
               const range =
                 selection && "startLineNumber" in selection
                   ? selection

@@ -37,7 +37,11 @@ test.beforeAll(async () => {
   );
   await writeFile(
     path.join(workspace, "greeting.ts"),
-    "/** Say hello to a developer. */\nexport function greet(name: string): string {\n  return `Hello, ${name}`;\n}\n",
+    "import { formatGreeting } from './formatting';\n/** Say hello to a developer. */\nexport function greet(name: string): string {\n  return formatGreeting(name);\n}\n",
+  );
+  await writeFile(
+    path.join(workspace, "formatting.ts"),
+    "export function formatGreeting(name: string): string {\n  return `Hello, ${name}`;\n}\n",
   );
   await writeFile(path.join(workspace, "main.ts"), source);
   await writeFile(
@@ -212,6 +216,36 @@ async function command(page: Page, name: string) {
   await page.getByRole("combobox", { name: "Editor commands" }).fill(name);
   await page.getByRole("option", { name, exact: false }).click();
 }
+
+test("opens a further workspace definition from inside a peek widget", async ({ page }, info) => {
+  await seed(page);
+  await open(page);
+  // Open the dependency through the real file UI before testing nested navigation.
+  await open(page, "greeting.ts");
+  await open(page);
+  await position(page, "greet(person", 1);
+  await command(page, "Peek definition");
+  await expect(page.locator(".reference-zone-widget").first()).toBeVisible();
+  await expect(page.locator(".reference-zone-widget").first()).toContainText("greeting.ts");
+  await page.evaluate(async () => {
+    const modulePath = "/src/components/codeEditor/editorRuntime.ts";
+    const { monaco } = await import(/* @vite-ignore */ modulePath);
+    const editor = monaco.editor
+      .getEditors()
+      .find((candidate: { getModel(): { uri: { path: string } } | null }) =>
+        candidate.getModel()?.uri.path.endsWith("/greeting.ts"),
+      );
+    if (!editor) throw new Error("The real peek editor did not open greeting.ts.");
+    const model = editor.getModel();
+    editor.setPosition(
+      model.getPositionAt(model.getValue().lastIndexOf("formatGreeting(name)") + 1),
+    );
+    editor.focus();
+  });
+  await page.keyboard.press("F12");
+  await editorVisible(page, "formatting.ts");
+  await capture(page, info, "after-peek-definition-navigation");
+});
 
 test("native editor intelligence, guarded persistence, navigation, and debugging", async ({
   page,
