@@ -64,10 +64,10 @@ export interface ChatTurnSubmissionInput {
   threadId: ThreadId;
   hasLiveTurn: boolean;
   /**
-   * Refuses a live send up front (before the message is shown) when the
+   * Refuses a send up front (before the message is shown) when the
    * composer picked another provider but the thread cannot hand off yet.
    */
-  canSendWithProviderHandoff?: (() => boolean) | undefined;
+  canSendWithProviderHandoff?: ((modelSelection?: ModelSelection) => boolean) | undefined;
   /**
    * Runs right before the turn is dispatched, once the message is already on
    * screen. When the composer picked another provider it hands the thread off

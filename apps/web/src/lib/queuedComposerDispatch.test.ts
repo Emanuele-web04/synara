@@ -150,6 +150,42 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
     );
   });
 
+  it("sends a queued turn on the provider the thread was handed off to", async () => {
+    const claudeSelection = { provider: "claudeAgent" as const, model: "claude-sonnet-5" };
+    useStore.setState(
+      makeState(
+        makeThread({
+          id: THREAD_ID,
+          modelSelection: claudeSelection,
+          latestTurn: {
+            turnId: "turn-1" as never,
+            state: "completed",
+            requestedAt: "2026-03-13T11:00:00.000Z",
+            startedAt: null,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      ),
+    );
+
+    const succeeded = await dispatchQueuedComposerTurnHeadless({
+      threadId: THREAD_ID,
+      queuedTurn: makeQueuedChatTurn(),
+      dispatchMode: "queue",
+      assistantDeliveryMode: "streaming",
+    });
+
+    expect(succeeded).toBe(true);
+    // Writing the queued Codex selection back would flip the thread off Claude.
+    expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.meta.update" }),
+    );
+    expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.turn.start", modelSelection: claudeSelection }),
+    );
+  });
+
   it("dispatches a snapshotted plan follow-up as its own turn kind", async () => {
     const succeeded = await dispatchQueuedComposerTurnHeadless({
       threadId: THREAD_ID,

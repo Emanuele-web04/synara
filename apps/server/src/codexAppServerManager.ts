@@ -447,6 +447,9 @@ function userConfiguredMcpOAuthServer(line: string): string | null {
 }
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  // Codex writes a thread's rollout on its first turn, so a thread opened and
+  // restarted before any turn (e.g. right after a handoff) has nothing to resume.
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",

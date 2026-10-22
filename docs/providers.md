@@ -607,6 +607,11 @@ launch tests use disposable CLI fixtures and do not authenticate personal accoun
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to
 continue the task and work in the same environment with the context Synara passes to it.
 
+Continue task, workflow resumes, and plan follow-ups use the same handoff eligibility checks
+as Send. A refused plan handoff keeps the thread's runtime and interaction modes; a refusal
+caused by background tasks uses the existing stop-or-wait notice. Editing a queued message
+after a handoff restores the current provider and an access mode it supports.
+
 Use handoffs deliberately. Review the working tree before and after changing providers so ownership
 remains clear.
 

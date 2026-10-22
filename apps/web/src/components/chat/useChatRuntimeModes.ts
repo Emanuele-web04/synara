@@ -1,4 +1,5 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
@@ -13,6 +14,8 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
+  accessModeModelSelectionToPersist,
+  autoWaitsForProviderHandoff,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
 } from "../ChatView.logic";
@@ -86,9 +89,31 @@ export function useChatRuntimeModes({
             });
             return false;
           }
+          if (
+            nextMode === "auto" &&
+            autoWaitsForProviderHandoff({ thread: serverThread, selectedModelSelection })
+          ) {
+            // The server checks Auto against the thread's current provider, which
+            // cannot run it. The switch itself happens on Send.
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: `Send a message to switch to ${
+                PROVIDER_DISPLAY_NAMES[selectedModelSelection.provider]
+              } first, then choose this access mode.`,
+            });
+            return false;
+          }
+          const accessModeModelSelection =
+            nextMode === "auto"
+              ? accessModeModelSelectionToPersist({
+                  thread: serverThread,
+                  selectedModelSelection,
+                })
+              : undefined;
           const persistenceInput = {
             currentModelSelection: serverThread.modelSelection,
-            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            ...(accessModeModelSelection ? { nextModelSelection: accessModeModelSelection } : {}),
             currentRuntimeMode: currentMode,
             nextRuntimeMode: nextMode,
             persistModelSelection: (modelSelection: ModelSelection) =>
