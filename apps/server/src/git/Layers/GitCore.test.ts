@@ -2862,6 +2862,57 @@ it.layer(TestLayer)("git integration", (it) => {
       );
     }
 
+    for (const nested of ["cloned repository", "linked worktree"] as const) {
+      it.effect(`leaves an untracked ${nested} out of working tree diffs`, () =>
+        Effect.gen(function* () {
+          const core = yield* GitCore;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          let nestedPath: string;
+          if (nested === "cloned repository") {
+            const upstream = yield* makeTmpDir();
+            yield* initRepoWithCommit(upstream);
+            yield* git(tmp, ["clone", upstream, "vendor/lib"]);
+            nestedPath = "vendor/lib/";
+          } else {
+            yield* git(tmp, ["worktree", "add", "-b", "feature", "worktrees/feature"]);
+            nestedPath = "worktrees/feature/";
+          }
+          yield* writeTextFile(path.join(tmp, "README.md"), "# test\nchanged\n");
+          yield* Effect.promise(() => fs.mkdir(path.join(tmp, "docs")));
+          yield* writeTextFile(path.join(tmp, "docs", "new.txt"), "a\nb\n");
+          // Unlike a file that turns into a directory after listing, Git itself
+          // lists the nested repository as one `dir/` entry.
+          const untracked = yield* git(tmp, ["ls-files", "--others", "--exclude-standard"]);
+          expect(untracked.split("\n")).toContain(nestedPath);
+
+          for (const scope of ["workingTree", "unstaged"] as const) {
+            expect(yield* core.readDiffStats(tmp, scope)).toEqual({
+              additions: 3,
+              deletions: 0,
+              fileCount: 2,
+            });
+          }
+          expect(yield* core.readDiffStats(tmp, "ref", "HEAD")).toEqual({
+            additions: 3,
+            deletions: 0,
+            fileCount: 2,
+          });
+          const patches = [
+            (yield* core.readWorkingTreePatch(tmp)).patch,
+            (yield* core.readUnstagedPatch(tmp)).patch,
+            (yield* core.readRefPatch(tmp, "HEAD")).patch,
+          ];
+          for (const patch of patches) {
+            expect(patch).toContain("diff --git a/README.md b/README.md");
+            expect(patch).toContain("+changed");
+            expect(patch).toContain("diff --git a/docs/new.txt b/docs/new.txt");
+            expect(patch).not.toContain(nestedPath);
+          }
+        }),
+      );
+    }
+
     it.effect("counts untracked numstats in-process with Git's numstat semantics", () =>
       Effect.gen(function* () {
         const realCore = yield* GitCore;

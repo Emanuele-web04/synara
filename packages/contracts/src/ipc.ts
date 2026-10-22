@@ -844,9 +844,21 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+/**
+ * Full Disk Access as observed by the desktop main process when the info was
+ * requested. "unknown" means there was no Safari data to prove it either way.
+ */
+export type DesktopSafariFullDiskAccess = "granted" | "denied" | "unknown";
+
 export type DesktopSafariAccessInfo =
   | { supported: false }
-  | { supported: true; appName: string; appPath: string | null };
+  | {
+      supported: true;
+      appName: string;
+      appPath: string | null;
+      /** Absent from desktop builds that predate the access probe. */
+      fullDiskAccess?: DesktopSafariFullDiskAccess;
+    };
 
 /**
  * One frame of the desktop app's native computer preview tap: a complete JPEG
