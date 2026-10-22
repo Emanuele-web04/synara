@@ -369,18 +369,13 @@ export function ChatTranscriptPane({
       )}
     >
       {/* The thread error renders in flow above the transcript rather than as
-          a floating overlay, so it can never cover message content. It takes the
-          transcript's right inset so it centers on the message column instead of
-          sliding under the docked right-edge card. */}
+          a floating overlay, so it can never cover message content. */}
       {!agentActivityDetail &&
       threadError &&
       !visibleTimelineEntries.some(
         (entry) => entry.kind === "work" && entry.entry.turnFailure?.cause === threadError,
       ) ? (
-        <div
-          className="flex shrink-0 justify-center px-3 pt-2"
-          style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-        >
+        <div className="flex shrink-0 justify-center px-3 pt-2">
           <ThreadErrorBanner
             error={threadError}
             unblocking={unblockingThread === true}
