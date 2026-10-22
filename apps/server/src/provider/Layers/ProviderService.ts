@@ -3286,7 +3286,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   persistedPriorTranscriptBootstrapPending ||
                   staleSessionFallbackOccurred ||
                   abandonsOtherProviderContinuation ||
-                  (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                  ((nativeResumeAttempted ||
+                    outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true) &&
                     !nativeResumeSucceeded);
 
                 if (session.provider !== adapter.provider) {

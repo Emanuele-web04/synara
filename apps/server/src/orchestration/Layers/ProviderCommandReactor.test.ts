@@ -450,8 +450,7 @@ describe("ProviderCommandReactor", () => {
         nativeResumeAttempted && (input?.confirmNativeResume?.(effectiveResumeCursor) ?? true);
       if (
         (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true ||
-          ((sessionInput.provider === "devin" || sessionInput.provider === "grok") &&
-            nativeResumeAttempted)) &&
+          nativeResumeAttempted) &&
         !nativeResumeSucceeded
       ) {
         pendingPriorTranscriptBootstraps.add(threadId);
@@ -11102,7 +11101,6 @@ describe("ProviderCommandReactor", () => {
     ]);
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
-    expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
     const followUpInput = harness.sendTurn.mock.calls[1]?.[0];
     expect(followUpInput?.input).toBe("Continue after interrupt escalation");
   });
@@ -20919,7 +20917,7 @@ describe("ProviderCommandReactor", () => {
     expect((await readHarnessThread(harness))?.session?.runtimeMode).toBe("approval-required");
   });
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "codex", "claudeAgent"] as const)(
     "discards a pending %s transcript recap on explicit session stop",
     async (provider) => {
       const harness = await createHarness({
@@ -20955,7 +20953,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "codex", "claudeAgent"] as const)(
     "keeps a fresh %s session usable while stopped-recap cleanup retries",
     async (provider) => {
       const harness = await createHarness({
@@ -21036,7 +21034,7 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
-  it.each(["opencode"] as const)(
+  it.each(["opencode", "claudeAgent"] as const)(
     "retains the %s transcript recap when async prompt submission aborts",
     async (provider) => {
       const harness = await createHarness({
@@ -21058,6 +21056,35 @@ describe("ProviderCommandReactor", () => {
       });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+
+      if (provider === "claudeAgent") {
+        harness.setRuntimeSessionTurnState({
+          threadId,
+          status: "running",
+          activeTurnId: rejectedTurnId,
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("cmd-pending-claude-bootstrap-steer"),
+            threadId,
+            message: {
+              messageId: asMessageId("pending-claude-bootstrap-steer"),
+              role: "user",
+              text: "Focus on the current recovery turn.",
+              attachments: [],
+            },
+            dispatchMode: "steer",
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: now,
+          }),
+        );
+        await harness.drain();
+        expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+        expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+        harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+      }
 
       await emitHarnessTurnTerminal(harness, {
         eventId: `${provider}-async-bootstrap-aborted`,
@@ -21277,14 +21304,16 @@ describe("ProviderCommandReactor", () => {
     expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
   });
 
-  it.each(["opencode", "devin", "grok"] as const)(
+  it.each(["opencode", "devin", "grok", "codex", "claudeAgent"] as const)(
     "injects transcript context when %s rejects the persisted resume cursor",
     async (provider) => {
+      let rejectNativeResume = true;
       const harness = await createHarness({
         threadModelSelection: { provider, model: "openai/gpt-5" },
-        confirmNativeResume: () => false,
+        confirmNativeResume: () => !rejectNativeResume,
       });
       const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-1");
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-rejected-resume-seed`,
@@ -21292,27 +21321,53 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-      await Effect.runPromise(
-        harness.stopRuntimeSession({ threadId: ThreadId.makeUnsafe("thread-1") }),
-      );
+      await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+      if (provider === "codex") {
+        harness.sendTurn.mockImplementationOnce(() =>
+          Effect.fail(
+            new ProviderAdapterValidationError({
+              provider,
+              operation: "turn/start",
+              issue: "Rejected before provider acknowledgement",
+            }),
+          ),
+        );
+        await dispatchHarnessUserTurn(harness, {
+          messageId: `${provider}-rejected-resume-unaccepted`,
+          text: "This recovery attempt was not accepted.",
+          createdAt: now,
+        });
+        await harness.drain();
+        expect(harness.pendingPriorTranscriptBootstraps.has(threadId)).toBe(true);
+        expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+      }
+      const followUpSendIndex = harness.sendTurn.mock.calls.length;
 
       await dispatchHarnessUserTurn(harness, {
         messageId: `${provider}-rejected-resume-follow-up`,
         text: "What is the retained codename?",
         createdAt: now,
       });
-      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      await waitFor(() => harness.sendTurn.mock.calls.length === followUpSendIndex + 1);
+      await harness.drain();
 
-      const followUpInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+      const followUpInput = harness.sendTurn.mock.calls[followUpSendIndex]?.[0] as {
+        readonly input?: string;
+      };
       expect(followUpInput.input).toContain("<thread_context>");
       expect(followUpInput.input).toContain("The retained codename is heliotrope.");
       expect(followUpInput.input?.match(/What is the retained codename\?/g)).toHaveLength(1);
-      expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
-      expect(
-        (await readHarnessThread(harness))?.activities.filter(
-          (activity) => activity.kind === "provider.context.changed",
-        ),
-      ).toEqual([]);
+      if (provider === "codex") {
+        // Codex's acknowledgement accepts the recap; no terminal event is needed.
+        expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
+      } else {
+        expect(harness.completePriorTranscriptBootstrap).not.toHaveBeenCalled();
+        expect(
+          (await readHarnessThread(harness))?.activities.filter(
+            (activity) => activity.kind === "provider.context.changed",
+          ),
+        ).toEqual([]);
+      }
       await emitHarnessTurnTerminal(harness, {
         eventId: `${provider}-rejected-resume-bootstrap-completed`,
         provider,
@@ -21326,11 +21381,25 @@ describe("ProviderCommandReactor", () => {
         payload: {
           provider,
           nativeHistory: "unavailable",
-          sessionRestarted: true,
-          restartReason: "native-resume-failed",
           recapInjected: true,
+          ...(provider === "codex"
+            ? {}
+            : { sessionRestarted: true, restartReason: "native-resume-failed" }),
         },
       });
+      rejectNativeResume = false;
+      const resumedSendIndex = harness.sendTurn.mock.calls.length;
+      await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+      await dispatchHarnessUserTurn(harness, {
+        messageId: `${provider}-accepted-resume-follow-up`,
+        text: "Continue with the restored native history.",
+        createdAt: now,
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === resumedSendIndex + 1);
+      expect(harness.sendTurn.mock.calls[resumedSendIndex]?.[0].input).toBe(
+        "Continue with the restored native history.",
+      );
+      expect(harness.completePriorTranscriptBootstrap).toHaveBeenCalledTimes(1);
     },
   );
 

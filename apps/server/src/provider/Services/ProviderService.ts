@@ -70,8 +70,9 @@ export interface ProviderSessionStartOutcome {
 export interface ProviderSessionStartOutcomeOptions {
   /**
    * Persist a pending transcript bootstrap when this start cannot restore
-   * provider-native context. The caller clears it only after the provider has
-   * accepted the bootstrap turn.
+   * provider-native context, even if no native resume was attempted. A failed
+   * native resume always registers it. The caller clears it only after the
+   * provider has accepted the bootstrap turn.
    */
   readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
   /**

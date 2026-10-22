@@ -1593,6 +1593,7 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
   it.effect("keeps transcript bootstrap pending when the adapter rejects a supplied cursor", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-adapter-rejected-resume");
 
       yield* provider.startSession(threadId, {
@@ -1601,19 +1602,20 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
         runtimeMode: "full-access",
       });
       yield* provider.stopRuntimeSession!({ threadId });
-      const outcome = yield* provider.startSessionWithOutcome!(
+      const outcome = yield* provider.startSessionWithOutcome!(threadId, {
+        provider: "codex",
         threadId,
-        {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        },
-        { registerPriorTranscriptBootstrapOnFreshStart: true },
-      );
+        runtimeMode: "full-access",
+      });
 
       assert.equal(outcome.nativeResumeAttempted, true);
       assert.equal(outcome.nativeResumeSucceeded, false);
       assert.equal(outcome.priorTranscriptBootstrapPending, true);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(
+        asRuntimePayloadRecord(binding?.runtimePayload).priorTranscriptBootstrapPending,
+        true,
+      );
       yield* provider.stopSession({ threadId });
     }),
   );

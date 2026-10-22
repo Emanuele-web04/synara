@@ -230,6 +230,45 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("confirms native resume only when Codex returns the requested thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const now = new Date().toISOString();
+      for (const [requested, returned, expected] of [
+        [{ threadId: "original" }, { threadId: "original" }, true],
+        [{ threadId: "original" }, { threadId: "fresh-fallback" }, false],
+        [{ threadId: " original " }, { threadId: "original" }, true],
+        [{ threadId: "original" }, undefined, false],
+        [undefined, { threadId: "fresh" }, false],
+        [{ threadId: " " }, { threadId: "fresh" }, false],
+        [{ threadId: 42 }, { threadId: "fresh" }, false],
+        [[{ threadId: "original" }], { threadId: "original" }, false],
+      ] as const) {
+        assert.equal(
+          adapter.didResumeSession?.(
+            {
+              provider: "codex",
+              threadId: asThreadId("thread-resume-outcome"),
+              resumeCursor: requested,
+              runtimeMode: "approval-required",
+            },
+            {
+              provider: "codex",
+              threadId: asThreadId("thread-resume-outcome"),
+              status: "ready",
+              resumeCursor: returned,
+              runtimeMode: "approval-required",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ),
+          expected,
+          `resume ${JSON.stringify(requested)} as ${JSON.stringify(returned)}`,
+        );
+      }
+    }),
+  );
+
   it.effect("passes the Hub coordinator tool grant to the Codex manager", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();

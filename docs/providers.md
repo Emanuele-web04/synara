@@ -48,6 +48,14 @@ with an error while unrelated tasks remain usable. Persisted Claude compaction r
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
 
+Codex native resume is confirmed only when the runtime returns the requested thread ID.
+If a recoverable resume failure starts a fresh Codex thread instead, Synara treats its native
+history as unavailable and carries the stored transcript through the existing bounded recovery
+summary. Starting the replacement process alone does not prove that native history was restored.
+Recovery remains pending until Codex acknowledges the recap turn, or another provider reports
+matching terminal success. Synara then retires the durable recovery marker; rejected
+submissions keep it for retry, and an explicit stop discards it.
+
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider
 errors still appear. Previously stored activity rows are preserved.
@@ -212,6 +220,12 @@ path. A detected CLI update refreshes the picker even when the path stays the sa
 after a restart. Catalog revalidation uses a temporary Claude process because running sessions
 retain the model metadata returned when they initialized. Ordinary picker reads share the
 server cache rather than starting a process each time.
+
+Codex plugin catalogs run in a dedicated discovery process scoped to the same working directory,
+account, home, configuration, and authentication generation as the request. Discovery stdout
+frames have a 32 MiB limit because `plugin/list` is not paginated and catalogs can exceed 16 MiB.
+A response beyond that bound fails discovery without stopping a conversation. Conversation stdout
+frames and all stdin frames retain the 16 MiB limit.
 
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.

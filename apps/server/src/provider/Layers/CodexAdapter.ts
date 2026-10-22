@@ -49,6 +49,7 @@ import {
   CodexAppServerManager,
   CodexSessionAuthInvalidatedError,
   parseCodexUserInputQuestions,
+  readResumeCursorThreadId,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
   type CodexSessionInspection,
@@ -2790,6 +2791,13 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         supportsLiveTurnDiffPatch: true,
       },
       startSession,
+      didResumeSession: (input, session) => {
+        const requestedThreadId = readResumeCursorThreadId(input.resumeCursor);
+        return (
+          requestedThreadId !== undefined &&
+          readResumeCursorThreadId(session.resumeCursor) === requestedThreadId
+        );
+      },
       sendTurn,
       steerTurn,
       startReview,
