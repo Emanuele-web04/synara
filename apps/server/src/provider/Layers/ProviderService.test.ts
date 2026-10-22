@@ -1905,6 +1905,56 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }),
   );
 
+  it.effect("rejects transcript completion from a replaced provider generation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      for (const targetProvider of ["codex", "claudeAgent"] as const) {
+        const threadId = asThreadId(`thread-rebound-bootstrap-${targetProvider}`);
+        yield* provider.startSessionWithOutcome!(
+          threadId,
+          { provider: "codex", threadId, runtimeMode: "full-access" },
+          { registerPriorTranscriptBootstrapOnFreshStart: true },
+        );
+        const previousBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.ok(previousBinding?.lifecycleGeneration);
+        yield* provider.stopRuntimeSession!({ threadId });
+        yield* provider.startSessionWithOutcome!(
+          threadId,
+          { provider: targetProvider, threadId, runtimeMode: "full-access" },
+          { abandonOtherProviderContinuation: true },
+        );
+        const currentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.ok(currentBinding?.lifecycleGeneration);
+        assert.notEqual(currentBinding?.lifecycleGeneration, previousBinding?.lifecycleGeneration);
+
+        const staleCompletion = {
+          threadId,
+          expectedLifecycleGeneration: previousBinding!.lifecycleGeneration!,
+        };
+        const staleResult = yield* Effect.result(
+          provider.completePriorTranscriptBootstrap!(staleCompletion),
+        );
+        assert.equal(staleResult._tag, "Failure");
+        const retainedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.isTrue(
+          asRuntimePayloadRecord(retainedBinding?.runtimePayload).priorTranscriptBootstrapPending,
+        );
+
+        const acceptedCompletion = {
+          threadId,
+          expectedLifecycleGeneration: currentBinding!.lifecycleGeneration!,
+        };
+        yield* provider.completePriorTranscriptBootstrap!(acceptedCompletion);
+        const completedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.isFalse(
+          asRuntimePayloadRecord(completedBinding?.runtimePayload).priorTranscriptBootstrapPending,
+        );
+        yield* provider.stopSession({ threadId });
+      }
+    }),
+  );
+
   it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

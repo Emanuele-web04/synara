@@ -384,20 +384,11 @@ function shouldDropResumeCursorForProviderOptionsChange(input: {
   return input.providerOptionsChanged;
 }
 
-// Providers whose fresh-session transcript bootstrap is also persisted on the
-// provider binding (OpenCode and providers whose native resume can fall back to
-// a fresh session). Synara must clear that flag once the bootstrap is consumed,
-// or every later start of the session would ask for the transcript again.
-function persistsPriorTranscriptBootstrap(
-  provider: string | undefined,
-): provider is "opencode" | "devin" | "grok" | "codex" | "claudeAgent" {
-  return (
-    provider === "opencode" ||
-    provider === "devin" ||
-    provider === "grok" ||
-    provider === "codex" ||
-    provider === "claudeAgent"
-  );
+// Any provider can receive a persisted transcript bootstrap after a stored
+// cross-provider switch. Clear it once consumed so later runtime restarts do
+// not replay the same transcript again.
+function persistsPriorTranscriptBootstrap(provider: string | undefined): provider is ProviderKind {
+  return isProviderKind(provider);
 }
 
 function escapeRegExp(value: string): string {
@@ -472,6 +463,7 @@ interface ProviderContextLifecycleActivityInput {
   readonly evidence: ProviderContextLifecycleEvidence;
   readonly createdAt: string;
   readonly completeDurablePriorTranscript?: boolean;
+  readonly lifecycleGeneration?: string;
 }
 
 interface ProviderContextLifecycleActivityRecord {
@@ -488,6 +480,7 @@ interface ProviderContextLifecycleActivityRecord {
   readonly summary: string;
   readonly createdAt: string;
   readonly completeDurablePriorTranscript: boolean;
+  readonly lifecycleGeneration: string | undefined;
 }
 
 function recapTailPreview(recapText: string): string {
@@ -1200,6 +1193,7 @@ const make = Effect.gen(function* () {
       summary: providerContextLifecycleSummary(input.evidence),
       createdAt: input.createdAt,
       completeDurablePriorTranscript: input.completeDurablePriorTranscript ?? false,
+      lifecycleGeneration: input.lifecycleGeneration,
     };
   };
   const appendProviderContextLifecycleActivity = (
@@ -1292,8 +1286,14 @@ const make = Effect.gen(function* () {
       // this evidence. Retire it only after the idempotent activity committed.
       // A failed marker write deliberately keeps the recap pending for the next
       // accepted turn instead of completing it later without another delivery.
+      if (input.lifecycleGeneration === undefined) {
+        return "durable-pending" as const;
+      }
       return yield* providerService
-        .completePriorTranscriptBootstrap({ threadId: input.threadId })
+        .completePriorTranscriptBootstrap({
+          threadId: input.threadId,
+          expectedLifecycleGeneration: input.lifecycleGeneration,
+        })
         .pipe(
           Effect.as("completed" as const),
           Effect.catchCause((cause) =>
@@ -1401,20 +1401,29 @@ const make = Effect.gen(function* () {
   const persistPriorTranscriptBootstrapCompletion = Effect.fnUntraced(function* (
     threadId: ThreadId,
     provider: ProviderKind,
+    expectedLifecycleGeneration?: string,
   ) {
     if (!providerService.completePriorTranscriptBootstrap) {
       return false;
     }
-    return yield* providerService.completePriorTranscriptBootstrap({ threadId }).pipe(
-      Effect.as(true),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("provider command reactor could not mark transcript bootstrap complete", {
-          threadId,
-          provider,
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.as(false)),
-      ),
-    );
+    return yield* providerService
+      .completePriorTranscriptBootstrap({
+        threadId,
+        ...(expectedLifecycleGeneration !== undefined ? { expectedLifecycleGeneration } : {}),
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "provider command reactor could not mark transcript bootstrap complete",
+            {
+              threadId,
+              provider,
+              cause: Cause.pretty(cause),
+            },
+          ).pipe(Effect.as(false)),
+        ),
+      );
   });
 
   const completePendingContextBootstrapAttempt = Effect.fnUntraced(function* (
@@ -1446,13 +1455,18 @@ const make = Effect.gen(function* () {
           evidence: attempt.lifecycleEvidence,
           createdAt: attempt.lifecycleEvidenceCreatedAt,
           completeDurablePriorTranscript: attempt.completeDurablePriorTranscript,
+          ...(event.lifecycleGeneration !== undefined
+            ? { lifecycleGeneration: event.lifecycleGeneration }
+            : {}),
         }),
       );
       if (lifecyclePersistence === "activity-pending") {
         // The accepted provider turn already received this recap, so current
         // in-memory state can advance while the durable marker remains as the
         // crash-recovery source until the idempotent activity retry succeeds.
-        clearPendingContextBootstrapAttemptFlags(threadId, attempt);
+        if (pendingContextBootstrapAttempts.get(threadId) === attempt) {
+          clearPendingContextBootstrapAttemptFlags(threadId, attempt);
+        }
         return;
       }
       if (lifecyclePersistence === "durable-pending") {
@@ -1467,7 +1481,14 @@ const make = Effect.gen(function* () {
       !lifecyclePersistenceOwnsDurableBootstrap &&
       providerService.completePriorTranscriptBootstrap
     ) {
-      const completed = yield* persistPriorTranscriptBootstrapCompletion(threadId, event.provider);
+      if (event.lifecycleGeneration === undefined) {
+        return;
+      }
+      const completed = yield* persistPriorTranscriptBootstrapCompletion(
+        threadId,
+        event.provider,
+        event.lifecycleGeneration,
+      );
       if (!completed) {
         return;
       }

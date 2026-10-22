@@ -55,6 +55,11 @@ summary. Starting the replacement process alone does not prove that native histo
 Recovery remains pending until Codex acknowledges the recap turn, or another provider reports
 matching terminal success. Synara then retires the durable recovery marker; rejected
 submissions keep it for retry, and an explicit stop discards it.
+This applies to every provider after a stored provider change. Delayed recovery
+evidence can retire only the provider session generation that accepted the recap,
+so an old activity retry cannot discard a newer session's pending transcript.
+If the runtime restarts before that evidence is committed, Synara conservatively
+retains the recap for the next accepted turn, even when native resume succeeds.
 
 Codex's internal `turn/moderationMetadata` notifications stay in local native event logs
 when logging is enabled and do not create conversation activity rows. Actual provider

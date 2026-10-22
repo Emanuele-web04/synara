@@ -129,6 +129,11 @@ export interface ProviderServiceShape {
   /** Mark a persisted prior-transcript bootstrap as accepted by the provider. */
   readonly completePriorTranscriptBootstrap?: (input: {
     readonly threadId: ThreadId;
+    /**
+     * Pin terminal-confirmed acceptance to its runtime. Explicit discard and
+     * immediate Codex acknowledgement do not supply a terminal generation.
+     */
+    readonly expectedLifecycleGeneration?: string;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
