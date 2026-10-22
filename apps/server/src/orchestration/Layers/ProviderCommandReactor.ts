@@ -50,6 +50,7 @@ import {
 import {
   Cache,
   Cause,
+  Clock,
   Duration,
   Deferred,
   Effect,
@@ -300,36 +301,44 @@ const reduceProviderCallExit = <E>(
         });
 
 /**
- * Runs a provider call under a hard deadline and reduces it to a decision.
- * A call that never returns cannot simply be awaited here: the caller holds the
- * reactor's single delivery permit, so waiting forever stalls every thread.
- * Interruption is re-raised untouched so shutdown still cancels cleanly.
+ * Run a provider operation within its deadline plus an optional bounded settle
+ * grace. A late settled outcome remains authoritative; interruption propagates.
  */
 const runBoundedProviderCall = <E, R>(input: {
   readonly label: string;
   readonly timeout: Duration.Duration;
+  readonly settleGrace?: Duration.Duration;
   readonly call: Effect.Effect<unknown, E, R>;
 }): Effect.Effect<BoundedProviderCallResult<E>, E, R> =>
-  Effect.suspend(() => {
-    let timedOut = false;
-    return input.call.pipe(
-      Effect.timeoutOption(input.timeout),
-      Effect.flatMap((result) =>
-        Effect.sync(() => {
-          timedOut = Option.isNone(result);
-        }),
-      ),
+  Effect.gen(function* () {
+    const startedAt = yield* Clock.currentTimeMillis;
+    const timeoutMs = Duration.toMillis(input.timeout);
+    const settleGraceMs = Duration.toMillis(input.settleGrace ?? Duration.millis(0));
+    const exit = yield* input.call.pipe(
+      Effect.timeoutOption(Duration.millis(timeoutMs + settleGraceMs)),
       Effect.exit,
-      Effect.flatMap(
-        (exit): Effect.Effect<BoundedProviderCallResult<E>, E> =>
-          Exit.isSuccess(exit) && timedOut
-            ? Effect.succeed({
-                _tag: "timeout",
-                detail: `${input.label} did not respond within ${Duration.toMillis(input.timeout)}ms.`,
-              })
-            : reduceProviderCallExit(exit),
-      ),
     );
+    if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+      return yield* Effect.failCause(exit.cause);
+    }
+    const timedOut = Exit.isSuccess(exit) && Option.isNone(exit.value);
+    const elapsedMs = (yield* Clock.currentTimeMillis) - startedAt;
+    if (!timedOut && elapsedMs > timeoutMs) {
+      yield* Effect.logInfo("provider command settled within its settle grace", {
+        label: input.label,
+        timeoutMs,
+        settleGraceMs,
+        elapsedMs,
+        outcome: Exit.isSuccess(exit) ? "accepted" : "failed",
+      });
+    }
+    if (timedOut) {
+      return {
+        _tag: "timeout" as const,
+        detail: `${input.label} did not respond within ${timeoutMs}ms plus ${settleGraceMs}ms settlement grace.`,
+      };
+    }
+    return yield* reduceProviderCallExit(exit);
   });
 
 export function isSafeLegacyProviderBlocker(lastError: string | null): boolean {
@@ -663,6 +672,23 @@ const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
+/**
+ * A provider call that settles just after its command deadline can still carry
+ * a definitive outcome: a bounded startup failure whose retirement outlived the
+ * deadline proves the command never ran. Waiting this short grace window before
+ * declaring the delivery uncertain keeps such recoveries from quarantining the
+ * thread, while a call that never returns still degrades into a terminal
+ * failure well before it could deadlock the single-permit delivery lock.
+ */
+const PROVIDER_COMMAND_SETTLE_GRACE = Duration.seconds(15);
+/**
+ * Provider intents take the per-thread checkpoint lease before they can start,
+ * and that lease is also held by checkpoint captures that park on slow git
+ * work. Bound only the acquisition: a command that cannot start within this
+ * window is rejected as retryable instead of silently consuming its delivery
+ * deadline and racing the provider startup timeout into a quarantine.
+ */
+const PROVIDER_COMMAND_LEASE_ACQUIRE_TIMEOUT = Duration.seconds(30);
 const PRE_TURN_BASELINE_TIMEOUT = Duration.seconds(5);
 const GATEWAY_OPERATION_COMPLETION_NEGATIVE_CACHE_TTL = Duration.seconds(30);
 
@@ -925,6 +951,8 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 export interface ProviderCommandReactorLiveOptions {
   readonly commandEventTimeout?: Duration.Duration;
+  readonly commandSettleGrace?: Duration.Duration;
+  readonly commandLeaseAcquireTimeout?: Duration.Duration;
   readonly preTurnBaselineTimeout?: Duration.Duration;
   readonly cacheResponseTimeout?: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
@@ -933,6 +961,8 @@ export interface ProviderCommandReactorLiveOptions {
 
 interface ProviderCommandReactorConfigShape {
   readonly commandEventTimeout: Duration.Duration;
+  readonly commandSettleGrace: Duration.Duration;
+  readonly commandLeaseAcquireTimeout: Duration.Duration;
   readonly preTurnBaselineTimeout: Duration.Duration;
   readonly cacheResponseTimeout: Duration.Duration;
   readonly gatewayOperationCompletionWaitTimeout: Duration.Duration;
@@ -947,6 +977,8 @@ class ProviderCommandReactorConfig extends ServiceMap.Service<
 const make = Effect.gen(function* () {
   const {
     commandEventTimeout,
+    commandSettleGrace,
+    commandLeaseAcquireTimeout,
     preTurnBaselineTimeout,
     cacheResponseTimeout,
     gatewayOperationCompletionWaitTimeout,
@@ -1921,10 +1953,63 @@ const make = Effect.gen(function* () {
     return providerThread?.id ?? threadId;
   });
 
-  const withProviderSessionLease = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+  const withProviderSessionLease = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+    options?: {
+      readonly onAcquireTimeout?: (input: {
+        readonly detail: string;
+        readonly provider: ProviderKind;
+      }) => Effect.Effect<unknown, unknown>;
+    },
+  ) =>
     resolveProviderSessionThread(threadId).pipe(
       Effect.flatMap((providerThread) =>
-        turnCheckpointCoordinator.withThreadLease(providerThread?.id ?? threadId, effect),
+        Effect.gen(function* () {
+          const leaseThreadId = providerThread?.id ?? threadId;
+          const acquired = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const leaseFiber = yield* Effect.forkChild(
+            turnCheckpointCoordinator.withThreadLease(
+              leaseThreadId,
+              Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            ),
+            { startImmediately: true },
+          );
+          const handshake = yield* Deferred.await(acquired).pipe(
+            Effect.timeoutOption(commandLeaseAcquireTimeout),
+          );
+          if (Option.isNone(handshake)) {
+            yield* Fiber.interrupt(leaseFiber).pipe(Effect.ignore);
+            const detail = `Another checkpoint operation held thread '${leaseThreadId}' for more than ${Duration.toMillis(commandLeaseAcquireTimeout)}ms.`;
+            const projectedProvider = providerThread?.session?.providerName;
+            const thread = yield* resolveThread(threadId);
+            const provider: ProviderKind =
+              projectedProvider !== null &&
+              projectedProvider !== undefined &&
+              Schema.is(ProviderKind)(projectedProvider)
+                ? projectedProvider
+                : (thread?.modelSelection.provider ?? "codex");
+            if (options?.onAcquireTimeout !== undefined) {
+              yield* options.onAcquireTimeout({ detail, provider }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("failed to surface a provider command lease timeout", {
+                    threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "provider.session.lease",
+              issue: detail,
+            });
+          }
+          return yield* effect.pipe(
+            Effect.ensuring(Deferred.succeed(release, undefined).pipe(Effect.ignore)),
+          );
+        }),
       ),
     );
 
@@ -5061,7 +5146,30 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) =>
-    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event));
+    withProviderSessionLease(event.payload.threadId, processTurnStartRequestedWithoutLease(event), {
+      onAcquireTimeout: ({ detail }) =>
+        Effect.gen(function* () {
+          const createdAt = new Date().toISOString();
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start blocked by a checkpoint operation",
+            detail,
+            turnId: null,
+            createdAt,
+            settlementStatus: "retryable",
+          });
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (thread && thread.session?.activeTurnId == null) {
+            yield* setThreadSessionError({
+              threadId: event.payload.threadId,
+              runtimeMode: event.payload.runtimeMode,
+              detail,
+              createdAt,
+            });
+          }
+        }),
+    });
 
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
@@ -5989,6 +6097,34 @@ const make = Effect.gen(function* () {
           });
         }
       }),
+      {
+        onAcquireTimeout: ({ detail }) =>
+          Effect.gen(function* () {
+            const createdAt = new Date().toISOString();
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Goal continuation blocked by a checkpoint operation",
+              detail,
+              turnId: null,
+              createdAt,
+              settlementStatus: "retryable",
+            });
+            const thread = yield* resolveThread(event.payload.threadId);
+            if (thread && thread.session?.activeTurnId == null) {
+              yield* setThreadSessionError({
+                threadId: event.payload.threadId,
+                runtimeMode: thread.runtimeMode,
+                detail,
+                createdAt,
+              });
+            }
+            // Queue the rejected continuation for a later retry; its
+            // delivery can settle while the checkpoint remains busy. The retry
+            // queue rechecks the current goal and pause state before dispatch.
+            yield* deferGoalContinuation(event);
+          }),
+      },
     );
 
   const observeStaleClaudeResumeTerminal = Effect.fnUntraced(function* (
@@ -6174,6 +6310,7 @@ const make = Effect.gen(function* () {
     const result = yield* runBoundedProviderCall({
       label: "The provider interrupt",
       timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+      settleGrace: commandSettleGrace,
       call: providerService.interruptTurn({
         threadId: providerThread.id,
         ...(turnId ? { turnId } : {}),
@@ -6574,6 +6711,21 @@ const make = Effect.gen(function* () {
     withProviderSessionLease(
       event.payload.threadId,
       processConversationRollbackRequestedWithoutLease(event),
+      {
+        onAcquireTimeout: ({ detail }) =>
+          Effect.gen(function* () {
+            const createdAt = new Date().toISOString();
+            const thread = yield* resolveThread(event.payload.threadId);
+            if (thread && thread.session?.activeTurnId == null) {
+              yield* setThreadSessionError({
+                threadId: event.payload.threadId,
+                runtimeMode: thread.runtimeMode,
+                detail,
+                createdAt,
+              });
+            }
+          }),
+      },
     );
 
   const processMessageEditResendPayload = Effect.fnUntraced(function* (
@@ -6883,6 +7035,7 @@ const make = Effect.gen(function* () {
       const childInterrupt = yield* runBoundedProviderCall({
         label: "The provider interrupt",
         timeout: PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        settleGrace: commandSettleGrace,
         call: providerService.interruptTurn({
           threadId: providerThread.id,
           turnId: thread.session.activeTurnId,
@@ -6950,6 +7103,7 @@ const make = Effect.gen(function* () {
         const stopped = yield* runBoundedProviderCall({
           label: "The provider session stop",
           timeout: PROVIDER_COMMAND_STOP_TIMEOUT,
+          settleGrace: commandSettleGrace,
           call: providerService.stopRuntimeSession({ threadId: providerThread.id }),
         });
         if (stopped._tag !== "ok") {
@@ -7020,6 +7174,7 @@ const make = Effect.gen(function* () {
       // outcome below run outside the generic provider deadline, so database
       // contention cannot erase this known result or quarantine the thread.
       timeout: Duration.millis(Duration.toMillis(commandEventTimeout) * 0.9),
+      settleGrace: commandSettleGrace,
       call: Effect.gen(function* () {
         if (
           Array.from(pendingClaudeCacheResponses.values()).some(
@@ -8234,6 +8389,7 @@ const make = Effect.gen(function* () {
               // Native compaction and its follow-up get a longer finite deadline;
               // a provider that never answers must still release its durable claim.
               timeout: cacheResponse ? cacheResponseTimeout : commandEventTimeout,
+              settleGrace: commandSettleGrace,
               call:
                 cacheResponse &&
                 event.type === "thread.claude-cache-response-requested" &&
@@ -8281,8 +8437,9 @@ const make = Effect.gen(function* () {
             });
         if (workerResult._tag === "timeout") {
           // The delivery lock is single-permit and process-wide, so an attempt
-          // that never returns is a total outage. Settle it as uncertain and
-          // let the thread quarantine rather than block every other thread.
+          // that never returns is a total outage. It has already run through
+          // the bounded settle grace, so settle it as uncertain and let the
+          // thread quarantine rather than block every other thread.
           if (event.type === "thread.turn-start-requested") {
             yield* surfaceTimedOutTurnStart(event, workerResult.detail).pipe(
               Effect.catchCause((cause) =>
@@ -9627,6 +9784,9 @@ export const makeProviderCommandReactorLive = (options?: ProviderCommandReactorL
     Layer.provide(
       Layer.succeed(ProviderCommandReactorConfig, {
         commandEventTimeout: options?.commandEventTimeout ?? PROVIDER_COMMAND_EVENT_TIMEOUT,
+        commandSettleGrace: options?.commandSettleGrace ?? PROVIDER_COMMAND_SETTLE_GRACE,
+        commandLeaseAcquireTimeout:
+          options?.commandLeaseAcquireTimeout ?? PROVIDER_COMMAND_LEASE_ACQUIRE_TIMEOUT,
         preTurnBaselineTimeout,
         cacheResponseTimeout,
         gatewayOperationCompletionWaitTimeout,

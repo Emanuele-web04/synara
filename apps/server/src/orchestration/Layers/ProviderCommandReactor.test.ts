@@ -44,6 +44,7 @@ import {
 import type { DeepPartial } from "@synara/shared/Struct";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS } from "@synara/shared/sidechatExpiry";
 import {
+  Clock,
   Duration,
   Deferred,
   Effect,
@@ -59,6 +60,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
+import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -116,7 +118,10 @@ import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
-import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
+import {
+  TurnCheckpointCoordinator,
+  type TurnCheckpointCoordinatorShape,
+} from "../Services/TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { HubOutputReactorLive } from "./HubOutputReactor.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -341,8 +346,12 @@ describe("ProviderCommandReactor", () => {
     readonly hubOutputReactor?: Partial<HubOutputReactorShape>;
     readonly forkThreadResult?: ProviderForkThreadResult | null;
     readonly startReactor?: boolean;
+    readonly clock?: Clock.Clock;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
     readonly commandEventTimeout?: Duration.Duration;
+    readonly commandSettleGrace?: Duration.Duration;
+    readonly commandLeaseAcquireTimeout?: Duration.Duration;
+    readonly threadLease?: TurnCheckpointCoordinatorShape["withThreadLease"];
     readonly preTurnBaselineTimeout?: Duration.Duration;
     readonly cacheResponseTimeout?: Duration.Duration;
     readonly gatewayOperationCompletionWaitTimeout?: Duration.Duration;
@@ -769,13 +778,27 @@ describe("ProviderCommandReactor", () => {
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
-    const reactorLayer = makeProviderCommandReactorLive(input);
+    const reactorLayer = makeProviderCommandReactorLive({
+      ...input,
+      // Hanging mocks use the primary deadline unless a case exercises grace.
+      commandSettleGrace: input?.commandSettleGrace ?? Duration.zero,
+    });
     const layer = Layer.mergeAll(reactorLayer, ProviderRuntimeIngestionLive).pipe(
       Layer.provideMerge(projectAgentLayer),
       Layer.provideMerge(projectAgentRepositoryLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
-      Layer.provideMerge(TurnCheckpointCoordinatorLive),
+      Layer.provideMerge(
+        input?.threadLease
+          ? Layer.effect(
+              TurnCheckpointCoordinator,
+              Effect.gen(function* () {
+                const coordinator = yield* TurnCheckpointCoordinator;
+                return { ...coordinator, withThreadLease: input.threadLease! };
+              }),
+            ).pipe(Layer.provide(TurnCheckpointCoordinatorLive))
+          : TurnCheckpointCoordinatorLive,
+      ),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(
         input?.computerService
@@ -897,7 +920,10 @@ describe("ProviderCommandReactor", () => {
     let reactorStarted = false;
     const startReactor = async () => {
       if (reactorStarted) return;
-      const start = reactor.start.pipe(Scope.provide(harnessScope));
+      const scopedStart = reactor.start.pipe(Scope.provide(harnessScope));
+      const start = input?.clock
+        ? scopedStart.pipe(Effect.provideService(Clock.Clock, input.clock))
+        : scopedStart;
       await Effect.runPromise(
         input?.logMessages
           ? start.pipe(
@@ -929,9 +955,15 @@ describe("ProviderCommandReactor", () => {
         ),
       );
       const fresh = ServiceMap.get(services, ProviderCommandReactor);
+      const freshStart = fresh.start.pipe(Scope.provide(freshScope));
       return {
         reactor: fresh,
-        start: () => Effect.runPromise(fresh.start.pipe(Scope.provide(freshScope))),
+        start: () =>
+          Effect.runPromise(
+            input?.clock
+              ? freshStart.pipe(Effect.provideService(Clock.Clock, input.clock))
+              : freshStart,
+          ),
       };
     };
 
@@ -15132,6 +15164,703 @@ describe("ProviderCommandReactor", () => {
         ),
       ),
     );
+  });
+
+  it("recovers a startup failure that settles after the command deadline within the settle grace", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(25),
+      commandSettleGrace: Duration.millis(500),
+    });
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.sleep(Duration.millis(60)).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: "codex",
+              operation: "ProviderService.startSession",
+              issue:
+                "Provider 'codex' did not finish starting within 60000ms for thread 'thread-1'.",
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-settles-after-deadline"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-settles-after-deadline"),
+          role: "user",
+          text: "hello late-failing provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((items) => Array.from(items)),
+      ),
+    );
+    const startEvent = events.find((event) => event.type === "thread.turn-start-requested");
+    expect(startEvent).toBeDefined();
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: startEvent!.sequence,
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "succeeded";
+    });
+
+    const blocking = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId: "thread-1",
+      }),
+    );
+    expect(Option.isNone(blocking)).toBe(true);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    expect((await readHarnessThread(harness))?.session?.activeTurnId).toBeNull();
+  });
+
+  it("honors a provider start that completes after the command deadline within the settle grace", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(25),
+      commandSettleGrace: Duration.millis(500),
+    });
+    const now = new Date().toISOString();
+    const defaultStartSession = harness.startSession.getMockImplementation();
+    harness.startSession.mockImplementationOnce((threadId, input) =>
+      Effect.sleep(Duration.millis(60)).pipe(Effect.andThen(defaultStartSession!(threadId, input))),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-completes-after-deadline"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-completes-after-deadline"),
+          role: "user",
+          text: "hello late provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((items) => Array.from(items)),
+      ),
+    );
+    const startEvent = events.find((event) => event.type === "thread.turn-start-requested");
+    expect(startEvent).toBeDefined();
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: startEvent!.sequence,
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "succeeded";
+    });
+    const blocking = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId: "thread-1",
+      }),
+    );
+    expect(Option.isNone(blocking)).toBe(true);
+    expect((await readHarnessThread(harness))?.session?.status).not.toBe("error");
+  });
+
+  it("rejects a startup failure that lands inside the settle grace window", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(120),
+      commandSettleGrace: Duration.millis(80),
+    });
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.sleep(Duration.millis(120)).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: "codex",
+              operation: "ProviderService.startSession",
+              issue:
+                "Provider 'codex' did not finish starting within 60000ms for thread 'thread-1'.",
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-proportional-grace"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-proportional-grace"),
+          role: "user",
+          text: "hello proportional grace",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((items) => Array.from(items)),
+      ),
+    );
+    const startEvent = events.find((event) => event.type === "thread.turn-start-requested");
+    expect(startEvent).toBeDefined();
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: startEvent!.sequence,
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "succeeded";
+    });
+    const blocking = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId: "thread-1",
+      }),
+    );
+    expect(Option.isNone(blocking)).toBe(true);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
+  it("settles uncertain when a startup failure lands beyond the settle grace", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(120),
+      commandSettleGrace: Duration.millis(80),
+    });
+    const now = new Date().toISOString();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.sleep(Duration.millis(230)).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: "codex",
+              operation: "ProviderService.startSession",
+              issue:
+                "Provider 'codex' did not finish starting within 60000ms for thread 'thread-1'.",
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-beyond-grace"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-beyond-grace"),
+          role: "user",
+          text: "hello beyond grace",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const blocking = await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-1",
+        }),
+      );
+      return Option.isSome(blocking) && blocking.value.state === "uncertain";
+    });
+  });
+
+  it.each(["accepted", "rejected", "beyond-grace"] as const)(
+    "uses the production 120s/15s deadline ratio with a controlled clock: %s",
+    async (outcome) => {
+      const clockScope = await Effect.runPromise(Scope.make("sequential"));
+      scopes.add(clockScope);
+      const clock = await Effect.runPromise(TestClock.make().pipe(Scope.provide(clockScope)));
+      const logMessages: string[] = [];
+      const harness = await createHarness({
+        clock,
+        commandEventTimeout: Duration.seconds(120),
+        commandSettleGrace: Duration.seconds(15),
+        logMessages,
+      });
+      const entered = Effect.runSync(Deferred.make<void>());
+      const defaultStartSession = harness.startSession.getMockImplementation();
+      let providerOutcomeReached = false;
+      harness.startSession.mockImplementationOnce((threadId, input) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Effect.sleep(Duration.seconds(outcome === "beyond-grace" ? 136 : 134));
+          providerOutcomeReached = true;
+          if (outcome === "accepted") return yield* defaultStartSession!(threadId, input);
+          return yield* new ProviderAdapterValidationError({
+            provider: "codex",
+            operation: "ProviderService.startSession",
+            issue: "Controlled startup rejection after bounded cleanup.",
+          });
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-production-grace-${outcome}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(`user-production-grace-${outcome}`),
+            role: "user",
+            text: "Verify the real deadline ratio.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("1 second")));
+      const events = await Effect.runPromise(
+        Stream.runCollect(harness.engine.readEvents(0)).pipe(
+          Effect.map((items) => Array.from(items)),
+        ),
+      );
+      const startEvent = events.find((event) => event.type === "thread.turn-start-requested");
+      expect(startEvent).toBeDefined();
+      const delivery = () =>
+        Effect.runPromise(
+          harness.deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: startEvent!.sequence,
+          }),
+        );
+      const advance = (seconds: number) =>
+        Effect.runPromise(clock.adjust(Duration.seconds(seconds)).pipe(Scope.provide(clockScope)));
+
+      await advance(120);
+      expect(providerOutcomeReached).toBe(false);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(Option.getOrThrow(await delivery()).state).toBe("inflight");
+      await advance(13);
+      expect(Option.getOrThrow(await delivery()).state).toBe("inflight");
+      await advance(1);
+
+      if (outcome === "beyond-grace") {
+        expect(providerOutcomeReached).toBe(false);
+        expect(Option.getOrThrow(await delivery()).state).toBe("inflight");
+        await advance(1);
+        await waitFor(async () => Option.getOrThrow(await delivery()).state === "uncertain");
+        expect(providerOutcomeReached).toBe(false);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const blocking = await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: "thread-1",
+          }),
+        );
+        expect(Option.getOrThrow(blocking).state).toBe("uncertain");
+      } else {
+        await waitFor(async () => Option.getOrThrow(await delivery()).state === "succeeded");
+        expect(providerOutcomeReached).toBe(true);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);
+        expect(
+          logMessages.some((message) => message.includes("settled within its settle grace")),
+        ).toBe(true);
+        const blocking = await Effect.runPromise(
+          harness.deliveryRepository.firstBlockingDeliveryForThread({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            threadId: "thread-1",
+          }),
+        );
+        expect(Option.isNone(blocking)).toBe(true);
+      }
+    },
+  );
+
+  it("rejects a turn start retryably when the thread checkpoint lease never frees", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(500),
+      commandSettleGrace: Duration.zero,
+      commandLeaseAcquireTimeout: Duration.millis(25),
+      threadLease: () => Effect.never,
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-stuck-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stuck-lease"),
+          role: "user",
+          text: "hello stuck lease",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((items) => Array.from(items)),
+      ),
+    );
+    const startEvent = events.find((event) => event.type === "thread.turn-start-requested");
+    expect(startEvent).toBeDefined();
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          eventSequence: startEvent!.sequence,
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "succeeded";
+    });
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    await waitFor(async () =>
+      Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+    );
+    await waitFor(async () =>
+      Boolean(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) =>
+            activity.kind === "provider.turn.start.failed" &&
+            (activity.payload as Record<string, unknown> | null)?.settlementStatus === "retryable",
+        ),
+      ),
+    );
+    const blocking = await Effect.runPromise(
+      harness.deliveryRepository.firstBlockingDeliveryForThread({
+        consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+        threadId: "thread-1",
+      }),
+    );
+    expect(Option.isNone(blocking)).toBe(true);
+  });
+
+  it("recovers a turn start after a held checkpoint lease frees", async () => {
+    const coordinator = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* TurnCheckpointCoordinator;
+      }).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
+    );
+    const acquired = Effect.runSync(Deferred.make<void>());
+    const release = Effect.runSync(Deferred.make<void>());
+    const holder = Effect.runFork(
+      coordinator.withThreadLease(
+        ThreadId.makeUnsafe("thread-1"),
+        Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      ),
+    );
+    await Effect.runPromise(Deferred.await(acquired));
+
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(500),
+      commandSettleGrace: Duration.zero,
+      commandLeaseAcquireTimeout: Duration.millis(40),
+      threadLease: coordinator.withThreadLease,
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-held-lease"),
+          role: "user",
+          text: "hello held lease",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () =>
+      Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+    );
+    expect(harness.startSession.mock.calls.length).toBe(0);
+
+    Effect.runSync(Deferred.succeed(release, undefined));
+    await Effect.runPromise(Fiber.interrupt(holder).pipe(Effect.ignore));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-after-release"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-after-release"),
+          role: "user",
+          text: "hello after release",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+  });
+
+  it("surfaces a goal continuation blocked by a held checkpoint lease", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(500),
+      commandSettleGrace: Duration.zero,
+      commandLeaseAcquireTimeout: Duration.millis(25),
+      threadLease: () => Effect.never,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-goal-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        goal: "Continue with a held checkpoint lease",
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+    );
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
+  it.each([false, true])(
+    "retries a goal after its held checkpoint lease frees unless the goal was paused: %s",
+    async (pauseBeforeRelease) => {
+      const coordinator = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* TurnCheckpointCoordinator;
+        }).pipe(Effect.provide(TurnCheckpointCoordinatorLive)),
+      );
+      const acquired = Effect.runSync(Deferred.make<void>());
+      const release = Effect.runSync(Deferred.make<void>());
+      const holder = Effect.runFork(
+        coordinator.withThreadLease(
+          ThreadId.makeUnsafe("thread-1"),
+          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(acquired));
+
+      try {
+        const harness = await createHarness({
+          commandEventTimeout: Duration.millis(500),
+          commandSettleGrace: Duration.zero,
+          commandLeaseAcquireTimeout: Duration.millis(40),
+          threadLease: coordinator.withThreadLease,
+        });
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-goal-lease-retry"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            goal: "Finish the remaining goal work after the checkpoint is released",
+          }),
+        );
+        await waitFor(async () =>
+          Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+        );
+        const readContinuationEvents = () =>
+          Effect.runPromise(
+            Stream.runCollect(harness.engine.readEvents(0)).pipe(
+              Effect.map((events) =>
+                Array.from(events).filter(
+                  (event) => event.type === "thread.goal-continuation-requested",
+                ),
+              ),
+            ),
+          );
+        const first = (await readContinuationEvents())[0];
+        expect(first).toBeDefined();
+        await waitFor(async () => {
+          const delivery = await Effect.runPromise(
+            harness.deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: first!.sequence,
+            }),
+          );
+          return Option.isSome(delivery) && delivery.value.state === "succeeded";
+        });
+        const blocked = await readHarnessThread(harness);
+        expect(blocked?.goalPausedAt).toBeNull();
+        expect(
+          blocked?.activities.some(
+            (activity) =>
+              activity.kind === "provider.turn.start.failed" &&
+              (activity.payload as Record<string, unknown> | null)?.settlementStatus ===
+                "retryable",
+          ),
+        ).toBe(true);
+        expect(harness.startSession).toHaveBeenCalledTimes(0);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(0);
+
+        if (pauseBeforeRelease) {
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.makeUnsafe("cmd-pause-goal-before-lease-release"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              goalPaused: true,
+            }),
+          );
+          await waitFor(async () => (await readHarnessThread(harness))?.goalPausedAt != null);
+        }
+
+        Effect.runSync(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Fiber.join(holder));
+
+        if (pauseBeforeRelease) {
+          // Observe beyond two existing 500ms retry-queue intervals. The test
+          // does not advance the goal or manually dispatch a continuation.
+          await new Promise((resolve) => setTimeout(resolve, 1_100));
+          expect(harness.startSession).toHaveBeenCalledTimes(0);
+          expect(harness.sendTurn).toHaveBeenCalledTimes(0);
+          expect((await readHarnessThread(harness))?.goalPausedAt).not.toBeNull();
+        } else {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+          expect(harness.startSession).toHaveBeenCalledTimes(1);
+          expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+          expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain(
+            "Finish the remaining goal work after the checkpoint is released",
+          );
+          expect((await readHarnessThread(harness))?.goalPausedAt).toBeNull();
+          const retried = (await readContinuationEvents()).filter(
+            (event) => event.sequence > first!.sequence,
+          );
+          expect(retried.length).toBeGreaterThan(0);
+          for (const event of retried) {
+            expect(event.payload.goalStartedAt).toBe(first!.payload.goalStartedAt);
+            expect(event.payload.trigger).toBe(first!.payload.trigger);
+            expect(event.payload.sourceTurnId).toBe(first!.payload.sourceTurnId);
+          }
+        }
+      } finally {
+        Effect.runSync(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Fiber.interrupt(holder).pipe(Effect.ignore));
+      }
+    },
+  );
+
+  it("surfaces a rollback blocked by a held checkpoint lease", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(500),
+      commandSettleGrace: Duration.zero,
+      commandLeaseAcquireTimeout: Duration.millis(25),
+      threadLease: () => Effect.never,
+    });
+    const now = new Date().toISOString();
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-rollback-held-lease"),
+      turnId: asTurnId("turn-rollback-held-lease"),
+      createdAt: now,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-rollback-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-rollback-held-lease"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+    );
+    expect(harness.rollbackConversation.mock.calls.length).toBe(0);
+  });
+
+  it("surfaces an edit resend blocked by a held checkpoint lease", async () => {
+    const harness = await createHarness({
+      commandEventTimeout: Duration.millis(500),
+      commandSettleGrace: Duration.zero,
+      commandLeaseAcquireTimeout: Duration.millis(25),
+      threadLease: () => Effect.never,
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-edit-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("user-message-edit-held-lease"),
+            role: "user",
+            text: "old prompt",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe("cmd-assistant-edit-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("assistant-edit-held-lease"),
+        turnId: asTurnId("turn-edit-held-lease"),
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-and-resend-held-lease"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-edit-held-lease"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () =>
+      Boolean((await readHarnessThread(harness))?.session?.lastError?.includes("held thread")),
+    );
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
   });
 
   it("does not pass the Home chat container workspace root through as provider cwd", async () => {
