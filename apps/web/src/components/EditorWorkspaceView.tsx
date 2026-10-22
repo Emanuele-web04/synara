@@ -111,7 +111,7 @@ interface EditorWorkspaceViewProps {
   editDiffBasePath?: string | null;
   editDiffBaseRev: DiffEditBaseRev | null;
   onCenterModeChange: (mode: EditorCenterMode) => void;
-  onEditFile: (filePath: string) => void;
+  onEditFile: (filePath: string, beforeOpen?: () => void) => void;
   onCloseEdit: () => void;
   onExitEditorView: () => void;
   /**
@@ -748,13 +748,12 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           )}
           <WorkspaceFileOpenerContext.Provider
             value={{
-              openFile: (path) => {
+              openFile: (path, beforeOpen) => {
                 const target = resolveWorkspaceFileOpenTarget(path, props.workspaceRoot);
                 if (!target) return false;
-                guardLeavingEdit(() => {
-                  props.onSelectFile(target);
-                  props.onEditFile(target);
-                });
+                // The parent owns the final save guard and prepares the reveal
+                // only when it accepts this editing request.
+                props.onEditFile(target, beforeOpen);
                 return true;
               },
             }}

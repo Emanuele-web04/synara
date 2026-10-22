@@ -214,7 +214,8 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
     else editor.trigger("synara", id, undefined);
   }
   const openFile = useEffectEvent(
-    (relativePath: string) => opener?.openFile(relativePath) ?? false,
+    (relativePath: string, beforeOpen: () => void) =>
+      opener?.openFile(relativePath, beforeOpen) ?? false,
   );
   const emitChange = useEffectEvent((value: string) => props.onChange(value));
   const emitHistory = useEffectEvent((history: { canUndo: boolean; canRedo: boolean }) =>
@@ -234,8 +235,7 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
       return;
     }
     const uri = editorUri(entry.client, entry.cwd, location.relativePath);
-    rememberEditorLocation(uri, range);
-    if (!openFile(location.relativePath)) {
+    if (!openFile(location.relativePath, () => rememberEditorLocation(uri, range))) {
       forgetEditorLocation(uri);
       throw new Error("This surface cannot open another workspace file. Open it from Files.");
     }
@@ -655,8 +655,9 @@ export default function MonacoEditorSurface(props: SurfaceProps) {
                 editor.focus();
                 return true;
               }
-              rememberEditorLocation(resource, range);
-              if (!openFile(resource.path.slice(1))) {
+              if (
+                !openFile(resource.path.slice(1), () => rememberEditorLocation(resource, range))
+              ) {
                 forgetEditorLocation(resource);
                 report(
                   new Error("This surface cannot open another workspace file. Open it from Files."),

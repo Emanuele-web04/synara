@@ -9,6 +9,7 @@ import type { EditorDebugStore } from "../src/components/codeEditor/editorDebugS
 declare global {
   interface Window {
     editorRaceProbe?: { store: EditorDebugStore; restore: () => void };
+    editorNavigationProbe?: { targetReads: number; restore: () => void };
   }
 }
 
@@ -541,6 +542,89 @@ test("retains a real debugger pause that arrives before the step acknowledgement
       window.editorRaceProbe?.restore();
       await window.editorRaceProbe?.store.stop();
       delete window.editorRaceProbe;
+    });
+  }
+});
+
+test("does not retain a definition reveal after a blocked navigation", async ({ page }, info) => {
+  const targetFile = "navigation-target.ts";
+  const originFile = "navigation-origin.ts";
+  const target = "\n\n\nexport function navigationTarget() { return 42; }\n";
+  const origin = 'import { navigationTarget } from "./navigation-target";\nnavigationTarget();\n';
+  await writeFile(path.join(workspace, targetFile), target);
+  await writeFile(path.join(workspace, originFile), origin);
+  await seed(page);
+  await open(page, targetFile);
+  await page.keyboard.press("ControlOrMeta+Home");
+  await open(page, originFile);
+  await page.evaluate(async (targetFile) => {
+    const modulePath = "/src/nativeApi.ts";
+    const { ensureNativeApi } = (await import(
+      /* @vite-ignore */ modulePath
+    )) as typeof import("../src/nativeApi");
+    const api = ensureNativeApi();
+    const write = api.projects.writeFile;
+    const read = api.projects.readFile;
+    window.editorNavigationProbe = {
+      targetReads: 0,
+      restore: () => {
+        api.projects.writeFile = write;
+        api.projects.readFile = read;
+      },
+    };
+    api.projects.writeFile = async () => {
+      throw new Error("Navigation save blocked");
+    };
+    api.projects.readFile = async (input) => {
+      const result = await read(input);
+      if (input.relativePath === targetFile) window.editorNavigationProbe!.targetReads++;
+      return result;
+    };
+  }, targetFile);
+  try {
+    await position(page, "navigationTarget();", 1);
+    await page.keyboard.press("End");
+    await page.keyboard.type(" ");
+    await expect(page.getByText("Navigation save blocked", { exact: true })).toBeVisible();
+    await position(page, "navigationTarget();", 1);
+    await page.keyboard.press("F12");
+    // A definition RPC can finish before its target is loaded. Observe the
+    // successful real file read and let its UI microtasks settle before leaving.
+    await expect
+      .poll(() => page.evaluate(() => window.editorNavigationProbe!.targetReads))
+      .toBeGreaterThan(0);
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    await expect(page.getByText(/No definition found/)).toHaveCount(0);
+    await editorVisible(page, originFile);
+    await page.evaluate(() => window.editorNavigationProbe!.restore());
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(() => readFile(path.join(workspace, originFile), "utf8"))
+      .toBe(origin.replace("navigationTarget();", "navigationTarget(); "));
+    await page.getByRole("button", { name: targetFile, exact: true }).click();
+    await page.getByRole("button", { name: "Edit file", exact: true }).click();
+    await editorVisible(page, targetFile);
+    await expect
+      .poll(() =>
+        page.evaluate(async (file) => {
+          const modulePath = "/src/components/codeEditor/editorRuntime.ts";
+          const { monaco } = (await import(
+            /* @vite-ignore */ modulePath
+          )) as typeof import("../src/components/codeEditor/editorRuntime");
+          return monaco.editor
+            .getEditors()
+            .find((editor) => editor.getModel()?.uri.path.endsWith("/" + file))
+            ?.getPosition()?.lineNumber;
+        }, targetFile),
+      )
+      .toBe(1);
+    await capture(page, info, "after-blocked-definition-keeps-manual-position");
+  } finally {
+    await page.evaluate(() => {
+      window.editorNavigationProbe?.restore();
+      delete window.editorNavigationProbe;
     });
   }
 });
