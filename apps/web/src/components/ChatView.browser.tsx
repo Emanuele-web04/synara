@@ -5017,7 +5017,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     });
 
-    it("hands the thread off when Continue task runs on another provider", async () => {
+    async function checkContinueHandoff(handoffDisabled: boolean) {
       // A Codex turn that hit a provider error, continued on Claude from its
       // banner ("Change model", then "Continue task").
       const base = createSnapshotForTargetUser({
@@ -5026,7 +5026,7 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       const turnId = TurnId.makeUnsafe("handoff-continue-failed-turn");
       const cause = "Selected model is at capacity. Please try a different model.";
-      const snapshot: OrchestrationReadModel = {
+      let snapshot: OrchestrationReadModel = {
         ...base,
         threads: [
           {
@@ -5079,6 +5079,24 @@ describe("ChatView transcript geometry (full app)", () => {
           },
         ],
       };
+      if (handoffDisabled) {
+        snapshot = {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => ({
+            ...thread,
+            handoff: {
+              sourceThreadId: ThreadId.makeUnsafe("handoff-original-thread"),
+              sourceProvider: "claudeAgent",
+              importedAt: NOW_ISO,
+              bootstrapStatus: "completed",
+            },
+            messages: thread.messages.map((message) => ({
+              ...message,
+              source: "handoff-import",
+            })),
+          })),
+        };
+      }
       const mounted = await mountWithCapturedCommands(snapshot, respondToHandoff("completed"));
       try {
         await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
@@ -5087,6 +5105,14 @@ describe("ChatView transcript geometry (full app)", () => {
           model: "claude-sonnet-4-6",
         });
         await page.getByRole("button", { name: "Continue task", exact: true }).click();
+        if (handoffDisabled) {
+          await expect.element(page.getByText("Cannot switch to Claude yet")).toBeVisible();
+          await page.screenshot({
+            path: "../../../../output/playwright/provider-handoff-continue-guard.png",
+          });
+          expect(mounted.commands).toEqual([]);
+          return;
+        }
         await vi.waitFor(
           () =>
             expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
@@ -5113,7 +5139,48 @@ describe("ChatView transcript geometry (full app)", () => {
       } finally {
         await mounted.cleanup();
       }
-    });
+    }
+
+    it.each([false, true])(
+      "checks handoff availability when Continue task runs on another provider (disabled=%s)",
+      checkContinueHandoff,
+    );
+
+    it.each(["blocked", "completed"] as const)(
+      "checks plan follow-up handoffs before saving settings (%s)",
+      async (outcome) => {
+        const snapshot = createSnapshotWithSettledPlanAwaitingFollowUp();
+        const mounted = await mountWithCapturedCommands(snapshot, respondToHandoff(outcome));
+        try {
+          useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+          });
+          await page.getByRole("button", { name: "Implement", exact: true }).click();
+          if (outcome === "blocked") {
+            await expect.element(page.getByTestId("blocked-handoff-notice")).toBeVisible();
+            await page.screenshot({
+              path: "../../../../output/playwright/provider-handoff-plan-blocked.png",
+            });
+            expect(document.body.textContent ?? "").not.toContain("cannot switch to Claude yet.");
+            expect(mounted.commands).toHaveLength(1);
+          } else {
+            await vi.waitFor(() =>
+              expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+                true,
+              ),
+            );
+          }
+          expect(mounted.commands[0]).toMatchObject({
+            type: "thread.meta.update",
+            providerHandoff: true,
+            modelSelection: { provider: "claudeAgent" },
+          });
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
 
     it("hands off the captured selection when the picker changes during attachment upload", async () => {
       let releaseUpload = () => {};
@@ -9534,7 +9601,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("editing a queued follow-up removes only that row and restores its images to the composer", async () => {
+  async function checkQueuedFollowUpRestore(handedOff: boolean) {
     const queuedImage = createComposerImage({
       id: "queued-image-1",
       previewUrl: "blob:queued-image-1",
@@ -9543,13 +9610,29 @@ describe("ChatView transcript geometry (full app)", () => {
     const firstQueuedPrompt = "first queued prompt with image";
     const secondQueuedPrompt = "second queued prompt stays queued";
 
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-running-edit-queue" as MessageId,
+      targetText: "running edit queue target",
+      sessionStatus: "running",
+    });
+    const snapshot: OrchestrationReadModel = handedOff
+      ? {
+          ...baseSnapshot,
+          threads: baseSnapshot.threads.map((thread) => ({
+            ...thread,
+            modelSelection: { provider: "opencode", model: "opencode-model" },
+            session: { ...thread.session!, providerName: "opencode" },
+          })),
+        }
+      : baseSnapshot;
+    const restoredRuntimeModes: Array<string | null | undefined> = [];
+    const unsubscribe = useComposerDraftStore.subscribe((state) => {
+      const draft = state.draftsByThreadId[THREAD_ID];
+      if (draft?.prompt === firstQueuedPrompt) restoredRuntimeModes.push(draft.runtimeMode);
+    });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-running-edit-queue" as MessageId,
-        targetText: "running edit queue target",
-        sessionStatus: "running",
-      }),
+      snapshot,
     });
 
     try {
@@ -9576,7 +9659,7 @@ describe("ChatView transcript geometry (full app)", () => {
           provider: "codex",
           model: "gpt-5",
         },
-        runtimeMode: "full-access",
+        runtimeMode: handedOff ? "auto" : "full-access",
         interactionMode: "default",
         envMode: "local",
       });
@@ -9657,13 +9740,28 @@ describe("ChatView transcript geometry (full app)", () => {
           // The restored image renders as a thumbnail chip whose filename lives in
           // its accessible label/title, not in text content.
           expect(document.querySelector('[aria-label="Preview queued-image.png"]')).not.toBeNull();
+          if (handedOff) {
+            expect(
+              useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.activeProvider,
+            ).toBe("opencode");
+            expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.runtimeMode).toBe(
+              "approval-required",
+            );
+            expect(restoredRuntimeModes).not.toContain("auto");
+          }
         },
         { timeout: 8_000, interval: 16 },
       );
     } finally {
+      unsubscribe();
       await mounted.cleanup();
     }
-  });
+  }
+
+  it.each([false, true])(
+    "editing a queued follow-up restores its content and compatible settings (handed off=%s)",
+    checkQueuedFollowUpRestore,
+  );
 
   it("auto-dispatches a queued turn without wiping the live composer draft", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();

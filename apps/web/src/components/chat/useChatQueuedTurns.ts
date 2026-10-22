@@ -210,10 +210,11 @@ export function useChatQueuedTurns({
   }, [setQueuedSteerGate, threadId]);
 
   const restoreQueuedTurnToComposer = useCallback(
-    (queuedTurn: QueuedComposerTurn) => {
+    (queued: QueuedComposerTurn) => {
       if (!activeThread) {
         return;
       }
+      const queuedTurn = retargetQueuedTurnToThreadProvider(queued, activeThread);
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
       const restoredImages =
         queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageAttachment) : [];
@@ -271,10 +272,7 @@ export function useChatQueuedTurns({
             }
           : null,
       );
-      setComposerDraftModelSelection(
-        activeThread.id,
-        retargetQueuedTurnToThreadProvider(queuedTurn, activeThread).modelSelection,
-      );
+      setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
       // Restore the frozen switch plus its revocation generation.
