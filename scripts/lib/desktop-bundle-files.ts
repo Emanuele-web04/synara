@@ -32,10 +32,12 @@ export function createDesktopBundleFilePatterns(
   if (platform !== "mac") files.push("!node_modules/node-pty/prebuilds/darwin-*/**");
   if (platform !== "win") files.push("!node_modules/node-pty/prebuilds/win32-*/**");
   files.push("!node_modules/node-pty/lib/*.test.js");
-  // MSVC leaves incremental-link inputs and build logs next to the rebuilt
-  // addon. These are build products, not DLLs, executables, or native addons.
+  // MSVC rebuilds leave link inputs and logs in both native packages and in
+  // node-pty's node-addon-api project. Dependencies can also be nested after
+  // hoisting. Limit exclusions to these build trees and metadata extensions;
+  // preserve DLLs, executables, native addons, headers, and license notices.
   files.push(
-    "!node_modules/node-pty/build/**/*.{iobj,ipdb,tlog,vcxproj,filters,recipe,lastbuildstate,exp,lib}",
+    "!node_modules/**/{node-pty,msgpackr-extract}/{build,node-addon-api}/**/*.{iobj,ipdb,tlog,vcxproj,filters,recipe,lastbuildstate,exp,lib}",
   );
 
   // All icon preferences for the target OS and the menu fallback remain intact.
